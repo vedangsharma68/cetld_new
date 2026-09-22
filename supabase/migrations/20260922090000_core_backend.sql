@@ -230,6 +230,13 @@ create or replace function app.prevent_last_owner_change()
 returns trigger language plpgsql security definer set search_path = pg_catalog, public
 as $$
 begin
+  -- Allow the owner membership to cascade when its parent workspace is being
+  -- deleted. The parent row is no longer visible during the cascade.
+  if tg_op = 'DELETE' and not exists (
+    select 1 from public.workspaces w where w.id = old.workspace_id
+  ) then
+    return old;
+  end if;
   if old.role = 'owner'::public.workspace_role and (tg_op = 'DELETE' or new.role <> old.role) then
     if not exists (
       select 1 from public.workspace_members wm
