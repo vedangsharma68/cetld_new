@@ -97,3 +97,21 @@ body{min-height:100vh;isolation:isolate;overflow-x:hidden}#app{position:relative
   .dashboard-aside{gap:12px}
   .dashboard-aside>.stack{gap:12px}
 }
+
+
+/* Sign-in polish: quiet payment micro-visual and official Google mark. */
+.btn.google{gap:10px;background:var(--white);border-color:var(--line);color:var(--ink)}
+.btn.google:hover{background:var(--soft);border-color:#b7cbbd}
+.google-mark{display:grid;place-items:center;width:18px;height:18px;flex:0 0 18px}
+.google-mark svg{display:block;width:18px;height:18px}
+.collection-demo{margin-top:40px}
+.collection-demo .receipt{position:relative}
+.receipt-line{align-items:center;gap:16px}
+.balance-transition{display:inline-flex;align-items:center;gap:7px;color:#718277;white-space:nowrap}
+.balance-transition>strong{font-size:.9rem;color:#315f4d;letter-spacing:-.02em}
+.balance-arrow{color:#9aac9f;font-size:1rem}
+.receipt-badge{margin-top:-5px}
+@media(prefers-reduced-motion:reduce){
+  .receipt,.receipt-badge{animation:none!important}
+}
+.reduce-motion .receipt,.reduce-motion .receipt-badge{animation:none!important}
