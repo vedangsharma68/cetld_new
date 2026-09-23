@@ -82,3 +82,12 @@ test('rejects empty responses and invalid message history', async () => {
     /empty response/,
   );
 });
+
+test('assembles streamed markdown without dropping chunks',async()=>{
+  const encoder=new TextEncoder(),progress=[];
+  const stream=new ReadableStream({start(controller){controller.enqueue(encoder.encode('data: {"delta":"## Summary\\n\\n"}\n\n'));controller.enqueue(encoder.encode('data: {"delta":"- Invoice one\\n"}\n\ndata: {"delta":"- Invoice two"}\n\ndata: [DONE]\n\n'));controller.close()}});
+  const client=createAssistantClient({getAccessToken:async()=> 'session-token',fetchImpl:async()=>new Response(stream,{status:200,headers:{'Content-Type':'text/event-stream'}})});
+  const answer=await client.send({workspaceId:'workspace-1',messages:[{role:'user',content:'Give me a detailed summary'}],onProgress:value=>progress.push(value)});
+  assert.equal(answer,'## Summary\n\n- Invoice one\n- Invoice two');
+  assert.equal(progress.at(-1),answer);
+});

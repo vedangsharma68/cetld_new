@@ -21,7 +21,19 @@ export function totals(invoices) {
 }
 export function payment(invoice, amount) {
   if (!Number.isSafeInteger(amount) || amount <= 0 || amount > remaining(invoice)) throw new Error('Payment must be positive and cannot exceed the balance.');
-  return {...invoice, paid_minor: invoice.paid_minor+amount, followup_state: remaining(invoice)===amount?'cancelled':invoice.followup_state};
+  const settled = remaining(invoice) === amount;
+  return {...invoice, paid_minor: invoice.paid_minor+amount, followup_state: settled?'cancelled':invoice.followup_state, ...(settled ? {next_follow_up_at:null} : {})};
+}
+export function settleInvoice(invoiceOrPayload) {
+  const invoice = invoiceOrPayload?.invoice ?? invoiceOrPayload;
+  const alreadyPaid = invoiceOrPayload?.alreadyPaid === true || invoice?.alreadyPaid === true;
+  if (!alreadyPaid) return invoice;
+  const hasMinorTotal = invoice?.amount_minor !== undefined && invoice?.amount_minor !== null;
+  const total = Number(hasMinorTotal ? invoice.amount_minor : invoice?.total_amount);
+  const totalMinor = hasMinorTotal ? total : Math.round(total * 100);
+  if (!Number.isSafeInteger(totalMinor) || totalMinor <= 0) throw new Error('A valid invoice total is required before marking an invoice paid.');
+  if (hasMinorTotal) return {...invoice, paid_minor:totalMinor, followup_state:'cancelled', next_follow_up_at:null, status:'paid'};
+  return {...invoice, amount_paid:Number(Number(invoice.total_amount).toFixed(2)), status:'paid', metadata:{...(invoice.metadata ?? {}),followup_state:'cancelled',next_follow_up_at:null}};
 }
 export function canApprove(invoice) { return remaining(invoice)>0 && ['draft','paused','cancelled'].includes(invoice.followup_state); }
 export function csvCell(value) {

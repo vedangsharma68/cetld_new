@@ -131,7 +131,7 @@ function basic(clientId, clientSecret) {
 }
 
 export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIENT_ID, clientSecret = process.env.ZOHO_BOOKS_CLIENT_SECRET, redirectUri = process.env.ZOHO_BOOKS_REDIRECT_URI, region = process.env.ZOHO_BOOKS_REGION || 'com', fetchImpl = globalThis.fetch } = {}) {
-  const scopes = 'ZohoBooks.invoices.READ,ZohoBooks.customerpayments.READ';
+  const scopes = 'ZohoBooks.invoices.READ,ZohoBooks.invoices.CREATE,ZohoBooks.contacts.READ,ZohoBooks.contacts.CREATE,ZohoBooks.customerpayments.READ';
   return {
     name: 'zoho_books',
     scopes,
@@ -187,6 +187,35 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       if (!invoice || invoice.externalId !== String(invoiceId)) throw new Error('Zoho Books returned an invalid invoice balance');
       return { balanceMinor: invoice.balanceMinor, currency: invoice.currency, totalMinor: invoice.amountMinor, externalId: invoice.externalId };
     },
+    async createInvoice({ token, accountId, invoice }) {
+      if (!accountId) throw new Error('Zoho Books organization ID is required');
+      const headers = { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' };
+      const existingUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices`);
+      existingUrl.search = new URLSearchParams({organization_id: accountId, invoice_number: invoice.invoiceNumber}).toString();
+      const existingBody = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', existingUrl, {headers}), 'zoho_books');
+      const existing = (existingBody.invoices || []).map(normalizeZohoInvoice).find(item => item?.number === invoice.invoiceNumber);
+      if (existing) return {externalId: existing.externalId, duplicate: true};
+
+      const contactsUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/contacts`);
+      contactsUrl.search = new URLSearchParams({organization_id: accountId, contact_name_contains: invoice.clientName}).toString();
+      const contactsBody = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', contactsUrl, {headers}), 'zoho_books');
+      let contact = (contactsBody.contacts || []).find(item => String(item.contact_name || '').toLowerCase() === invoice.clientName.toLowerCase());
+      if (!contact) {
+        const contactBody = {contact_name: invoice.clientName, company_name: invoice.clientName, contact_type: 'customer'};
+        if (invoice.clientEmail || invoice.clientPhone) contactBody.contact_persons = [{first_name: invoice.clientName.slice(0, 100), email: invoice.clientEmail || undefined, phone: invoice.clientPhone || undefined, is_primary_contact: true}];
+        const createUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/contacts`);
+        createUrl.search = new URLSearchParams({organization_id: accountId}).toString();
+        const created = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', createUrl, {method: 'POST', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify(contactBody)}), 'zoho_books');
+        contact = created.contact;
+      }
+      if (!contact?.contact_id) throw new Error('Zoho Books customer could not be resolved');
+      const createUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices`);
+      createUrl.search = new URLSearchParams({organization_id: accountId}).toString();
+      const payload = {customer_id: String(contact.contact_id), invoice_number: invoice.invoiceNumber, date: invoice.invoiceDate, due_date: invoice.dueDate, currency_code: invoice.currency, line_items: [{name: `Invoice ${invoice.invoiceNumber}`, description: invoice.notes || undefined, quantity: 1, rate: invoice.total}], notes: invoice.notes || undefined};
+      const created = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', createUrl, {method: 'POST', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify(payload)}), 'zoho_books');
+      if (!created.invoice?.invoice_id) throw new Error('Zoho Books did not return an invoice ID');
+      return {externalId: String(created.invoice.invoice_id), duplicate: false};
+    },
   };
 }
 
@@ -230,6 +259,34 @@ export function createQuickBooksProvider({ clientId = process.env.QUICKBOOKS_CLI
       const invoice = normalizeQboInvoice(body.Invoice);
       if (!invoice || invoice.externalId !== String(invoiceId)) throw new Error('QuickBooks returned an invalid invoice balance');
       return { balanceMinor: invoice.balanceMinor, currency: invoice.currency, totalMinor: invoice.amountMinor, externalId: invoice.externalId };
+    },
+    async createInvoice({ token, accountId, invoice }) {
+      if (!accountId) throw new Error('QuickBooks company ID is required');
+      const headers = {Authorization: `Bearer ${token.accessToken}`, Accept: 'application/json'};
+      const quote = value => String(value).replaceAll("'", "\\'");
+      const query = async statement => {
+        const url = `${apiRoot}/v3/company/${encodeURIComponent(accountId)}/query?query=${encodeURIComponent(statement)}&minorversion=75`;
+        return jsonResponse(await providerFetch(fetchImpl, 'quickbooks', url, {headers}), 'quickbooks');
+      };
+      const existingBody = await query(`select * from Invoice where DocNumber = '${quote(invoice.invoiceNumber)}' MAXRESULTS 1`);
+      const existing = existingBody.QueryResponse?.Invoice?.[0];
+      if (existing?.Id) return {externalId: String(existing.Id), duplicate: true};
+      const customerBody = await query(`select * from Customer where DisplayName = '${quote(invoice.clientName)}' MAXRESULTS 1`);
+      let customer = customerBody.QueryResponse?.Customer?.[0];
+      if (!customer) {
+        const url = `${apiRoot}/v3/company/${encodeURIComponent(accountId)}/customer?minorversion=75`;
+        const payload = {DisplayName: invoice.clientName, CompanyName: invoice.clientName};
+        if (invoice.clientEmail) payload.PrimaryEmailAddr = {Address: invoice.clientEmail};
+        if (invoice.clientPhone) payload.PrimaryPhone = {FreeFormNumber: invoice.clientPhone};
+        const created = await jsonResponse(await providerFetch(fetchImpl, 'quickbooks', url, {method: 'POST', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify(payload)}), 'quickbooks');
+        customer = created.Customer;
+      }
+      if (!customer?.Id) throw new Error('QuickBooks customer could not be resolved');
+      const url = `${apiRoot}/v3/company/${encodeURIComponent(accountId)}/invoice?minorversion=75`;
+      const payload = {DocNumber: invoice.invoiceNumber, CustomerRef: {value: String(customer.Id)}, TxnDate: invoice.invoiceDate, DueDate: invoice.dueDate, CurrencyRef: {value: invoice.currency}, PrivateNote: invoice.notes || undefined, Line: [{Amount: invoice.total, DetailType: 'SalesItemLineDetail', Description: invoice.notes || `Invoice ${invoice.invoiceNumber}`, SalesItemLineDetail: {Qty: 1, UnitPrice: invoice.total}}]};
+      const created = await jsonResponse(await providerFetch(fetchImpl, 'quickbooks', url, {method: 'POST', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify(payload)}), 'quickbooks');
+      if (!created.Invoice?.Id) throw new Error('QuickBooks did not return an invoice ID');
+      return {externalId: String(created.Invoice.Id), duplicate: false};
     },
   };
 }

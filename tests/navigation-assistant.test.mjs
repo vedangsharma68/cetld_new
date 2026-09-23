@@ -28,3 +28,13 @@ test('collapsed sidebar hides profile text and leaves only the avatar', () => {
   const css = fs.readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.shell\.sidebar-collapsed \.workspace-badge>div\{display:none\}/);
 });
+
+test('assistant is available in one click and invoice review exposes paid and retry controls',()=>{
+  const css=fs.readFileSync(new URL('../styles.css',import.meta.url),'utf8');
+  assert.match(app,/class="assistant-fab"[\s\S]*data-page="Assistant"/);
+  assert.match(css,/\.assistant-fab\{position:fixed/);
+  assert.match(css,/@media\(max-width:600px\)[\s\S]*\.assistant-fab/);
+  assert.match(app,/name="alreadyPaid"/);
+  assert.match(app,/data-action="retry-assistant-sync"/);
+  assert.match(app,/What is the due date for this invoice\?/);
+});

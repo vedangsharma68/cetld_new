@@ -40,6 +40,30 @@ create trigger cetld_invoices_bump_automation_version
 before update on public.cetld_invoices
 for each row execute function public.cetld_bump_automation_version();
 
+-- Paid state is terminal for reminders, including invoices inserted directly by
+-- the app or an integration. Keep this invariant in the database as a final gate.
+create or replace function public.cetld_suppress_paid_invoice_followups()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $function$
+begin
+  if new.amount_minor > 0 and coalesce(new.paid_minor, 0) >= new.amount_minor then
+    new.paid_minor := new.amount_minor;
+    new.followup_state := 'cancelled';
+    new.next_follow_up_at := null;
+  end if;
+  return new;
+end;
+$function$;
+
+drop trigger if exists cetld_suppress_paid_invoice_followups on public.cetld_invoices;
+create trigger cetld_suppress_paid_invoice_followups
+before insert or update of amount_minor, paid_minor, followup_state, next_follow_up_at
+on public.cetld_invoices
+for each row execute function public.cetld_suppress_paid_invoice_followups();
+
 create table if not exists public.cetld_automation_messages (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references auth.users(id) on delete cascade,
