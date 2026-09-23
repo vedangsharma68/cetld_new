@@ -252,10 +252,11 @@ export class AIProvider {
       });
       const body = JSON.parse(await readBoundedText(response));
       if (!response.ok || body?.error) throw statusError(response.status || body?.error?.code || 502);
-      const message = body?.choices?.[0]?.message;
+      const choice = body?.choices?.[0];
+      const message = choice?.message;
       if (!message) throw new AIError('INVALID_RESPONSE');
       const content = typeof message.content === 'string' ? message.content : Array.isArray(message.content) ? message.content.map(part => part?.text || '').join('') : '';
-      return {content, toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [], model, usedFallback};
+      return {content, finishReason: choice.finish_reason || null, toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [], model, usedFallback};
     }
     if (!this.#geminiApiKey) throw new AIError('API_KEY_MISSING', 503);
     const response = await this.#fetch(`${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.#geminiApiKey)}`, {
@@ -270,13 +271,14 @@ export class AIProvider {
     const parts = body?.candidates?.[0]?.content?.parts;
     if (!Array.isArray(parts)) throw new AIError('INVALID_RESPONSE');
     const content = parts.filter(part => typeof part?.text === 'string').map(part => part.text).join('');
+    const finishReason = body?.candidates?.[0]?.finishReason || null;
     const toolCalls = parts.filter(part => part?.functionCall?.name).map((part, index) => ({
       id: `gemini-call-${index}`,
       type: 'function',
       function: {name: part.functionCall.name, arguments: safeJsonStringify(part.functionCall.args || {})},
     }));
     if (!content && !toolCalls.length) throw new AIError('INVALID_RESPONSE');
-    return {content, toolCalls, model, usedFallback};
+    return {content, finishReason, toolCalls, model, usedFallback};
   }
 
   async #fetch(url, init) {
