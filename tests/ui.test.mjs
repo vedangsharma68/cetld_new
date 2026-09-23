@@ -11,7 +11,8 @@ const [app, css, html, vercel] = await Promise.all([
 
 test('all requested Quiet Finance OS surfaces are present', () => {
   for (const surface of [
-    'Receivables ageing',
+    'Collections Pulse',
+    'collectionsPulse',
     'Invoice ledger',
     'Conversations',
     'Assistant',
@@ -128,4 +129,12 @@ test('workspace AI settings and invoice extraction use the centralized server AP
   assert.match(app, /value\('currency'\)/);
   assert.doesNotMatch(app, /OPENROUTER_API_KEY/);
   assert.doesNotMatch(app, /cetld_primary_ai_model:primaryModel/);
+});
+
+test('Collections Pulse uses complete workspace-scoped data and explicit multi-currency presentation', () => {
+  assert.match(app, /workspaceRows\('invoices',workspaceId\)/);
+  assert.match(app, /workspaceRows\('payments',workspaceId/);
+  assert.match(app, /Currencies are shown separately\. No FX conversion is applied\./);
+  assert.match(css, /\.dark \.btn\.primary:hover:not\(:disabled\)/);
+  assert.match(css, /\.dark \.btn\.primary:disabled/);
 });
