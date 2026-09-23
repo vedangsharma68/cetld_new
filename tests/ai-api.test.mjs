@@ -2,10 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {authorizeAIWorkspace} from '../ai/store.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
+import {readFile} from 'node:fs/promises';
 import {answerWorkspaceQuestion} from '../ai/assistant.mjs';
 import {DEFAULT_MODEL, AIProvider} from '../ai/provider.mjs';
 const A='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', B='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', U='11111111-1111-4111-8111-111111111111', F='22222222-2222-4222-8222-222222222222';
 const env={SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUBLISHABLE_KEY:'public-test-key'};
+
+test('Vercel entrypoint safely falls back only to public Supabase client config', async () => {
+  const entrypoint=await readFile(new URL('../api/ai.js',import.meta.url),'utf8');
+  assert.match(entrypoint,/SUPABASE_URL: process\.env\.SUPABASE_URL \|\| config\.url/);
+  assert.match(entrypoint,/SUPABASE_PUBLISHABLE_KEY: process\.env\.SUPABASE_PUBLISHABLE_KEY \|\| config\.key/);
+  assert.doesNotMatch(entrypoint,/OPENROUTER_API_KEY:\s*process\.env\.OPENROUTER_API_KEY\s*\|\|/);
+});
 const request={headers:{authorization:'Bearer test-user-token'}};
 const json = data => new Response(JSON.stringify(data));
 function transport(extra, role='owner') {
