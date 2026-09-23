@@ -1,4 +1,4 @@
-const DEFAULT_ENDPOINT = '/api/assistant';
+const DEFAULT_ENDPOINT = '/api/ai?action=assistant';
 const REQUEST_TIMEOUT_MS = 45_000;
 
 function responseMessage(payload) {
@@ -6,7 +6,7 @@ function responseMessage(payload) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error('The assistant returned an empty response. Please try again.');
   }
-  return value.trim();
+  return [value.trim(), typeof payload?.guidance === 'string' ? payload.guidance.trim() : ''].filter(Boolean).join('\n\n');
 }
 
 function safeMessages(messages) {
@@ -42,6 +42,9 @@ export function createAssistantClient({
       signal?.addEventListener('abort', abort, {once: true});
 
       try {
+        const conversation = safeMessages(messages);
+        const latest = conversation.at(-1);
+        if (latest.role !== 'user') throw new Error('The latest conversation message must be from you.');
         const response = await fetchImpl(endpoint, {
           method: 'POST',
           credentials: 'same-origin',
@@ -49,7 +52,7 @@ export function createAssistantClient({
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({workspaceId, messages: safeMessages(messages)}),
+          body: JSON.stringify({workspaceId, message: latest.content, history: conversation.slice(0, -1).slice(-8)}),
           signal: controller.signal,
         });
         const payload = await response.json().catch(() => ({}));

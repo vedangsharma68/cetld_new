@@ -18,12 +18,33 @@ test('sends authenticated, workspace-scoped conversation data', async () => {
   });
 
   assert.equal(answer, '₹84,600 is overdue.');
-  assert.equal(request.url, '/api/assistant');
+  assert.equal(request.url, '/api/ai?action=assistant');
   assert.equal(request.options.headers.Authorization, 'Bearer session-token');
   assert.deepEqual(JSON.parse(request.options.body), {
     workspaceId: 'workspace-1',
-    messages: [{role: 'user', content: 'What is overdue?'}],
+    message: 'What is overdue?',
+    history: [],
   });
+});
+
+test('matches the AI backend history contract and appends grounded guidance', async () => {
+  let body;
+  const client = createAssistantClient({
+    getAccessToken: async () => 'session-token',
+    fetchImpl: async (_url, options) => {
+      body = JSON.parse(options.body);
+      return {ok: true, json: async () => ({answer: 'Verified balances', guidance: 'Follow up politely.'})};
+    },
+  });
+  const messages = Array.from({length: 10}, (_, index) => ({
+    role: index % 2 ? 'assistant' : 'user',
+    content: `Message ${index}`,
+  }));
+  messages.push({role: 'user', content: 'What next?'});
+  assert.equal(await client.send({workspaceId: 'workspace-1', messages}), 'Verified balances\n\nFollow up politely.');
+  assert.equal(body.message, 'What next?');
+  assert.equal(body.history.length, 8);
+  assert.deepEqual(body.history, messages.slice(2, 10));
 });
 
 test('refuses unauthenticated requests before calling the backend', async () => {
