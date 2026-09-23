@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "description": "Tenant-isolated Supabase backend foundation",
   "scripts": {
-    "test": "node --import tsx --test tests/*.test.ts",
+    "test": "node --import tsx --test tests/*.test.ts tests/*.test.mjs",
+    "test:ai": "node --test tests/ai-*.test.mjs",
+    "test:ai:live": "node scripts/ai-smoke.mjs",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [],
@@ -14,6 +16,7 @@
     "@supabase/supabase-js": "2.116.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
     "@types/node": "26.6.2",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
