@@ -9,7 +9,7 @@ function assertServerRuntime() {
 }
 
 export const DEFAULT_MODEL = 'gemini-3.5-flash';
-export const DEFAULT_FALLBACK_MODEL = 'gemini-3.1-flash';
+export const DEFAULT_FALLBACK_MODEL = 'openrouter/free';
 export const DEFAULT_EXTRACTION_MODEL = 'gemini-3.5-flash-lite';
 export const DEFAULT_EXTRACTION_FALLBACK_MODEL = 'gemini-3.1-flash-lite';
 export const OPENROUTER_FREE_MODEL = 'openrouter/free';
