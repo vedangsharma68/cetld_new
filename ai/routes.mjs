@@ -18,7 +18,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
           try { await verify(id, {fetchImpl, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY, timeoutMs: 5000}); return id; }
           catch { return null; }
         }));
-        const available = checks.filter(Boolean);
+        const available = [...new Set(checks.filter(Boolean))];
         return res.status(200).json({models: available.filter(id => !id.includes('flash-lite')), extractionModels: available.filter(id => id.includes('flash-lite')), openRouterFallback: available.includes('openrouter/free')});
       }
       const body = req.method === 'GET' ? {} : requestBody(req, action === 'settings' ? ['workspaceId', 'primary_model', 'fallback_model'] : action === 'extract' ? ['workspaceId', 'fileId', 'file'] : ['workspaceId', 'message', 'history'], action === 'extract' ? 4400000 : 32768);
