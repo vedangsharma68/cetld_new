@@ -1,5 +1,5 @@
 import {APIError, object, requestBody, sendError, uuid} from './http.mjs';
-import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL, isFreeModelId, verifyModel} from './provider.mjs';
+import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL, VERIFIED_MODELS, isFreeModelId, verifyModel} from './provider.mjs';
 import {authorizeAIWorkspace} from './store.mjs';
 import {extractInvoice} from './extraction.mjs';
 import {answerWorkspaceQuestion} from './assistant.mjs';
@@ -10,9 +10,17 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
     res.setHeader('X-Content-Type-Options', 'nosniff');
     try {
       const action = req.query?.action;
-      if (!['settings', 'extract', 'assistant'].includes(action)) throw new APIError(404, 'NOT_FOUND');
-      const methods = action === 'settings' ? ['GET', 'PUT'] : ['POST'];
+      if (!['models', 'settings', 'extract', 'assistant'].includes(action)) throw new APIError(404, 'NOT_FOUND');
+      const methods = action === 'models' ? ['GET'] : action === 'settings' ? ['GET', 'PUT'] : ['POST'];
       if (!methods.includes(req.method)) { res.setHeader('Allow', methods.join(', ')); throw new APIError(405, 'METHOD_NOT_ALLOWED'); }
+      if (action === 'models') {
+        const checks = await Promise.all(VERIFIED_MODELS.map(async id => {
+          try { await verify(id, {fetchImpl, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY, timeoutMs: 5000}); return id; }
+          catch { return null; }
+        }));
+        const available = checks.filter(Boolean);
+        return res.status(200).json({models: available.filter(id => !id.includes('flash-lite')), extractionModels: available.filter(id => id.includes('flash-lite')), openRouterFallback: available.includes('openrouter/free')});
+      }
       const body = req.method === 'GET' ? {} : requestBody(req, action === 'settings' ? ['workspaceId', 'primary_model', 'fallback_model'] : action === 'extract' ? ['workspaceId', 'fileId', 'file'] : ['workspaceId', 'message', 'history'], action === 'extract' ? 4400000 : 32768);
       const workspaceId = uuid(req.method === 'GET' ? req.query.workspaceId : body.workspaceId);
       const store = await authorize(req, workspaceId, {env, fetchImpl});
