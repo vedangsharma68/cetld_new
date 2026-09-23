@@ -5,7 +5,7 @@
       {"key":"X-Content-Type-Options","value":"nosniff"},
       {"key":"Referrer-Policy","value":"no-referrer"},
       {"key":"Permissions-Policy","value":"camera=(), microphone=(), geolocation=()"},
-      {"key":"Content-Security-Policy","value":"default-src 'self'; script-src 'self' https://esm.sh; style-src 'self'; img-src 'self' data:; connect-src 'self' https://mbprssoufdelbszsawwu.supabase.co wss://mbprssoufdelbszsawwu.supabase.co https://esm.sh; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"}
+      {"key":"Content-Security-Policy","value":"default-src 'self'; script-src 'self' https://esm.sh; style-src 'self'; img-src 'self' data: https://cdn.simpleicons.org; connect-src 'self' https://mbprssoufdelbszsawwu.supabase.co wss://mbprssoufdelbszsawwu.supabase.co https://esm.sh; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"}
     ]}
   ]
 }
