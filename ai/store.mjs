@@ -1,5 +1,5 @@
 import {APIError, uuid, readJSON, readBounded} from './http.mjs';
-import {DEFAULT_MODEL} from './provider.mjs';
+import {DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, sanitizeModelSettings} from './provider.mjs';
 
 const TABLES = new Set(['invoices', 'customers', 'payments', 'invoice_files']);
 
@@ -41,7 +41,10 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
     },
     async getSettings() {
       const rows = checkRows(await request('/rest/v1/workspace_ai_settings?' + new URLSearchParams({workspace_id: `eq.${workspaceId}`, select: 'workspace_id,primary_model,fallback_model', limit: '1'})));
-      return rows[0] ?? {workspace_id: workspaceId, primary_model: DEFAULT_MODEL, fallback_model: null};
+      const row = rows[0];
+      if (!row) return {workspace_id: workspaceId, primary_model: DEFAULT_MODEL, fallback_model: DEFAULT_FALLBACK_MODEL};
+      const models = sanitizeModelSettings({primaryModel: row.primary_model, fallbackModel: row.fallback_model});
+      return {...row, primary_model: models.primaryModel, fallback_model: models.fallbackModel};
     },
     async saveSettings({primary_model, fallback_model}) {
       if (!['owner', 'admin'].includes(role)) throw new APIError(403, 'SETTINGS_ADMIN_REQUIRED');

@@ -1,10 +1,10 @@
 -- Model identifiers only. Provider credentials remain server environment secrets.
 create table public.workspace_ai_settings (
   workspace_id uuid primary key references public.workspaces(id) on delete cascade,
-  primary_model text not null default 'qwen/qwen3.8-27b:free'
-    check (length(primary_model) <= 160 and primary_model ~ '^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._:+-]*$'),
-  fallback_model text
-    check (fallback_model is null or (length(fallback_model) <= 160 and fallback_model ~ '^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._:+-]*$')),
+  primary_model text not null default 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'
+    check (primary_model = 'openrouter/free' or (length(primary_model) <= 160 and primary_model ~ '^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*:free$')),
+  fallback_model text default 'openrouter/free'
+    check (fallback_model is null or fallback_model = 'openrouter/free' or (length(fallback_model) <= 160 and fallback_model ~ '^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*:free$')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   check (fallback_model is null or fallback_model <> primary_model)

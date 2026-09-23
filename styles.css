@@ -53,3 +53,47 @@ body{min-height:100vh;isolation:isolate;overflow-x:hidden}#app{position:relative
 @media(max-width:520px){.assistant-shell{height:calc(100svh - 101px);min-height:480px;border-radius:10px}.assistant-empty{justify-content:stretch}.assistant-suggestions{grid-template-columns:1fr;margin-top:22px}.assistant-suggestions button:last-child{grid-column:auto}.assistant-message{grid-template-columns:1fr;gap:4px;margin-bottom:22px}.assistant-message-label{padding:0}.assistant-message.user .assistant-bubble{justify-self:start}.assistant-compose-note{display:block}.assistant-thread{padding:23px 15px}.assistant-empty h1{font-size:1.75rem}}
 @media(prefers-reduced-motion:reduce){.liquid-chrome{transform:none!important;opacity:.42}.chrome-orb{animation:none!important;will-change:auto}.assistant-thinking i{animation:none!important;opacity:.6}}.reduce-motion .liquid-chrome{transform:none!important;opacity:.42}.reduce-motion .chrome-orb{animation:none!important;will-change:auto}.reduce-motion .assistant-thinking i{animation:none!important;opacity:.6}
 .assistant-bubble{white-space:pre-wrap}
+.overview-assistant{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:18px;padding:22px 24px;background:linear-gradient(120deg,var(--white),#edf5ef)}
+.overview-assistant-copy{min-width:0}.overview-assistant h2{margin:5px 0 7px;font-size:1.35rem;font-weight:550;letter-spacing:-.025em}.overview-assistant p{margin:0;color:var(--muted);font-size:.84rem}.overview-assistant .assistant-mark{flex:0 0 auto}.overview-assistant-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:17px}.assistant-suggestion{padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--white);color:var(--ink);font-size:.75rem;text-align:left}.assistant-suggestion:hover{border-color:#9fc8b8;background:var(--soft)}.dark .overview-assistant{background:linear-gradient(120deg,var(--white),#18392f)}
+@media(max-width:600px){.overview-assistant{align-items:flex-start;padding:19px 17px}.overview-assistant>.assistant-mark{display:none}.overview-assistant-actions{display:grid;grid-template-columns:1fr}.overview-assistant-actions .btn,.assistant-suggestion{width:100%;min-height:42px}}
+@media(min-width:801px){.shell.sidebar-collapsed .workspace-badge>div{display:none}}
+
+/* Overview mobile: keep the dashboard readable at phone widths. */
+@media(max-width:640px){
+  .content,.page{width:100%;max-width:100%;min-width:0;overflow-x:hidden}
+  .page-intro{gap:14px;margin-bottom:18px}
+  .page-intro h1{overflow-wrap:anywhere}
+  .overview-assistant{width:100%;min-width:0;padding:16px;margin-bottom:14px}
+  .overview-assistant-copy{min-width:0}
+  .overview-assistant h2{font-size:1.15rem;line-height:1.25;overflow-wrap:anywhere}
+  .overview-assistant p{line-height:1.45;overflow-wrap:anywhere}
+  .overview-assistant-actions{grid-template-columns:minmax(0,1fr);min-width:0;margin-top:13px}
+  .stats,.insight-grid,.dashboard-grid,.dashboard-aside{grid-template-columns:minmax(0,1fr);width:100%;min-width:0}
+  .stats{gap:10px;margin-bottom:16px}
+  .stat{min-width:0;padding:14px}
+  .stat strong,.stat small{min-width:0;overflow-wrap:anywhere}
+  .stat strong{font-size:1.45rem}
+  .insight-grid,.dashboard-grid{gap:12px}
+  .aging-chart{min-width:0;height:180px;padding:16px 12px 12px;gap:5px}
+  .age-column{min-width:0;font-size:.62rem}
+  .age-value{font-size:.55rem;overflow-wrap:anywhere}
+  .page:has(.dashboard-grid) .panel,.page:has(.dashboard-grid) .activity-panel,.page:has(.dashboard-grid) .dashboard-grid>.panel,.page:has(.dashboard-grid) .dashboard-aside>*{width:100%;min-width:0}
+  .page:has(.dashboard-grid) .panel-head{padding:15px}
+  .page:has(.dashboard-grid) .panel-head h2,.page:has(.dashboard-grid) .panel-head p{min-width:0;overflow-wrap:anywhere}
+  .page:has(.dashboard-grid) .search-row{display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;gap:8px;padding:12px 15px}
+  .page:has(.dashboard-grid) .search{width:100%;max-width:none;min-width:0}
+  .page:has(.dashboard-grid) .search input,.page:has(.dashboard-grid) .filter{min-width:0;width:100%}
+  .page:has(.dashboard-grid) .filter{padding-block:9px}
+  .page:has(.dashboard-grid) .responsive-table tbody{padding:8px;gap:8px}
+  .page:has(.dashboard-grid) .responsive-table tr{grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-width:0;padding:12px;gap:9px 10px}
+  .page:has(.dashboard-grid) .responsive-table td,.page:has(.dashboard-grid) .responsive-table td strong,.page:has(.dashboard-grid) .responsive-table td small{min-width:0;overflow-wrap:anywhere}
+  .page:has(.dashboard-grid) .empty{min-height:180px;padding:30px 14px}
+  .page:has(.dashboard-grid) .attention{min-width:0;padding:16px;border-radius:11px}
+  .page:has(.dashboard-grid) .attention h2{font-size:1.25rem;line-height:1.2;margin:10px 0 7px;overflow-wrap:anywhere}
+  .page:has(.dashboard-grid) .attention p{font-size:.78rem;line-height:1.45;margin-bottom:12px;overflow-wrap:anywhere}
+  .page:has(.dashboard-grid) .attention .btn{width:100%;min-height:40px}
+  .page:has(.dashboard-grid) .quiet-control .panel-body{padding:15px}
+  .page:has(.dashboard-grid) .quiet-control h3,.page:has(.dashboard-grid) .quiet-control p{min-width:0;overflow-wrap:anywhere}
+  .dashboard-aside{gap:12px}
+  .dashboard-aside>.stack{gap:12px}
+}

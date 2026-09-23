@@ -12,20 +12,27 @@ Server environment: `OPENROUTER_API_KEY`, `SUPABASE_URL`,
 prefix or put it in a database, URL, request from a browser, or source file.
 Rotate any key previously shared in chat before configuring hosting secrets.
 
-Apply `supabase/migrations/20260922185109_ai_workspace_settings.sql` to the
-target **non-production** database before integration testing. This branch does
-not apply migrations remotely or deploy production.
+Apply the AI settings migrations, including
+`supabase/migrations/20260923100000_normalize_ai_free_models.sql`, to the target
+**non-production** database before integration testing. The forward migration
+normalizes legacy rows before enforcing the verified free-model allowlist. This
+branch does not apply migrations remotely or deploy production.
 
-The primary default is `qwen/qwen3.8-27b:free`; the fallback defaults to null.
-The exact primary ID was present in OpenRouter's live public model catalog on
-2026-09-22. Runtime requests validate current availability. Missing/unavailable
-models fail safely; only an explicitly configured fallback is attempted once.
-There is no alternate API/provider or automatic paid-model substitution.
+The primary default is `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`;
+the fallback defaults to `openrouter/free`. Both are OpenRouter free endpoints;
+paid model IDs are rejected at the API, provider, and database boundaries. The
+exact IDs were present in OpenRouter's live public catalog on 2026-09-23.
+Runtime requests validate current availability. A retryable primary failure is
+retried at most twice with bounded exponential backoff, then the fallback gets
+the same bounded retry policy. A 429 is surfaced as a safe temporary
+rate-limit error after those attempts; no key or provider response body is
+returned. There is no alternate API/provider or automatic paid-model
+substitution.
 
 `AIProvider.generate()` / `generateStructured()` are the shared server abstraction
 for extraction, assistant planning, and future WhatsApp agent integration.
-Timeout defaults to 20 seconds per upstream attempt; at most two completion
-attempts. Authentication/malformed-output errors do not trigger fallback.
+Timeout defaults to 20 seconds per upstream attempt; at most three attempts per
+free model. Authentication/malformed-output errors do not trigger fallback.
 Financial answers are **deterministically rendered tool results**, not LLM prose.
 The model selects tools; it cannot supply authoritative financial values.
 
@@ -34,13 +41,13 @@ The model selects tools; it cannot supply authoritative financial values.
 `GET /api/ai?action=settings&workspaceId=<uuid>` returns:
 
 ```json
-{"workspace_id":"...","primary_model":"qwen/qwen3.8-27b:free","fallback_model":null}
+{"workspace_id":"...","primary_model":"nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free","fallback_model":"openrouter/free"}
 ```
 
 `PUT /api/ai?action=settings`, JSON body:
 
 ```json
-{"workspaceId":"...","primary_model":"qwen/qwen3.8-27b:free","fallback_model":null}
+{"workspaceId":"...","primary_model":"nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free","fallback_model":"openrouter/free"}
 ```
 
 Owner/admin only; both IDs are checked against the catalog. Members can read.

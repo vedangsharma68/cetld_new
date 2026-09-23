@@ -8,7 +8,12 @@ function assertServerRuntime() {
   if (typeof globalThis.window !== 'undefined') throw new AIError('INVALID_ARGUMENT', 400);
 }
 
-export const DEFAULT_MODEL = 'qwen/qwen3.8-27b:free';
+// Keep the production path on OpenRouter's free endpoints. The explicit
+// primary is multimodal for invoice images/PDFs; the router is a compatible
+// free fallback for assistant and future WhatsApp calls.
+export const DEFAULT_MODEL = 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free';
+export const DEFAULT_FALLBACK_MODEL = 'openrouter/free';
+export const VERIFIED_FREE_MODELS = Object.freeze([DEFAULT_MODEL, DEFAULT_FALLBACK_MODEL]);
 
 const SAFE_MESSAGES = Object.freeze({
   INVALID_MODEL: 'The configured AI model is not available.',
@@ -40,10 +45,26 @@ export function isModelId(value) {
     && /^[a-zA-Z0-9][a-zA-Z0-9._-]*\/[a-zA-Z0-9][a-zA-Z0-9._-]*(?::[a-zA-Z0-9][a-zA-Z0-9._-]*)?$/.test(value);
 }
 
+export function isFreeModelId(value) {
+  return VERIFIED_FREE_MODELS.includes(value);
+}
+
+export function sanitizeModelSettings({ primaryModel, fallbackModel } = {}) {
+  const primary = isFreeModelId(primaryModel) ? primaryModel : DEFAULT_MODEL;
+  if (fallbackModel === null) return { primaryModel: primary, fallbackModel: null };
+  if (isFreeModelId(fallbackModel) && fallbackModel !== primary) {
+    return { primaryModel: primary, fallbackModel };
+  }
+  return {
+    primaryModel: primary,
+    fallbackModel: primary === DEFAULT_MODEL ? DEFAULT_FALLBACK_MODEL : DEFAULT_MODEL,
+  };
+}
+
 /** Check a model against OpenRouter's public catalog without requiring an API key. */
 export async function verifyModel(modelId, { fetchImpl = globalThis.fetch, timeoutMs = 10_000 } = {}) {
   assertServerRuntime();
-  if (!isModelId(modelId)) throw new AIError('INVALID_MODEL', 400);
+  if (!isFreeModelId(modelId)) throw new AIError('INVALID_MODEL', 400);
   if (typeof fetchImpl !== 'function') throw new AIError('NETWORK_ERROR', 503);
   const controller = new AbortController();
   let timeoutId;
@@ -62,6 +83,7 @@ export async function verifyModel(modelId, { fetchImpl = globalThis.fetch, timeo
       if (!Array.isArray(body?.data)) throw new AIError('INVALID_RESPONSE');
       const entry = body.data.find((model) => model?.id === modelId);
       if (!entry) throw new AIError('INVALID_MODEL', 404);
+      if (!isFreeCatalogEntry(entry)) throw new AIError('INVALID_MODEL', 400);
       // Only return catalog metadata, never provider response/error text.
       return { id: entry.id, name: typeof entry.name === 'string' ? entry.name.slice(0, 300) : null };
     });
@@ -73,6 +95,16 @@ export async function verifyModel(modelId, { fetchImpl = globalThis.fetch, timeo
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
   }
+}
+
+function isFreeCatalogEntry(entry) {
+  if (entry?.id === 'openrouter/free') return true;
+  if (!isFreeModelId(entry?.id)) return false;
+  // Older test doubles and older catalog responses may omit pricing. The
+  // canonical :free suffix remains the fallback in that case; when pricing
+  // is present, require both token prices to be zero.
+  if (!entry?.pricing || typeof entry.pricing !== 'object') return true;
+  return Number(entry.pricing.prompt) === 0 && Number(entry.pricing.completion) === 0;
 }
 
 function invalidArgument() {
@@ -135,7 +167,13 @@ function normalizeContent(content) {
 }
 
 function retryable(error) {
-  return error instanceof AIError && (error.code === 'INVALID_MODEL' && error.status === 404 || ['TIMEOUT', 'NETWORK_ERROR', 'RATE_LIMITED', 'PROVIDER_UNAVAILABLE', 'PROVIDER_ERROR'].includes(error.code));
+  return error instanceof AIError && (
+    (error.code === 'INVALID_MODEL' && error.status === 404)
+    || error.code === 'TIMEOUT'
+    || error.code === 'NETWORK_ERROR'
+    || error.code === 'RATE_LIMITED'
+    || (error.code === 'PROVIDER_UNAVAILABLE' && error.status >= 500)
+  );
 }
 
 function statusError(status) {
@@ -150,19 +188,28 @@ export class AIProvider {
   #apiKey;
   constructor({
     primaryModel = DEFAULT_MODEL,
-    fallbackModel = null,
+    fallbackModel = DEFAULT_FALLBACK_MODEL,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     apiKey = globalThis.process?.env?.OPENROUTER_API_KEY,
     fetchImpl = globalThis.fetch,
     catalogTtlMs = DEFAULT_CATALOG_TTL_MS,
+    maxAttempts = 3,
+    retryDelayMs = 100,
+    sleepImpl = (delay) => new Promise(resolve => setTimeout(resolve, delay)),
   } = {}) {
     assertServerRuntime();
+    if (!isFreeModelId(primaryModel) || (fallbackModel !== null && !isFreeModelId(fallbackModel))) {
+      throw new AIError('INVALID_MODEL', 400);
+    }
     this.primaryModel = primaryModel;
     this.fallbackModel = fallbackModel;
     this.timeoutMs = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : DEFAULT_TIMEOUT_MS;
     this.#apiKey = typeof apiKey === 'string' ? apiKey : '';
     this.fetchImpl = fetchImpl;
     this.catalogTtlMs = Number.isFinite(catalogTtlMs) ? Math.max(0, catalogTtlMs) : DEFAULT_CATALOG_TTL_MS;
+    this.maxAttempts = Number.isInteger(maxAttempts) ? Math.min(3, Math.max(1, maxAttempts)) : 3;
+    this.retryDelayMs = Number.isFinite(retryDelayMs) ? Math.min(1000, Math.max(0, retryDelayMs)) : 100;
+    this.sleepImpl = typeof sleepImpl === 'function' ? sleepImpl : (() => Promise.resolve());
     this.catalog = null;
     this.catalogFetchedAt = 0;
   }
@@ -184,7 +231,7 @@ export class AIProvider {
       return await this.#generateWithModel(primary, messages, requestOptions, false);
     } catch (error) {
       if (!retryable(error) || this.fallbackModel === null || this.fallbackModel === primary) throw error;
-      if (!isModelId(this.fallbackModel)) throw new AIError('INVALID_MODEL', 400);
+      if (!isFreeModelId(this.fallbackModel)) throw new AIError('INVALID_MODEL', 400);
       const fallback = await this.#validateModel(this.fallbackModel);
       return this.#generateWithModel(fallback, messages, requestOptions, true);
     }
@@ -222,7 +269,7 @@ export class AIProvider {
   }
 
   async #validateModel(model) {
-    if (!isModelId(model)) throw new AIError('INVALID_MODEL', 400);
+    if (!isFreeModelId(model)) throw new AIError('INVALID_MODEL', 400);
     if (!this.#apiKey) throw new AIError('API_KEY_MISSING', 503);
     const catalog = await this.#getCatalog();
     if (!catalog.has(model)) throw new AIError('INVALID_MODEL', 404);
@@ -241,13 +288,27 @@ export class AIProvider {
       throw new AIError('INVALID_RESPONSE');
     }
     if (!Array.isArray(body?.data) || body.data.length > 100_000) throw new AIError('INVALID_RESPONSE');
-    const models = new Set(body.data.filter((entry) => isModelId(entry?.id)).map((entry) => entry.id));
+    const models = new Set(body.data.filter(isFreeCatalogEntry).map((entry) => entry.id));
     this.catalog = models;
     this.catalogFetchedAt = now;
     return models;
   }
 
   async #generateWithModel(model, messages, options, usedFallback) {
+    let lastError;
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
+      try {
+        return await this.#requestModel(model, messages, options, usedFallback);
+      } catch (error) {
+        lastError = error;
+        if (attempt >= this.maxAttempts || !retryable(error)) throw error;
+        await this.sleepImpl(this.retryDelayMs * (2 ** (attempt - 1)));
+      }
+    }
+    throw lastError;
+  }
+
+  async #requestModel(model, messages, options, usedFallback) {
     const payload = { ...options, model, messages, stream: false };
     const { response, text: bodyText } = await this.#fetchText(`${OPENROUTER_BASE_URL}/chat/completions`, {
       method: 'POST',

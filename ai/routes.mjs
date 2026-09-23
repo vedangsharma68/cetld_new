@@ -1,5 +1,5 @@
 import {APIError, object, requestBody, sendError, uuid} from './http.mjs';
-import {AIProvider, isModelId, verifyModel} from './provider.mjs';
+import {AIProvider, isFreeModelId, verifyModel} from './provider.mjs';
 import {authorizeAIWorkspace} from './store.mjs';
 import {extractInvoice} from './extraction.mjs';
 import {answerWorkspaceQuestion} from './assistant.mjs';
@@ -20,7 +20,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         if (req.method === 'GET') return res.status(200).json(await store.getSettings());
         if (!['owner', 'admin'].includes(store.role)) throw new APIError(403, 'SETTINGS_ADMIN_REQUIRED');
         const {primary_model, fallback_model = null} = body;
-        if (!isModelId(primary_model) || (fallback_model !== null && !isModelId(fallback_model)) || primary_model === fallback_model) throw new APIError(400, 'INVALID_MODEL_CONFIGURATION');
+        if (!isFreeModelId(primary_model) || (fallback_model !== null && !isFreeModelId(fallback_model)) || primary_model === fallback_model) throw new APIError(400, 'INVALID_MODEL_CONFIGURATION');
         await verify(primary_model, {fetchImpl});
         if (fallback_model) await verify(fallback_model, {fetchImpl});
         return res.status(200).json(await store.saveSettings({primary_model, fallback_model}));

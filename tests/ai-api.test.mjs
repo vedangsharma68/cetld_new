@@ -4,7 +4,7 @@ import {authorizeAIWorkspace} from '../ai/store.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
 import {readFile} from 'node:fs/promises';
 import {answerWorkspaceQuestion} from '../ai/assistant.mjs';
-import {DEFAULT_MODEL, AIProvider} from '../ai/provider.mjs';
+import {DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, AIProvider} from '../ai/provider.mjs';
 const A='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', B='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', U='11111111-1111-4111-8111-111111111111', F='22222222-2222-4222-8222-222222222222';
 const env={SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUBLISHABLE_KEY:'public-test-key'};
 
@@ -45,11 +45,18 @@ test('settings persistence uses user RLS and never includes API secrets',async()
     return json(saved);
   })});
   assert.equal((await store.getSettings()).primary_model,DEFAULT_MODEL);
-  await store.saveSettings({primary_model:DEFAULT_MODEL,fallback_model:'vendor/fallback'});
-  assert.equal((await store.getSettings()).fallback_model,'vendor/fallback');
+  await store.saveSettings({primary_model:DEFAULT_MODEL,fallback_model:DEFAULT_FALLBACK_MODEL});
+  assert.equal((await store.getSettings()).fallback_model,DEFAULT_FALLBACK_MODEL);
   assert.deepEqual(Object.keys(saved[0]).sort(),['fallback_model','primary_model','workspace_id']);
   const member=await authorizeAIWorkspace(request,A,{env,fetchImpl:transport(()=>json([]),'member')});
   await assert.rejects(member.saveSettings({primary_model:DEFAULT_MODEL,fallback_model:null}),e=>e.status===403);
+});
+test('settings reads sanitize legacy paid and invalid model IDs to verified free defaults', async()=>{
+  const store=await authorizeAIWorkspace(request,A,{env,fetchImpl:transport(url=>{
+    assert.match(url.pathname,/workspace_ai_settings$/);
+    return json([{workspace_id:A,primary_model:'openai/gpt-4.1-mini',fallback_model:'not-a-model'}]);
+  })});
+  assert.deepEqual(await store.getSettings(),{workspace_id:A,primary_model:DEFAULT_MODEL,fallback_model:DEFAULT_FALLBACK_MODEL});
 });
 test('file extraction download checks workspace and invoice path before accessing storage',async()=>{
   let downloaded=false;
@@ -69,7 +76,7 @@ test('settings API validates models, permissions, and unknown fields before savi
   let saves=0,verified=[];
   const store={role:'owner',getSettings:async()=>({primary_model:DEFAULT_MODEL}),saveSettings:async s=>{saves++;return s;}};
   const handler=createAIHandler({authorize:async()=>store,verify:async id=>verified.push(id)});
-  const req={method:'PUT',query:{action:'settings'},body:{workspaceId:A,primary_model:DEFAULT_MODEL,fallback_model:'vendor/fallback'}};
+  const req={method:'PUT',query:{action:'settings'},body:{workspaceId:A,primary_model:DEFAULT_MODEL,fallback_model:DEFAULT_FALLBACK_MODEL}};
   const res=response();await handler(req,res);assert.equal(res.code,200);assert.equal(saves,1);assert.equal(verified.length,2);
   const bad=response();await handler({...req,body:{...req.body,apiKey:'forbidden'}},bad);assert.equal(bad.code,400);assert.equal(saves,1);
   store.role='member';const denied=response();await handler(req,denied);assert.equal(denied.code,403);

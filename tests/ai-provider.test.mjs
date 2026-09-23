@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AIError, AIProvider, DEFAULT_MODEL, isModelId, verifyModel } from '../ai/provider.mjs';
+import { AIError, AIProvider, DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, isFreeModelId, isModelId, verifyModel } from '../ai/provider.mjs';
 
-const FALLBACK_MODEL = 'openai/gpt-4.1-mini';
+const FALLBACK_MODEL = DEFAULT_FALLBACK_MODEL;
 
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
@@ -42,6 +42,19 @@ test('model ids accept OpenRouter slugs and reject malformed values', () => {
   }
 });
 
+test('only the verified free OpenRouter models are accepted for provider configuration', async () => {
+  assert.equal(DEFAULT_MODEL, 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free');
+  assert.equal(DEFAULT_FALLBACK_MODEL, 'openrouter/free');
+  assert.equal(isFreeModelId(DEFAULT_MODEL), true);
+  assert.equal(isFreeModelId(DEFAULT_FALLBACK_MODEL), true);
+  assert.equal(isFreeModelId('openai/gpt-4.1-mini'), false);
+  assert.equal(isFreeModelId('google/gemini-2.5-flash'), false);
+  await assert.rejects(
+    () => verifyModel('openai/gpt-4.1-mini', { fetchImpl: async () => { throw new Error('must not fetch paid model'); } }),
+    (error) => error.code === 'INVALID_MODEL' && error.status === 400,
+  );
+});
+
 test('uses the configured primary model and returns normalized completion fields', async () => {
   let requestBody;
   const ai = provider(mockedFetch(async (_url, init) => {
@@ -66,10 +79,57 @@ test('falls back once after a retryable provider status and identifies the selec
     return model === DEFAULT_MODEL ? jsonResponse({ error: 'private provider detail' }, 503) : completion('recovered');
   }));
   const result = await ai.generate({ messages: [{ role: 'user', content: 'Hi' }] });
-  assert.deepEqual(requestedModels, [DEFAULT_MODEL, FALLBACK_MODEL]);
+  assert.deepEqual(requestedModels, [DEFAULT_MODEL, DEFAULT_MODEL, DEFAULT_MODEL, FALLBACK_MODEL]);
   assert.equal(result.content, 'recovered');
   assert.equal(result.model, FALLBACK_MODEL);
   assert.equal(result.usedFallback, true);
+});
+
+test('retries explicit 429 responses with bounded exponential backoff before using the free fallback', async () => {
+  const requestedModels = [];
+  const waits = [];
+  const ai = provider(mockedFetch(async (_url, init) => {
+    const model = JSON.parse(init.body).model;
+    requestedModels.push(model);
+    return model === DEFAULT_MODEL
+      ? jsonResponse({ error: 'rate limited' }, 429)
+      : completion('recovered after rate limit');
+  }), { sleepImpl: async ms => waits.push(ms), maxAttempts: 3, retryDelayMs: 25 });
+  const result = await ai.generate({ messages: [{ role: 'user', content: 'Hi' }] });
+  assert.deepEqual(requestedModels, [DEFAULT_MODEL, DEFAULT_MODEL, DEFAULT_MODEL, FALLBACK_MODEL]);
+  assert.deepEqual(waits, [25, 50]);
+  assert.equal(result.usedFallback, true);
+});
+
+test('returns a safe temporary rate-limit error after bounded retries on both free models', async () => {
+  let requests = 0;
+  const ai = provider(mockedFetch(async () => {
+    requests++;
+    return jsonResponse({ error: 'provider detail must not escape' }, 429);
+  }), { sleepImpl: async () => {}, maxAttempts: 2, retryDelayMs: 1 });
+  await assert.rejects(ai.generate({ messages: [{ role: 'user', content: 'Hi' }] }), (error) => {
+    assert.ok(error instanceof AIError);
+    assert.equal(error.code, 'RATE_LIMITED');
+    assert.equal(error.status, 429);
+    assert.match(error.message, /temporarily rate limited/);
+    assert.doesNotMatch(error.message, /provider detail/);
+    return true;
+  });
+  assert.equal(requests, 4);
+});
+
+test('rejects paid primary and fallback models before contacting OpenRouter', async () => {
+  let requests = 0;
+  const fetchImpl = async () => { requests++; throw new Error('must not fetch paid model'); };
+  assert.throws(
+    () => new AIProvider({ apiKey: 'test-key', fetchImpl, primaryModel: 'openai/gpt-4.1-mini' }),
+    error => error.code === 'INVALID_MODEL' && error.status === 400,
+  );
+  assert.throws(
+    () => new AIProvider({ apiKey: 'test-key', fetchImpl, primaryModel: DEFAULT_MODEL, fallbackModel: 'openai/gpt-4.1-mini' }),
+    error => error.code === 'INVALID_MODEL' && error.status === 400,
+  );
+  assert.equal(requests, 0);
 });
 
 test('does not fall back on authentication failure and never exposes provider error bodies', async () => {
@@ -98,7 +158,7 @@ test('network failures and timeouts can use the one configured fallback', async 
     return completion('fallback after network failure');
   }));
   const result = await ai.generate({ messages: [{ role: 'user', content: 'Hi' }] });
-  assert.deepEqual(requestedModels, [DEFAULT_MODEL, FALLBACK_MODEL]);
+  assert.deepEqual(requestedModels, [DEFAULT_MODEL, DEFAULT_MODEL, DEFAULT_MODEL, FALLBACK_MODEL]);
   assert.equal(result.usedFallback, true);
 
   let timedOutModels = [];
@@ -107,9 +167,9 @@ test('network failures and timeouts can use the one configured fallback', async 
     timedOutModels.push(model);
     if (model === DEFAULT_MODEL) return new Promise(() => {});
     return Promise.resolve(completion('fallback after timeout'));
-  }), { timeoutMs: 10 });
+  }), { timeoutMs: 10, sleepImpl: async () => {} });
   const afterTimeout = await slow.generate({ messages: [{ role: 'user', content: 'Hi' }] });
-  assert.deepEqual(timedOutModels, [DEFAULT_MODEL, FALLBACK_MODEL]);
+  assert.deepEqual(timedOutModels, [DEFAULT_MODEL, DEFAULT_MODEL, DEFAULT_MODEL, FALLBACK_MODEL]);
   assert.equal(afterTimeout.usedFallback, true);
 });
 

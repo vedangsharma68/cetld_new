@@ -29,8 +29,8 @@ test('real Postgres RLS: settings persist, isolate tenants, restrict members, pr
     const wa2=(await db.query("select (public.create_workspace('Alpha two','alpha-space-two')).id")).rows[0].id;
     await db.query("insert into workspace_members(workspace_id,user_id,role) values ($1,$2,'member')",[wa,member]);
     await db.query('insert into workspace_ai_settings(workspace_id) values ($1)',[wa]);
-    await db.query("update workspace_ai_settings set fallback_model='vendor/fallback' where workspace_id=$1",[wa]);
-    assert.equal((await db.query('select fallback_model from workspace_ai_settings')).rows[0].fallback_model,'vendor/fallback');
+    await db.query("update workspace_ai_settings set fallback_model='openrouter/free' where workspace_id=$1",[wa]);
+    assert.equal((await db.query('select fallback_model from workspace_ai_settings')).rows[0].fallback_model,'openrouter/free');
     await assert.rejects(db.query('update workspace_ai_settings set workspace_id=$1 where workspace_id=$2',[wa2,wa]), /immutable/);
     await identity(b);
     const wb=(await db.query("select (public.create_workspace('Beta','beta-space')).id")).rows[0].id;
