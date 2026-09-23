@@ -55,3 +55,38 @@ test('interactive controls preserve delegated action contracts', () => {
     'onboarding',
   ]) assert.match(app, new RegExp(`['\"]${action}['\"]`));
 });
+
+test('mobile tables, drawers and navigation remain usable at small widths', () => {
+  assert.match(css, /@media\(max-width:600px\)/);
+  assert.match(css, /@media\(max-width:360px\)/);
+  assert.match(css, /\.responsive-table thead\{display:none\}/);
+  assert.match(css, /\.responsive-table td::before/);
+  assert.match(css, /dialog\.detail-drawer\[open\]\{display:flex\}/);
+  assert.match(app, /class="responsive-table invoice-table"/);
+  assert.match(app, /class="responsive-table payment-table"/);
+  assert.match(app, /aria-controls="app-navigation"/);
+  assert.match(app, /action="collapse-nav"/);
+});
+test('settings persist workspace currency and account model preferences', () => {
+  for (const code of ['INR','USD','EUR','GBP','AED','SGD','AUD','CAD','JPY','CHF']) assert.ok(app.includes("['"+code+"'"));
+  assert.match(app, /name="primary_ai_model"/);
+  assert.match(app, /name="fallback_ai_model"/);
+  assert.match(app, /db\.auth\.updateUser/);
+  assert.match(app, /default_currency:currency/);
+  assert.match(app, /\(x\.currency\|\|currency\)===currency/);
+  assert.match(app, /x\?\.currency\|\|state\.settings\?\.default_currency/);
+  assert.match(app, /Intl\.NumberFormat/);
+});
+test('client wording, official integration logos and global contact links are present', () => {
+  assert.match(app, /Client phone \(optional\)/);
+  assert.match(app, /Client email \(optional\)/);
+  assert.doesNotMatch(app, /Debtor (?:phone|email)/);
+  assert.match(app, /\['zoho'/);
+  assert.match(app, /\['quickbooks'/);
+  assert.match(app, /\['whatsapp'/);
+  assert.match(app, /cdn\.simpleicons\.org/);
+  assert.match(app, /mailto:vedangsharma52@gmail\.com/);
+  assert.match(app, /tel:\+919871367051/);
+  const csp=JSON.parse(vercel).headers[0].headers.find(({key})=>key==='Content-Security-Policy').value;
+  assert.match(csp,/img-src[^;]*https:\/\/cdn\.simpleicons\.org/);
+});
