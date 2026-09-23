@@ -1,12 +1,11 @@
 const MAX_BYTES = 10 * 1024 * 1024;
-const MAX_LINE_ITEMS = 100;
 const CONFIDENCE_THRESHOLD = 0.75;
 
 const FIELD_NAMES = [
   'invoiceNumber', 'customerName', 'invoiceDate', 'dueDate', 'subtotal', 'tax',
-  'total', 'outstandingAmount', 'currency', 'clientPhone', 'clientEmail', 'lineItems',
+  'total', 'outstandingAmount', 'currency', 'clientPhone', 'clientEmail', 'notes',
 ];
-const SCALAR_FIELDS = FIELD_NAMES.filter((field) => field !== 'lineItems');
+const SCALAR_FIELDS = FIELD_NAMES;
 
 // Intl's currency data is the preferred source. Keep a vetted fallback for runtimes
 // without supportedValuesOf, and add the commonly used codes to cover older ICU data.
@@ -50,24 +49,7 @@ const responseSchema = {
     currency: { ...FIELD_SCHEMA, properties: { ...FIELD_SCHEMA.properties, value: nullable('string') } },
     clientPhone: { ...FIELD_SCHEMA, properties: { ...FIELD_SCHEMA.properties, value: nullable('string') } },
     clientEmail: { ...FIELD_SCHEMA, properties: { ...FIELD_SCHEMA.properties, value: nullable('string') } },
-    lineItems: {
-      type: 'object', additionalProperties: false, required: ['value', 'confidence'],
-      properties: {
-        value: {
-          type: 'array', maxItems: MAX_LINE_ITEMS,
-          items: {
-            type: 'object', additionalProperties: false,
-            required: ['description', 'quantity', 'unitPrice', 'amount', 'confidence'],
-            properties: {
-              description: nullable('string'), quantity: nullable('number'),
-              unitPrice: nullable('number'), amount: nullable('number'),
-              confidence: { type: 'number', minimum: 0, maximum: 1 },
-            },
-          },
-        },
-        confidence: { type: 'number', minimum: 0, maximum: 1 },
-      },
-    },
+    notes: { ...FIELD_SCHEMA, properties: { ...FIELD_SCHEMA.properties, value: nullable('string') } },
   },
 };
 
@@ -149,7 +131,7 @@ function makeMessages({ bytes, mimeType, fileName }) {
     'For currency, return an explicit three-letter ISO 4217 code only when printed explicitly; symbols such as $, £, or ¥ alone are ambiguous and must yield null.',
     'Return clientEmail exactly when a client/bill-to email address is explicitly printed; otherwise return null. Never infer an email address.',
     'Return clientPhone only when the complete number is explicitly present in valid E.164 form including its + country code. Do not invent a country prefix.',
-    'Set confidence per field from 0 to 1 based only on legibility and direct support. Do not perform external lookups.',
+    'Return short useful notes only when explicitly printed; otherwise return null. Set confidence per field from 0 to 1 based only on legibility and direct support.',
   ].join(' ');
 
   if (detected === 'application/pdf') {
@@ -158,7 +140,6 @@ function makeMessages({ bytes, mimeType, fileName }) {
         { type: 'text', text: instruction },
         { type: 'file', file: { filename: safeName.endsWith('.pdf') ? safeName : `${safeName}.pdf`, file_data: `data:application/pdf;base64,${data.toString('base64')}` } },
       ] }],
-      plugins: [{ id: 'file-parser', pdf: { engine: 'pdf-text' } }],
     };
   }
   return {
@@ -170,13 +151,15 @@ function makeMessages({ bytes, mimeType, fileName }) {
 }
 
 function validateAndSanitize(raw) {
-  exactKeys(raw, FIELD_NAMES, 'response');
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('response must be an object');
+  const allowed = new Set([...FIELD_NAMES, 'lineItems']);
+  if (Object.keys(raw).some((name) => !allowed.has(name))) fail('response has unknown fields');
   const warnings = [];
   const uncertainFields = new Set();
   const result = {};
 
   for (const name of SCALAR_FIELDS) {
-    const item = raw[name];
+    const item = raw[name] ?? {value: null, confidence: 0};
     exactKeys(item, ['value', 'confidence'], name);
     const confidence = finiteConfidence(item.confidence, name);
     let value = field(item.value, name === 'subtotal' || name === 'tax' || name === 'total' || name === 'outstandingAmount' ? 'number' : 'string', name, warnings);
@@ -221,26 +204,6 @@ function validateAndSanitize(raw) {
     warnings.push('Currency is not explicit or could not be verified; monetary values need review.');
   }
 
-  const item = raw.lineItems;
-  exactKeys(item, ['value', 'confidence'], 'lineItems');
-  const lineConfidence = finiteConfidence(item.confidence, 'lineItems');
-  if (!Array.isArray(item.value) || item.value.length > MAX_LINE_ITEMS) fail(`lineItems must be an array of at most ${MAX_LINE_ITEMS} items`);
-  const lineItems = item.value.map((line, index) => {
-    exactKeys(line, ['description', 'quantity', 'unitPrice', 'amount', 'confidence'], `lineItems[${index}]`);
-    const confidence = finiteConfidence(line.confidence, `lineItems[${index}]`);
-    const description = line.description === null ? null : field(line.description, 'string', `lineItems[${index}].description`, warnings);
-    const quantity = line.quantity;
-    if (quantity !== null && (typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity < 0 || quantity > 1_000_000)) fail(`lineItems[${index}].quantity is invalid`);
-    const unitPrice = line.unitPrice === null ? null : field(line.unitPrice, 'number', `lineItems[${index}].unitPrice`, warnings);
-    const amount = line.amount === null ? null : field(line.amount, 'number', `lineItems[${index}].amount`, warnings);
-    for (const [label, value] of [['unitPrice', unitPrice], ['amount', amount]]) {
-      if (value !== null && (!Number.isSafeInteger(Math.round(value * (10 ** digits))) || Math.abs(value * (10 ** digits) - Math.round(value * (10 ** digits))) > 1e-7)) fail(`lineItems[${index}].${label} has invalid fractional precision`);
-    }
-    if (confidence < CONFIDENCE_THRESHOLD || description === null || amount === null) uncertainFields.add(`lineItems[${index}]`);
-    return { description, quantity, unitPrice, amount, confidence };
-  });
-  if (lineConfidence < CONFIDENCE_THRESHOLD) uncertainFields.add('lineItems');
-  result.lineItems = { value: lineItems, confidence: lineConfidence };
 
   const subtotal = result.subtotal.value;
   const tax = result.tax.value;
@@ -251,10 +214,6 @@ function validateAndSanitize(raw) {
   }
   if (subtotal !== null && tax !== null && total !== null && Math.abs(subtotal + tax - total) > (0.5 / (10 ** digits))) {
     warnings.push('Subtotal plus tax does not match total.');
-  }
-  if (subtotal !== null && lineItems.length > 0 && lineItems.every((line) => line.amount !== null)) {
-    const sum = lineItems.reduce((acc, line) => acc + line.amount, 0);
-    if (Math.abs(sum - subtotal) > (0.5 / (10 ** digits))) warnings.push('Line item amounts do not match subtotal.');
   }
   if (result.dueDate.value && result.invoiceDate.value && result.dueDate.value < result.invoiceDate.value) {
     warnings.push('Due date is earlier than invoice date.');
@@ -279,8 +238,8 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName }) {
     schema: responseSchema,
     name: 'invoice_extraction',
     validate,
-    maxTokens: 2500,
-    ...(payload.plugins ? { plugins: payload.plugins } : {}),
+    maxTokens: 900,
+
   });
   if (!response || typeof response !== 'object' || !Object.hasOwn(response, 'data')) fail('provider returned a malformed response');
   // AIProvider already returns the validator's sanitized shape (with warnings).

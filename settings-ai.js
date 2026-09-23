@@ -1,4 +1,9 @@
 export const AI_MODELS = [
-  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+  'gemini-3.5-flash',
+  'gemini-3.1-flash',
   'openrouter/free',
+];
+export const EXTRACTION_MODELS = [
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
 ];
