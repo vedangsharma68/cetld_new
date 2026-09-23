@@ -100,6 +100,12 @@ test('only accepts complete E.164 phone numbers and never invents a prefix', asy
   assert.ok(result.warnings.some((warning) => /complete E\.164/.test(warning)));
 });
 
+test('explicitly instructs the model to return printed client email without inference', async () => {
+  let sent;
+  await run(response(), { inspect: (request) => { sent = request; } });
+  assert.match(JSON.stringify(sent), /Return clientEmail exactly when a client\/bill-to email address is explicitly printed/);
+});
+
 test('routes PDFs through the file-parser plugin and sends an inline PDF data URL', async () => {
   let captured;
   await run(response(), {
