@@ -63,6 +63,15 @@ export function respondError(response, error) {
     if (code === 'ACCOUNTING_PROVIDER_ERROR') {
       return response.status(502).json({ error: 'Zoho authorization provider rejected the request. Verify the Zoho app credentials and callback URL.' });
     }
+    if (code === 'ACCOUNTING_ZOHO_CLIENT_ID_MISSING') {
+      return response.status(503).json({ error: 'Missing server configuration: ZOHO_BOOKS_CLIENT_ID' });
+    }
+    if (code === 'ACCOUNTING_ZOHO_CLIENT_SECRET_MISSING') {
+      return response.status(503).json({ error: 'Missing server configuration: ZOHO_BOOKS_CLIENT_SECRET' });
+    }
+    if (code === 'ACCOUNTING_ZOHO_REDIRECT_URI_MISSING') {
+      return response.status(503).json({ error: 'Missing server configuration: ZOHO_BOOKS_REDIRECT_URI' });
+    }
     return response.status(503).json({ error: 'Zoho connection failed (' + code + '). Check the Vercel function logs for this error code.' });
   }
   console.error('Automation request failed', { name: String(error?.name || 'Error') });
