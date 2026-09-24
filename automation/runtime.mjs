@@ -7,7 +7,7 @@ import { scheduleInitialFollowUp, nextContactTime } from './cadence.mjs';
 
 export function createAccountingRuntime({env=process.env,fetchImpl=fetch}={}) {
   return createAccountingIntegration({
-    store:new SupabaseAccountingStore({url:required(env,'SUPABASE_URL'),serviceRoleKey:required(env,'SUPABASE_SERVICE_ROLE_KEY'),fetchImpl}),
+    store:new SupabaseAccountingStore({url:env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || required(env,'SUPABASE_URL'),serviceRoleKey:required(env,'SUPABASE_SERVICE_ROLE_KEY'),fetchImpl}),
     cipher:new TokenCipher(encryptionKeyFromEnv(env.ACCOUNTING_TOKEN_ENCRYPTION_KEY)),
     providers:createAccountingProviders({
       zoho_books:{clientId:env.ZOHO_BOOKS_CLIENT_ID,clientSecret:env.ZOHO_BOOKS_CLIENT_SECRET,redirectUri:env.ZOHO_BOOKS_REDIRECT_URI,region:env.ZOHO_BOOKS_REGION || 'com',fetchImpl},
