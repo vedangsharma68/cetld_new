@@ -89,6 +89,19 @@ test("tool definitions are OpenAI function tools with no workspace or owner inpu
   }
 });
 
+test('live Zoho read tool returns currency major-units and never provider raw data', async () => {
+  let scope;
+  const tools = createAssistantTools({store: makeStore(), accounting: {async readZohoData(input) {
+    scope = input;
+    return {provider:'zoho_books',resource:'invoices',records:[{externalId:'zoho-1',number:'INV-005',customerName:'Shiv Engineering',amountMinor:8460000,paidMinor:0,balanceMinor:8460000,currency:'INR',raw:{access_token:'secret'}}]};
+  }}});
+  assert.ok(tools.definitions.some(item => item.function.name === 'getZohoBooksData'));
+  const result = await tools.execute('getZohoBooksData', {resource:'invoices'});
+  assert.equal(scope.resource, 'invoices');
+  assert.equal(result.invoices[0].outstandingAmount, '84600.00');
+  assert.doesNotMatch(JSON.stringify(result), /access_token|zoho-1.*raw/);
+});
+
 test("outstanding math is decimal-exact and grouped by currency without summing payments", async () => {
   const store = makeStore({ invoices: [
     invoice(INV_1, { total_amount: "0.30", amount_paid: "0.10", currency: "USD" }),

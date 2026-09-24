@@ -153,7 +153,7 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       const response = await providerFetch(fetchImpl, 'zoho_books', url, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: formBody({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: callback, grant_type: 'authorization_code' }) });
       const body = await jsonResponse(response, 'zoho_books');
       if (!body.access_token || !body.refresh_token) throw new Error('Zoho Books did not return required tokens');
-      return { accessToken: body.access_token, refreshToken: body.refresh_token, expiresAt: Date.now() + Number(body.expires_in || 3600) * 1000, apiDomain: safeApiDomain(body.api_domain, selectedRegion), region: selectedRegion };
+      return { accessToken: body.access_token, refreshToken: body.refresh_token, expiresAt: Date.now() + Number(body.expires_in || 3600) * 1000, accountsDomain: accountDomain(selectedRegion), apiDomain: safeApiDomain(body.api_domain, selectedRegion), region: selectedRegion };
     },
     async refreshToken({ refreshToken, region: selectedRegion = region }) {
       if (!clientId || !clientSecret || !refreshToken) throw new Error('Zoho Books client is not configured');
@@ -161,7 +161,13 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       const response = await providerFetch(fetchImpl, 'zoho_books', url, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: formBody({ refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret, grant_type: 'refresh_token' }) });
       const body = await jsonResponse(response, 'zoho_books');
       if (!body.access_token) throw new Error('Zoho Books did not return an access token');
-      return { accessToken: body.access_token, refreshToken: body.refresh_token || refreshToken, expiresAt: Date.now() + Number(body.expires_in || 3600) * 1000, apiDomain: safeApiDomain(body.api_domain, selectedRegion), region: selectedRegion };
+      return { accessToken: body.access_token, refreshToken: body.refresh_token || refreshToken, expiresAt: Date.now() + Number(body.expires_in || 3600) * 1000, accountsDomain: accountDomain(selectedRegion), apiDomain: safeApiDomain(body.api_domain, selectedRegion), region: selectedRegion };
+    },
+    async revokeToken({ refreshToken, region: selectedRegion = region }) {
+      if (!refreshToken) return;
+      const url = new URL(`${accountDomain(selectedRegion)}/oauth/v2/token/revoke`);
+      url.search = new URLSearchParams({ token: refreshToken }).toString();
+      await providerFetch(fetchImpl, 'zoho_books', url, { method: 'POST', headers: { Accept: 'application/json' } });
     },
     async fetchOrganizations({ token }) {
       const url = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/organizations`);
@@ -213,6 +219,34 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       const invoice = normalizeZohoInvoice(body.invoice);
       if (!invoice || invoice.externalId !== String(invoiceId)) throw new Error('Zoho Books returned an invalid invoice balance');
       return { balanceMinor: invoice.balanceMinor, currency: invoice.currency, totalMinor: invoice.amountMinor, externalId: invoice.externalId };
+    },
+    async fetchInvoice({ token, accountId, invoiceId }) {
+      if (!accountId || !invoiceId) throw new Error('Zoho Books organization and invoice IDs are required');
+      const url = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices/${encodeURIComponent(invoiceId)}`);
+      url.search = new URLSearchParams({ organization_id: accountId }).toString();
+      const body = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', url, { headers: { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' } }), 'zoho_books');
+      const invoice = normalizeZohoInvoice(body.invoice);
+      if (!invoice || invoice.externalId !== String(invoiceId)) throw new Error('Zoho Books returned an invalid invoice');
+      return invoice;
+    },
+    async updateInvoice({ token, accountId, invoiceId, invoice }) {
+      if (!accountId || !invoiceId || !invoice || typeof invoice !== 'object') throw new Error('Zoho Books organization, invoice ID and invoice updates are required');
+      const payload = {};
+      for (const [source, target] of [['dueDate', 'due_date'], ['invoiceDate', 'date'], ['invoiceNumber', 'invoice_number']]) {
+        if (invoice[source] === undefined) continue;
+        const value = String(invoice[source]);
+        if (source !== 'invoiceNumber' && !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('Invoice dates must use YYYY-MM-DD');
+        if (source === 'invoiceNumber' && (!value.trim() || value.length > 100)) throw new Error('Invoice number is invalid');
+        payload[target] = value;
+      }
+      if (invoice.notes !== undefined) payload.notes = String(invoice.notes).slice(0, 2000);
+      if (!Object.keys(payload).length) throw new Error('No supported Zoho Books invoice fields were provided');
+      const url = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices/${encodeURIComponent(invoiceId)}`);
+      url.search = new URLSearchParams({ organization_id: accountId }).toString();
+      const response = await providerFetch(fetchImpl, 'zoho_books', url, { method: 'PUT', headers: { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const body = await jsonResponse(response, 'zoho_books');
+      if (String(body.invoice?.invoice_id || '') !== String(invoiceId)) throw new Error('Zoho Books did not confirm the requested invoice update');
+      return this.fetchInvoice({ token, accountId, invoiceId });
     },
     async createInvoice({ token, accountId, invoice }) {
       if (!accountId) throw new Error('Zoho Books organization ID is required');
@@ -332,4 +366,3 @@ async function queryQbo(fetchImpl, token, accountId, entity, normalize, apiRoot,
 export function createAccountingProviders(options = {}) {
   return { zoho_books: createZohoBooksProvider(options.zoho_books), quickbooks: createQuickBooksProvider(options.quickbooks) };
 }
-

@@ -6,7 +6,9 @@ create table if not exists public.cetld_accounting_connections (
   workspace_id uuid not null references public.cetld_workspaces(id) on delete cascade,
   provider text not null check (provider in ('zoho_books','quickbooks')),
   provider_account_id text,
+  organization_name text,
   region text,
+  accounts_domain text,
   api_domain text,
   token_ciphertext text not null,
   token_iv text not null,
@@ -15,6 +17,11 @@ create table if not exists public.cetld_accounting_connections (
   revision bigint not null default 1,
   refresh_lease_token text,
   refresh_lease_until timestamptz,
+  status text not null default 'connecting' check (status in ('connecting','needs_organization','connected','needs_attention','disconnected')),
+  last_synced_at timestamptz,
+  last_sync_status text not null default 'never' check (last_sync_status in ('never','syncing','synced','failed')),
+  last_sync_error text,
+  connection_problem text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique(owner_id, workspace_id, provider)
@@ -39,7 +46,7 @@ create table if not exists public.cetld_accounting_sync_records (
   owner_id uuid not null references auth.users(id) on delete cascade,
   workspace_id uuid not null references public.cetld_workspaces(id) on delete cascade,
   provider text not null check (provider in ('zoho_books','quickbooks')),
-  record_type text not null check (record_type in ('invoice','payment')),
+  record_type text not null check (record_type in ('customer','invoice','payment')),
   external_id text not null,
   payload jsonb not null,
   synced_at timestamptz not null default now(),
@@ -110,4 +117,3 @@ grant execute on function public.cetld_claim_accounting_connection_refresh(uuid,
 grant execute on function public.cetld_update_accounting_connection_tokens(uuid,uuid,text,bigint,text,text,text,text,timestamptz,text,text,text) to service_role;
 grant execute on function public.cetld_release_accounting_connection_refresh(uuid,uuid,text,text) to service_role;
 commit;
-

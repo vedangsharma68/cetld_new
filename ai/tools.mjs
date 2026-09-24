@@ -241,6 +241,29 @@ function cleanObject(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== null && item !== undefined && item !== "").map(([key, item]) => [key, cleanObject(item)]));
 }
 
+function accountingAmount(minor, currency) {
+  if (!Number.isSafeInteger(minor) || minor < 0) return null;
+  const code = String(currency || '').toUpperCase();
+  const scale = ['BHD','IQD','JOD','KWD','LYD','OMR','TND'].includes(code) ? 1000 : ['BIF','CLP','DJF','GNF','ISK','JPY','KMF','KRW','PYG','RWF','UGX','VND','VUV','XAF','XOF','XPF'].includes(code) ? 1 : 100;
+  return (minor / scale).toFixed(scale === 1 ? 0 : scale === 1000 ? 3 : 2);
+}
+
+function safeZohoResult(resource, result) {
+  const records = Array.isArray(result?.records) ? result.records : [];
+  if (resource === 'invoices') return {
+    provider: 'zoho_books', resource, nextPage: result.nextPage || null,
+    invoices: records.map(row => ({invoiceId: row.externalId, invoiceNumber: row.number, customerName: row.customerName, currency: row.currency, totalAmount: accountingAmount(row.amountMinor, row.currency), amountPaid: accountingAmount(row.paidMinor, row.currency), outstandingAmount: accountingAmount(row.balanceMinor, row.currency), dueDate: row.dueDate, invoiceDate: row.invoiceDate, status: row.status, updatedAt: row.updatedAt})),
+  };
+  if (resource === 'contacts') return {
+    provider: 'zoho_books', resource, nextPage: result.nextPage || null,
+    customers: records.map(row => ({customerId: row.externalId, name: row.name, companyName: row.companyName, email: row.email, phone: row.phone, status: row.status, currency: row.currency, updatedAt: row.updatedAt})),
+  };
+  return {
+    provider: 'zoho_books', resource, nextPage: result.nextPage || null,
+    payments: records.map(row => ({paymentId: row.externalId, amount: accountingAmount(row.amountMinor, row.currency), currency: row.currency, paymentDate: row.paymentDate, invoiceIds: row.invoiceIds, reference: row.reference})),
+  };
+}
+
 function exactPattern(value) { return `ilike.${String(value).replace(/[\\%*_]/g, "\\$&")}`; }
 function partialPattern(value) { return `ilike.*${String(value).replace(/[\\%*_]/g, "\\$&")}*`; }
 
@@ -257,7 +280,7 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
   if (!store || typeof store.query !== "function") throw new TypeError("An authenticated workspace store with query() is required");
 
   let lookupInvoice;
-  const activeDefinitions = accounting?.integration?.readZohoData ? [...definitions, zohoBooksDataTool] : definitions;
+  const activeDefinitions = (accounting?.readZohoData || accounting?.integration?.readZohoData) ? [...definitions, zohoBooksDataTool] : definitions;
 
   const customersForInvoices = async invoices => {
     const ids = [...new Set(invoices.map(invoice => invoice.customer_id).filter(id => typeof id === "string" && UUID_RE.test(id)))].slice(0, MAX_PAGE_SIZE);
@@ -407,10 +430,14 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
         return { verifiedFollowUpLogAvailable: false, note: "Invoice and payment events are shown; follow-up metadata, if present, is only a current invoice snapshot, not a verified follow-up event log.", events: events.slice(0, limit) };
       }
       case "getZohoBooksData": {
-        if (!accounting?.integration?.readZohoData) throw new TypeError("Zoho Books is not connected to this workspace");
+        if (!accounting?.readZohoData && !accounting?.integration?.readZohoData) throw new TypeError("Zoho Books is not connected to this workspace");
         const args = strictArgs(rawArgs, ["resource", "page", "perPage"]);
         if (!["invoices", "contacts", "payments"].includes(args.resource)) throw new TypeError("Zoho Books resource is invalid");
-        return accounting.integration.readZohoData({ userId: accounting.userId, workspaceId: accounting.workspaceId, provider: "zoho_books", resource: args.resource, page: boundedInteger(args.page, 1, 1, 10000, "page"), perPage: boundedInteger(args.perPage, 50, 1, 200, "perPage") });
+        const input = {resource: args.resource, page: boundedInteger(args.page, 1, 1, 50, "page"), perPage: boundedInteger(args.perPage, 50, 1, 200, "perPage")};
+        const result = accounting.readZohoData
+          ? await accounting.readZohoData(input)
+          : await accounting.integration.readZohoData({...input, userId: accounting.userId, workspaceId: accounting.workspaceId, provider: "zoho_books"});
+        return safeZohoResult(args.resource, result);
       }
       case "getInvoiceDetails": {
         const args = strictArgs(rawArgs, ["target"]);
