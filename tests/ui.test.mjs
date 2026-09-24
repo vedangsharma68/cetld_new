@@ -36,6 +36,9 @@ test('assistant page has an honest, accessible conversation flow', () => {
   assert.match(app, /role="log"/);
   assert.match(app, /aria-live="polite"/);
   assert.match(app, /The demo never generates financial answers/);
+  assert.match(app, /<form class="assistant-composer"[^>]*><label class="assistant-attach"/);
+  assert.match(app, /aria-label="Attach invoice image or PDF"/);
+  assert.doesNotMatch(app, /<span>Add invoice<\/span>/);
 });
 
 test('liquid chrome is global, subtle and motion-aware', () => {
