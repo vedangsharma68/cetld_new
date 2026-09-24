@@ -32,8 +32,13 @@ export async function handleAccountingRequest(request, response, dependencies = 
     }
     if (request.method !== 'POST') throw new HttpError(405, 'GET or POST required');
     const identity = await authorizeWorkspace(request, input.workspaceId, env, dependencies.fetchImpl);
+    const integration = await getIntegration();
+    if (input.action === 'status') return response.status(200).json(await integration.connectionStatus({ ...identity, provider }));
+    if (input.action === 'select-organization') {
+      if (provider !== 'zoho_books') throw new HttpError(400, 'Organization selection is only supported for Zoho Books');
+      return response.status(200).json(await integration.selectOrganization({ ...identity, provider, organizationId: input.organizationId }));
+    }
     if (input.action === 'start') {
-      const integration = await getIntegration();
       const browserSession = randomBytes(32).toString('base64url');
       const result = await integration.startOAuth({ ...identity, provider, browserSession, organizationId: input.organizationId, redirectUri: redirectUri(env, provider), region: env.ZOHO_BOOKS_REGION || 'com' });
       response.setHeader('Set-Cookie', `${cookieName(provider)}=${browserSession}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`);
