@@ -6,7 +6,8 @@ export default async function handler(request, response) {
   }
   const body = typeof request.body === 'string' ? JSON.parse(request.body || '{}') : (request.body || {});
   return handleAccountingRequest({
-    ...request,
+    method: request.method,
+    headers: request.headers || {},
     url: '/api/integrations/zoho/connect',
     body: { ...body, provider: 'zoho_books', action: 'start' },
   }, response);
