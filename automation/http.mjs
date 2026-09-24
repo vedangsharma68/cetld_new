@@ -22,7 +22,7 @@ export async function authorizeWorkspace(request, workspaceId, env, fetchImpl = 
   uuid(workspaceId);
   const token = request.headers?.authorization;
   if (typeof token !== 'string' || !token.startsWith('Bearer ') || token.length > 16384) throw new HttpError(401, 'Sign in required');
-  const base = required(env, 'SUPABASE_URL').replace(/\/$/, '');
+  const base = String(env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || required(env, 'SUPABASE_URL')).replace(/\/$/, '');
   const headers = { apikey: required(env, 'SUPABASE_SERVICE_ROLE_KEY'), Authorization: token };
   const auth = await fetchImpl(`${base}/auth/v1/user`, { headers, signal: AbortSignal.timeout(10000) });
   if (!auth.ok) throw new HttpError(401, 'Sign in required');
