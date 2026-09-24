@@ -72,7 +72,16 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         const extractionProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL, fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY, fetchImpl, timeoutMs: 14000});
         return res.status(200).json(await extractInvoice({provider: extractionProvider, ...file}));
       }
-      return res.status(200).json(await answerWorkspaceQuestion({provider, store, message: body.message, history: body.history, clock}));
+      let accounting = null;
+      if (env.SUPABASE_SERVICE_ROLE_KEY && env.ACCOUNTING_TOKEN_ENCRYPTION_KEY) {
+        try {
+          const {createAccountingRuntime} = await import('../automation/runtime.mjs');
+          const integration = createAccountingRuntime({env, fetchImpl});
+          const status = await integration.connectionStatus({userId: store.userId, workspaceId: store.workspaceId, provider: 'zoho_books'});
+          if (status.status === 'connected') accounting = {integration, userId: store.userId, workspaceId: store.workspaceId};
+        } catch { accounting = null; }
+      }
+      return res.status(200).json(await answerWorkspaceQuestion({provider, store, message: body.message, history: body.history, clock, accounting}));
     } catch (error) { return sendError(res, error); }
   };
 }
