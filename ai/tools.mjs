@@ -256,7 +256,8 @@ function optionalFollowUpSnapshot(metadata) {
 export function createAssistantTools({ store, clock = () => new Date(), accounting = null } = {}) {
   if (!store || typeof store.query !== "function") throw new TypeError("An authenticated workspace store with query() is required");
 
-  let lookupInvoice;\n  const activeDefinitions = accounting?.integration?.readZohoData ? [...definitions, zohoBooksDataTool] : definitions;
+  let lookupInvoice;
+  const activeDefinitions = accounting?.integration?.readZohoData ? [...definitions, zohoBooksDataTool] : definitions;
 
   const customersForInvoices = async invoices => {
     const ids = [...new Set(invoices.map(invoice => invoice.customer_id).filter(id => typeof id === "string" && UUID_RE.test(id)))].slice(0, MAX_PAGE_SIZE);
