@@ -1,3 +1,4 @@
+import { config as appConfig } from '../config.js';
 import { timingSafeEqual } from 'node:crypto';
 
 export class HttpError extends Error {
@@ -22,8 +23,8 @@ export async function authorizeWorkspace(request, workspaceId, env, fetchImpl = 
   uuid(workspaceId);
   const token = request.headers?.authorization;
   if (typeof token !== 'string' || !token.startsWith('Bearer ') || token.length > 16384) throw new HttpError(401, 'Sign in required');
-  const base = String(env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || required(env, 'SUPABASE_URL')).replace(/\/$/, '');
-  const headers = { apikey: required(env, 'SUPABASE_SERVICE_ROLE_KEY'), Authorization: token };
+  const base = String(env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || appConfig.url).replace(/\/$/, '');
+  const headers = { apikey: env.SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_ANON_KEY || appConfig.key, Authorization: token };
   const auth = await fetchImpl(`${base}/auth/v1/user`, { headers, signal: AbortSignal.timeout(10000) });
   if (!auth.ok) throw new HttpError(401, 'Sign in required');
   const user = await auth.json();
