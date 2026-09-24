@@ -1,7 +1,7 @@
 import {APIError} from './http.mjs';
 import {createAssistantTools} from './tools.mjs';
 
-const LABELS = {getInvoices: 'Invoices', getCustomer: 'Customer', getPayments: 'Payments collected', getOutstandingSummary: 'Outstanding balances', getOverdueInvoices: 'Overdue invoices', getActivity: 'Recorded activity', getInvoiceDetails: 'Invoice details'};
+const LABELS = {getZohoBooksData: 'Zoho Books records', getInvoices: 'Invoices', getCustomer: 'Customer', getPayments: 'Payments collected', getOutstandingSummary: 'Outstanding balances', getOverdueInvoices: 'Overdue invoices', getActivity: 'Recorded activity', getInvoiceDetails: 'Invoice details'};
 
 function conversationalAnswer(message) {
   const text = message.trim().toLowerCase().replace(/[!?.,]+$/g, '');
@@ -108,12 +108,12 @@ function invoiceClarification(invoices) {
   return `I found more than one matching invoice${options ? `: ${options}` : ''}. Which invoice did you mean?`;
 }
 
-export async function answerWorkspaceQuestion({provider, store, message, history = [], clock = () => new Date()}) {
+export async function answerWorkspaceQuestion({provider, store, message, history = [], clock = () => new Date(), accounting = null}) {
   if (typeof message !== 'string' || !message.trim() || message.length > 4000 || !Array.isArray(history) || history.length > 8 || history.some(x => !x || !['user', 'assistant'].includes(x.role) || typeof x.content !== 'string' || x.content.length > 4000 || Object.keys(x).some(k => !['role', 'content'].includes(k)))) throw new APIError(400, 'INVALID_CONVERSATION');
   const direct = conversationalAnswer(message);
   if (direct) return {answer: direct, asOf: clock().toISOString(), timezone: 'UTC', model: null, usedFallback: false, readOnly: true};
 
-  const tools = createAssistantTools({store, clock});
+  const tools = createAssistantTools({store, clock, accounting});
   const target = contextualInvoiceTarget(message, history);
   if (target) {
     const match = await tools.lookupInvoice(target);
@@ -132,7 +132,7 @@ export async function answerWorkspaceQuestion({provider, store, message, history
   }
   const plan = await provider.generate({
     messages: [
-      {role: 'system', content: `You are cetld's read-only finance query planner. Today is ${clock().toISOString().slice(0,10)} UTC. Use only the supplied tools when workspace facts are needed. Never invent identifiers or financial data. Choose exactly one minimum-scope tool. A named invoice or customer: getInvoiceDetails. Largest debtors: getOutstandingSummary. Overdue priorities: getOverdueInvoices. Collections: getPayments. General activity: getActivity.`},
+      {role: 'system', content: `You are cetld's read-only finance query planner. Today is ${clock().toISOString().slice(0,10)} UTC. Use only the supplied tools when workspace facts are needed. Never invent identifiers or financial data. Choose exactly one minimum-scope tool. A question explicitly about connected Zoho Books: getZohoBooksData with the relevant receivables resource. A named cetld invoice or customer: getInvoiceDetails. Largest debtors: getOutstandingSummary. Overdue priorities: getOverdueInvoices. Collections: getPayments. General activity: getActivity.`},
       ...history.map(item => ({role: item.role, content: item.content})),
       {role: 'user', content: message},
     ],
