@@ -1,4 +1,4 @@
-module.exports = async function handler(request, response) {
+export default async function handler(request, response) {
   const { handleAccountingRequest } = await import('../../../automation/accounting-routes.mjs');
   if (request.method !== 'POST') {
     response.setHeader('Allow', 'POST');
