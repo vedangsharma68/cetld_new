@@ -30,6 +30,12 @@ const definitions = [
   }, ["target"]),
 ];
 
+const zohoBooksDataTool = tool("getZohoBooksData", "Read paginated live Zoho Books receivables data for the connected organization. Use only when the user asks about Zoho Books; this tool is read-only.", {
+  resource: { type: "string", enum: ["invoices", "contacts", "payments"] },
+  page: { type: "integer", minimum: 1, maximum: 10000 },
+  perPage: { type: "integer", minimum: 1, maximum: 200 },
+}, ["resource"]);
+
 function tool(name, description, properties, required = []) {
   return { type: "function", function: {
     name, description,
@@ -247,10 +253,10 @@ function optionalFollowUpSnapshot(metadata) {
   return Object.keys(safe).length ? safe : null;
 }
 
-export function createAssistantTools({ store, clock = () => new Date() } = {}) {
+export function createAssistantTools({ store, clock = () => new Date(), accounting = null } = {}) {
   if (!store || typeof store.query !== "function") throw new TypeError("An authenticated workspace store with query() is required");
 
-  let lookupInvoice;
+  let lookupInvoice;\n  const activeDefinitions = accounting?.integration?.readZohoData ? [...definitions, zohoBooksDataTool] : definitions;
 
   const customersForInvoices = async invoices => {
     const ids = [...new Set(invoices.map(invoice => invoice.customer_id).filter(id => typeof id === "string" && UUID_RE.test(id)))].slice(0, MAX_PAGE_SIZE);
@@ -399,6 +405,12 @@ export function createAssistantTools({ store, clock = () => new Date() } = {}) {
         events.sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt)) || a.type.localeCompare(b.type) || String(a.invoiceId).localeCompare(String(b.invoiceId)));
         return { verifiedFollowUpLogAvailable: false, note: "Invoice and payment events are shown; follow-up metadata, if present, is only a current invoice snapshot, not a verified follow-up event log.", events: events.slice(0, limit) };
       }
+      case "getZohoBooksData": {
+        if (!accounting?.integration?.readZohoData) throw new TypeError("Zoho Books is not connected to this workspace");
+        const args = strictArgs(rawArgs, ["resource", "page", "perPage"]);
+        if (!["invoices", "contacts", "payments"].includes(args.resource)) throw new TypeError("Zoho Books resource is invalid");
+        return accounting.integration.readZohoData({ userId: accounting.userId, workspaceId: accounting.workspaceId, provider: "zoho_books", resource: args.resource, page: boundedInteger(args.page, 1, 1, 10000, "page"), perPage: boundedInteger(args.perPage, 50, 1, 200, "perPage") });
+      }
       case "getInvoiceDetails": {
         const args = strictArgs(rawArgs, ["target"]);
         const match = await lookupInvoice(args.target);
@@ -455,5 +467,5 @@ export function createAssistantTools({ store, clock = () => new Date() } = {}) {
     return result;
   };
 
-  return { definitions: definitions.map((item) => structuredClone(item)), tools: definitions.map((item) => structuredClone(item)), execute, lookupInvoice };
+  return { definitions: activeDefinitions.map((item) => structuredClone(item)), tools: activeDefinitions.map((item) => structuredClone(item)), execute, lookupInvoice };
 }
