@@ -131,6 +131,20 @@ test('workspace AI settings and invoice extraction use the centralized server AP
   assert.doesNotMatch(app, /cetld_primary_ai_model:primaryModel/);
 });
 
+test('invoice currency is a shared dropdown in manual, edit, extraction review, and Assistant review flows', () => {
+  for (const code of ['INR','USD','EUR','GBP','AED','AUD','SGD','CAD','JPY','CHF']) {
+    assert.match(app, new RegExp(`\\['${code}',`));
+  }
+  assert.equal((app.match(/<select name="currency"/g) || []).length, 2);
+  assert.equal((app.match(/currencyOptions\(/g) || []).length >= 3, true);
+  assert.match(app, /currencyOptions\(x\?\.currency\|\|state\.settings\?\.default_currency\|\|'INR'\)/);
+  assert.match(app, /currencyOptions\(currency\)/);
+  assert.match(app, /input\.tagName==='SELECT'.*input\.add\(new Option/);
+  assert.match(app, /amount_minor:cents\(rawAmount\),currency/);
+  assert.match(app, /currency:String\(values\.get\('currency'\)\|\|''\)\.trim\(\)\.toUpperCase\(\)/);
+  assert.doesNotMatch(app, /<input name="currency"/);
+});
+
 test('Collections Pulse uses complete workspace-scoped data and explicit multi-currency presentation', () => {
   assert.match(app, /workspaceRows\('invoices',workspaceId\)/);
   assert.match(app, /workspaceRows\('payments',workspaceId/);
@@ -161,5 +175,10 @@ test('Google sign-in mark stays legible and consistent in light and dark themes'
   assert.match(css, /\.google\{gap:10px;background:var\(--white\)/);
   assert.match(css, /\.dark \.google\{background:#fff[^}]*color:#202124/);
 });
-
-
+test('auth page restores sibling desktop panels and gives dark mode readable controls', () => {
+  assert.match(app, /auth\.innerHTML=auth\.innerHTML\.replace\('<section class="auth-panel">','<\/section><section class="auth-panel">'\)/);
+  assert.match(css, /\.auth\{[^}]*display:grid;grid-template-columns:1\.05fr 1fr/);
+  assert.match(css, /\.dark \.auth-panel \.field input\{background:#1b2c24;border-color:#40584a;color:#e7eee2\}/);
+  assert.match(css, /\.dark \.auth-panel \.auth-links button,\.dark \.auth-panel \.text-link\{color:#a9d9bd\}/);
+  assert.match(css, /\.dark \.auth-brand-copy h1\{color:#f7f9f7\}/);
+});

@@ -231,7 +231,8 @@ export function createAssistantTools({ store, clock = () => new Date() } = {}) {
           row.balance += balance; grouped.set(key, row);
         }
         const debtors = [...grouped.values()].sort((a,b) => a.currency.localeCompare(b.currency) || (a.balance > b.balance ? -1 : a.balance < b.balance ? 1 : a.customerId.localeCompare(b.customerId)));
-        return { basis: "invoices.amount_paid", currencies: groupInvoiceAmounts(applicable), debtors: debtors.slice(0,100).map(({balance,...row}) => ({...row,outstandingAmount: money(balance)})), debtorCount: debtors.length, debtorsTruncated: debtors.length > 100 };
+        const leaders = debtors.filter((row,index) => index === 0 || row.currency !== debtors[index - 1].currency);
+        return { basis: "invoices.amount_paid", currencies: groupInvoiceAmounts(applicable), debtors: leaders.map(({balance,...row}) => ({...row,outstandingAmount: money(balance)})), debtorCount: debtors.length };
       }
       case "getOverdueInvoices": {
         const args = strictArgs(rawArgs, ['dueDateFrom','dueDateTo']);
@@ -269,5 +270,36 @@ export function createAssistantTools({ store, clock = () => new Date() } = {}) {
     }
   };
 
-  return { definitions: definitions.map((item) => structuredClone(item)), tools: definitions.map((item) => structuredClone(item)), execute };
+  // Exact, deterministic lookup used before any model planning. The model only
+  // receives the matched invoice rows, never a workspace-wide invoice list.
+  const lookupInvoice = async (rawTarget) => {
+    if (typeof rawTarget !== 'string' || !rawTarget.trim() || rawTarget.length > 160 || /[%*_]/.test(rawTarget)) throw new TypeError('Invoice lookup target is invalid');
+    const target = rawTarget.trim();
+    const uuidTarget = UUID_RE.test(target);
+    const numberRows = uuidTarget ? [] : await query(store, 'invoices', INVOICE_SELECT, {filters: {invoice_number: `ilike.${target}`}, limit: 3});
+    let invoiceRows = numberRows;
+    if (uuidTarget) invoiceRows = await query(store, 'invoices', INVOICE_SELECT, {filters: {id: `eq.${target}`}, limit: 3});
+    let customerRows = [];
+    if (!invoiceRows.length && !uuidTarget) {
+      const [byName, byCompany] = await Promise.all([
+        query(store, 'customers', 'id,name,company_name', {filters: {name: `ilike.${target}`}, limit: 3}),
+        query(store, 'customers', 'id,name,company_name', {filters: {company_name: `ilike.${target}`}, limit: 3}),
+      ]);
+      customerRows = [...new Map([...byName, ...byCompany].map(row => [row.id, row])).values()];
+      if (customerRows.length === 1) invoiceRows = await query(store, 'invoices', INVOICE_SELECT, {filters: {customer_id: `eq.${customerRows[0].id}`}, limit: 26});
+    }
+    const customerMap = new Map(customerRows.map(row => [row.id, row.company_name || row.name]));
+    if (invoiceRows.length && !customerMap.size) {
+      const ids = [...new Set(invoiceRows.map(row => row.customer_id))];
+      const customers = await Promise.all(ids.slice(0, 3).map(id => query(store, 'customers', 'id,name,company_name', {filters: {id: `eq.${id}`}, limit: 1})));
+      for (const customer of customers.flat()) customerMap.set(customer.id, customer.company_name || customer.name);
+    }
+    return {
+      ambiguousCustomer: customerRows.length > 1,
+      invoices: invoiceRows.slice(0, 25).map(row => ({...safeInvoice(row), customerName: customerMap.get(row.customer_id) ?? null})),
+      truncated: invoiceRows.length > 25,
+    };
+  };
+
+  return { definitions: definitions.map((item) => structuredClone(item)), tools: definitions.map((item) => structuredClone(item)), execute, lookupInvoice };
 }

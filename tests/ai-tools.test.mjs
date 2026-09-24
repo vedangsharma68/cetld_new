@@ -29,6 +29,7 @@ function makeStore({ workspaceId = WS_A, invoices = [], customers = [], payments
         rows = rows.filter((row) => {
           const actual = row[column];
           if (operator === "eq") return String(actual) === value;
+          if (operator === "ilike") return String(actual ?? '').toLowerCase() === value.toLowerCase();
           if (operator === "gte") return String(actual) >= value;
           if (operator === "lte") return String(actual) <= value;
           throw new Error(`Unsupported filter ${operator}`);
@@ -55,6 +56,16 @@ test("only reads the bound workspace and rejects scope or injection arguments", 
   await assert.rejects(tools.execute("getCustomer", { customerId: "not-a-uuid" }), /UUID/);
   await assert.rejects(tools.execute("rpc/drop_tables", {}), /Unknown assistant tool/);
   assert.equal(store.calls.length, 1, "invalid tool arguments must not reach storage");
+});
+
+test('deterministic invoice lookup returns only the exact requested customer invoice rows', async () => {
+  const customer = {id:CUSTOMER,workspace_id:WS_A,name:'Shiv Engineering',company_name:'Shiv Engineering'};
+  const store = makeStore({customers:[customer],invoices:[invoice(INV_1,{invoice_number:'INV-005'}),invoice(INV_2,{invoice_number:'INV-006',customer_id:'dddddddd-dddd-4ddd-8ddd-dddddddddddd'})]});
+  const found = await createAssistantTools({store}).lookupInvoice('Shiv Engineering');
+  assert.equal(found.invoices.length,1);
+  assert.equal(found.invoices[0].invoiceNumber,'INV-005');
+  assert.equal(found.invoices[0].customerName,'Shiv Engineering');
+  assert.ok(store.calls.filter(call=>call.table==='invoices').every(call=>call.options.filters?.customer_id==='eq.'+CUSTOMER || call.options.filters?.invoice_number));
 });
 
 test("tool definitions are OpenAI function tools with no workspace or owner inputs", () => {
