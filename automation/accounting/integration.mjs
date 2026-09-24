@@ -40,8 +40,8 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     const state = randomState();
     const browserNonce = browserSession || randomState();
     const expiresAt = now() + stateTtlMs;
-    await store.putOAuthState({ stateHash: hashState(state), userId: context.userId, workspaceId: context.workspaceId, provider, redirectUri, region: region || null, providerAccountId: providerAccountId || organizationId || null, browserNonceHash: hashState(browserNonce), expiresAt, usedAt: null });
     const authorizationUrl = providers[provider].authorizationUrl({ state, redirectUri, region });
+    await store.putOAuthState({ stateHash: hashState(state), userId: context.userId, workspaceId: context.workspaceId, provider, redirectUri, region: region || null, providerAccountId: providerAccountId || organizationId || null, browserNonceHash: hashState(browserNonce), expiresAt, usedAt: null });
     // The caller should set browserNonce in a Secure, HttpOnly, SameSite=Lax
     // cookie. The callback accepts it as proof that the browser started this flow.
     return { authorizationUrl, state, browserNonce, expiresAt };
