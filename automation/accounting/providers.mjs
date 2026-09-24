@@ -137,6 +137,7 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
     name: 'zoho_books',
     scopes,
     authorizationUrl({ state, redirectUri: callback = redirectUri, region: selectedRegion = region } = {}) {
+      callback = String(callback || '').trim();
       if (!clientId) throw new AccountingError('ACCOUNTING_ZOHO_CLIENT_ID_MISSING', 'Zoho Books client ID is not configured');
       if (!callback) throw new AccountingError('ACCOUNTING_ZOHO_REDIRECT_URI_MISSING', 'Zoho Books redirect URI is not configured');
       const url = new URL(`${accountDomain(selectedRegion)}/oauth/v2/auth`);
@@ -144,6 +145,7 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       return url.toString();
     },
     async exchangeCode({ code, redirectUri: callback = redirectUri, region: selectedRegion = region }) {
+      callback = String(callback || '').trim();
       if (!clientId) throw new AccountingError('ACCOUNTING_ZOHO_CLIENT_ID_MISSING', 'Zoho Books client ID is not configured');
       if (!clientSecret) throw new AccountingError('ACCOUNTING_ZOHO_CLIENT_SECRET_MISSING', 'Zoho Books client secret is not configured');
       if (!callback) throw new AccountingError('ACCOUNTING_ZOHO_REDIRECT_URI_MISSING', 'Zoho Books redirect URI is not configured');
