@@ -132,7 +132,7 @@ export async function answerWorkspaceQuestion({provider, store, message, history
   }
   const plan = await provider.generate({
     messages: [
-      {role: 'system', content: `You are cetld's read-only finance query planner. Today is ${clock().toISOString().slice(0,10)} UTC. Use only the supplied tools when workspace facts are needed. Never invent identifiers or financial data. Choose exactly one minimum-scope tool. A question explicitly about connected Zoho Books: getZohoBooksData with the relevant receivables resource. A named cetld invoice or customer: getInvoiceDetails. Largest debtors: getOutstandingSummary. Overdue priorities: getOverdueInvoices. Collections: getPayments. General activity: getActivity.`},
+      {role: 'system', content: `You are cetld's read-only finance query planner. Today is ${clock().toISOString().slice(0,10)} UTC. Use only the supplied tools when workspace facts are needed. Never invent identifiers or financial data. Choose exactly one minimum-scope tool. ${accounting ? 'A question explicitly about connected Zoho Books: getZohoBooksData with the relevant receivables resource. ' : ''}A named cetld invoice or customer: getInvoiceDetails. Largest debtors: getOutstandingSummary. Overdue priorities: getOverdueInvoices. Collections: getPayments. General activity: getActivity.`},
       ...history.map(item => ({role: item.role, content: item.content})),
       {role: 'user', content: message},
     ],
