@@ -1,4 +1,5 @@
 import { providerFetch, jsonResponse, formBody } from './http.mjs';
+import { AccountingError } from './errors.mjs';
 
 const ZOHO_DEFAULT_ACCOUNTS = 'https://accounts.zoho.com';
 const ZOHO_DEFAULT_API = 'https://www.zohoapis.com';
@@ -136,13 +137,16 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
     name: 'zoho_books',
     scopes,
     authorizationUrl({ state, redirectUri: callback = redirectUri, region: selectedRegion = region } = {}) {
-      if (!clientId || !callback) throw new Error('Zoho Books client is not configured');
+      if (!clientId) throw new AccountingError('ACCOUNTING_ZOHO_CLIENT_ID_MISSING', 'Zoho Books client ID is not configured');
+      if (!callback) throw new AccountingError('ACCOUNTING_ZOHO_REDIRECT_URI_MISSING', 'Zoho Books redirect URI is not configured');
       const url = new URL(`${accountDomain(selectedRegion)}/oauth/v2/auth`);
       url.search = new URLSearchParams({ client_id: clientId, response_type: 'code', redirect_uri: callback, scope: scopes, state, access_type: 'offline', prompt: 'consent' }).toString();
       return url.toString();
     },
     async exchangeCode({ code, redirectUri: callback = redirectUri, region: selectedRegion = region }) {
-      if (!clientId || !clientSecret || !callback) throw new Error('Zoho Books client is not configured');
+      if (!clientId) throw new AccountingError('ACCOUNTING_ZOHO_CLIENT_ID_MISSING', 'Zoho Books client ID is not configured');
+      if (!clientSecret) throw new AccountingError('ACCOUNTING_ZOHO_CLIENT_SECRET_MISSING', 'Zoho Books client secret is not configured');
+      if (!callback) throw new AccountingError('ACCOUNTING_ZOHO_REDIRECT_URI_MISSING', 'Zoho Books redirect URI is not configured');
       const url = new URL(`${accountDomain(selectedRegion)}/oauth/v2/token`);
       const response = await providerFetch(fetchImpl, 'zoho_books', url, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: formBody({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: callback, grant_type: 'authorization_code' }) });
       const body = await jsonResponse(response, 'zoho_books');
