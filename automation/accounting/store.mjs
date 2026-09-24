@@ -130,6 +130,12 @@ export class SupabaseAccountingStore {
     return Array.isArray(rows) && rows[0] ? mapConnection(rows[0]) : null;
   }
 
+  async setOrganization(identity, organization) {
+    const query = new URLSearchParams({ owner_id: `eq.${identity.userId}`, workspace_id: `eq.${identity.workspaceId}`, provider: `eq.${identity.provider}`, select: '*' });
+    const rows = await this.request(`${this.table}?${query}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' }, body: JSON.stringify({ provider_account_id: organization.id, status: 'connected' }) });
+    return Array.isArray(rows) && rows[0] ? mapConnection(rows[0]) : null;
+  }
+
   async insertConnection(connection) {
     const row = await this.request(this.table, { method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' }, body: JSON.stringify(toRow(connection)) });
     return mapConnection(Array.isArray(row) ? row[0] : row);
@@ -137,7 +143,7 @@ export class SupabaseAccountingStore {
 
   async replaceConnection(connection, expectedRevision) {
     const query = new URLSearchParams({ owner_id: `eq.${connection.userId}`, workspace_id: `eq.${connection.workspaceId}`, provider: `eq.${connection.provider}`, revision: `eq.${expectedRevision}` });
-    const row = await this.request(`${this.table}?${query}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' }, body: JSON.stringify({ provider_account_id: connection.providerAccountId || null, region: connection.region || null, api_domain: connection.apiDomain || null, token_ciphertext: connection.ciphertext, token_iv: connection.iv, token_tag: connection.tag, token_expires_at: new Date(connection.tokenExpiresAt).toISOString(), revision: Number(expectedRevision) + 1, refresh_lease_token: null, refresh_lease_until: null }) });
+    const row = await this.request(`${this.table}?${query}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' }, body: JSON.stringify({ provider_account_id: connection.providerAccountId || null, status: connection.status || (connection.providerAccountId ? 'connected' : 'needs_attention'), region: connection.region || null, api_domain: connection.apiDomain || null, token_ciphertext: connection.ciphertext, token_iv: connection.iv, token_tag: connection.tag, token_expires_at: new Date(connection.tokenExpiresAt).toISOString(), revision: Number(expectedRevision) + 1, refresh_lease_token: null, refresh_lease_until: null }) });
     if (!Array.isArray(row) || !row[0]) throw new AccountingError('ACCOUNTING_CONNECTION_CONFLICT', 'Accounting connection changed during authorization');
     return mapConnection(row[0]);
   }
@@ -175,7 +181,7 @@ function toRow(connection) {
 }
 
 function mapConnection(row) {
-  return { userId: row.owner_id, workspaceId: row.workspace_id, provider: row.provider, providerAccountId: row.provider_account_id, region: row.region, apiDomain: row.api_domain, ciphertext: row.token_ciphertext, iv: row.token_iv, tag: row.token_tag, tokenExpiresAt: Date.parse(row.token_expires_at), revision: Number(row.revision || 1), lease: row.refresh_lease_token ? { token: row.refresh_lease_token, expiresAt: Date.parse(row.refresh_lease_until) } : null };
+  return { userId: row.owner_id, workspaceId: row.workspace_id, provider: row.provider, providerAccountId: row.provider_account_id, status: row.status || (row.provider_account_id ? 'connected' : 'needs_attention'), region: row.region, apiDomain: row.api_domain, ciphertext: row.token_ciphertext, iv: row.token_iv, tag: row.token_tag, tokenExpiresAt: Date.parse(row.token_expires_at), revision: Number(row.revision || 1), lease: row.refresh_lease_token ? { token: row.refresh_lease_token, expiresAt: Date.parse(row.refresh_lease_until) } : null };
 }
 
 export const createSupabaseAccountingStore = (options) => new SupabaseAccountingStore(options);
