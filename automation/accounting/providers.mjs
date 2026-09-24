@@ -132,7 +132,7 @@ function basic(clientId, clientSecret) {
 }
 
 export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIENT_ID, clientSecret = process.env.ZOHO_BOOKS_CLIENT_SECRET, redirectUri = process.env.ZOHO_BOOKS_REDIRECT_URI, region = process.env.ZOHO_BOOKS_REGION || 'com', fetchImpl = globalThis.fetch } = {}) {
-  const scopes = 'ZohoBooks.invoices.READ,ZohoBooks.invoices.CREATE,ZohoBooks.contacts.READ,ZohoBooks.contacts.CREATE,ZohoBooks.customerpayments.READ';
+  const scopes = 'ZohoBooks.settings.READ,ZohoBooks.invoices.READ,ZohoBooks.invoices.CREATE,ZohoBooks.invoices.UPDATE,ZohoBooks.contacts.READ,ZohoBooks.contacts.CREATE,ZohoBooks.contacts.UPDATE,ZohoBooks.customerpayments.READ,ZohoBooks.customerpayments.UPDATE';
   return {
     name: 'zoho_books',
     scopes,
@@ -162,6 +162,12 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       const body = await jsonResponse(response, 'zoho_books');
       if (!body.access_token) throw new Error('Zoho Books did not return an access token');
       return { accessToken: body.access_token, refreshToken: body.refresh_token || refreshToken, expiresAt: Date.now() + Number(body.expires_in || 3600) * 1000, apiDomain: safeApiDomain(body.api_domain, selectedRegion), region: selectedRegion };
+    },
+    async fetchOrganizations({ token }) {
+      const url = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/organizations`);
+      const response = await providerFetch(fetchImpl, 'zoho_books', url, { headers: { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' } });
+      const body = await jsonResponse(response, 'zoho_books');
+      return (Array.isArray(body.organizations) ? body.organizations : []).filter(item => item?.organization_id).map(item => ({ id: String(item.organization_id), name: String(item.name || item.org_name || 'Zoho Books organization') }));
     },
     async fetchInvoices({ token, accountId, page = 1, perPage = 200 }) {
       if (!accountId) throw new Error('Zoho Books organization ID is required');
