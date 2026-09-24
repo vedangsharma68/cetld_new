@@ -60,8 +60,14 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     if ((userId && !equalText(userId, record.userId)) || (workspaceId && !equalText(workspaceId, record.workspaceId))) throw new AccountingError('ACCOUNTING_OAUTH_STATE_INVALID', 'Accounting authorization state is invalid or expired');
     const token = await providers[provider].exchangeCode({ code, redirectUri: record.redirectUri, region: record.region });
     if (!token.accessToken || !token.refreshToken) throw new AccountingError('ACCOUNTING_TOKEN_INVALID', 'Accounting provider did not return required credentials');
+    let organizations = [];
+    if (provider === 'zoho_books' && typeof providers[provider].fetchOrganizations === 'function') {
+      organizations = await providers[provider].fetchOrganizations({ token });
+    }
+    const chosenOrganization = organizations.length === 1 ? organizations[0] : null;
     const encrypted = tokenEnvelope(cipher, token, provider, record.workspaceId);
-    const connection = { userId: record.userId, workspaceId: record.workspaceId, provider, providerAccountId: token.providerAccountId || providerAccountId || accountId || realmId || record.providerAccountId || null, region: token.region || record.region || null, apiDomain: token.apiDomain || null, ...encrypted, tokenExpiresAt: token.expiresAt };
+    const selectedAccountId = chosenOrganization?.id || token.providerAccountId || providerAccountId || accountId || realmId || record.providerAccountId || null;
+    const connection = { userId: record.userId, workspaceId: record.workspaceId, provider, providerAccountId: selectedAccountId, region: token.region || record.region || null, apiDomain: token.apiDomain || null, status: selectedAccountId ? 'connected' : 'needs_attention', ...encrypted, tokenExpiresAt: token.expiresAt };
     const existing = await store.getConnection(connection);
     if (existing) {
       // Re-consent is an intentional replacement. A new revision invalidates an
@@ -73,7 +79,47 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     } else {
       await store.insertConnection(connection);
     }
-    return { provider, userId: record.userId, workspaceId: record.workspaceId, providerAccountId: connection.providerAccountId };
+    return { provider, userId: record.userId, workspaceId: record.workspaceId, providerAccountId: connection.providerAccountId, organization: chosenOrganization, organizations };
+  }
+
+  async function connectionStatus({ userId, workspaceId, provider } = {}) {
+    const context = identity({ userId, workspaceId, provider });
+    let connection = await store.getConnection(context);
+    if (!connection) return { provider, status: 'not_connected', organizationId: null, organizationName: null, organizations: [] };
+    try {
+      const refreshed = await accessToken(context);
+      connection = refreshed.connection;
+      const organizations = typeof providers[provider].fetchOrganizations === 'function'
+        ? await providers[provider].fetchOrganizations({ token: refreshed.token })
+        : [];
+      let selected = organizations.find(item => item.id === connection.providerAccountId) || null;
+      if (!connection.providerAccountId && organizations.length === 1) {
+        selected = organizations[0];
+        if (store.setOrganization) await store.setOrganization(context, selected);
+        connection.providerAccountId = selected.id;
+      }
+      return {
+        provider,
+        status: connection.status === 'disconnected' ? 'disconnected' : selected || connection.providerAccountId ? 'connected' : 'needs_attention',
+        organizationId: connection.providerAccountId || null,
+        organizationName: selected?.name || null,
+        organizations: organizations.map(({id, name}) => ({id, name})),
+      };
+    } catch {
+      return { provider, status: 'needs_attention', organizationId: connection.providerAccountId || null, organizationName: null, organizations: [] };
+    }
+  }
+
+  async function selectOrganization({ userId, workspaceId, provider, organizationId } = {}) {
+    const context = identity({ userId, workspaceId, provider });
+    if (typeof organizationId !== 'string' || !organizationId.trim() || organizationId.length > 80) throw new AccountingError('ACCOUNTING_ORGANIZATION_REQUIRED', 'Select a valid Zoho Books organization');
+    const {token} = await accessToken(context);
+    const organizations = await providers[provider].fetchOrganizations({ token });
+    const organization = organizations.find(item => item.id === organizationId.trim());
+    if (!organization) throw new AccountingError('ACCOUNTING_ORGANIZATION_INVALID', 'Selected Zoho Books organization is unavailable');
+    if (!store.setOrganization) throw new AccountingError('ACCOUNTING_STORE_ERROR', 'Organization selection is unavailable');
+    await store.setOrganization(context, organization);
+    return { provider, status: 'connected', organizationId: organization.id, organizationName: organization.name };
   }
 
   async function decryptConnection(connection) {
@@ -167,6 +213,6 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     }
   }
 
-  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, sync, syncInvoicesAndPayments: sync, syncInvoice, latestInvoiceBalance });
+  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, connectionStatus, selectOrganization, sync, syncInvoicesAndPayments: sync, syncInvoice, latestInvoiceBalance });
 }
 
