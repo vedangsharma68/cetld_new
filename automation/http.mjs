@@ -5,7 +5,7 @@ export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 export function required(env, name) {
-  if (!env[name]) throw new HttpError(503, \`Missing server configuration: \${name}\`);
+  if (!env[name]) throw new HttpError(503, 'Missing server configuration: ' + name);
   return env[name];
 }
 export function uuid(value) {
@@ -25,11 +25,11 @@ export async function authorizeWorkspace(request, workspaceId, env, fetchImpl = 
   if (typeof token !== 'string' || !token.startsWith('Bearer ') || token.length > 16384) throw new HttpError(401, 'Sign in required');
   const base = String(appConfig.url).replace(/\/$/, '');
   const headers = { apikey: appConfig.key, Authorization: token };
-  const auth = await fetchImpl(\`\${base}/auth/v1/user\`, { headers, signal: AbortSignal.timeout(10000) });
+  const auth = await fetchImpl(base + '/auth/v1/user', { headers, signal: AbortSignal.timeout(10000) });
   if (!auth.ok) throw new HttpError(401, 'Sign in required');
   const user = await auth.json();
   uuid(user.id);
-  const result = await fetchImpl(\`\${base}/rest/v1/workspaces?id=eq.\${workspaceId}&owner_id=eq.\${user.id}&select=id,owner_id\`, { headers, signal: AbortSignal.timeout(10000) });
+  const result = await fetchImpl(base + '/rest/v1/workspaces?id=eq.' + workspaceId + '&owner_id=eq.' + user.id + '&select=id,owner_id', { headers, signal: AbortSignal.timeout(10000) });
   if (!result.ok) throw new HttpError(403, 'Workspace unavailable');
   const rows = await result.json();
   if (!Array.isArray(rows) || rows.length !== 1 || rows[0].owner_id !== user.id || rows[0].id !== workspaceId) throw new HttpError(403, 'Workspace unavailable');
@@ -63,7 +63,7 @@ export function respondError(response, error) {
     if (code === 'ACCOUNTING_PROVIDER_ERROR') {
       return response.status(502).json({ error: 'Zoho authorization provider rejected the request. Verify the Zoho app credentials and callback URL.' });
     }
-    return response.status(503).json({ error: \`Zoho connection failed (\${code}). Check the Vercel function logs for this error code.\` });
+    return response.status(503).json({ error: 'Zoho connection failed (' + code + '). Check the Vercel function logs for this error code.' });
   }
   console.error('Automation request failed', { name: String(error?.name || 'Error') });
   return response.status(503).json({ error: 'Operation unavailable; no automatic retry of uncertain sends.' });
