@@ -6,5 +6,9 @@ export default async function handler(request, response) {
   }
   const incoming = new URL(request.url, 'https://cetld.invalid');
   incoming.searchParams.set('provider', 'zoho_books');
-  return handleAccountingRequest({ ...request, url: incoming.pathname + incoming.search }, response);
+  return handleAccountingRequest({
+    method: request.method,
+    headers: request.headers || {},
+    url: incoming.pathname + incoming.search,
+  }, response);
 };
