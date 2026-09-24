@@ -183,6 +183,19 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     return { provider, userId: context.userId, workspaceId: context.workspaceId, invoices, payments, pagination: { invoices: { nextPage: invoices.nextPage || null }, payments: { nextPage: payments.nextPage || null } }, persisted };
   }
 
+  async function readZohoData({ userId, workspaceId, provider = 'zoho_books', resource, page = 1, perPage = 100 } = {}) {
+    const context = identity({ userId, workspaceId, provider });
+    if (provider !== 'zoho_books') throw new AccountingError('ACCOUNTING_PROVIDER_UNSUPPORTED', 'This data reader is only available for Zoho Books');
+    if (!['invoices', 'contacts', 'payments'].includes(resource)) throw new AccountingError('ACCOUNTING_RESOURCE_UNSUPPORTED', 'Unsupported Zoho Books resource');
+    if (!Number.isInteger(page) || page < 1 || page > 10000 || !Number.isInteger(perPage) || perPage < 1 || perPage > 200) throw new AccountingError('ACCOUNTING_PAGE_INVALID', 'Invalid Zoho Books page');
+    const {token, connection} = await accessToken(context);
+    if (!connection.providerAccountId) throw new AccountingError('ACCOUNTING_ORGANIZATION_REQUIRED', 'Choose a Zoho Books organization before reading its data');
+    const method = resource === 'invoices' ? 'fetchInvoices' : resource === 'contacts' ? 'fetchContacts' : 'fetchPayments';
+    if (typeof providers[provider][method] !== 'function') throw new AccountingError('ACCOUNTING_NOT_CONFIGURED', 'Zoho Books data reader is unavailable');
+    const rows = await providers[provider][method]({token, accountId: connection.providerAccountId, page, perPage});
+    return {provider, resource, records: rows.map(({raw, ...record}) => record), nextPage: rows.nextPage || null};
+  }
+
   async function latestInvoiceBalance({ userId, workspaceId, provider, invoiceId } = {}) {
     const context = identity({ userId, workspaceId, provider });
     if (!invoiceId) throw new AccountingError('ACCOUNTING_INVOICE_REQUIRED', 'External invoice ID is required');
@@ -213,6 +226,6 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     }
   }
 
-  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, connectionStatus, selectOrganization, sync, syncInvoicesAndPayments: sync, syncInvoice, latestInvoiceBalance });
+  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, connectionStatus, selectOrganization, readZohoData, sync, syncInvoicesAndPayments: sync, syncInvoice, latestInvoiceBalance });
 }
 
