@@ -23,15 +23,12 @@ export async function authorizeWorkspace(request, workspaceId, env, fetchImpl = 
   uuid(workspaceId);
   const token = request.headers?.authorization;
   if (typeof token !== 'string' || !token.startsWith('Bearer ') || token.length > 16384) throw new HttpError(401, 'Sign in required');
-  // The browser session is issued by the app's configured Supabase project.
-  // Do not let a stale server-only URL/key override send it to another project.
-  const base = String(appConfig.url).replace(/\/$/, '');
+  const base = String(appConfig.url).replace(/\\/$/, '');
   const headers = { apikey: appConfig.key, Authorization: token };
   const auth = await fetchImpl(`${base}/auth/v1/user`, { headers, signal: AbortSignal.timeout(10000) });
   if (!auth.ok) throw new HttpError(401, 'Sign in required');
   const user = await auth.json();
   uuid(user.id);
-  // Query with the user's bearer token, and independently bind ownership.
   const result = await fetchImpl(`${base}/rest/v1/workspaces?id=eq.${workspaceId}&owner_id=eq.${user.id}&select=id,owner_id`, { headers, signal: AbortSignal.timeout(10000) });
   if (!result.ok) throw new HttpError(403, 'Workspace unavailable');
   const rows = await result.json();
@@ -49,6 +46,21 @@ export function bodyOf(request) {
   return body;
 }
 export function respondError(response, error) {
-  const status = error instanceof HttpError ? error.status : 503;
-  return response.status(status).json({ error: error instanceof HttpError ? error.message : 'Operation unavailable; no automatic retry of uncertain sends.' });
+  if (error instanceof HttpError) return response.status(error.status).json({ error: error.message });
+  const code = String(error?.code || 'ACCOUNTING_ERROR');
+  // Record only a stable error code/status. Never log tokens, OAuth codes, or provider bodies.
+  console.error('Accounting request failed', { code, status: error?.status || 503 });
+  if (code === 'ACCOUNTING_KEY_MISSING') {
+    return response.status(503).json({ error: 'Missing server configuration: ACCOUNTING_TOKEN_ENCRYPTION_KEY' });
+  }
+  if (code === 'ACCOUNTING_KEY_INVALID') {
+    return response.status(503).json({ error: 'ACCOUNTING_TOKEN_ENCRYPTION_KEY must be a base64 encoded 32-byte key' });
+  }
+  if (code === 'ACCOUNTING_STORE_ERROR') {
+    return response.status(503).json({ error: 'Zoho connection storage failed. Verify the server-side Supabase configuration and integration migration.' });
+  }
+  if (code === 'ACCOUNTING_PROVIDER_ERROR') {
+    return response.status(502).json({ error: 'Zoho authorization provider rejected the request. Verify the Zoho app credentials and callback URL.' });
+  }
+  return response.status(503).json({ error: `Zoho connection failed (${code}). Check the Vercel function logs for this error code.` });
 }
