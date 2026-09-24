@@ -39,6 +39,42 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
       const query = new URLSearchParams({...filters, workspace_id: `eq.${workspaceId}`, select: projection, order, limit: String(limit), offset: String(offset)});
       return checkRows(await request(`/rest/v1/${table}?${query}`));
     },
+    async findAssistantInvoice({invoiceNumber, idempotencyKey}) {
+      const rows = await store.query('invoices', {select: 'id,workspace_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata,created_at,updated_at', filters: {invoice_number: `eq.${invoiceNumber}`}, limit: 1});
+      const row = rows[0] || null;
+      if (row && row.metadata?.assistant_idempotency_key !== idempotencyKey) throw new APIError(409, 'INVOICE_ALREADY_EXISTS');
+      return row;
+    },
+    async findCustomer({email, name}) {
+      let rows = [];
+      if (email) rows = await store.query('customers', {select: 'id,workspace_id,name,email,phone', filters: {email: `ilike.${email}`}, limit: 1});
+      if (!rows.length && name) rows = await store.query('customers', {select: 'id,workspace_id,name,email,phone', filters: {name: `ilike.${name}`}, limit: 1});
+      return rows[0] || null;
+    },
+    async createCustomer({name, email, phone}) {
+      const rows = checkRows(await request('/rest/v1/customers?select=id,workspace_id,name,email,phone', {method: 'POST', headers: {Prefer: 'return=representation'}, body: JSON.stringify({workspace_id: workspaceId, name, company_name: name, email: email || null, phone: phone || null})}));
+      if (rows.length !== 1) throw new APIError(503, 'CUSTOMER_NOT_SAVED');
+      return rows[0];
+    },
+    async createAssistantInvoice({customerId, invoice}) {
+      const params = new URLSearchParams({on_conflict: 'workspace_id,invoice_number', select: 'id,workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata,created_at,updated_at'});
+      const rows = checkRows(await request(`/rest/v1/invoices?${params}`, {method: 'POST', headers: {Prefer: 'resolution=ignore-duplicates,return=representation'}, body: JSON.stringify({workspace_id: workspaceId, customer_id: customerId, invoice_number: invoice.invoiceNumber, issue_date: invoice.invoiceDate, due_date: invoice.dueDate, currency: invoice.currency, total_amount: invoice.total, amount_paid: invoice.alreadyPaid ? invoice.total : 0, status: invoice.alreadyPaid ? 'paid' : 'draft', notes: invoice.notes || null, metadata: {assistant_idempotency_key: invoice.idempotencyKey, bookkeeping_sync_status: 'pending', followup_state: invoice.alreadyPaid ? 'cancelled' : 'draft', next_follow_up_at: null, subtotal: invoice.subtotal, tax: invoice.tax, outstanding_amount: invoice.alreadyPaid ? 0 : (invoice.outstanding ?? invoice.total), client_phone: invoice.clientPhone || null, client_email: invoice.clientEmail || null}})}));
+      const row = rows[0] || null;
+      if (row && invoice.alreadyPaid) {
+        const payments = checkRows(await request('/rest/v1/payments?select=id,workspace_id', {method: 'POST', headers: {Prefer: 'return=representation'}, body: JSON.stringify({workspace_id: workspaceId, invoice_id: row.id, amount: invoice.total, reference: 'Marked as already paid'})}));
+        if (payments.length !== 1) throw new APIError(503, 'PAYMENT_STATE_NOT_SAVED');
+      }
+      return row;
+    },
+    async getAssistantInvoice(invoiceId) {
+      const rows = await store.query('invoices', {select: 'id,workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata,created_at,updated_at', filters: {id: `eq.${uuid(invoiceId)}`}, limit: 1});
+      return rows[0] || null;
+    },
+    async updateAssistantInvoiceMetadata(invoiceId, metadata) {
+      const rows = checkRows(await request(`/rest/v1/invoices?${new URLSearchParams({workspace_id: `eq.${workspaceId}`, id: `eq.${uuid(invoiceId)}`, select: 'id,workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata,created_at,updated_at'})}`, {method: 'PATCH', headers: {Prefer: 'return=representation'}, body: JSON.stringify({metadata})}));
+      if (rows.length !== 1) throw new APIError(503, 'INVOICE_SYNC_STATE_NOT_SAVED');
+      return rows[0];
+    },
     async getSettings() {
       const rows = checkRows(await request('/rest/v1/workspace_ai_settings?' + new URLSearchParams({workspace_id: `eq.${workspaceId}`, select: 'workspace_id,primary_model,fallback_model', limit: '1'})));
       const row = rows[0];
@@ -69,3 +105,4 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
   };
   return Object.freeze(store);
 }
+

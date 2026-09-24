@@ -146,5 +146,27 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     return { provider, invoiceId: String(invoiceId), balanceMinor: balance.balanceMinor, currency: balance.currency || null, amountMinor: balance.totalMinor ?? null };
   }
 
-  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, sync, syncInvoicesAndPayments: sync, latestInvoiceBalance });
+  async function syncInvoice({ userId, workspaceId, invoice, invoiceId } = {}) {
+    if (!invoice || typeof invoice !== 'object' || !invoiceId) throw new AccountingError('ACCOUNTING_INVOICE_REQUIRED', 'A saved invoice is required');
+    let connected = null;
+    for (const provider of ACCOUNTING_PROVIDERS) {
+      const connection = await store.getConnection({userId: String(userId), workspaceId: String(workspaceId), provider});
+      if (connection) { connected = provider; break; }
+    }
+    if (!connected) throw new AccountingError('ACCOUNTING_NOT_CONNECTED', 'Accounting provider is not connected');
+    const adapter = providers[connected];
+    if (typeof adapter.createInvoice !== 'function') throw new AccountingError('ACCOUNTING_NOT_CONFIGURED', 'Accounting invoice creation is unavailable');
+    const {token, connection} = await accessToken({userId, workspaceId, provider: connected});
+    try {
+      const result = await adapter.createInvoice({token, accountId: connection.providerAccountId, invoice: {...invoice, localInvoiceId: String(invoiceId)}});
+      if (!result?.externalId) throw new Error('Missing external invoice ID');
+      return {provider: connected, externalId: String(result.externalId), duplicate: Boolean(result.duplicate)};
+    } catch (error) {
+      if (error?.code?.startsWith?.('ACCOUNTING_')) throw error;
+      throw new AccountingError('ACCOUNTING_SYNC_FAILED', 'Invoice could not be synced to accounting', redactedError(error));
+    }
+  }
+
+  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, sync, syncInvoicesAndPayments: sync, syncInvoice, latestInvoiceBalance });
 }
+

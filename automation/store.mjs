@@ -37,18 +37,21 @@ function normalizeInvoice(input) {
   const scope = requiredScope(input);
   const amountMinor = Number(input.amountMinor ?? input.amount_minor ?? 0);
   const paidMinor = Number(input.paidMinor ?? input.paid_minor ?? 0);
+  const settled = amountMinor > 0 && paidMinor >= amountMinor;
+  const followupState = settled ? "cancelled" : String(input.followupState ?? input.followup_state ?? "approved");
+  const nextFollowUpAt = settled ? null : input.nextFollowUpAt ?? input.next_follow_up_at ?? null;
   return {
     ...copy(input),
     id: String(input.id ?? input.invoiceId ?? input.invoice_id),
     ...scope,
     amountMinor,
     paidMinor,
-    followupState: String(input.followupState ?? input.followup_state ?? "approved"),
-    nextFollowUpAt: input.nextFollowUpAt ?? input.next_follow_up_at ?? null,
+    followupState,
+    nextFollowUpAt,
     automationVersion: Number(input.automationVersion ?? input.automation_version ?? 0),
     owner_id: scope.ownerId, workspace_id: scope.workspaceId, amount_minor: amountMinor, paid_minor: paidMinor,
-    followup_state: String(input.followupState ?? input.followup_state ?? "approved"),
-    next_follow_up_at: input.nextFollowUpAt ?? input.next_follow_up_at ?? null,
+    followup_state: followupState,
+    next_follow_up_at: nextFollowUpAt,
     automation_version: Number(input.automationVersion ?? input.automation_version ?? 0),
   };
 }
@@ -104,7 +107,6 @@ export class MemoryAutomationStore {
     const invoice = this.getInvoice(input);
     if (!invoice) return null;
     const current = this.invoices.get(invoice.id);
-    if (current.paidMinor >= current.amountMinor) return copy(current);
     return this.updateInvoice({ ...input, paidMinor: current.amountMinor, followupState: "cancelled", nextFollowUpAt: null });
   }
 
@@ -351,3 +353,4 @@ export class SupabaseAutomationStore {
 export function createMemoryStore(options) { return new MemoryAutomationStore(options); }
 export function createSupabaseStore(options) { return new SupabaseAutomationStore(options); }
 export { ACTIVE_STATES, TERMINAL_STATES, requiredScope };
+

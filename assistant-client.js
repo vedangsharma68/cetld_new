@@ -1,5 +1,5 @@
 const DEFAULT_ENDPOINT = '/api/ai?action=assistant';
-const REQUEST_TIMEOUT_MS = 45_000;
+const REQUEST_TIMEOUT_MS = 90_000;
 
 function responseMessage(payload) {
   const value = payload?.message?.content ?? payload?.content ?? payload?.answer;
@@ -7,6 +7,45 @@ function responseMessage(payload) {
     throw new Error('The assistant returned an empty response. Please try again.');
   }
   return [value.trim(), typeof payload?.guidance === 'string' ? payload.guidance.trim() : ''].filter(Boolean).join('\n\n');
+}
+
+function streamDelta(event) {
+  if (typeof event === 'string') return event;
+  return event?.delta?.text ?? event?.delta ?? event?.text ?? event?.choices?.[0]?.delta?.content ?? '';
+}
+
+async function readAssistantResponse(response, onProgress) {
+  if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
+    const payload = await response.json().catch(() => ({}));
+    return responseMessage(payload);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '', answer = '';
+  while (true) {
+    const {value, done} = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), {stream: !done});
+    const events = buffer.split(/\r?\n\r?\n/);
+    buffer = events.pop() || '';
+    for (const event of events) {
+      const data = event.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
+      if (!data || data === '[DONE]') continue;
+      let parsed;
+      try { parsed = JSON.parse(data); } catch { parsed = data; }
+      const delta = streamDelta(parsed);
+      if (typeof delta === 'string' && delta) { answer += delta; onProgress?.(answer); }
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) {
+    const data = buffer.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
+    if (data && data !== '[DONE]') {
+      let parsed; try { parsed = JSON.parse(data); } catch { parsed = data; }
+      answer += streamDelta(parsed);
+    }
+  }
+  if (!answer.trim()) throw new Error('The assistant returned an empty response. Please try again.');
+  return answer.trim();
 }
 
 function safeMessages(messages) {
@@ -31,7 +70,7 @@ export function createAssistantClient({
   if (typeof fetchImpl !== 'function') throw new Error('A fetch implementation is required.');
 
   return {
-    async send({workspaceId, messages, signal} = {}) {
+    async send({workspaceId, messages, signal, onProgress} = {}) {
       if (!workspaceId) throw new Error('Open a workspace before using the assistant.');
       const token = await getAccessToken();
       if (!token) throw new Error('Sign in to ask about your live financial data.');
@@ -55,11 +94,11 @@ export function createAssistantClient({
           body: JSON.stringify({workspaceId, message: latest.content, history: conversation.slice(0, -1).slice(-8)}),
           signal: controller.signal,
         });
-        const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
           throw new Error(typeof payload?.error === 'string' ? payload.error : 'The assistant is unavailable right now.');
         }
-        return responseMessage(payload);
+        return readAssistantResponse(response, onProgress);
       } catch (error) {
         if (error?.name === 'AbortError') throw new Error('The assistant took too long to respond. Please try again.');
         throw error;
@@ -70,3 +109,4 @@ export function createAssistantClient({
     },
   };
 }
+

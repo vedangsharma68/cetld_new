@@ -11,7 +11,8 @@ const [app, css, html, vercel] = await Promise.all([
 
 test('all requested Quiet Finance OS surfaces are present', () => {
   for (const surface of [
-    'Receivables ageing',
+    'Collections Pulse',
+    'collectionsPulse',
     'Invoice ledger',
     'Conversations',
     'Assistant',
@@ -129,3 +130,36 @@ test('workspace AI settings and invoice extraction use the centralized server AP
   assert.doesNotMatch(app, /OPENROUTER_API_KEY/);
   assert.doesNotMatch(app, /cetld_primary_ai_model:primaryModel/);
 });
+
+test('Collections Pulse uses complete workspace-scoped data and explicit multi-currency presentation', () => {
+  assert.match(app, /workspaceRows\('invoices',workspaceId\)/);
+  assert.match(app, /workspaceRows\('payments',workspaceId/);
+  assert.match(app, /Currencies are shown separately\. No FX conversion is applied\./);
+  assert.match(css, /\.dark \.btn\.primary:hover:not\(:disabled\)/);
+  assert.match(css, /\.dark \.btn\.primary:disabled/);
+});
+
+test('sign-in uses the approved Cetld message and simple settlement sequence', () => {
+  assert.match(app, /<h1>Get it cetld\.<\/h1>/);
+  assert.match(app, /Less chasing\. More getting paid\./);
+  assert.match(app, /settlement-animation/);
+  for (const event of ['Payment received','Follow-up stopped','Invoice settled']) assert.ok(app.includes(event));
+  assert.match(app, /class="balance-zero"/);
+  assert.match(app, /class="status-settled"/);
+});
+test('sign-in brand panel fits desktop and tablet and respects reduced motion', () => {
+  assert.match(css, /\.auth-brand-copy h1[^}]*white-space:nowrap/);
+  assert.match(css, /@media\(min-width:801px\) and \(max-width:1150px\)/);
+  assert.match(css, /@media\(max-width:800px\)\{\.auth-brand-panel/);
+  assert.match(css, /@media\(max-width:640px\)\{\.auth-brand-panel/);
+  assert.match(css, /prefers-reduced-motion:reduce\)\{\.settlement-animation/);
+  assert.match(css, /\.reduce-motion \.settlement-animation/);
+});
+test('Google sign-in mark stays legible and consistent in light and dark themes', () => {
+  assert.match(app, /class="google-mark"[^>]*>\s*<svg viewBox="0 0 18 18"/);
+  assert.match(css, /\.google-mark svg/);
+  assert.match(css, /\.google\{gap:10px;background:var\(--white\)/);
+  assert.match(css, /\.dark \.google\{background:#fff[^}]*color:#202124/);
+});
+
+

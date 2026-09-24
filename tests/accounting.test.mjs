@@ -97,3 +97,14 @@ test('Zoho organization survives consent and re-consent safely replaces tokens',
   for(let i=0;i<2;i++){const start=await integration.startOAuth({...identity,provider:'zoho_books',organizationId:'org-1',redirectUri:'https://app.test/cb',browserSession:'browser'});await integration.callback({provider:'zoho_books',state:start.state,code:'code',browserSession:'browser'});}
   const row=await store.getConnection({...identity,provider:'zoho_books'});assert.equal(row.providerAccountId,'org-1');assert.equal(row.revision,2);
 });
+test('saved invoice sync uses the connected provider and preserves provider deduplication',async()=>{
+  const store=new InMemoryAccountingStore();let passed;
+  const provider=fakeProvider({createInvoice:async input=>{passed=input;return{externalId:'external-1048',duplicate:true}}});
+  const integration=createAccountingIntegration({store,cipher:new TokenCipher(key),providers:{zoho_books:provider,quickbooks:provider}});
+  const start=await integration.startOAuth({...identity,provider:'quickbooks',redirectUri:'https://app.test/cb',browserSession:'browser'});
+  await integration.callback({provider:'quickbooks',state:start.state,code:'code',browserSession:'browser',realmId:'realm-1'});
+  const result=await integration.syncInvoice({...identity,invoiceId:'local-1048',invoice:{invoiceNumber:'INV-1048',clientName:'Arbor & Finch',invoiceDate:'2026-09-01',dueDate:'2026-10-01',total:118,currency:'INR'}});
+  assert.deepEqual(result,{provider:'quickbooks',externalId:'external-1048',duplicate:true});
+  assert.equal(passed.accountId,'account-1');assert.equal(passed.invoice.localInvoiceId,'local-1048');
+});
+
