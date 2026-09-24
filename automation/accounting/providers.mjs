@@ -179,6 +179,21 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       result.nextPage = body.page_context?.has_more_page ? Number(page) + 1 : null;
       return result;
     },
+    async fetchContacts({ token, accountId, page = 1, perPage = 200 }) {
+      if (!accountId) throw new Error('Zoho Books organization ID is required');
+      const url = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/contacts`);
+      url.search = new URLSearchParams({ organization_id: accountId, page: String(page), per_page: String(perPage), contact_type: 'customer' }).toString();
+      const response = await providerFetch(fetchImpl, 'zoho_books', url, { headers: { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' } });
+      const body = await jsonResponse(response, 'zoho_books');
+      const result = (Array.isArray(body.contacts) ? body.contacts : []).filter(item => item?.contact_id).map(item => ({
+        externalId: String(item.contact_id), name: item.contact_name || item.company_name || null,
+        companyName: item.company_name || null, email: item.email || null, phone: item.phone || null,
+        contactType: item.contact_type || 'customer', status: item.status || null, currency: item.currency_code || null,
+        updatedAt: item.last_modified_time || null, source: 'zoho_books', raw: item,
+      }));
+      result.nextPage = body.page_context?.has_more_page ? Number(page) + 1 : null;
+      return result;
+    },
     async fetchPayments({ token, accountId, page = 1, perPage = 200 }) {
       if (!accountId) throw new Error('Zoho Books organization ID is required');
       const url = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/customerpayments`);
