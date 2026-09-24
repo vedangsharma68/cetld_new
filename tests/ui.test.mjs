@@ -41,6 +41,20 @@ test('assistant page has an honest, accessible conversation flow', () => {
   assert.doesNotMatch(app, /<span>Add invoice<\/span>/);
 });
 
+test('assistant progress line reflects loading versus streamed response without exposing reasoning', () => {
+  assert.match(app, /const busy=state\.assistantStatus==='loading',streaming=busy/);
+  assert.match(app, /class="assistant-thought-line" role="status" aria-live="polite"/);
+  assert.match(app, /const thought=busy&&!streaming/);
+  assert.match(app, /Preparing response…/);
+  assert.match(app, /Checking follow-up history…/);
+  assert.match(app, /busy&&!streaming\?/);
+  assert.doesNotMatch(app, /chain.of.thought|internal reasoning/i);
+  assert.match(css, /\.assistant-thought-line/);
+  assert.match(css, /\.assistant-thought-dot/);
+  assert.match(css, /@media\(prefers-reduced-motion:reduce\)\{\.assistant-thought-line/);
+  assert.match(css, /@media\(max-width:520px\)\{\.assistant-thought-line/);
+});
+
 test('liquid chrome is global, subtle and motion-aware', () => {
   assert.match(html, /class="liquid-chrome"/);
   assert.match(css, /chromeDriftOne/);
@@ -113,7 +127,9 @@ test('client wording, official integration logos and global contact links are pr
   assert.doesNotMatch(app, /Debtor (?:phone|email)/);
   assert.match(app, /\['zoho'/);
   assert.match(app, /\['quickbooks'/);
-  assert.match(app, /\['whatsapp'/);
+  assert.match(app, /\['tally'/);
+  assert.match(app, /\/tallyprime-logo\.svg/);
+  for (const infrastructure of ["['supabase'", "['whatsapp'", "['resend'", "['sentry'"]) assert.doesNotMatch(app, new RegExp(infrastructure.replace('[', '\\[')));
   assert.match(app, /cdn\.simpleicons\.org/);
   assert.match(app, /mailto:vedangsharma52@gmail\.com/);
   assert.match(app, /tel:\+919871367051/);
@@ -171,6 +187,14 @@ test('sign-in brand panel fits desktop and tablet and respects reduced motion', 
   assert.match(css, /@media\(max-width:640px\)\{\.auth-brand-panel/);
   assert.match(css, /prefers-reduced-motion:reduce\)\{\.settlement-animation/);
   assert.match(css, /\.reduce-motion \.settlement-animation/);
+});
+test('auth brand backdrop is subtle, theme-aware, lightweight, and motion-safe', () => {
+  assert.match(css, /\.auth-brand-panel:before\{[^}]*pointer-events:none[^}]*radial-gradient/);
+  assert.match(css, /animation:auth-iridescence 42s ease-in-out infinite alternate/);
+  assert.match(css, /\.dark \.auth-brand-panel:before\{[^}]*background-image:radial-gradient/);
+  assert.match(css, /@media\(max-width:640px\)\{\.auth-brand-panel:before/);
+  assert.match(css, /@media\(prefers-reduced-motion:reduce\)\{\.auth-brand-panel:before\{animation:none/);
+  assert.match(css, /\.reduce-motion \.auth-brand-panel:before\{animation:none/);
 });
 test('Google sign-in mark stays legible and consistent in light and dark themes', () => {
   assert.match(app, /class="google-mark"[^>]*>\s*<svg viewBox="0 0 18 18"/);
