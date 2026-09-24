@@ -32,6 +32,7 @@ function makeStore({ workspaceId = WS_A, invoices = [], customers = [], payments
           if (operator === "ilike") return String(actual ?? '').toLowerCase() === value.toLowerCase();
           if (operator === "gte") return String(actual) >= value;
           if (operator === "lte") return String(actual) <= value;
+          if (operator === "in") return value.replace(/^\(|\)$/g, "").split(",").includes(String(actual));
           throw new Error(`Unsupported filter ${operator}`);
         });
       }
@@ -51,11 +52,12 @@ test("only reads the bound workspace and rejects scope or injection arguments", 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].invoiceNumber, `INV-${INV_1.slice(0, 4)}`);
   assert.ok(store.calls.every(({ table }) => ["invoices", "customers", "payments"].includes(table)));
+  const validCallCount = store.calls.length;
   await assert.rejects(tools.execute("getInvoices", { workspace_id: WS_B }), /Unexpected argument/);
   await assert.rejects(tools.execute("getInvoices", { status: "sent&select=*" }), /Invalid status/);
   await assert.rejects(tools.execute("getCustomer", { customerId: "not-a-uuid" }), /UUID/);
   await assert.rejects(tools.execute("rpc/drop_tables", {}), /Unknown assistant tool/);
-  assert.equal(store.calls.length, 1, "invalid tool arguments must not reach storage");
+  assert.equal(store.calls.length, validCallCount, "invalid tool arguments must not reach storage");
 });
 
 test('deterministic invoice lookup returns only the exact requested customer invoice rows', async () => {
@@ -68,9 +70,18 @@ test('deterministic invoice lookup returns only the exact requested customer inv
   assert.ok(store.calls.filter(call=>call.table==='invoices').every(call=>call.options.filters?.customer_id==='eq.'+CUSTOMER || call.options.filters?.invoice_number));
 });
 
+test('deterministic invoice lookup can use an exact displayed amount without loading unrelated invoices', async () => {
+  const customer = {id:CUSTOMER,workspace_id:WS_A,name:'Shiv Engineering',company_name:'Shiv Engineering'};
+  const store = makeStore({customers:[customer],invoices:[invoice(INV_1,{invoice_number:'INV-1001',total_amount:'84600'}),invoice(INV_2,{total_amount:'100.00'})]});
+  const found = await createAssistantTools({store}).lookupInvoice('₹84,600');
+  assert.equal(found.invoices.length,1);
+  assert.equal(found.invoices[0].invoiceNumber,'INV-1001');
+  assert.ok(store.calls.filter(call=>call.table==='invoices').every(call=>call.options.filters?.total_amount==='eq.84600'||call.options.filters?.invoice_number));
+});
+
 test("tool definitions are OpenAI function tools with no workspace or owner inputs", () => {
   const { definitions } = createAssistantTools({ store: makeStore() });
-  assert.deepEqual(definitions.map((item) => item.function.name), ["getInvoices", "getCustomer", "getPayments", "getOutstandingSummary", "getOverdueInvoices", "getActivity"]);
+  assert.deepEqual(definitions.map((item) => item.function.name), ["getInvoices", "getCustomer", "getPayments", "getOutstandingSummary", "getOverdueInvoices", "getActivity", "getInvoiceDetails"]);
   for (const item of definitions) {
     assert.equal(item.type, "function");
     assert.equal(item.function.parameters.additionalProperties, false);

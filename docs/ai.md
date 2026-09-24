@@ -97,14 +97,22 @@ results), optional `guidance` (general collection suggestions), `asOf`, `timezon
 cards/tables and escape user text; `answer` is a safe plain-text fallback.
 
 Read-only tools: `getInvoices`, `getCustomer`, `getPayments`,
-`getOutstandingSummary`, `getOverdueInvoices`, `getActivity`.
+`getOutstandingSummary`, `getOverdueInvoices`, `getActivity`, and
+`getInvoiceDetails`. Named invoice/client questions are resolved
+deterministically before model planning. One unambiguous match is enriched with
+that invoice's customer contact fields, payment rows, original-file metadata,
+safe follow-up/reminder metadata, latest recorded customer-response snapshot,
+and bookkeeping-sync status. No unrelated workspace rows are added to the
+model context; ambiguous matches return a clarification question.
 Totals use exact decimal arithmetic, grouped by currency, with no exchange-rate
 assumptions. Collection totals use recorded payment transactions; outstanding
 balances use invoice `amount_paid`. These may differ if records are unreconciled.
 Date boundaries use UTC. Aggregates refuse more than 5,000 source rows instead
 of silently reporting partial totals. Lists are bounded and marked where truncated.
-The existing unprefixed core schema has no verified follow-up log; activity
-explicitly distinguishes invoice/payment events and current follow-up metadata.
+The existing unprefixed core schema has no verified follow-up/message-history
+table; activity explicitly distinguishes invoice/payment events and the
+current follow-up, reminder-draft, and latest-response metadata that is actually
+present. Missing history is reported as not recorded rather than inferred.
 Legacy `cetld_*` automation tables are not mixed into workspace financial data.
 
 ## Verification / integration boundaries

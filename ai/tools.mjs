@@ -4,8 +4,10 @@ const MAX_PAGE_SIZE = 100;
 const MAX_OFFSET = MAX_ROWS - MAX_PAGE_SIZE;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const INVOICE_SELECT = "id,invoice_number,customer_id,issue_date,due_date,currency,total_amount,amount_paid,status,created_at,updated_at";
-const PAYMENT_SELECT = "id,invoice_id,amount,paid_at";
+const INVOICE_SELECT = "id,invoice_number,customer_id,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata,created_at,updated_at";
+const CUSTOMER_SELECT = "id,name,company_name,email,phone,created_at,updated_at";
+const PAYMENT_SELECT = "id,invoice_id,amount,paid_at,method,reference,created_at,updated_at";
+const FILE_SELECT = "id,invoice_id,file_name,mime_type,size_bytes,created_at,updated_at";
 
 const definitions = [
   tool("getInvoices", "List invoices in the authenticated workspace. Amounts are the invoice snapshot; use getPayments for recorded payment transactions.", {
@@ -23,6 +25,9 @@ const definitions = [
   tool("getActivity", "Show invoice creation/update timestamps and recorded payment transactions. No verified follow-up event log is available; safe follow-up metadata is only a current invoice snapshot.", {
     invoiceId: { type: "string", format: "uuid" }, limit: { type: "integer", minimum: 1, maximum: MAX_PAGE_SIZE },
   }),
+  tool("getInvoiceDetails", "Get one invoice's compact joined customer, payment, file, follow-up, reminder, conversation snapshot, and bookkeeping-sync context.", {
+    target: {type: "string", minLength: 1, maxLength: 160},
+  }, ["target"]),
 ];
 
 function tool(name, description, properties, required = []) {
@@ -151,13 +156,87 @@ function groupInvoiceAmounts(invoices) {
 }
 
 function safeInvoice(invoice) {
+  const total = cents(invoice.total_amount, "total_amount");
+  const paid = cents(invoice.amount_paid, "amount_paid");
+  if (paid > total) throw new TypeError("Invoice amount_paid exceeds total_amount");
   return {
     id: invoice.id, invoiceNumber: invoice.invoice_number, customerId: invoice.customer_id,
     issueDate: invoice.issue_date, dueDate: invoice.due_date, currency: invoice.currency,
-    totalAmount: String(invoice.total_amount), amountPaid: String(invoice.amount_paid), status: invoice.status,
+    subtotal: decimalMetadata(invoice.metadata?.subtotal), tax: decimalMetadata(invoice.metadata?.tax),
+    totalAmount: String(invoice.total_amount), amountPaid: String(invoice.amount_paid), outstandingAmount: money(total - paid),
+    paymentStatus: paid >= total ? "paid" : paid > 0n ? "partially_paid" : "unpaid", isFullyPaid: paid >= total,
+    status: invoice.status, invoiceStatus: invoice.status, notes: safeText(invoice.notes, 4000),
     createdAt: invoice.created_at, updatedAt: invoice.updated_at,
   };
 }
+
+function safeText(value, maximum = 500) {
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, maximum) : null;
+}
+
+function decimalMetadata(value) {
+  if (value === null || value === undefined || value === "") return null;
+  try { return money(cents(value, "metadata amount")); } catch { return null; }
+}
+
+function stringMetadata(metadata, keys, maximum = 500) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  for (const key of keys) {
+    const value = safeText(metadata[key], maximum);
+    if (value) return value;
+  }
+  return null;
+}
+
+function integerMetadata(metadata, keys) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  for (const key of keys) if (Number.isSafeInteger(metadata[key]) && metadata[key] >= 0) return metadata[key];
+  return null;
+}
+
+function compactFollowUp(metadata) {
+  return cleanObject({
+    state: stringMetadata(metadata, ["followup_state", "follow_up_state", "followup_status"]),
+    nextScheduledReminder: stringMetadata(metadata, ["next_follow_up_at", "next_reminder_at"]),
+    lastReminderSent: stringMetadata(metadata, ["last_follow_up_at", "last_reminder_sent_at"]),
+    remindersSent: integerMetadata(metadata, ["reminder_count", "reminders_sent"]),
+    cadence: stringMetadata(metadata, ["reminder_cadence", "follow_up_cadence"]),
+    pauseReason: stringMetadata(metadata, ["pause_reason"]),
+    paymentClaimed: typeof metadata?.payment_claimed === "boolean" ? metadata.payment_claimed : null,
+    needsAttentionReason: stringMetadata(metadata, ["needs_attention_reason"]),
+    escalationState: stringMetadata(metadata, ["escalation_state"]),
+  });
+}
+
+function compactBookkeeping(metadata) {
+  return cleanObject({
+    provider: stringMetadata(metadata, ["bookkeeping_provider", "accounting_provider"]),
+    externalInvoiceId: stringMetadata(metadata, ["bookkeeping_record_id", "accounting_external_invoice_id"]),
+    syncStatus: stringMetadata(metadata, ["bookkeeping_sync_status"]),
+    syncError: stringMetadata(metadata, ["bookkeeping_sync_error"], 300),
+    syncedAt: stringMetadata(metadata, ["bookkeeping_synced_at"]),
+    lastSyncAttemptAt: stringMetadata(metadata, ["bookkeeping_sync_attempted_at"]),
+  });
+}
+
+function compactConversation(metadata) {
+  return cleanObject({
+    status: stringMetadata(metadata, ["conversation_status"]),
+    reminderDraft: stringMetadata(metadata, ["reminder_text"], 2000),
+    latestCustomerResponse: stringMetadata(metadata, ["latest_customer_response", "last_customer_reply"], 2000),
+    latestCustomerResponseAt: stringMetadata(metadata, ["latest_customer_response_at", "last_customer_reply_at"]),
+    historyRecorded: false,
+  });
+}
+
+function cleanObject(value) {
+  if (Array.isArray(value)) return value.map(cleanObject);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== null && item !== undefined && item !== "").map(([key, item]) => [key, cleanObject(item)]));
+}
+
+function exactPattern(value) { return `ilike.${String(value).replace(/[\\%*_]/g, "\\$&")}`; }
+function partialPattern(value) { return `ilike.*${String(value).replace(/[\\%*_]/g, "\\$&")}*`; }
 
 function optionalFollowUpSnapshot(metadata) {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
@@ -170,6 +249,54 @@ function optionalFollowUpSnapshot(metadata) {
 
 export function createAssistantTools({ store, clock = () => new Date() } = {}) {
   if (!store || typeof store.query !== "function") throw new TypeError("An authenticated workspace store with query() is required");
+
+  let lookupInvoice;
+
+  const customersForInvoices = async invoices => {
+    const ids = [...new Set(invoices.map(invoice => invoice.customer_id).filter(id => typeof id === "string" && UUID_RE.test(id)))].slice(0, MAX_PAGE_SIZE);
+    if (!ids.length) return new Map();
+    const rows = await query(store, "customers", CUSTOMER_SELECT, {filters: {id: `in.(${ids.join(",")})`}, limit: ids.length});
+    return new Map(rows.map(customer => [customer.id, customer]));
+  };
+
+  const buildInvoiceContext = async (invoice, knownCustomer = null) => {
+    const [customerRows, paymentRows, fileRows] = await Promise.all([
+      knownCustomer ? Promise.resolve([knownCustomer]) : query(store, "customers", CUSTOMER_SELECT, {filters: {id: `eq.${invoice.customer_id}`}, limit: 1}),
+      query(store, "payments", PAYMENT_SELECT, {filters: {invoice_id: `eq.${invoice.id}`}, order: "paid_at.desc,id.asc", limit: 100}),
+      query(store, "invoice_files", FILE_SELECT, {filters: {invoice_id: `eq.${invoice.id}`}, order: "created_at.desc,id.asc", limit: 25}).catch(() => []),
+    ]);
+    const customer = customerRows[0] || null;
+    const normalized = safeInvoice(invoice);
+    const paymentTotal = paymentRows.reduce((total, payment) => total + cents(payment.amount, "payment amount"), 0n);
+    const context = cleanObject({
+      ...normalized,
+      customerName: customer?.company_name || customer?.name || null,
+      customer: customer ? {
+        name: customer.name, companyName: customer.company_name, email: customer.email, phone: customer.phone,
+        createdAt: customer.created_at, updatedAt: customer.updated_at,
+      } : null,
+      payments: paymentRows.map(payment => cleanObject({
+        id: payment.id, amount: String(payment.amount), currency: invoice.currency, paidAt: payment.paid_at,
+        method: safeText(payment.method), reference: safeText(payment.reference), createdAt: payment.created_at, updatedAt: payment.updated_at,
+      })),
+      recordedPaymentTotal: money(paymentTotal),
+      originalFiles: fileRows.map(file => cleanObject({
+        id: file.id, fileName: file.file_name, mimeType: file.mime_type, sizeBytes: file.size_bytes,
+        createdAt: file.created_at, updatedAt: file.updated_at,
+      })),
+      followUp: compactFollowUp(invoice.metadata),
+      conversation: compactConversation(invoice.metadata),
+      bookkeeping: compactBookkeeping(invoice.metadata),
+      dataAvailability: {
+        reminderHistory: "not recorded",
+        outboundMessageHistory: "not recorded",
+        inboundReplyHistory: "not recorded",
+      },
+    });
+    delete context.customerId;
+    if (!customer) context.customerName = null;
+    return context;
+  };
 
   const execute = async (name, rawArgs = {}) => {
     switch (name) {
@@ -187,13 +314,15 @@ export function createAssistantTools({ store, clock = () => new Date() } = {}) {
         const bounds = dateBounds(args.issueDateFrom, args.issueDateTo, "issueDateFrom", "issueDateTo");
         const rows = await query(store, "invoices", INVOICE_SELECT, { filters, limit: bounds.lower || bounds.upper ? MAX_ROWS + 1 : limit, offset: bounds.lower || bounds.upper ? 0 : offset });
         const filtered = bounds.lower || bounds.upper ? rows.filter((row) => withinDateBounds(row.issue_date, bounds)) : rows;
-        return (bounds.lower || bounds.upper ? filtered.slice(offset, offset + limit) : filtered).map(safeInvoice);
+        const selected = bounds.lower || bounds.upper ? filtered.slice(offset, offset + limit) : filtered;
+        const customers = await customersForInvoices(selected);
+        return selected.map(row => ({...safeInvoice(row), customerName: customers.get(row.customer_id)?.company_name || customers.get(row.customer_id)?.name || null}));
       }
       case "getCustomer": {
         const args = strictArgs(rawArgs, ["customerId"]);
         const id = uuid(args.customerId, "customerId");
-        const rows = await query(store, "customers", "id,name,company_name,created_at,updated_at", { filters: { id: `eq.${id}` }, limit: 2 });
-        return rows.length ? { id: rows[0].id, name: rows[0].name, companyName: rows[0].company_name ?? null, createdAt: rows[0].created_at, updatedAt: rows[0].updated_at } : null;
+        const rows = await query(store, "customers", CUSTOMER_SELECT, { filters: { id: `eq.${id}` }, limit: 2 });
+        return rows.length ? cleanObject({ id: rows[0].id, name: rows[0].name, companyName: rows[0].company_name, email: rows[0].email, phone: rows[0].phone, createdAt: rows[0].created_at, updatedAt: rows[0].updated_at }) : null;
       }
       case "getPayments": {
         const args = strictArgs(rawArgs, ["limit", "offset", "invoiceId", "paidAtFrom", "paidAtTo"]);
@@ -205,8 +334,12 @@ export function createAssistantTools({ store, clock = () => new Date() } = {}) {
         const bounds = dateBounds(args.paidAtFrom, args.paidAtTo, "paidAtFrom", "paidAtTo");
         const rows = await query(store, "payments", PAYMENT_SELECT, { filters, order: "paid_at.desc,id.asc" });
         const filtered = bounds.lower || bounds.upper ? rows.filter((row) => withinDateBounds(row.paid_at, bounds, true)) : rows;
-        const invoices = await query(store, 'invoices', 'id,currency');
-        const currencies = new Map(invoices.map(i => [i.id, currencyCode(i.currency)]));
+        const invoiceIds = args.invoiceId ? [uuid(args.invoiceId, "invoiceId")] : [...new Set(filtered.map(row => row.invoice_id))];
+        const invoiceRows = await Promise.all(invoiceIds.map(id => query(store, 'invoices', 'id,invoice_number,customer_id,currency', {filters: {id: `eq.${id}`}, limit: 1})));
+        const paymentInvoices = invoiceRows.flat();
+        const paymentCustomers = await customersForInvoices(paymentInvoices);
+        const invoicesById = new Map(paymentInvoices.map(i => [i.id, i]));
+        const currencies = new Map(paymentInvoices.map(i => [i.id, currencyCode(i.currency)]));
         const totals = new Map();
         for (const row of filtered) {
           const currency = currencies.get(row.invoice_id);
@@ -214,7 +347,7 @@ export function createAssistantTools({ store, clock = () => new Date() } = {}) {
           totals.set(currency, (totals.get(currency) ?? 0n) + cents(row.amount, 'amount'));
         }
         return {basis: 'recorded payment transactions', count: filtered.length, totalsByCurrency: Object.fromEntries([...totals].map(([c, n]) => [c, money(n)])),
-          payments: filtered.slice(offset, offset + limit).map((row) => ({ id: row.id, invoiceId: row.invoice_id, currency: currencies.get(row.invoice_id), amount: String(row.amount), paidAt: row.paid_at })), offset, limit};
+          payments: filtered.slice(offset, offset + limit).map((row) => { const invoice = invoicesById.get(row.invoice_id); const customer = paymentCustomers.get(invoice?.customer_id); return cleanObject({ id: row.id, invoiceId: row.invoice_id, invoiceNumber: invoice?.invoice_number, customerName: customer?.company_name || customer?.name, currency: currencies.get(row.invoice_id), amount: String(row.amount), paidAt: row.paid_at, method: row.method, reference: row.reference }); }), offset, limit};
       }
       case "getOutstandingSummary": {
         strictArgs(rawArgs, []);
@@ -240,7 +373,8 @@ export function createAssistantTools({ store, clock = () => new Date() } = {}) {
         const todayUtc = isoDay(clock);
         const invoices = await query(store, "invoices", INVOICE_SELECT, { order: "id.asc" });
         const overdue = invoices.filter((invoice) => invoice.due_date && invoice.due_date < todayUtc && withinDateBounds(invoice.due_date,bounds) && !["draft", "paid", "void", "cancelled"].includes(invoice.status) && cents(invoice.amount_paid, "amount_paid") < cents(invoice.total_amount, "total_amount"));
-        const balances = overdue.map((invoice) => ({ ...safeInvoice(invoice), outstandingAmount: money(cents(invoice.total_amount, "total_amount") - cents(invoice.amount_paid, "amount_paid")) }));
+        const overdueCustomers = await customersForInvoices(overdue);
+        const balances = overdue.map((invoice) => ({ ...safeInvoice(invoice), customerName: overdueCustomers.get(invoice.customer_id)?.company_name || overdueCustomers.get(invoice.customer_id)?.name || null, outstandingAmount: money(cents(invoice.total_amount, "total_amount") - cents(invoice.amount_paid, "amount_paid")) }));
         balances.sort((a,b) => a.dueDate.localeCompare(b.dueDate) || a.id.localeCompare(b.id));
         return { asOfUtcDate: todayUtc, count: balances.length, balancesByCurrency: groupInvoiceAmounts(overdue), invoices: balances.slice(0,100), truncated: balances.length > 100 };
       }
@@ -251,7 +385,7 @@ export function createAssistantTools({ store, clock = () => new Date() } = {}) {
         const invoiceFilters = invoiceId ? { id: `eq.${invoiceId}` } : {};
         const paymentFilters = invoiceId ? { invoice_id: `eq.${invoiceId}` } : {};
         const [invoices, payments] = await Promise.all([
-          query(store, "invoices", `${INVOICE_SELECT},metadata`, { filters: invoiceFilters, order: "updated_at.desc,id.asc" }),
+          query(store, "invoices", INVOICE_SELECT, { filters: invoiceFilters, order: "updated_at.desc,id.asc" }),
           query(store, "payments", PAYMENT_SELECT, { filters: paymentFilters, order: "paid_at.desc,id.asc" }),
         ]);
         if (invoices.length + payments.length > MAX_ROWS) throw new RangeError(`Activity exceeds the ${MAX_ROWS}-row safety limit; refusing a partial answer`);
@@ -265,6 +399,11 @@ export function createAssistantTools({ store, clock = () => new Date() } = {}) {
         events.sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt)) || a.type.localeCompare(b.type) || String(a.invoiceId).localeCompare(String(b.invoiceId)));
         return { verifiedFollowUpLogAvailable: false, note: "Invoice and payment events are shown; follow-up metadata, if present, is only a current invoice snapshot, not a verified follow-up event log.", events: events.slice(0, limit) };
       }
+      case "getInvoiceDetails": {
+        const args = strictArgs(rawArgs, ["target"]);
+        const match = await lookupInvoice(args.target);
+        return match;
+      }
       default:
         throw new TypeError(`Unknown assistant tool: ${String(name)}`);
     }
@@ -272,33 +411,48 @@ export function createAssistantTools({ store, clock = () => new Date() } = {}) {
 
   // Exact, deterministic lookup used before any model planning. The model only
   // receives the matched invoice rows, never a workspace-wide invoice list.
-  const lookupInvoice = async (rawTarget) => {
+  lookupInvoice = async (rawTarget) => {
     if (typeof rawTarget !== 'string' || !rawTarget.trim() || rawTarget.length > 160 || /[%*_]/.test(rawTarget)) throw new TypeError('Invoice lookup target is invalid');
-    const target = rawTarget.trim();
+    const target = rawTarget.trim().replace(/^the\s+/i, '').replace(/\s+invoice$/i, '').trim();
     const uuidTarget = UUID_RE.test(target);
-    const numberRows = uuidTarget ? [] : await query(store, 'invoices', INVOICE_SELECT, {filters: {invoice_number: `ilike.${target}`}, limit: 3});
+    const numberRows = uuidTarget ? [] : await query(store, 'invoices', INVOICE_SELECT, {filters: {invoice_number: exactPattern(target)}, limit: 10});
     let invoiceRows = numberRows;
     if (uuidTarget) invoiceRows = await query(store, 'invoices', INVOICE_SELECT, {filters: {id: `eq.${target}`}, limit: 3});
     let customerRows = [];
     if (!invoiceRows.length && !uuidTarget) {
       const [byName, byCompany] = await Promise.all([
-        query(store, 'customers', 'id,name,company_name', {filters: {name: `ilike.${target}`}, limit: 3}),
-        query(store, 'customers', 'id,name,company_name', {filters: {company_name: `ilike.${target}`}, limit: 3}),
+        query(store, 'customers', CUSTOMER_SELECT, {filters: {name: exactPattern(target)}, limit: 10}),
+        query(store, 'customers', CUSTOMER_SELECT, {filters: {company_name: exactPattern(target)}, limit: 10}),
       ]);
       customerRows = [...new Map([...byName, ...byCompany].map(row => [row.id, row])).values()];
+      if (!customerRows.length && target.length >= 3) {
+        const [byNamePartial, byCompanyPartial] = await Promise.all([
+          query(store, 'customers', CUSTOMER_SELECT, {filters: {name: partialPattern(target)}, limit: 10}),
+          query(store, 'customers', CUSTOMER_SELECT, {filters: {company_name: partialPattern(target)}, limit: 10}),
+        ]);
+        customerRows = [...new Map([...byNamePartial, ...byCompanyPartial].map(row => [row.id, row])).values()];
+      }
       if (customerRows.length === 1) invoiceRows = await query(store, 'invoices', INVOICE_SELECT, {filters: {customer_id: `eq.${customerRows[0].id}`}, limit: 26});
     }
-    const customerMap = new Map(customerRows.map(row => [row.id, row.company_name || row.name]));
-    if (invoiceRows.length && !customerMap.size) {
-      const ids = [...new Set(invoiceRows.map(row => row.customer_id))];
-      const customers = await Promise.all(ids.slice(0, 3).map(id => query(store, 'customers', 'id,name,company_name', {filters: {id: `eq.${id}`}, limit: 1})));
-      for (const customer of customers.flat()) customerMap.set(customer.id, customer.company_name || customer.name);
+    if (!invoiceRows.length && !uuidTarget) {
+      const amount = target.replace(/[,\s]/g, '').match(/^(?:₹|INR|USD|EUR|GBP|AED|AUD|SGD|CAD|JPY|CHF)?([0-9]+(?:\.[0-9]{1,2})?)$/i)?.[1];
+      if (amount) invoiceRows = await query(store, 'invoices', INVOICE_SELECT, {filters: {total_amount: `eq.${amount}`}, limit: 26});
     }
-    return {
+    const customerMap = new Map(customerRows.map(row => [row.id, row]));
+    if (invoiceRows.length) {
+      const ids = [...new Set(invoiceRows.map(row => row.customer_id))];
+      const customers = await Promise.all(ids.slice(0, 10).map(id => query(store, 'customers', CUSTOMER_SELECT, {filters: {id: `eq.${id}`}, limit: 1})));
+      for (const customer of customers.flat()) customerMap.set(customer.id, customer);
+    }
+    const result = {
       ambiguousCustomer: customerRows.length > 1,
-      invoices: invoiceRows.slice(0, 25).map(row => ({...safeInvoice(row), customerName: customerMap.get(row.customer_id) ?? null})),
+      invoices: invoiceRows.slice(0, 25).map(row => ({...safeInvoice(row), customerName: customerMap.get(row.customer_id)?.company_name || customerMap.get(row.customer_id)?.name || null})),
       truncated: invoiceRows.length > 25,
     };
+    if (!result.ambiguousCustomer && result.invoices.length === 1 && !result.truncated) {
+      result.invoices[0] = await buildInvoiceContext(invoiceRows[0], customerMap.get(invoiceRows[0].customer_id));
+    }
+    return result;
   };
 
   return { definitions: definitions.map((item) => structuredClone(item)), tools: definitions.map((item) => structuredClone(item)), execute, lookupInvoice };
