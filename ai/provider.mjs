@@ -11,8 +11,8 @@ function assertServerRuntime() {
 export const DEFAULT_MODEL = 'gemini-3.5-flash';
 export const DEFAULT_FALLBACK_MODEL = 'openrouter/free';
 export const DEFAULT_EXTRACTION_MODEL = 'gemini-3.5-flash-lite';
-export const DEFAULT_EXTRACTION_FALLBACK_MODEL = 'gemini-3.1-flash-lite';
 export const OPENROUTER_FREE_MODEL = 'openrouter/free';
+export const DEFAULT_EXTRACTION_FALLBACK_MODEL = OPENROUTER_FREE_MODEL;
 export const VERIFIED_MODELS = Object.freeze([
   DEFAULT_MODEL,
   DEFAULT_FALLBACK_MODEL,
@@ -49,16 +49,22 @@ export class AIError extends Error {
 export function isGeminiModelId(value) {
   return typeof value === 'string' && /^gemini-[a-zA-Z0-9.-]{1,100}$/.test(value) && VERIFIED_MODELS.includes(value);
 }
+export function isPrimaryModelId(value) {
+  return value === DEFAULT_MODEL;
+}
+export function isFallbackModelId(value) {
+  return value === OPENROUTER_FREE_MODEL;
+}
 export function isModelId(value) {
   return value === OPENROUTER_FREE_MODEL || isGeminiModelId(value);
 }
 export const isFreeModelId = isModelId;
 
 export function sanitizeModelSettings({primaryModel, fallbackModel} = {}) {
-  const primary = isGeminiModelId(primaryModel) ? primaryModel : DEFAULT_MODEL;
+  const primary = isPrimaryModelId(primaryModel) ? primaryModel : DEFAULT_MODEL;
   if (fallbackModel === null) return {primaryModel: primary, fallbackModel: null};
-  const fallback = isModelId(fallbackModel) && fallbackModel !== primary ? fallbackModel : DEFAULT_FALLBACK_MODEL;
-  return {primaryModel: primary, fallbackModel: fallback === primary ? OPENROUTER_FREE_MODEL : fallback};
+  const fallback = isFallbackModelId(fallbackModel) ? fallbackModel : DEFAULT_FALLBACK_MODEL;
+  return {primaryModel: primary, fallbackModel: fallback};
 }
 
 function invalidArgument() { return new AIError('INVALID_ARGUMENT', 400); }
@@ -182,7 +188,8 @@ export class AIProvider {
     sleepImpl = delay => new Promise(resolve => setTimeout(resolve, delay)),
   } = {}) {
     assertServerRuntime();
-    if (!isModelId(primaryModel) || (fallbackModel !== null && !isModelId(fallbackModel))) throw new AIError('INVALID_MODEL', 400);
+    const extractionPrimary = primaryModel === DEFAULT_EXTRACTION_MODEL;
+    if ((!isPrimaryModelId(primaryModel) && !extractionPrimary) || (fallbackModel !== null && !isFallbackModelId(fallbackModel))) throw new AIError('INVALID_MODEL', 400);
     this.primaryModel = primaryModel;
     this.fallbackModel = fallbackModel;
     this.#geminiApiKey = typeof geminiApiKey === 'string' ? geminiApiKey : '';
@@ -200,7 +207,7 @@ export class AIProvider {
     if (maxTokens !== undefined) requestOptions.max_tokens = maxTokens;
     if (tools !== undefined) requestOptions.tools = tools;
     if (toolChoice !== undefined) requestOptions.tool_choice = toolChoice;
-    const candidates = [...new Set([this.primaryModel, this.fallbackModel, OPENROUTER_FREE_MODEL].filter(Boolean))];
+    const candidates = [this.primaryModel, this.fallbackModel].filter(Boolean);
     let lastError;
     for (const model of candidates) {
       try { return await this.#generateWithModel(model, messages, requestOptions, model !== this.primaryModel); }

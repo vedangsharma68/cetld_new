@@ -39,6 +39,15 @@ test('assistant is available in one click and invoice review exposes paid and re
   assert.match(app,/What is the due date for this invoice\?/);
 });
 
+test('assistant renders only safe evidence labels, freshness, coverage, and invoice reference links',()=>{
+  assert.match(app,/function assistantEvidence\(message\)/);
+  assert.match(app,/Answer evidence/);
+  assert.match(app,/As of \$\{escape\(freshness\)\}/);
+  assert.match(app,/Coverage not confirmed/);
+  assert.match(app,/data-action="assistant-evidence-invoice"/);
+  assert.match(app,/evidence=typeof result==='object'\?result\.evidence:null/);
+});
+
 test('connections only surfaces supported accounting integrations and neutral credential copy',()=>{
   const connectionSource=app.slice(app.indexOf('function connections()'),app.indexOf('function onboarding()'));
   assert.match(connectionSource,/Zoho Books/);

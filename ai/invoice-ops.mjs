@@ -1,4 +1,5 @@
 import {APIError, object, uuid} from './http.mjs';
+import {AMOUNT_PRECISION_MESSAGE,CURRENCY_SUPPORT_MESSAGE,isSupportedCurrency} from '../currency-contract.mjs';
 
 const INPUT_FIELDS = ['invoiceNumber', 'clientName', 'clientEmail', 'clientPhone', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total', 'outstanding', 'currency', 'notes', 'alreadyPaid'];
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -15,9 +16,12 @@ function amount(value, required = false) {
     return null;
   }
   if (typeof value !== 'number' && typeof value !== 'string') throw new APIError(422, 'INVALID_INVOICE_AMOUNT');
-  const n = Number(value);
+  const text=String(value).trim();
+  if (!/^\d+(?:\.\d+)?$/.test(text)) throw new APIError(422, 'INVALID_INVOICE_AMOUNT');
+  if (/\.\d{3,}$/.test(text)) throw new APIError(422, 'AMOUNT_PRECISION_UNSUPPORTED', AMOUNT_PRECISION_MESSAGE);
+  const n = Number(text);
   if (!Number.isFinite(n) || n < 0 || n > 9999999999999999) throw new APIError(422, 'INVALID_INVOICE_AMOUNT');
-  return Math.round(n * 100) / 100;
+  return n;
 }
 
 export function validateAssistantInvoice(value) {
@@ -30,7 +34,8 @@ export function validateAssistantInvoice(value) {
   if (!dateValue(value.dueDate)) return {missingDueDate: true};
   if (value.dueDate < value.invoiceDate) throw new APIError(422, 'INVALID_DUE_DATE');
   const currency = String(value.currency || '').trim().toUpperCase();
-  if (!/^[A-Z]{3}$/.test(currency)) throw new APIError(422, 'CURRENCY_REQUIRED');
+  if (!currency) throw new APIError(422, 'CURRENCY_REQUIRED');
+  if (!isSupportedCurrency(currency)) throw new APIError(422, 'UNSUPPORTED_CURRENCY', CURRENCY_SUPPORT_MESSAGE);
   const total = amount(value.total, true);
   const subtotal = amount(value.subtotal);
   const tax = amount(value.tax);
@@ -79,7 +84,22 @@ export async function saveAssistantInvoice({store, invoice: input, confirmed, id
   invoice.idempotencyKey = idempotencyKey;
   let row = await store.findAssistantInvoice({invoiceNumber: invoice.invoiceNumber, idempotencyKey});
   let idempotent = Boolean(row);
-  if (!row) {
+  if (invoice.alreadyPaid) {
+    let customerId = row?.customer_id;
+    if (!customerId) {
+      let customer = await store.findCustomer({email: invoice.clientEmail, name: invoice.clientName});
+      if (!customer) customer = await store.createCustomer({name: invoice.clientName, email: invoice.clientEmail, phone: invoice.clientPhone});
+      customerId = customer.id;
+    }
+    // Always call the atomic RPC, including on retries of a previously saved row.
+    // The RPC repairs a legacy fully-paid row only when payment history is absent.
+    row = await store.createPaidAssistantInvoice({customerId, invoice});
+    if (!row) {
+      row = await store.findAssistantInvoice({invoiceNumber: invoice.invoiceNumber, idempotencyKey});
+      if (!row) throw new APIError(409, 'INVOICE_ALREADY_EXISTS');
+      idempotent = true;
+    }
+  } else if (!row) {
     let customer = await store.findCustomer({email: invoice.clientEmail, name: invoice.clientName});
     if (!customer) customer = await store.createCustomer({name: invoice.clientName, email: invoice.clientEmail, phone: invoice.clientPhone});
     row = await store.createAssistantInvoice({customerId: customer.id, invoice});

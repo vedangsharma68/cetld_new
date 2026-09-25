@@ -129,7 +129,7 @@ test('required invoice, payment, reminder, reply and next-action questions stay 
   const replied=await answerWorkspaceQuestion({provider,store:scopedStore(WS_A,{invoices:[shiv],customers,payments:[],invoice_files:[]}),message:'what did they say?',history:[{role:'user',content:'tell me about the Shiv Engineering invoice'},{role:'assistant',content:about.answer}]});
   const next=await answerWorkspaceQuestion({provider,store:shivStore,message:'what happens next on INV-005?'});
   assert.match(about.answer,/SHIV-1048.*Shiv Engineering.*4200\.00/);
-  assert.equal(paid.answer,'Yes. APP-1049 is fully paid.');
+  assert.match(paid.answer,/APP-1049 for App Revolution is fully paid \(invoice status: paid\)\. Total: INR 9100\.00/);
   assert.match(reminded.answer,/2026-09-22/);
   assert.match(replied.answer,/Payment was processed yesterday/);
   assert.match(next.answer,/2026-09-27/);

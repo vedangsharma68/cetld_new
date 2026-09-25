@@ -20,6 +20,14 @@ test('Assistant create request returns a validated proposal without writing', as
   assert.equal(created,0);
 });
 
+test('Assistant refuses a Zoho invoice proposal using an unsupported precision currency',async()=>{
+  const provider={generate:async()=>({toolCalls:[{function:{name:'proposeCreateInvoice',arguments:JSON.stringify({invoiceNumber:'INV-JPY',clientName:'Shiv Engineering',invoiceDate:'2026-10-01',dueDate:'2026-10-15',total:84600,currency:'JPY'})}}],model:'test',usedFallback:false})};
+  const accounting={readZohoData:async()=>({provider:'zoho_books',records:[]}),async syncInvoice(){throw new Error('must not write') }};
+  const result=await answerWorkspaceQuestion({provider,store:EMPTY_STORE,message:'Create a JPY invoice.',accounting,clock:()=>new Date('2026-09-24T00:00:00.000Z')});
+  assert.equal(result.pendingAction,null);
+  assert.match(result.answer,/CETLD supports only two-decimal currencies/i);
+});
+
 test('Assistant invoice edit resolves one Zoho invoice and returns a proposal without writing', async () => {
   let updated = 0;
   const provider = {generate:async()=>({toolCalls:[{function:{name:'proposeUpdateInvoice',arguments:JSON.stringify({target:'INV-005',changes:{dueDate:'2026-10-30'}})}}],model:'test',usedFallback:false})};

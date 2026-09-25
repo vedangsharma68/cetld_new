@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import vm from 'node:vm';
+import {cents,remaining,payment,paymentRequestKey} from '../core.mjs';
 
 const [app, css, html, vercel] = await Promise.all([
   readFile(new URL('../app.js', import.meta.url), 'utf8'),
@@ -100,6 +102,59 @@ test('interactive controls preserve delegated action contracts', () => {
   ]) assert.match(app, new RegExp(`['\"]${action}['\"]`));
 });
 
+test('payment retries bind the same idempotency key to amount and reference', () => {
+  assert.match(app, /paymentRequestKey\(form\.dataset,\{amount,reference\}\)/);
+  assert.match(app, /p_reference:reference/);
+});
+
+function extractedAppFunction(startMarker,endMarker,sandbox) {
+  const start=app.indexOf(startMarker),end=app.indexOf(endMarker,start);
+  assert.notEqual(start,-1,`missing app handler ${startMarker}`);
+  assert.notEqual(end,-1,`missing end marker ${endMarker}`);
+  const name=startMarker.match(/function\s+(\w+)/)?.[1];
+  assert.ok(name,`could not read function name from ${startMarker}`);
+  return vm.runInNewContext(`${app.slice(start,end)}; ${name}`,sandbox);
+}
+
+test('Assistant invoice submit executes the save request with values and a retry-stable key',async()=>{
+  const requests=[],buttonEl={disabled:false},fields={invoiceNumber:'INV-1',clientName:'Client',invoiceDate:'2026-09-01',dueDate:'2026-10-01',total:'100',currency:'INR'};
+  const form={dataset:{},elements:{dueDate:{focus(){}}},querySelector(selector){return selector==='[type=submit]'?buttonEl:{textContent:''}}};
+  class FormValues {get(key){return fields[key]??''}has(key){return key==='alreadyPaid'&&!!fields.alreadyPaid}}
+  const handler=extractedAppFunction('async function saveAssistantInvoice(event){','async function retryAssistantSync',{
+    state:{workspace:{id:'workspace-1'},assistantInvoiceFile:null},FormData:FormValues,crypto:{randomUUID:()=> 'assistant-key-1234'},
+    aiRequest:async(action,request)=>{requests.push({action,request});return{saved:false}},showError(){},
+  });
+  for(let i=0;i<2;i++)await handler({preventDefault(){},currentTarget:form});
+  assert.equal(requests.length,2);
+  assert.equal(requests[0].action,'save-invoice');
+  assert.equal(requests[0].request.body.workspaceId,'workspace-1');
+  assert.equal(requests[0].request.body.invoice.invoiceNumber,'INV-1');
+  assert.equal(requests[0].request.body.idempotencyKey,'assistant-key-1234');
+  assert.equal(requests[1].request.body.idempotencyKey,requests[0].request.body.idempotencyKey);
+});
+
+test('payment form executes the RPC with the declared reference and bound request key',async()=>{
+  const calls=[],buttonEl={disabled:false},invoice={id:'invoice-1',amount_minor:10000,paid_minor:0,currency:'INR',client:'Client',number:'INV-1',status:'sent'};
+  const form={dataset:{},querySelector(selector){return selector==='[type=submit]'?buttonEl:null},addEventListener(_name,handler){this.submit=handler}};
+  class FormValues {get(key){return key==='amount'?'12.34':key==='reference'?'receipt-1':''}}
+  const handler=extractedAppFunction('function paymentForm(id){','function draftForm(id)',{
+    state:{demo:false,workspace:{id:'workspace-1'},invoices:[invoice]},FormData:FormValues,crypto:{randomUUID:()=> 'payment-key-1234'},
+    openDialog(){},$:selector=>selector==='#payment-form'?form:{close(){}},escape:String,money:()=>'',button:()=>'',terminalInvoice:()=>false,
+    remaining,payment,cents,paymentRequestKey,db:{rpc:async(...args)=>{calls.push(args);return{error:null}}},loadData:async()=>{},toast(){},showError(){},
+  });
+  handler('invoice-1');
+  await form.submit({preventDefault(){},currentTarget:form});
+  assert.equal(calls.length,1);
+  assert.equal(calls[0][0],'record_invoice_payment');
+  assert.equal(calls[0][1].p_amount,12.34);
+  assert.equal(calls[0][1].p_reference,'receipt-1');
+  const savedKey=calls[0][1].p_idempotency_key;
+  assert.ok(savedKey);
+  assert.equal(form.dataset.paymentRequestKey,savedKey);
+  assert.equal(paymentRequestKey(form.dataset,{amount:1234,reference:'receipt-1'}),savedKey);
+  assert.throws(()=>paymentRequestKey(form.dataset,{amount:1235,reference:'receipt-1'}),/pending.*same amount and reference/i);
+});
+
 test('mobile tables, drawers and navigation remain usable at small widths', () => {
   assert.match(css, /@media\(max-width:600px\)/);
   assert.match(css, /@media\(max-width:360px\)/);
@@ -112,7 +167,7 @@ test('mobile tables, drawers and navigation remain usable at small widths', () =
   assert.match(app, /action="collapse-nav"/);
 });
 test('settings persist workspace currency and account model preferences', () => {
-  for (const code of ['INR','USD','EUR','GBP','AED','SGD','AUD','CAD','JPY','CHF']) assert.ok(app.includes("['"+code+"'"));
+  for (const code of ['INR','USD','EUR','GBP','AED','SGD','AUD','CAD','CHF']) assert.ok(app.includes("['"+code+"'"));
   assert.match(app, /name="primary_ai_model"/);
   assert.match(app, /name="fallback_ai_model"/);
   assert.match(app, /db\.auth\.updateUser/);
@@ -151,9 +206,10 @@ test('workspace AI settings and invoice extraction use the centralized server AP
 });
 
 test('invoice currency is a shared dropdown in manual, edit, extraction review, and Assistant review flows', () => {
-  for (const code of ['INR','USD','EUR','GBP','AED','AUD','SGD','CAD','JPY','CHF']) {
+  for (const code of ['INR','USD','EUR','GBP','AED','AUD','SGD','CAD','CHF']) {
     assert.match(app, new RegExp(`\\['${code}',`));
   }
+  assert.doesNotMatch(app,/\['JPY',/);
   assert.equal((app.match(/<select name="currency"/g) || []).length, 2);
   assert.equal((app.match(/currencyOptions\(/g) || []).length >= 3, true);
   assert.match(app, /currencyOptions\(x\?\.currency\|\|state\.settings\?\.default_currency\|\|'INR'\)/);
@@ -161,7 +217,14 @@ test('invoice currency is a shared dropdown in manual, edit, extraction review, 
   assert.match(app, /input\.tagName==='SELECT'.*input\.add\(new Option/);
   assert.match(app, /amount_minor:cents\(rawAmount\),currency/);
   assert.match(app, /currency:String\(values\.get\('currency'\)\|\|''\)\.trim\(\)\.toUpperCase\(\)/);
+  assert.match(app,/isSupportedCurrency\(currency\)/);
+  assert.match(app,/unsupported precision/);
   assert.doesNotMatch(app, /<input name="currency"/);
+});
+
+test('invoice writes leave amount paid and lifecycle status to the settlement RPC',()=>{
+  assert.doesNotMatch(app,/amount_paid:\(x\?\.paid_minor\|\|0\)\/100/);
+  assert.doesNotMatch(app,/status:x\?\.status\|\|'draft'/);
 });
 
 test('Collections Pulse uses complete workspace-scoped data and explicit multi-currency presentation', () => {

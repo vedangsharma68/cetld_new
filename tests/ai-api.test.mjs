@@ -4,7 +4,7 @@ import {authorizeAIWorkspace} from '../ai/store.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
 import {readFile} from 'node:fs/promises';
 import {answerWorkspaceQuestion} from '../ai/assistant.mjs';
-import {DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, AIProvider} from '../ai/provider.mjs';
+import {DEFAULT_EXTRACTION_MODEL, DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, OPENROUTER_FREE_MODEL, AIProvider} from '../ai/provider.mjs';
 const A='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', B='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', U='11111111-1111-4111-8111-111111111111', F='22222222-2222-4222-8222-222222222222';
 const env={SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUBLISHABLE_KEY:'public-test-key'};
 
@@ -72,6 +72,18 @@ test('file extraction download checks workspace and invoice path before accessin
   assert.equal(file.bytes.toString(),'%PDF-1.4\n');
 });
 function response(){return {headers:{},setHeader(k,v){this.headers[k]=v;},status(n){this.code=n;return this;},json(data){this.data=data;return this;}};}
+test('models endpoint separates verified Gemini primary, extraction, and OpenRouter fallback',async()=>{
+  const verified=[];
+  const handler=createAIHandler({env:{GEMINI_API_KEY:'gemini-secret',OPENROUTER_API_KEY:'router-secret'},verify:async(id,opts)=>{verified.push([id,opts.geminiApiKey,opts.openRouterApiKey]);return {id};}});
+  const res=response();await handler({method:'GET',query:{action:'models'}},res);
+  assert.equal(res.code,200);
+  assert.deepEqual(res.data.models,[DEFAULT_MODEL]);
+  assert.deepEqual(res.data.fallbackModels,[OPENROUTER_FREE_MODEL]);
+  assert.deepEqual(res.data.extractionModels,[DEFAULT_EXTRACTION_MODEL]);
+  assert.equal(res.data.openRouterFallback,true);
+  assert.ok(verified.some(([id])=>id===DEFAULT_MODEL));
+  assert.ok(verified.every(([,geminiKey,routerKey])=>geminiKey==='gemini-secret'&&routerKey==='router-secret'));
+});
 test('settings API validates models, permissions, and unknown fields before saving',async()=>{
   let saves=0,verified=[];
   const store={role:'owner',getSettings:async()=>({primary_model:DEFAULT_MODEL}),saveSettings:async s=>{saves++;return s;}};
@@ -83,12 +95,27 @@ test('settings API validates models, permissions, and unknown fields before savi
   const unavailable=createAIHandler({authorize:async()=>({...store,role:'owner'}),verify:async()=>{throw new Error('upstream secret');}});
   const error=response();await unavailable(req,error);assert.equal(error.code,503);assert.ok(!JSON.stringify(error).includes('upstream secret'));
 });
+test('settings API rejects OpenRouter as primary and accepts only Gemini primary with OpenRouter free fallback',async()=>{
+  let saved=[];
+  const store={role:'owner',saveSettings:async value=>{saved.push(value);return value;}};
+  const handler=createAIHandler({authorize:async()=>store,verify:async()=>({})});
+  const base={method:'PUT',query:{action:'settings'},body:{workspaceId:A,primary_model:DEFAULT_MODEL,fallback_model:DEFAULT_FALLBACK_MODEL}};
+  const accepted=response();await handler(base,accepted);
+  assert.equal(accepted.code,200);
+  const before=saved.length;
+  const rejected=response();await handler({...base,body:{...base.body,primary_model:DEFAULT_FALLBACK_MODEL,fallback_model:null}},rejected);
+  assert.equal(rejected.code,400);
+  assert.equal(saved.length,before);
+  const duplicate=response();await handler({...base,body:{...base.body,fallback_model:DEFAULT_MODEL}},duplicate);
+  assert.equal(duplicate.code,400);
+  assert.equal(saved.length,before);
+});
 test('assistant uses only safe tools and renders factual results without model prose',async()=>{
   let calls=0;
   const store={query:async table=>{calls++;return table==='invoices'?[{id:F,customer_id:U,currency:'INR',total_amount:'100.00',amount_paid:'25.00',status:'sent'}]:[{id:U,name:'Client'}];}};
   const provider={generate:async()=>({content:'Invented balance 999999',model:DEFAULT_MODEL,usedFallback:false,toolCalls:[{function:{name:'getOutstandingSummary',arguments:'{}'}}]})};
   const result=await answerWorkspaceQuestion({provider,store,message:'Who owes the most?'});
-  assert.equal(calls,2);assert.match(result.answer,/75.00/);assert.ok(!result.answer.includes('999999'));assert.equal(result.sources[0].data.debtors[0].customerName,'Client');
+  assert.equal(calls,2);assert.match(result.answer,/75.00/);assert.ok(!result.answer.includes('999999'));assert.equal(result.evidence.source,'Cetld workspace');assert.equal(result.evidence.complete,true);assert.doesNotMatch(JSON.stringify(result.evidence),/workspace_id|customer_id|tool|sql/i);
   provider.generate=async()=>({toolCalls:[{function:{name:'deleteInvoice',arguments:'{}'}}]});
   await assert.rejects(answerWorkspaceQuestion({provider,store,message:'Delete everything'}),e=>e.code==='TOOL_NOT_ALLOWED');
   assert.equal(calls,2);
@@ -96,18 +123,19 @@ test('assistant uses only safe tools and renders factual results without model p
 });
 
 test('pre-save PDF upload flows through centralized structured provider and validation',async()=>{
-  const raw=Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail'].map(k=>[k,{value:null,confidence:0}]));
+  const raw=Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes'].map(k=>[k,{value:null,confidence:0}]));
   raw.lineItems={value:[],confidence:0};
   raw.currency={value:'USD',confidence:0.9};raw.total={value:0.29,confidence:0.9};
   let completions=0;
   const fetchImpl=async(url,init)=>{
-    if(url.endsWith('/models'))return json({data:[{id:DEFAULT_MODEL}]});
     const payload=JSON.parse(init.body);completions++;
-    assert.equal(payload.response_format.type,'json_schema');
-    assert.equal(payload.plugins[0].id,'file-parser');
-    return json({choices:[{message:{content:JSON.stringify(raw)}}]});
+    assert.match(String(url),/models\/gemini-3\.5-flash-lite:generateContent/);
+    assert.equal(payload.generationConfig.responseMimeType,'application/json');
+    assert.equal(payload.plugins,undefined);
+    assert.equal(payload.contents[0].parts[1].inlineData.mimeType,'application/pdf');
+    return json({candidates:[{content:{parts:[{text:JSON.stringify(raw)}]},finishReason:'STOP'}]});
   };
-  const handler=createAIHandler({authorize:async()=>({getSettings:async()=>({primary_model:DEFAULT_MODEL,fallback_model:null})}),providerFactory:o=>new AIProvider({...o,apiKey:'fake-test-key',fetchImpl})});
+  const handler=createAIHandler({authorize:async()=>({getSettings:async()=>({primary_model:DEFAULT_MODEL,fallback_model:null})}),env:{GEMINI_API_KEY:'gemini-test-key',OPENROUTER_API_KEY:'router-test-key'},providerFactory:o=>new AIProvider({...o,geminiApiKey:'gemini-test-key',openRouterApiKey:'router-test-key',fetchImpl})});
   const req={method:'POST',query:{action:'extract'},body:{workspaceId:A,file:{base64:Buffer.from('%PDF-1.7\n').toString('base64'),mimeType:'application/pdf',fileName:'invoice.pdf'}}};
   const res=response();await handler(req,res);
   assert.equal(res.code,200);assert.equal(res.data.total.value,0.29);assert.equal(res.data.currency.value,'USD');assert.equal(res.data.reviewRequired,true);assert.equal(completions,1);
