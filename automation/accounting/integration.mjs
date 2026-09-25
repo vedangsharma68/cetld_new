@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { TokenCipher, connectionAad } from './crypto.mjs';
 import { AccountingError, redactedError } from './errors.mjs';
-import { ACCOUNTING_PROVIDERS, createAccountingProviders } from './providers.mjs';
+import { ACCOUNTING_PROVIDERS, createAccountingProviders, zohoRegionFromLocation } from './providers.mjs';
 
 const DEFAULT_STATE_TTL = 10 * 60 * 1000;
 const EXPIRY_SKEW = 60 * 1000;
@@ -47,7 +47,7 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     return { authorizationUrl, state, browserNonce, expiresAt };
   }
 
-  async function callback({ provider, state, code, redirectUri, userId, workspaceId, browserNonce, browserSession, providerAccountId, accountId, realmId, error } = {}) {
+  async function callback({ provider, state, code, redirectUri, userId, workspaceId, browserNonce, browserSession, providerAccountId, accountId, realmId, location, error } = {}) {
     if (error) throw new AccountingError('ACCOUNTING_OAUTH_DENIED', 'Accounting authorization was denied');
     if (!state || !code) throw new AccountingError('ACCOUNTING_OAUTH_INVALID', 'Accounting authorization callback is invalid');
     const record = await store.consumeOAuthState(hashState(state), now());
@@ -58,7 +58,8 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     // Browser callbacks may not carry a bearer token. When supplied, the caller's
     // verified session still has to match the state-bound identity.
     if ((userId && !equalText(userId, record.userId)) || (workspaceId && !equalText(workspaceId, record.workspaceId))) throw new AccountingError('ACCOUNTING_OAUTH_STATE_INVALID', 'Accounting authorization state is invalid or expired');
-    const token = await providers[provider].exchangeCode({ code, redirectUri: record.redirectUri, region: record.region });
+    const region = provider === 'zoho_books' ? zohoRegionFromLocation(location, record.region || 'com') : record.region;
+    const token = await providers[provider].exchangeCode({ code, redirectUri: record.redirectUri, region });
     if (!token.accessToken || !token.refreshToken) throw new AccountingError('ACCOUNTING_TOKEN_INVALID', 'Accounting provider did not return required credentials');
     let organizations = [];
     if (provider === 'zoho_books' && typeof providers[provider].fetchOrganizations === 'function') {
@@ -71,7 +72,8 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     const selectedAccountId = provider === 'zoho_books'
       ? chosenOrganization?.id || null
       : token.providerAccountId || providerAccountId || accountId || realmId || record.providerAccountId || null;
-    const connectionStatus = selectedAccountId && token.refreshToken && token.apiDomain ? 'connected' : provider === 'zoho_books' && organizations.length > 1 ? 'needs_organization' : 'needs_attention';
+    const regionalReady = provider !== 'zoho_books' || Boolean(token.apiDomain && token.accountsDomain && token.region);
+    const connectionStatus = selectedAccountId && token.refreshToken && regionalReady ? 'connected' : provider === 'zoho_books' && organizations.length > 1 ? 'needs_organization' : 'needs_attention';
     const connection = { userId: record.userId, workspaceId: record.workspaceId, provider, providerAccountId: selectedAccountId, organizationName: chosenOrganization?.name || null, region: token.region || record.region || null, accountsDomain: token.accountsDomain || null, apiDomain: token.apiDomain || null, status: connectionStatus, lastSyncStatus: 'never', ...encrypted, tokenExpiresAt: token.expiresAt };
     const existing = await store.getConnection(connection);
     if (existing) {
@@ -105,9 +107,10 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
         connection.organizationName = selected.name;
       }
       const hasOrganization = provider !== 'zoho_books' || Boolean(selected);
-      const usable = Boolean(connection.providerAccountId && connection.apiDomain && refreshed.token.refreshToken && hasOrganization);
-      const status = connection.status === 'disconnected' ? 'not_connected' : connection.lastSyncStatus === 'failed' ? 'needs_attention' : usable ? 'connected' : !connection.providerAccountId && organizations.length > 1 ? 'needs_organization' : 'needs_attention';
-      const problem = connection.lastSyncError || (!connection.apiDomain ? 'Zoho regional API access is unavailable.' : !connection.providerAccountId ? (organizations.length > 1 ? null : 'No Zoho Books organization is available.') : !selected ? 'The selected Zoho Books organization is unavailable.' : null);
+      const regionalReady = provider !== 'zoho_books' || Boolean(connection.apiDomain && connection.accountsDomain && connection.region);
+      const usable = Boolean(connection.providerAccountId && regionalReady && refreshed.token.refreshToken && hasOrganization);
+      const status = connection.status === 'disconnected' ? 'not_connected' : usable ? 'connected' : !connection.providerAccountId && organizations.length > 1 ? 'needs_organization' : 'needs_attention';
+      const problem = provider === 'zoho_books' && !regionalReady ? 'Zoho regional API access is unavailable.' : !connection.providerAccountId ? (organizations.length > 1 ? null : 'No Zoho Books organization is available.') : provider === 'zoho_books' && !selected ? 'The selected Zoho Books organization is unavailable.' : connection.lastSyncStatus === 'failed' ? connection.lastSyncError : null;
       if (status !== 'not_connected' && store.setConnectionStatus) await store.setConnectionStatus(context, status, problem).catch(() => {});
       return {
         provider,
@@ -225,17 +228,28 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     if (!connection?.providerAccountId || !connection.apiDomain) throw new AccountingError('ACCOUNTING_NOT_CONNECTED', 'A verified Zoho Books organization is required before syncing');
     await store.markSyncResult?.(context, { syncedAt: null, error: null });
     try {
-      const fetched = await withProviderRetry(context, ({token, connection: activeConnection}) => Promise.all([
-        typeof adapter.fetchContacts === 'function' ? adapter.fetchContacts({ token, accountId: activeConnection.providerAccountId, page: 1 }) : [],
-        adapter.fetchInvoices({ token, accountId: activeConnection.providerAccountId, page:invoicePage }),
-        adapter.fetchPayments({ token, accountId: activeConnection.providerAccountId, page:paymentPage }),
-      ]));
-      connection = fetched.connection;
-      const [customers, invoices, payments] = fetched.result;
+      const fetchAll = async (method, firstPage) => {
+        if (typeof adapter[method] !== 'function') return [];
+        const records = [];
+        let page = firstPage;
+        for (let count = 0; count < 50; count++) {
+          const fetched = await withProviderRetry(context, ({token, connection: activeConnection}) => adapter[method]({ token, accountId: activeConnection.providerAccountId, page, perPage: 200 }));
+          connection = fetched.connection;
+          records.push(...fetched.result);
+          if (!fetched.result.nextPage) return records;
+          page = fetched.result.nextPage;
+        }
+        throw new AccountingError('ACCOUNTING_RESULT_TOO_LARGE', 'Zoho Books synchronization exceeded the safe page limit');
+      };
+      const [customers, invoices, payments] = await Promise.all([
+        fetchAll('fetchContacts', 1),
+        fetchAll('fetchInvoices', invoicePage),
+        fetchAll('fetchPayments', paymentPage),
+      ]);
       const persisted = store.upsertSyncSnapshots ? await store.upsertSyncSnapshots({ userId: context.userId, workspaceId: context.workspaceId, provider, customers, invoices, payments }) : null;
       const lastSyncedAt = new Date(now()).toISOString();
       await store.markSyncResult?.(context, { syncedAt: lastSyncedAt, error: null });
-      return { provider, userId: context.userId, workspaceId: context.workspaceId, customers, invoices, payments, lastSyncedAt, syncStatus: 'synced', pagination: { customers: { nextPage: customers.nextPage || null }, invoices: { nextPage: invoices.nextPage || null }, payments: { nextPage: payments.nextPage || null } }, persisted };
+      return { provider, userId: context.userId, workspaceId: context.workspaceId, customers, invoices, payments, lastSyncedAt, syncStatus: 'synced', pagination: { customers: { nextPage: null }, invoices: { nextPage: null }, payments: { nextPage: null } }, persisted };
     } catch (error) {
       await store.markSyncResult?.(context, { syncedAt: null, error: 'Zoho Books synchronization failed.' }).catch(() => {});
       throw new AccountingError('ACCOUNTING_SYNC_FAILED', 'Zoho Books synchronization failed', redactedError(error));
@@ -263,20 +277,24 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     return { provider, invoiceId: String(invoiceId), balanceMinor: balance.balanceMinor, currency: balance.currency || null, amountMinor: balance.totalMinor ?? null };
   }
 
-  async function syncInvoice({ userId, workspaceId, invoice, invoiceId } = {}) {
+  async function syncInvoice({ userId, workspaceId, provider, invoice, invoiceId } = {}) {
     if (!invoice || typeof invoice !== 'object' || !invoiceId) throw new AccountingError('ACCOUNTING_INVOICE_REQUIRED', 'A saved invoice is required');
-    let connected = null;
-    for (const provider of ACCOUNTING_PROVIDERS) {
-      const connection = await store.getConnection({userId: String(userId), workspaceId: String(workspaceId), provider});
-      if (connection) { connected = provider; break; }
+    if (!provider) {
+      for (const candidate of ACCOUNTING_PROVIDERS) {
+        const row = await store.getConnection({userId: String(userId), workspaceId: String(workspaceId), provider: candidate});
+        if (row?.status === 'connected' && row.providerAccountId && (candidate !== 'zoho_books' || row.apiDomain)) { provider = candidate; break; }
+      }
     }
-    if (!connected) throw new AccountingError('ACCOUNTING_NOT_CONNECTED', 'Accounting provider is not connected');
-    const adapter = providers[connected];
+    if (!provider) throw new AccountingError('ACCOUNTING_NOT_CONNECTED', 'Accounting provider is not connected');
+    const context = identity({userId, workspaceId, provider});
+    const connection = await store.getConnection(context);
+    if (!connection?.providerAccountId || (provider === 'zoho_books' && !connection.apiDomain) || connection.status !== 'connected') throw new AccountingError('ACCOUNTING_NOT_CONNECTED', 'Accounting provider is not connected');
+    const adapter = providers[provider];
     if (typeof adapter.createInvoice !== 'function') throw new AccountingError('ACCOUNTING_NOT_CONFIGURED', 'Accounting invoice creation is unavailable');
     try {
-      const {result} = await withProviderRetry({userId, workspaceId, provider: connected}, ({token, connection}) => adapter.createInvoice({token, accountId: connection.providerAccountId, invoice: {...invoice, localInvoiceId: String(invoiceId)}}));
+      const {result} = await withProviderRetry(context, ({token, connection}) => adapter.createInvoice({token, accountId: connection.providerAccountId, invoice: {...invoice, localInvoiceId: String(invoiceId)}}));
       if (!result?.externalId) throw new Error('Missing external invoice ID');
-      return {provider: connected, externalId: String(result.externalId), duplicate: Boolean(result.duplicate)};
+      return {provider, externalId: String(result.externalId), duplicate: Boolean(result.duplicate)};
     } catch (error) {
       if (error?.code?.startsWith?.('ACCOUNTING_')) throw error;
       throw new AccountingError('ACCOUNTING_SYNC_FAILED', 'Invoice could not be synced to accounting', redactedError(error));
@@ -287,19 +305,27 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     const context = identity({ userId, workspaceId, provider });
     if (provider !== 'zoho_books' || !invoiceId || !invoice || typeof invoice !== 'object' || Array.isArray(invoice)) throw new AccountingError('ACCOUNTING_INVOICE_REQUIRED', 'A Zoho invoice ID and supported field updates are required');
     const connection = await store.getConnection(context);
-    if (!connection.providerAccountId || !connection.apiDomain) throw new AccountingError('ACCOUNTING_ORGANIZATION_REQUIRED', 'Choose a Zoho Books organization before editing invoices');
+    if (!connection?.providerAccountId || !connection.apiDomain) throw new AccountingError('ACCOUNTING_ORGANIZATION_REQUIRED', 'Choose a Zoho Books organization before editing invoices');
     const adapter = providers[provider];
     if (typeof adapter.updateInvoice !== 'function') throw new AccountingError('ACCOUNTING_NOT_CONFIGURED', 'Zoho Books invoice editing is unavailable');
     try {
+      if (invoice.dueDate !== undefined || invoice.invoiceDate !== undefined) {
+        const {result: current} = await withProviderRetry(context, ({token, connection: activeConnection}) => adapter.fetchInvoice({token, accountId: activeConnection.providerAccountId, invoiceId: String(invoiceId)}));
+        const issueDate = invoice.invoiceDate || current.invoiceDate;
+        const dueDate = invoice.dueDate || current.dueDate;
+        if (issueDate && dueDate && dueDate < issueDate) throw new AccountingError('ACCOUNTING_INVOICE_DATES_INVALID', 'Invoice due date cannot be before the invoice date');
+      }
       const {result: updated} = await withProviderRetry(context, ({token, connection: activeConnection}) => adapter.updateInvoice({token, accountId: activeConnection.providerAccountId, invoiceId: String(invoiceId), invoice}));
       if (!updated?.externalId || String(updated.externalId) !== String(invoiceId)) throw new Error('Zoho Books did not confirm the invoice update');
-      await store.upsertSyncSnapshots?.({userId: context.userId, workspaceId: context.workspaceId, provider, invoices: [updated]});
-      return {provider, externalId: String(updated.externalId), invoice: Object.fromEntries(Object.entries(updated).filter(([key]) => key !== 'raw'))};
+      let syncStatus = 'synced';
+      try { await store.upsertSyncSnapshots?.({userId: context.userId, workspaceId: context.workspaceId, provider, invoices: [updated]}); }
+      catch { syncStatus = 'pending'; }
+      return {provider, externalId: String(updated.externalId), invoice: Object.fromEntries(Object.entries(updated).filter(([key]) => key !== 'raw')), syncStatus};
     } catch (error) {
       if (error?.code?.startsWith?.('ACCOUNTING_')) throw error;
       throw new AccountingError('ACCOUNTING_SYNC_FAILED', 'Invoice could not be updated in Zoho Books', redactedError(error));
     }
   }
 
-  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, connectionStatus, selectOrganization, disconnect, readZohoData, sync, syncInvoicesAndPayments: sync, syncInvoice, updateInvoice, latestInvoiceBalance });
+  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, connectionStatus, selectOrganization, disconnect, readZohoData, sync, retrySync: sync, syncInvoicesAndPayments: sync, syncInvoice, updateInvoice, latestInvoiceBalance });
 }

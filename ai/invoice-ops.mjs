@@ -59,12 +59,14 @@ async function syncSavedInvoice({store, invoice, row, accounting}) {
       const saved = await store.updateAssistantInvoiceMetadata(row.id, {...metadata, bookkeeping_sync_status: 'not_configured'});
       return {row: saved, sync: {status: 'not_configured', provider: null, retryable: false}};
     }
-    const result = await accounting.syncInvoice({userId: store.userId, workspaceId: store.workspaceId, invoice, invoiceId: row.id});
-    const updated = await store.updateAssistantInvoiceMetadata(row.id, {...metadata, bookkeeping_provider: result.provider, bookkeeping_record_id: result.externalId, bookkeeping_sync_status: 'synced', bookkeeping_synced_at: new Date().toISOString()});
+    const result = await accounting.syncInvoice({userId: store.userId, workspaceId: store.workspaceId, provider: 'zoho_books', invoice, invoiceId: row.id});
+    const syncedAt = new Date().toISOString();
+    const updated = await store.updateAssistantInvoiceMetadata(row.id, {...metadata, bookkeeping_provider: result.provider, bookkeeping_record_id: result.externalId, bookkeeping_sync_status: 'synced', bookkeeping_synced_at: syncedAt}, {external_provider: result.provider, external_invoice_id: result.externalId, last_synced_at: syncedAt, sync_status: 'synced', last_sync_error: null});
     return {row: updated, sync: {status: 'synced', provider: result.provider, externalId: result.externalId, retryable: false}};
   } catch (error) {
     const status = error?.code === 'ACCOUNTING_NOT_CONNECTED' || error?.code === 'ACCOUNTING_NOT_CONFIGURED' ? 'not_configured' : 'failed';
-    const updated = await store.updateAssistantInvoiceMetadata(row.id, {...metadata, bookkeeping_sync_status: status, bookkeeping_sync_error: String(error?.code || 'SYNC_FAILED').slice(0, 80), bookkeeping_sync_attempted_at: new Date().toISOString()});
+    const errorCode = String(error?.code || 'SYNC_FAILED').slice(0, 80);
+    const updated = await store.updateAssistantInvoiceMetadata(row.id, {...metadata, bookkeeping_sync_status: status, bookkeeping_sync_error: errorCode, bookkeeping_sync_attempted_at: new Date().toISOString()}, {sync_status: status === 'failed' ? 'failed' : 'local', last_sync_error: errorCode});
     return {row: updated, sync: {status, provider: null, retryable: status === 'failed'}};
   }
 }
@@ -103,4 +105,3 @@ export async function retryAssistantInvoiceSync({store, invoiceId, accounting} =
   const synced = await syncSavedInvoice({store, invoice, row, accounting});
   return {saved: true, invoice: responseInvoice(synced.row), sync: synced.sync, idempotent: true};
 }
-

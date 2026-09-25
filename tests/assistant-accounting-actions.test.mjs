@@ -46,7 +46,6 @@ test('confirmation endpoint executes only the signed, explicitly confirmed updat
     async connectionStatus(input) { assert.equal(input.workspaceId,WORKSPACE);return {status:'connected'}; },
     async readZohoData() { return {provider:'zoho_books',records:[]}; },
     async updateInvoice(input) { calls.push(['update',input]);return {provider:'zoho_books',externalId:input.invoiceId}; },
-    async sync(input) { calls.push(['sync',input]);return {persisted:true}; },
   };
   const store = {userId:USER,workspaceId:WORKSPACE};
   const handler = createAIHandler({env:{ACCOUNTING_TOKEN_ENCRYPTION_KEY:SECRET},authorize:async()=>store,accountingFactory:async()=>integration});
@@ -60,10 +59,22 @@ test('confirmation endpoint executes only the signed, explicitly confirmed updat
   assert.equal(calls[0][0],'update');
   assert.equal(calls[0][1].invoiceId,'zoho-invoice-005');
   assert.deepEqual(calls[0][1].invoice,{dueDate:'2026-10-30'});
-  assert.equal(calls[1][0],'sync');
+  assert.equal(res.data.sync,'pending');
 
   const rejected = {...res,code:0,data:null};
   await handler({...req,body:{...req.body,confirmed:false}},rejected);
   assert.equal(rejected.code,409);
-  assert.equal(calls.length,2);
+  assert.equal(calls.length,1);
+});
+
+test('confirmed create reports the real Zoho sync result', async () => {
+  const invoice={invoiceNumber:'INV-1048',clientName:'Shiv Engineering',invoiceDate:'2026-10-01',dueDate:'2026-10-15',total:84600,currency:'INR'};
+  const store={userId:USER,workspaceId:WORKSPACE,findAssistantInvoice:async()=>null,findCustomer:async()=>({id:'customer-1'}),createAssistantInvoice:async()=>({id:'invoice-1',invoice_number:'INV-1048',customer_name:'Shiv Engineering',issue_date:'2026-10-01',due_date:'2026-10-15',currency:'INR',total_amount:84600,amount_paid:0,status:'draft',metadata:{}}),updateAssistantInvoiceMetadata:async(_id,metadata)=>({id:'invoice-1',invoice_number:'INV-1048',customer_name:'Shiv Engineering',issue_date:'2026-10-01',due_date:'2026-10-15',currency:'INR',total_amount:84600,amount_paid:0,status:'draft',metadata})};
+  const integration={async connectionStatus(){return{status:'connected'};},async syncInvoice(){throw Object.assign(new Error('temporary'),{code:'ACCOUNTING_SYNC_FAILED'});}};
+  const handler=createAIHandler({env:{ACCOUNTING_TOKEN_ENCRYPTION_KEY:SECRET},authorize:async()=>store,accountingFactory:async()=>integration});
+  const confirmationToken=createAccountingActionToken({action:'create_invoice',payload:{invoice,idempotencyKey:'assistant_create_1048'},userId:USER,workspaceId:WORKSPACE,secret:SECRET});
+  const req={method:'POST',query:{action:'confirm-accounting-action'},body:{workspaceId:WORKSPACE,confirmed:true,confirmationToken},headers:{}};
+  const res={code:0,data:null,setHeader(){},status(code){this.code=code;return this;},json(data){this.data=data;return this;}};
+  await handler(req,res);
+  assert.equal(res.code,200);assert.equal(res.data.saved,true);assert.equal(res.data.sync.status,'failed');assert.equal(res.data.sync.externalId,undefined);
 });

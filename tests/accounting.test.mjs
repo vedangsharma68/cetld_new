@@ -111,7 +111,7 @@ test('Zoho OAuth auto-selects one organization and persists its usable connectio
 
 test('Zoho multiple organizations remain pending until a verified selection',async()=>{
   const store=new InMemoryAccountingStore();
-  const provider=fakeProvider({exchangeCode:async()=>({accessToken:'a',refreshToken:'r',expiresAt:Date.now()+3600000,apiDomain:'https://www.zohoapis.com',accountsDomain:'https://accounts.zoho.com'}),fetchOrganizations:async()=>[{id:'one',name:'One'},{id:'two',name:'Two'}]});
+  const provider=fakeProvider({exchangeCode:async()=>({accessToken:'a',refreshToken:'r',expiresAt:Date.now()+3600000,apiDomain:'https://www.zohoapis.com',accountsDomain:'https://accounts.zoho.com',region:'com'}),fetchOrganizations:async()=>[{id:'one',name:'One'},{id:'two',name:'Two'}]});
   const integration=createAccountingIntegration({store,cipher:new TokenCipher(key),providers:{zoho_books:provider,quickbooks:fakeProvider()}});
   const start=await integration.startOAuth({...identity,provider:'zoho_books',redirectUri:'https://app.test/cb',browserSession:'browser'});
   const pending=await integration.callback({provider:'zoho_books',state:start.state,code:'code',browserSession:'browser'});
@@ -120,6 +120,29 @@ test('Zoho multiple organizations remain pending until a verified selection',asy
   await integration.selectOrganization({...identity,provider:'zoho_books',organizationId:'two'});
   const state=await integration.connectionStatus({...identity,provider:'zoho_books'});
   assert.equal(state.status,'connected');assert.equal(state.organizationId,'two');assert.equal(state.organizationName,'Two');
+});
+
+test('Zoho callback uses the user data-center location',async()=>{
+  const store=new InMemoryAccountingStore();let exchangedRegion;
+  const provider=fakeProvider({exchangeCode:async({region})=>{exchangedRegion=region;return{accessToken:'a',refreshToken:'r',expiresAt:Date.now()+3600000,apiDomain:'https://www.zohoapis.in',accountsDomain:'https://accounts.zoho.in',region};},fetchOrganizations:async()=>[{id:'org-in',name:'India'}]});
+  const integration=createAccountingIntegration({store,cipher:new TokenCipher(key),providers:{zoho_books:provider,quickbooks:fakeProvider()}});
+  const start=await integration.startOAuth({...identity,provider:'zoho_books',redirectUri:'https://app.test/cb',browserSession:'browser'});
+  await integration.callback({provider:'zoho_books',state:start.state,code:'code',location:'IN',browserSession:'browser'});
+  assert.equal(exchangedRegion,'in');
+  assert.equal((await store.getConnection({...identity,provider:'zoho_books'})).accountsDomain,'https://accounts.zoho.in');
+});
+
+test('initial Zoho sync follows every page and keeps transient sync errors out of auth status',async()=>{
+  const store=new InMemoryAccountingStore();
+  const paged=(kind)=>async({page})=>{const rows=[{externalId:`${kind}-${page}`,name:`${kind}-${page}`,amountMinor:100,balanceMinor:100,currency:'INR',raw:{}}];rows.nextPage=page<3?page+1:null;return rows;};
+  const provider=fakeProvider({exchangeCode:async()=>({accessToken:'a',refreshToken:'r',expiresAt:Date.now()+3600000,apiDomain:'https://www.zohoapis.in',accountsDomain:'https://accounts.zoho.in',region:'in'}),fetchOrganizations:async()=>[{id:'org',name:'India'}],fetchContacts:paged('customer'),fetchInvoices:paged('invoice'),fetchPayments:paged('payment')});
+  const integration=createAccountingIntegration({store,cipher:new TokenCipher(key),providers:{zoho_books:provider,quickbooks:fakeProvider()}});
+  const start=await integration.startOAuth({...identity,provider:'zoho_books',redirectUri:'https://app.test/cb',region:'in',browserSession:'browser'});
+  await integration.callback({provider:'zoho_books',state:start.state,code:'code',browserSession:'browser'});
+  const result=await integration.sync({...identity,provider:'zoho_books'});
+  assert.equal(result.customers.length,3);assert.equal(result.invoices.length,3);assert.equal(result.payments.length,3);assert.equal(store.snapshots.size,9);
+  await store.markSyncResult({...identity,provider:'zoho_books'},{error:'Temporary sync failure'});
+  assert.equal((await integration.connectionStatus({...identity,provider:'zoho_books'})).status,'connected');
 });
 
 test('unrecoverable Zoho refresh persists needs_attention without token details',async()=>{

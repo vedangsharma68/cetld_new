@@ -15,16 +15,14 @@ function redirectUri(env, provider) {
 function callbackOrigin(env, provider) {
   try { return new URL(redirectUri(env, provider)).origin; } catch { return null; }
 }
-function safeJson(value) {
-  return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, (character) => ({ '<': '\\u003c', '>': '\\u003e', '&': '\\u0026', '\u2028': '\\u2028', '\u2029': '\\u2029' })[character]);
-}
 function callbackPage(response, { provider = 'zoho_books', origin, status, organizations = [], organizationId = null, syncStatus = null, message = null, failed = false }) {
   const returnPath = '/?page=Connections';
-  const payload = safeJson({ type: provider === 'zoho_books' ? 'cetld:zoho-oauth' : `cetld:${provider}-oauth`, provider, status, organizations, organizationId, syncStatus, message });
+  const payload = Buffer.from(JSON.stringify({ type: provider === 'zoho_books' ? 'cetld:zoho-oauth' : `cetld:${provider}-oauth`, provider, status, organizations, organizationId, syncStatus, message }), 'utf8').toString('base64url');
+  const targetOrigin = Buffer.from(String(origin || ''), 'utf8').toString('base64url');
   const title = failed ? 'Could not connect Zoho Books' : status === 'needs_organization' ? 'Choose your Zoho organization' : status === 'connected' ? 'Zoho Books connected' : 'Zoho connection needs attention';
   const description = failed ? 'We could not finish connecting Zoho Books. Return to cetld and try again.' : status === 'needs_organization' ? 'Your Zoho account has more than one organization. Choose one in cetld to finish setup.' : status === 'connected' ? 'Your Zoho Books organization is connected. You can return to cetld.' : 'Zoho authorization finished, but cetld could not verify a usable organization. Return to cetld to review the connection.';
   const autoClose = status === 'connected';
-  const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${title}</title><style>body{margin:0;background:#f6f7f8;color:#202528;font:16px/1.5 system-ui,sans-serif;display:grid;min-height:100vh;place-items:center}.card{max-width:460px;margin:24px;padding:32px;background:#fff;border:1px solid #e5e8e9;border-radius:18px;box-shadow:0 12px 40px #15202b12}h1{font-size:24px;margin:0 0 8px}p{color:#5b666c;margin:0 0 22px}a{display:inline-block;background:#153d34;color:#fff;text-decoration:none;padding:11px 16px;border-radius:9px}</style><main class="card"><h1>${title}</h1><p>${description}</p><a href="${returnPath}">Return to cetld</a></main><script>const data=${payload};if(window.opener&&${origin ? `true` : 'false'}){try{window.opener.postMessage(data,${safeJson(origin)})}catch{}}else{setTimeout(()=>location.replace(${safeJson(returnPath)}),900)}${autoClose ? 'if(window.opener)setTimeout(()=>window.close(),450);' : ''}</script></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${title}</title><link rel="stylesheet" href="/oauth-callback.css"><script src="/oauth-callback.js" defer></script></head><body><main id="oauth-result" class="card" data-payload="${payload}" data-origin="${targetOrigin}" data-auto-close="${autoClose ? 'true' : 'false'}"><h1>${title}</h1><p>${description}</p><a href="${returnPath}">Return to cetld</a></main></body></html>`;
   response.setHeader('Content-Type', 'text/html; charset=utf-8');
   if (typeof response.send === 'function') return response.status(failed ? 400 : 200).send(html);
   return response.status(failed ? 400 : 200).json({ html });
@@ -43,7 +41,7 @@ export async function handleAccountingRequest(request, response, dependencies = 
       const browserSession = cookieValue(request, cookieName(provider));
       if (!browserSession) throw new HttpError(401, 'Restart the accounting connection in this browser');
       const integration = await getIntegration();
-      const result = await integration.callback({ provider, state: input.state, code: input.code, error: input.error, realmId: input.realmId, browserSession, redirectUri: redirectUri(env, provider) });
+      const result = await integration.callback({ provider, state: input.state, code: input.code, error: input.error, realmId: input.realmId, location: input.location, browserSession, redirectUri: redirectUri(env, provider) });
       response.setHeader('Set-Cookie', `${cookieName(provider)}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
       if (provider !== 'zoho_books') return response.status(200).json({ connected: true, provider: result.provider, workspaceId: result.workspaceId });
       let syncStatus = null;
@@ -51,7 +49,7 @@ export async function handleAccountingRequest(request, response, dependencies = 
         try { await integration.sync({ userId: result.userId, workspaceId: result.workspaceId, provider }); syncStatus = 'synced'; }
         catch { syncStatus = 'failed'; }
       }
-      return callbackPage(response, { provider, origin: callbackOrigin(env, provider), status: syncStatus === 'failed' ? 'needs_attention' : result.status || (result.providerAccountId ? 'connected' : 'needs_attention'), organizations: (result.organizations || []).map(({id, name}) => ({id, name})), organizationId: result.providerAccountId || null, syncStatus });
+      return callbackPage(response, { provider, origin: callbackOrigin(env, provider), status: result.status || (result.providerAccountId ? 'connected' : 'needs_attention'), organizations: (result.organizations || []).map(({id, name}) => ({id, name})), organizationId: result.providerAccountId || null, syncStatus, message: syncStatus === 'failed' ? 'Zoho Books is connected, but the first sync did not finish. Use Sync now to retry.' : null });
     }
     if (request.method !== 'POST') throw new HttpError(405, 'GET or POST required');
     const identity = await authorizeWorkspace(request, input.workspaceId, env, dependencies.fetchImpl);

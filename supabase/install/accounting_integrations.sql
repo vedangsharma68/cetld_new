@@ -3,7 +3,7 @@ begin;
 create table if not exists public.cetld_accounting_connections (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references auth.users(id) on delete cascade,
-  workspace_id uuid not null references public.cetld_workspaces(id) on delete cascade,
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
   provider text not null check (provider in ('zoho_books','quickbooks')),
   provider_account_id text,
   organization_name text,
@@ -30,7 +30,7 @@ create table if not exists public.cetld_accounting_connections (
 create table if not exists public.cetld_accounting_oauth_states (
   state_hash text primary key,
   owner_id uuid not null references auth.users(id) on delete cascade,
-  workspace_id uuid not null references public.cetld_workspaces(id) on delete cascade,
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
   provider text not null check (provider in ('zoho_books','quickbooks')),
   redirect_uri text not null,
   region text,
@@ -44,7 +44,7 @@ create table if not exists public.cetld_accounting_oauth_states (
 create table if not exists public.cetld_accounting_sync_records (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references auth.users(id) on delete cascade,
-  workspace_id uuid not null references public.cetld_workspaces(id) on delete cascade,
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
   provider text not null check (provider in ('zoho_books','quickbooks')),
   record_type text not null check (record_type in ('customer','invoice','payment')),
   external_id text not null,

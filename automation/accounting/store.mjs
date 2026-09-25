@@ -112,11 +112,9 @@ export class InMemoryAccountingStore {
   async markSyncResult(identity, { syncedAt = null, error = null } = {}) {
     const row = this.connections.get(keyOf(identity));
     if (!row) return null;
-    row.lastSyncedAt = syncedAt;
+    if (syncedAt) row.lastSyncedAt = syncedAt;
     row.lastSyncError = error;
     row.lastSyncStatus = error ? 'failed' : syncedAt ? 'synced' : 'syncing';
-    if (error) row.status = 'needs_attention';
-    else if (syncedAt && row.providerAccountId) row.status = 'connected';
     row.updatedAt = this.now();
     this.connections.set(keyOf(identity), row);
     return this.getConnection(identity);
@@ -217,7 +215,7 @@ export class SupabaseAccountingStore {
 
   async markSyncResult(identity, { syncedAt = null, error = null } = {}) {
     const query = new URLSearchParams({ owner_id: `eq.${identity.userId}`, workspace_id: `eq.${identity.workspaceId}`, provider: `eq.${identity.provider}`, select: '*' });
-    const rows = await this.request(`${this.table}?${query}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' }, body: JSON.stringify({ last_synced_at: syncedAt, last_sync_status: error ? 'failed' : syncedAt ? 'synced' : 'syncing', last_sync_error: error, ...(error ? { status: 'needs_attention' } : syncedAt ? { status: 'connected' } : {}) }) });
+    const rows = await this.request(`${this.table}?${query}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' }, body: JSON.stringify({ ...(syncedAt ? { last_synced_at: syncedAt } : {}), last_sync_status: error ? 'failed' : syncedAt ? 'synced' : 'syncing', last_sync_error: error }) });
     return Array.isArray(rows) && rows[0] ? mapConnection(rows[0]) : null;
   }
 

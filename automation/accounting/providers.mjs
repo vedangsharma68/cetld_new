@@ -19,6 +19,14 @@ function accountDomain(region) {
   return `https://accounts.zoho.${suffix}`;
 }
 
+export function zohoRegionFromLocation(location, fallback = 'com') {
+  const value = String(location || fallback || 'com').trim().toLowerCase().replace(/^\./, '');
+  const aliases = { us: 'com', eu: 'eu', in: 'in', au: 'com.au', jp: 'jp', ca: 'ca', cn: 'com.cn', sa: 'sa' };
+  const region = aliases[value] || value;
+  accountDomain(region);
+  return region;
+}
+
 function apiDomain(region) {
   const suffix = String(region || 'com').replace(/^\./, '');
   accountDomain(suffix);
@@ -255,7 +263,14 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       existingUrl.search = new URLSearchParams({organization_id: accountId, invoice_number: invoice.invoiceNumber}).toString();
       const existingBody = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', existingUrl, {headers}), 'zoho_books');
       const existing = (existingBody.invoices || []).map(normalizeZohoInvoice).find(item => item?.number === invoice.invoiceNumber);
-      if (existing) return {externalId: existing.externalId, duplicate: true};
+      if (existing) {
+        const sameCustomer = String(existing.customerName || '').trim().toLowerCase() === String(invoice.clientName || '').trim().toLowerCase();
+        const sameCurrency = existing.currency === String(invoice.currency || '').toUpperCase();
+        const sameTotal = existing.amountMinor === amountMinor(invoice.total, invoice.currency);
+        const sameDates = existing.invoiceDate === invoice.invoiceDate && existing.dueDate === invoice.dueDate;
+        if (!sameCustomer || !sameCurrency || !sameTotal || !sameDates) throw new AccountingError('ACCOUNTING_INVOICE_CONFLICT', 'An existing Zoho Books invoice uses this number with different details');
+        return {externalId: existing.externalId, duplicate: true};
+      }
 
       const contactsUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/contacts`);
       contactsUrl.search = new URLSearchParams({organization_id: accountId, contact_name_contains: invoice.clientName}).toString();
@@ -272,7 +287,7 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       if (!contact?.contact_id) throw new Error('Zoho Books customer could not be resolved');
       const createUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices`);
       createUrl.search = new URLSearchParams({organization_id: accountId}).toString();
-      const payload = {customer_id: String(contact.contact_id), invoice_number: invoice.invoiceNumber, date: invoice.invoiceDate, due_date: invoice.dueDate, currency_code: invoice.currency, line_items: [{name: `Invoice ${invoice.invoiceNumber}`, description: invoice.notes || undefined, quantity: 1, rate: invoice.total}], notes: invoice.notes || undefined};
+      const payload = {customer_id: String(contact.contact_id), invoice_number: invoice.invoiceNumber, reference_number: invoice.localInvoiceId ? `cetld:${invoice.localInvoiceId}` : undefined, date: invoice.invoiceDate, due_date: invoice.dueDate, currency_code: invoice.currency, line_items: [{name: `Invoice ${invoice.invoiceNumber}`, description: invoice.notes || undefined, quantity: 1, rate: invoice.total}], notes: invoice.notes || undefined};
       const created = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', createUrl, {method: 'POST', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify(payload)}), 'zoho_books');
       if (!created.invoice?.invoice_id) throw new Error('Zoho Books did not return an invoice ID');
       return {externalId: String(created.invoice.invoice_id), duplicate: false};

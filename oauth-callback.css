@@ -1,0 +1,28 @@
+body {
+  margin: 0;
+  background: #f6f7f8;
+  color: #202528;
+  font: 16px/1.5 system-ui, sans-serif;
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+}
+.card {
+  max-width: 460px;
+  margin: 24px;
+  padding: 32px;
+  background: #fff;
+  border: 1px solid #e5e8e9;
+  border-radius: 18px;
+  box-shadow: 0 12px 40px #15202b12;
+}
+h1 { font-size: 24px; margin: 0 0 8px; }
+p { color: #5b666c; margin: 0 0 22px; }
+a {
+  display: inline-block;
+  background: #153d34;
+  color: #fff;
+  text-decoration: none;
+  padding: 11px 16px;
+  border-radius: 9px;
+}

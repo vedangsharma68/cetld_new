@@ -65,8 +65,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
           if (!accounting) throw new APIError(503, 'ACCOUNTING_NOT_CONNECTED');
           const operations = createAccountingTools({integration:accounting,userId:store.userId,workspaceId:store.workspaceId,provider:'zoho_books'});
           const result = await operations.updateInvoice({...action.payload,confirmed:true});
-          const sync = typeof accounting.sync === 'function' ? await accounting.sync({userId:store.userId,workspaceId:store.workspaceId,provider:'zoho_books'}) : null;
-          return res.status(200).json({updated:true,...result,sync:sync?.persisted ? 'synced' : 'pending'});
+          return res.status(200).json({updated:true,...result,sync:result.syncStatus || 'pending'});
         }
         if (typeof body.idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{12,100}$/.test(body.idempotencyKey)) throw new APIError(400, 'INVALID_IDEMPOTENCY_KEY');
         return res.status(200).json(await retryAssistantInvoiceSync({store, invoiceId: body.invoiceId, accounting}));

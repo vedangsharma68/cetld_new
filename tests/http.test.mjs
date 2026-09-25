@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { authorizeWorkspace, authorizeWorker, bodyOf } from '../automation/http.mjs';
 const workspaceId = '00000000-0000-0000-0000-000000000001';
 const userId = '00000000-0000-0000-0000-000000000002';
-const env = { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'server-only', AUTOMATION_WORKER_SECRET: 'x'.repeat(32) };
+const env = { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_PUBLISHABLE_KEY: 'public', SUPABASE_SERVICE_ROLE_KEY: 'server-only', AUTOMATION_WORKER_SECRET: 'x'.repeat(32) };
 test('worker authorization fails closed', () => {
   assert.throws(() => authorizeWorker({ headers: {} }, env));
   authorizeWorker({ headers: { authorization: `Bearer ${env.AUTOMATION_WORKER_SECRET}` } }, env);
