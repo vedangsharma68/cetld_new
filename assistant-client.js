@@ -9,6 +9,15 @@ function responseMessage(payload) {
   return [value.trim(), typeof payload?.guidance === 'string' ? payload.guidance.trim() : ''].filter(Boolean).join('\n\n');
 }
 
+function assistantResult(payload) {
+  const answer = responseMessage(payload);
+  const pendingAction = payload?.pendingAction;
+  if (pendingAction && ['create_invoice', 'update_invoice'].includes(pendingAction.type) && typeof pendingAction.confirmationToken === 'string' && pendingAction.confirmationToken) {
+    return {answer, pendingAction};
+  }
+  return answer;
+}
+
 function streamDelta(event) {
   if (typeof event === 'string') return event;
   return event?.delta?.text ?? event?.delta ?? event?.text ?? event?.choices?.[0]?.delta?.content ?? '';
@@ -17,7 +26,7 @@ function streamDelta(event) {
 async function readAssistantResponse(response, onProgress) {
   if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
     const payload = await response.json().catch(() => ({}));
-    return responseMessage(payload);
+    return assistantResult(payload);
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -109,4 +118,3 @@ export function createAssistantClient({
     },
   };
 }
-

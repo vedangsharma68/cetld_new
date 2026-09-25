@@ -23,8 +23,11 @@ export async function authorizeWorkspace(request, workspaceId, env, fetchImpl = 
   uuid(workspaceId);
   const token = request.headers?.authorization;
   if (typeof token !== 'string' || !token.startsWith('Bearer ') || token.length > 16384) throw new HttpError(401, 'Sign in required');
-  const base = String(appConfig.url).replace(/\/$/, '');
-  const headers = { apikey: appConfig.key, Authorization: token };
+  const base = String(env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || appConfig.url).replace(/\/$/, '');
+  const configuredKey = env.SUPABASE_PUBLISHABLE_KEY || env.NEXT_PUBLIC_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY;
+  const publicKey = configuredKey || (base === String(appConfig.url).replace(/\/$/, '') ? appConfig.key : null);
+  if (!publicKey) throw new HttpError(503, 'Supabase authorization project is not configured');
+  const headers = { apikey: publicKey, Authorization: token };
   const auth = await fetchImpl(base + '/auth/v1/user', { headers, signal: AbortSignal.timeout(10000) });
   if (!auth.ok) throw new HttpError(401, 'Sign in required');
   const user = await auth.json();

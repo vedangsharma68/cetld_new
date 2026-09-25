@@ -47,6 +47,17 @@ test('matches the AI backend history contract and appends grounded guidance', as
   assert.deepEqual(body.history, messages.slice(2, 10));
 });
 
+test('returns validated pending invoice actions alongside the readable answer', async () => {
+  const pendingAction={type:'create_invoice',confirmationToken:'opaque-confirm-token',payload:{invoice:{invoiceNumber:'INV-1048'}}};
+  const client=createAssistantClient({getAccessToken:async()=>'session-token',fetchImpl:async()=>({ok:true,json:async()=>({answer:'Create INV-1048 in Zoho Books?',pendingAction})})});
+  assert.deepEqual(await client.send({workspaceId:'workspace-1',messages:[{role:'user',content:'Create an invoice'}]}),{answer:'Create INV-1048 in Zoho Books?',pendingAction});
+});
+
+test('ignores malformed pending actions while preserving string responses', async () => {
+  const client=createAssistantClient({getAccessToken:async()=>'session-token',fetchImpl:async()=>({ok:true,json:async()=>({answer:'No action needed.',pendingAction:{type:'delete_invoice',confirmationToken:'secret'}})})});
+  assert.equal(await client.send({workspaceId:'workspace-1',messages:[{role:'user',content:'Hello'}]}),'No action needed.');
+});
+
 test('refuses unauthenticated requests before calling the backend', async () => {
   let called = false;
   const client = createAssistantClient({
@@ -91,4 +102,3 @@ test('assembles streamed markdown without dropping chunks',async()=>{
   assert.equal(answer,'## Summary\n\n- Invoice one\n- Invoice two');
   assert.equal(progress.at(-1),answer);
 });
-

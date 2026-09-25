@@ -19,6 +19,14 @@ function accountDomain(region) {
   return `https://accounts.zoho.${suffix}`;
 }
 
+export function zohoRegionFromLocation(location, fallback = 'com') {
+  const value = String(location || fallback || 'com').trim().toLowerCase().replace(/^\./, '');
+  const aliases = { us: 'com', eu: 'eu', in: 'in', au: 'com.au', jp: 'jp', ca: 'ca', cn: 'com.cn', sa: 'sa' };
+  const region = aliases[value] || value;
+  accountDomain(region);
+  return region;
+}
+
 function apiDomain(region) {
   const suffix = String(region || 'com').replace(/^\./, '');
   accountDomain(suffix);
@@ -153,7 +161,7 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       const response = await providerFetch(fetchImpl, 'zoho_books', url, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: formBody({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: callback, grant_type: 'authorization_code' }) });
       const body = await jsonResponse(response, 'zoho_books');
       if (!body.access_token || !body.refresh_token) throw new Error('Zoho Books did not return required tokens');
-      return { accessToken: body.access_token, refreshToken: body.refresh_token, expiresAt: Date.now() + Number(body.expires_in || 3600) * 1000, apiDomain: safeApiDomain(body.api_domain, selectedRegion), region: selectedRegion };
+      return { accessToken: body.access_token, refreshToken: body.refresh_token, expiresAt: Date.now() + Number(body.expires_in || 3600) * 1000, accountsDomain: accountDomain(selectedRegion), apiDomain: safeApiDomain(body.api_domain, selectedRegion), region: selectedRegion };
     },
     async refreshToken({ refreshToken, region: selectedRegion = region }) {
       if (!clientId || !clientSecret || !refreshToken) throw new Error('Zoho Books client is not configured');
@@ -161,7 +169,13 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       const response = await providerFetch(fetchImpl, 'zoho_books', url, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: formBody({ refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret, grant_type: 'refresh_token' }) });
       const body = await jsonResponse(response, 'zoho_books');
       if (!body.access_token) throw new Error('Zoho Books did not return an access token');
-      return { accessToken: body.access_token, refreshToken: body.refresh_token || refreshToken, expiresAt: Date.now() + Number(body.expires_in || 3600) * 1000, apiDomain: safeApiDomain(body.api_domain, selectedRegion), region: selectedRegion };
+      return { accessToken: body.access_token, refreshToken: body.refresh_token || refreshToken, expiresAt: Date.now() + Number(body.expires_in || 3600) * 1000, accountsDomain: accountDomain(selectedRegion), apiDomain: safeApiDomain(body.api_domain, selectedRegion), region: selectedRegion };
+    },
+    async revokeToken({ refreshToken, region: selectedRegion = region }) {
+      if (!refreshToken) return;
+      const url = new URL(`${accountDomain(selectedRegion)}/oauth/v2/token/revoke`);
+      url.search = new URLSearchParams({ token: refreshToken }).toString();
+      await providerFetch(fetchImpl, 'zoho_books', url, { method: 'POST', headers: { Accept: 'application/json' } });
     },
     async fetchOrganizations({ token }) {
       const url = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/organizations`);
@@ -214,6 +228,34 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       if (!invoice || invoice.externalId !== String(invoiceId)) throw new Error('Zoho Books returned an invalid invoice balance');
       return { balanceMinor: invoice.balanceMinor, currency: invoice.currency, totalMinor: invoice.amountMinor, externalId: invoice.externalId };
     },
+    async fetchInvoice({ token, accountId, invoiceId }) {
+      if (!accountId || !invoiceId) throw new Error('Zoho Books organization and invoice IDs are required');
+      const url = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices/${encodeURIComponent(invoiceId)}`);
+      url.search = new URLSearchParams({ organization_id: accountId }).toString();
+      const body = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', url, { headers: { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' } }), 'zoho_books');
+      const invoice = normalizeZohoInvoice(body.invoice);
+      if (!invoice || invoice.externalId !== String(invoiceId)) throw new Error('Zoho Books returned an invalid invoice');
+      return invoice;
+    },
+    async updateInvoice({ token, accountId, invoiceId, invoice }) {
+      if (!accountId || !invoiceId || !invoice || typeof invoice !== 'object') throw new Error('Zoho Books organization, invoice ID and invoice updates are required');
+      const payload = {};
+      for (const [source, target] of [['dueDate', 'due_date'], ['invoiceDate', 'date'], ['invoiceNumber', 'invoice_number']]) {
+        if (invoice[source] === undefined) continue;
+        const value = String(invoice[source]);
+        if (source !== 'invoiceNumber' && !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('Invoice dates must use YYYY-MM-DD');
+        if (source === 'invoiceNumber' && (!value.trim() || value.length > 100)) throw new Error('Invoice number is invalid');
+        payload[target] = value;
+      }
+      if (invoice.notes !== undefined) payload.notes = String(invoice.notes).slice(0, 2000);
+      if (!Object.keys(payload).length) throw new Error('No supported Zoho Books invoice fields were provided');
+      const url = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices/${encodeURIComponent(invoiceId)}`);
+      url.search = new URLSearchParams({ organization_id: accountId }).toString();
+      const response = await providerFetch(fetchImpl, 'zoho_books', url, { method: 'PUT', headers: { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const body = await jsonResponse(response, 'zoho_books');
+      if (String(body.invoice?.invoice_id || '') !== String(invoiceId)) throw new Error('Zoho Books did not confirm the requested invoice update');
+      return this.fetchInvoice({ token, accountId, invoiceId });
+    },
     async createInvoice({ token, accountId, invoice }) {
       if (!accountId) throw new Error('Zoho Books organization ID is required');
       const headers = { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' };
@@ -221,7 +263,14 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       existingUrl.search = new URLSearchParams({organization_id: accountId, invoice_number: invoice.invoiceNumber}).toString();
       const existingBody = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', existingUrl, {headers}), 'zoho_books');
       const existing = (existingBody.invoices || []).map(normalizeZohoInvoice).find(item => item?.number === invoice.invoiceNumber);
-      if (existing) return {externalId: existing.externalId, duplicate: true};
+      if (existing) {
+        const sameCustomer = String(existing.customerName || '').trim().toLowerCase() === String(invoice.clientName || '').trim().toLowerCase();
+        const sameCurrency = existing.currency === String(invoice.currency || '').toUpperCase();
+        const sameTotal = existing.amountMinor === amountMinor(invoice.total, invoice.currency);
+        const sameDates = existing.invoiceDate === invoice.invoiceDate && existing.dueDate === invoice.dueDate;
+        if (!sameCustomer || !sameCurrency || !sameTotal || !sameDates) throw new AccountingError('ACCOUNTING_INVOICE_CONFLICT', 'An existing Zoho Books invoice uses this number with different details');
+        return {externalId: existing.externalId, duplicate: true};
+      }
 
       const contactsUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/contacts`);
       contactsUrl.search = new URLSearchParams({organization_id: accountId, contact_name_contains: invoice.clientName}).toString();
@@ -238,7 +287,7 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       if (!contact?.contact_id) throw new Error('Zoho Books customer could not be resolved');
       const createUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices`);
       createUrl.search = new URLSearchParams({organization_id: accountId}).toString();
-      const payload = {customer_id: String(contact.contact_id), invoice_number: invoice.invoiceNumber, date: invoice.invoiceDate, due_date: invoice.dueDate, currency_code: invoice.currency, line_items: [{name: `Invoice ${invoice.invoiceNumber}`, description: invoice.notes || undefined, quantity: 1, rate: invoice.total}], notes: invoice.notes || undefined};
+      const payload = {customer_id: String(contact.contact_id), invoice_number: invoice.invoiceNumber, reference_number: invoice.localInvoiceId ? `cetld:${invoice.localInvoiceId}` : undefined, date: invoice.invoiceDate, due_date: invoice.dueDate, currency_code: invoice.currency, line_items: [{name: `Invoice ${invoice.invoiceNumber}`, description: invoice.notes || undefined, quantity: 1, rate: invoice.total}], notes: invoice.notes || undefined};
       const created = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', createUrl, {method: 'POST', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify(payload)}), 'zoho_books');
       if (!created.invoice?.invoice_id) throw new Error('Zoho Books did not return an invoice ID');
       return {externalId: String(created.invoice.invoice_id), duplicate: false};
@@ -332,4 +381,3 @@ async function queryQbo(fetchImpl, token, accountId, entity, normalize, apiRoot,
 export function createAccountingProviders(options = {}) {
   return { zoho_books: createZohoBooksProvider(options.zoho_books), quickbooks: createQuickBooksProvider(options.quickbooks) };
 }
-

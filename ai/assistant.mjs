@@ -1,5 +1,9 @@
 import {APIError} from './http.mjs';
 import {createAssistantTools} from './tools.mjs';
+import {randomUUID} from 'node:crypto';
+
+const createProposalTool = {type:'function',function:{name:'proposeCreateInvoice',description:'Prepare, but do not execute, a proposed Zoho Books invoice. Only include details explicitly supplied by the user. Return ISO dates. Never invent an invoice number, due date, customer, amount, or currency.',parameters:{type:'object',properties:{invoiceNumber:{type:'string',maxLength:100},clientName:{type:'string',maxLength:255},clientEmail:{type:'string',maxLength:320},clientPhone:{type:'string',maxLength:40},invoiceDate:{type:'string',format:'date'},dueDate:{type:'string',format:'date'},total:{type:'number',minimum:0.01},subtotal:{type:'number',minimum:0},tax:{type:'number',minimum:0},currency:{type:'string',pattern:'^[A-Z]{3}$'},notes:{type:'string',maxLength:2000}},required:['clientName','total','currency'],additionalProperties:false}}};
+const updateProposalTool = {type:'function',function:{name:'proposeUpdateInvoice',description:'Prepare, but do not execute, a proposed update to one exact Zoho Books invoice. Only include the changed values explicitly requested by the user.',parameters:{type:'object',properties:{target:{type:'string',minLength:1,maxLength:100},changes:{type:'object',properties:{dueDate:{type:'string',format:'date'},invoiceDate:{type:'string',format:'date'},notes:{type:'string',maxLength:2000}},additionalProperties:false}},required:['target','changes'],additionalProperties:false}}};
 
 const LABELS = {getZohoBooksData: 'Zoho Books records', getInvoices: 'Invoices', getCustomer: 'Customer', getPayments: 'Payments collected', getOutstandingSummary: 'Outstanding balances', getOverdueInvoices: 'Overdue invoices', getActivity: 'Recorded activity', getInvoiceDetails: 'Invoice details'};
 
@@ -108,14 +112,104 @@ function invoiceClarification(invoices) {
   return `I found more than one matching invoice${options ? `: ${options}` : ''}. Which invoice did you mean?`;
 }
 
+function isWriteIntent(message) {
+  return /\b(?:create|make|issue|generate|draft)\b.{0,80}\binvoice\b/i.test(message)
+    || /\b(?:change|update|edit|move|set)\b.{0,80}\b(?:invoice|INV[-#]?[A-Z0-9-]+)\b/i.test(message);
+}
+
+function isValidDay(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0,10) === value;
+}
+
+function proposalDate(date) {
+  if (!date) return null;
+  return new Date(`${date}T00:00:00.000Z`).toLocaleDateString('en-GB', {day:'numeric',month:'long',year:'numeric',timeZone:'UTC'});
+}
+
+async function prepareProposal({name, args, accounting, clock}) {
+  if (name === 'proposeCreateInvoice') {
+    const allowed = ['invoiceNumber','clientName','clientEmail','clientPhone','invoiceDate','dueDate','total','subtotal','tax','currency','notes'];
+    if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !allowed.includes(key))) throw new APIError(502, 'INVALID_TOOL_ARGUMENTS');
+    const missing = [];
+    if (typeof args.clientName !== 'string' || !args.clientName.trim()) missing.push('customer name');
+    if (!Number.isFinite(args.total) || args.total <= 0) missing.push('invoice amount');
+    if (typeof args.currency !== 'string' || !/^[A-Z]{3}$/.test(args.currency)) missing.push('currency');
+    if (!args.invoiceNumber?.trim()) missing.push('invoice number');
+    if (!isValidDay(args.dueDate)) missing.push('due date');
+    const invoiceDate = args.invoiceDate || clock().toISOString().slice(0,10);
+    if (!isValidDay(invoiceDate)) missing.push('invoice date');
+    if (missing.length) return {answer:`I can prepare the Zoho invoice, but I still need: ${[...new Set(missing)].join(', ')}.`, pendingAction:null};
+    if (!accounting) return {answer:'Connect Zoho Books before creating an invoice there.', pendingAction:null};
+    if (typeof args.clientEmail === 'string' && args.clientEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(args.clientEmail)) return {answer:'I could not safely validate the customer email. Please correct it before continuing.', pendingAction:null};
+    const invoice = {invoiceNumber:args.invoiceNumber.trim(),clientName:args.clientName.trim(),clientEmail:args.clientEmail || null,clientPhone:args.clientPhone || null,invoiceDate,dueDate:args.dueDate,total:args.total,subtotal:args.subtotal ?? null,tax:args.tax ?? null,outstanding:args.total,currency:args.currency,notes:args.notes || null,alreadyPaid:false};
+    const payload = {invoice,idempotencyKey:`assistant_${randomUUID().replaceAll('-','')}`};
+    return {answer:`Create ${invoice.invoiceNumber} for ${invoice.clientName}, ${invoice.currency} ${invoice.total.toFixed(2)}, due ${proposalDate(invoice.dueDate)} in Zoho Books?`, pendingAction:{type:'create_invoice',payload,invoiceDateDefaulted:!args.invoiceDate}};
+  }
+  if (name === 'proposeUpdateInvoice') {
+    if (!args || typeof args !== 'object' || Array.isArray(args) || typeof args.target !== 'string' || !args.target.trim() || !args.changes || typeof args.changes !== 'object' || Array.isArray(args.changes)) throw new APIError(502, 'INVALID_TOOL_ARGUMENTS');
+    if (!accounting?.getInvoice) return {answer:'Connect Zoho Books before editing an invoice there.', pendingAction:null};
+    let invoice;
+    try { invoice = await accounting.getInvoice(args.target.trim()); }
+    catch (error) { if (error?.code === 'ACCOUNTING_INVOICE_AMBIGUOUS') return {answer:`I found more than one Zoho invoice matching “${args.target}”. Please specify its invoice number.`,pendingAction:null}; throw error; }
+    if (!invoice) return {answer:`I couldn't find Zoho Books invoice “${args.target}”.`,pendingAction:null};
+    const keys = Object.keys(args.changes);
+    if (!keys.length || keys.some(key => !['dueDate','invoiceDate','notes'].includes(key))) throw new APIError(502, 'INVALID_TOOL_ARGUMENTS');
+    if (args.changes.dueDate !== undefined && !isValidDay(args.changes.dueDate)) return {answer:'I could not safely interpret the requested due date. Please provide it as a calendar date.',pendingAction:null};
+    if (args.changes.invoiceDate !== undefined && !isValidDay(args.changes.invoiceDate)) return {answer:'I could not safely interpret the requested invoice date. Please provide it as a calendar date.',pendingAction:null};
+    const changes = {...args.changes};
+    const label = keys.map(key => `${key === 'dueDate' ? 'due date' : key === 'invoiceDate' ? 'invoice date' : 'notes'} to ${key.endsWith('Date') ? proposalDate(changes[key]) : changes[key]}`).join(', ');
+    return {answer:`Change ${invoice.number} for ${invoice.customerName || 'the customer'} (${invoice.currency} ${accountingAmount(invoice.amountMinor,invoice.currency)}) ${label} in Zoho Books?`,pendingAction:{type:'update_invoice',payload:{invoiceId:invoice.externalId,changes},invoice}};
+  }
+  throw new APIError(400, 'TOOL_NOT_ALLOWED');
+}
+
+function accountingAmount(minor, currency) {
+  if (!Number.isSafeInteger(minor) || minor < 0) return null;
+  const code = String(currency || '').toUpperCase();
+  const scale = ['BHD','IQD','JOD','KWD','LYD','OMR','TND'].includes(code) ? 1000 : ['BIF','CLP','DJF','GNF','ISK','JPY','KMF','KRW','PYG','RWF','UGX','VND','VUV','XAF','XOF','XPF'].includes(code) ? 1 : 100;
+  return (minor / scale).toFixed(scale === 1 ? 0 : scale === 1000 ? 3 : 2);
+}
+
+async function liveZohoInvoice(accounting, target) {
+  if (!accounting?.readZohoData || !(/^(?:INV[-#]?[A-Z0-9-]+|[0-9a-f]{8}-[0-9a-f-]{27,})$/i.test(target))) return null;
+  const matches = [];
+  let page = 1;
+  let complete = false;
+  for (let count = 0; count < 50; count++) {
+    const result = await accounting.readZohoData({resource:'invoices', page, perPage:200});
+    const rows = Array.isArray(result?.records) ? result.records : [];
+    matches.push(...rows.filter(row => row.number?.toLowerCase() === target.toLowerCase() || row.externalId === target));
+    if (!result?.nextPage) { complete = true; break; }
+    page = result.nextPage;
+  }
+  if (!complete) throw new APIError(413, 'ACCOUNTING_RESULT_TOO_LARGE');
+  if (matches.length !== 1) return {ambiguous: matches.length > 1, invoice: null};
+  const row = matches[0];
+  const total = accountingAmount(row.amountMinor, row.currency);
+  const paid = accountingAmount(row.paidMinor, row.currency);
+  const outstanding = accountingAmount(row.balanceMinor, row.currency);
+  if (total === null || paid === null || outstanding === null) return null;
+  return {invoice: {invoiceNumber:row.number, customerName:row.customerName, currency:row.currency, total, paid, outstanding, dueDate:row.dueDate, status:row.status, paidState:row.balanceMinor === 0 ? 'paid' : row.paidMinor > 0 ? 'partially paid' : 'unpaid'}};
+}
+
 export async function answerWorkspaceQuestion({provider, store, message, history = [], clock = () => new Date(), accounting = null}) {
   if (typeof message !== 'string' || !message.trim() || message.length > 4000 || !Array.isArray(history) || history.length > 8 || history.some(x => !x || !['user', 'assistant'].includes(x.role) || typeof x.content !== 'string' || x.content.length > 4000 || Object.keys(x).some(k => !['role', 'content'].includes(k)))) throw new APIError(400, 'INVALID_CONVERSATION');
   const direct = conversationalAnswer(message);
   if (direct) return {answer: direct, asOf: clock().toISOString(), timezone: 'UTC', model: null, usedFallback: false, readOnly: true};
 
   const tools = createAssistantTools({store, clock, accounting});
-  const target = contextualInvoiceTarget(message, history);
+  const writeIntent = isWriteIntent(message);
+  if (writeIntent && !accounting) return {answer:'Connect Zoho Books before creating or editing an invoice there.',asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true,pendingAction:null};
+  const target = writeIntent ? null : contextualInvoiceTarget(message, history);
   if (target) {
+    const live = await liveZohoInvoice(accounting, target);
+    if (live?.ambiguous) return {answer:`I found more than one Zoho Books invoice matching “${target}”. Please specify the invoice number.`, asOf:clock().toISOString(), timezone:'UTC', model:null, usedFallback:false, readOnly:true};
+    if (live?.invoice) {
+      const row = live.invoice;
+      return {answer:`${row.invoiceNumber} for ${row.customerName || 'the customer'} is ${row.paidState}. Total: ${row.currency} ${row.total}; paid: ${row.currency} ${row.paid}; outstanding: ${row.currency} ${row.outstanding}. Due date: ${row.dueDate || 'not recorded'}.`, asOf:clock().toISOString(), timezone:'UTC', model:null, usedFallback:false, readOnly:true};
+    }
     const match = await tools.lookupInvoice(target);
     if (match.ambiguousCustomer) return {answer: `I found more than one customer named “${target}”. Which customer did you mean?`, asOf: clock().toISOString(), timezone: 'UTC', model: null, usedFallback: false, readOnly: true};
     if (!match.invoices.length) return {answer: `I couldn't find a matching invoice for “${target}”.`, asOf: clock().toISOString(), timezone: 'UTC', model: null, usedFallback: false, readOnly: true};
@@ -130,13 +224,14 @@ export async function answerWorkspaceQuestion({provider, store, message, history
       : answer;
     return {answer: safeAnswer, asOf: clock().toISOString(), timezone: 'UTC', model: response.model, usedFallback: response.usedFallback, readOnly: true};
   }
+  const allowedTools = writeIntent ? [...tools.definitions, createProposalTool, updateProposalTool] : tools.definitions;
   const plan = await provider.generate({
     messages: [
-      {role: 'system', content: `You are cetld's read-only finance query planner. Today is ${clock().toISOString().slice(0,10)} UTC. Use only the supplied tools when workspace facts are needed. Never invent identifiers or financial data. Choose exactly one minimum-scope tool. ${accounting ? 'A question explicitly about connected Zoho Books: getZohoBooksData with the relevant receivables resource. ' : ''}A named cetld invoice or customer: getInvoiceDetails. Largest debtors: getOutstandingSummary. Overdue priorities: getOverdueInvoices. Collections: getPayments. General activity: getActivity.`},
+      {role: 'system', content: `You are cetld's finance query planner and write-action proposal builder. Today is ${clock().toISOString().slice(0,10)} UTC. Use only the supplied tools when workspace facts are needed. Never invent identifiers or financial data. Choose exactly one minimum-scope tool. ${writeIntent ? 'For an explicit create or edit request, use exactly one propose tool; proposals are not writes. Only extract facts the user supplied. Do not execute or claim any change. Never invent an invoice number, customer, amount, currency, or due date; leave missing details out so cetld can ask. Use the current date only as the proposed invoice date when the user omitted it. For update requests, use the exact invoice target and only the changed fields explicitly requested.' : ''} ${accounting ? 'A question explicitly about connected Zoho Books: getZohoBooksData with the relevant receivables resource. ' : ''}A named cetld invoice or customer: getInvoiceDetails. Largest debtors: getOutstandingSummary. Overdue priorities: getOverdueInvoices. Collections: getPayments. General activity: getActivity.`},
       ...history.map(item => ({role: item.role, content: item.content})),
       {role: 'user', content: message},
     ],
-    tools: tools.definitions,
+    tools: allowedTools,
     toolChoice: 'required',
     maxTokens: 350,
     temperature: 0,
@@ -145,12 +240,16 @@ export async function answerWorkspaceQuestion({provider, store, message, history
   const sources = [];
   for (const call of plan.toolCalls) {
     const name = call.function?.name;
-    if (!Object.hasOwn(LABELS, name)) throw new APIError(400, 'TOOL_NOT_ALLOWED');
+    if (!Object.hasOwn(LABELS, name) && !(writeIntent && ['proposeCreateInvoice','proposeUpdateInvoice'].includes(name))) throw new APIError(400, 'TOOL_NOT_ALLOWED');
     let args;
     try {
       if (typeof call.function.arguments !== 'string' || call.function.arguments.length > 4096) throw new Error();
       args = JSON.parse(call.function.arguments);
     } catch { throw new APIError(502, 'INVALID_TOOL_ARGUMENTS'); }
+    if (name === 'proposeCreateInvoice' || name === 'proposeUpdateInvoice') {
+      const proposal = await prepareProposal({name,args,accounting,clock});
+      return {answer:proposal.answer,pendingAction:proposal.pendingAction,asOf:clock().toISOString(),timezone:'UTC',model:plan.model,usedFallback:plan.usedFallback,readOnly:true};
+    }
     sources.push({tool: name, label: LABELS[name], data: await tools.execute(name, args)});
   }
   const noData = emptyAnswer(sources);
