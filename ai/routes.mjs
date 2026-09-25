@@ -1,5 +1,5 @@
 import {APIError, object, requestBody, sendError, uuid} from './http.mjs';
-import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL, VERIFIED_MODELS, isFreeModelId, verifyModel} from './provider.mjs';
+import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL, OPENROUTER_FREE_MODEL, VERIFIED_MODELS, isFallbackModelId, isPrimaryModelId, verifyModel} from './provider.mjs';
 import {authorizeAIWorkspace} from './store.mjs';
 import {extractInvoice} from './extraction.mjs';
 import {answerWorkspaceQuestion} from './assistant.mjs';
@@ -22,7 +22,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
           catch { return null; }
         }));
         const available = [...new Set(checks.filter(Boolean))];
-        return res.status(200).json({models: available.filter(id => !id.includes('flash-lite')), extractionModels: available.filter(id => id.includes('flash-lite')), openRouterFallback: available.includes('openrouter/free')});
+        return res.status(200).json({models: available.filter(isPrimaryModelId), fallbackModels: available.filter(isFallbackModelId), extractionModels: available.filter(id => id === DEFAULT_EXTRACTION_MODEL), openRouterFallback: available.includes(OPENROUTER_FREE_MODEL)});
       }
       const allowed = action === 'settings' ? ['workspaceId', 'primary_model', 'fallback_model']
         : action === 'extract' ? ['workspaceId', 'fileId', 'file']
@@ -74,7 +74,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         if (req.method === 'GET') return res.status(200).json(await store.getSettings());
         if (!['owner', 'admin'].includes(store.role)) throw new APIError(403, 'SETTINGS_ADMIN_REQUIRED');
         const {primary_model, fallback_model = null} = body;
-        if (!isFreeModelId(primary_model) || (fallback_model !== null && !isFreeModelId(fallback_model)) || primary_model === fallback_model) throw new APIError(400, 'INVALID_MODEL_CONFIGURATION');
+        if (!isPrimaryModelId(primary_model) || (fallback_model !== null && !isFallbackModelId(fallback_model)) || primary_model === fallback_model) throw new APIError(400, 'INVALID_MODEL_CONFIGURATION');
         await verify(primary_model, {fetchImpl, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY});
         if (fallback_model) await verify(fallback_model, {fetchImpl, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY});
         return res.status(200).json(await store.saveSettings({primary_model, fallback_model}));

@@ -165,12 +165,13 @@ function safeInvoice(invoice) {
   const total = cents(invoice.total_amount, "total_amount");
   const paid = cents(invoice.amount_paid, "amount_paid");
   if (paid > total) throw new TypeError("Invoice amount_paid exceeds total_amount");
+  const isFullyPaid = total > 0n && paid >= total;
   return {
     id: invoice.id, invoiceNumber: invoice.invoice_number, customerId: invoice.customer_id,
     issueDate: invoice.issue_date, dueDate: invoice.due_date, currency: invoice.currency,
     subtotal: decimalMetadata(invoice.metadata?.subtotal), tax: decimalMetadata(invoice.metadata?.tax),
     totalAmount: String(invoice.total_amount), amountPaid: String(invoice.amount_paid), outstandingAmount: money(total - paid),
-    paymentStatus: paid >= total ? "paid" : paid > 0n ? "partially_paid" : "unpaid", isFullyPaid: paid >= total,
+    paymentStatus: isFullyPaid ? "paid" : paid > 0n ? "partially_paid" : "unpaid", isFullyPaid,
     status: invoice.status, invoiceStatus: invoice.status, notes: safeText(invoice.notes, 4000),
     createdAt: invoice.created_at, updatedAt: invoice.updated_at,
   };
@@ -250,16 +251,18 @@ function accountingAmount(minor, currency) {
 
 function safeZohoResult(resource, result) {
   const records = Array.isArray(result?.records) ? result.records : [];
+  const nextPage=result.nextPage||null;
+  const completeness={complete:!nextPage,truncated:Boolean(nextPage)};
   if (resource === 'invoices') return {
-    provider: 'zoho_books', resource, nextPage: result.nextPage || null,
+    provider: 'zoho_books', resource, nextPage, ...completeness,
     invoices: records.map(row => ({invoiceId: row.externalId, invoiceNumber: row.number, customerName: row.customerName, currency: row.currency, totalAmount: accountingAmount(row.amountMinor, row.currency), amountPaid: accountingAmount(row.paidMinor, row.currency), outstandingAmount: accountingAmount(row.balanceMinor, row.currency), dueDate: row.dueDate, invoiceDate: row.invoiceDate, status: row.status, updatedAt: row.updatedAt})),
   };
   if (resource === 'contacts') return {
-    provider: 'zoho_books', resource, nextPage: result.nextPage || null,
+    provider: 'zoho_books', resource, nextPage, ...completeness,
     customers: records.map(row => ({customerId: row.externalId, name: row.name, companyName: row.companyName, email: row.email, phone: row.phone, status: row.status, currency: row.currency, updatedAt: row.updatedAt})),
   };
   return {
-    provider: 'zoho_books', resource, nextPage: result.nextPage || null,
+    provider: 'zoho_books', resource, nextPage, ...completeness,
     payments: records.map(row => ({paymentId: row.externalId, amount: accountingAmount(row.amountMinor, row.currency), currency: row.currency, paymentDate: row.paymentDate, invoiceIds: row.invoiceIds, reference: row.reference})),
   };
 }
@@ -292,12 +295,14 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
   const buildInvoiceContext = async (invoice, knownCustomer = null) => {
     const [customerRows, paymentRows, fileRows] = await Promise.all([
       knownCustomer ? Promise.resolve([knownCustomer]) : query(store, "customers", CUSTOMER_SELECT, {filters: {id: `eq.${invoice.customer_id}`}, limit: 1}),
-      query(store, "payments", PAYMENT_SELECT, {filters: {invoice_id: `eq.${invoice.id}`}, order: "paid_at.desc,id.asc", limit: 100}),
+      query(store, "payments", PAYMENT_SELECT, {filters: {invoice_id: `eq.${invoice.id}`}, order: "paid_at.desc,id.asc", limit: 101}),
       query(store, "invoice_files", FILE_SELECT, {filters: {invoice_id: `eq.${invoice.id}`}, order: "created_at.desc,id.asc", limit: 25}).catch(() => []),
     ]);
     const customer = customerRows[0] || null;
     const normalized = safeInvoice(invoice);
-    const paymentTotal = paymentRows.reduce((total, payment) => total + cents(payment.amount, "payment amount"), 0n);
+    const paymentHistoryTruncated = paymentRows.length > 100;
+    const visiblePayments = paymentRows.slice(0,100);
+    const paymentTotal = visiblePayments.reduce((total, payment) => total + cents(payment.amount, "payment amount"), 0n);
     const context = cleanObject({
       ...normalized,
       customerName: customer?.company_name || customer?.name || null,
@@ -305,11 +310,13 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
         name: customer.name, companyName: customer.company_name, email: customer.email, phone: customer.phone,
         createdAt: customer.created_at, updatedAt: customer.updated_at,
       } : null,
-      payments: paymentRows.map(payment => cleanObject({
+      payments: visiblePayments.map(payment => cleanObject({
         id: payment.id, amount: String(payment.amount), currency: invoice.currency, paidAt: payment.paid_at,
         method: safeText(payment.method), reference: safeText(payment.reference), createdAt: payment.created_at, updatedAt: payment.updated_at,
       })),
       recordedPaymentTotal: money(paymentTotal),
+      recordedPaymentTotalComplete: !paymentHistoryTruncated,
+      paymentHistoryTruncated,
       originalFiles: fileRows.map(file => cleanObject({
         id: file.id, fileName: file.file_name, mimeType: file.mime_type, sizeBytes: file.size_bytes,
         createdAt: file.created_at, updatedAt: file.updated_at,
@@ -342,11 +349,13 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
         }
         if (args.customerId !== undefined) filters.customer_id = `eq.${uuid(args.customerId, "customerId")}`;
         const bounds = dateBounds(args.issueDateFrom, args.issueDateTo, "issueDateFrom", "issueDateTo");
-        const rows = await query(store, "invoices", INVOICE_SELECT, { filters, limit: bounds.lower || bounds.upper ? MAX_ROWS + 1 : limit, offset: bounds.lower || bounds.upper ? 0 : offset });
+        const rows = await query(store, "invoices", INVOICE_SELECT, { filters, limit: bounds.lower || bounds.upper ? MAX_ROWS + 1 : limit + 1, offset: bounds.lower || bounds.upper ? 0 : offset });
         const filtered = bounds.lower || bounds.upper ? rows.filter((row) => withinDateBounds(row.issue_date, bounds)) : rows;
-        const selected = bounds.lower || bounds.upper ? filtered.slice(offset, offset + limit) : filtered;
+        const selected = (bounds.lower || bounds.upper ? filtered.slice(offset, offset + limit) : filtered.slice(0,limit));
         const customers = await customersForInvoices(selected);
-        return selected.map(row => ({...safeInvoice(row), customerName: customers.get(row.customer_id)?.company_name || customers.get(row.customer_id)?.name || null}));
+        const result = selected.map(row => ({...safeInvoice(row), customerName: customers.get(row.customer_id)?.company_name || customers.get(row.customer_id)?.name || null}));
+        Object.defineProperty(result,'truncated',{value:bounds.lower||bounds.upper?filtered.length>offset+limit:rows.length>limit,enumerable:false});
+        return result;
       }
       case "getCustomer": {
         const args = strictArgs(rawArgs, ["customerId"]);
@@ -376,8 +385,9 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
           if (!currency) throw new TypeError('Payment invoice unavailable; cannot determine currency');
           totals.set(currency, (totals.get(currency) ?? 0n) + cents(row.amount, 'amount'));
         }
+        const truncated=offset+limit<filtered.length;
         return {basis: 'recorded payment transactions', count: filtered.length, totalsByCurrency: Object.fromEntries([...totals].map(([c, n]) => [c, money(n)])),
-          payments: filtered.slice(offset, offset + limit).map((row) => { const invoice = invoicesById.get(row.invoice_id); const customer = paymentCustomers.get(invoice?.customer_id); return cleanObject({ id: row.id, invoiceId: row.invoice_id, invoiceNumber: invoice?.invoice_number, customerName: customer?.company_name || customer?.name, currency: currencies.get(row.invoice_id), amount: String(row.amount), paidAt: row.paid_at, method: row.method, reference: row.reference }); }), offset, limit};
+          payments: filtered.slice(offset, offset + limit).map((row) => { const invoice = invoicesById.get(row.invoice_id); const customer = paymentCustomers.get(invoice?.customer_id); return cleanObject({ id: row.id, invoiceId: row.invoice_id, invoiceNumber: invoice?.invoice_number, customerName: customer?.company_name || customer?.name, currency: currencies.get(row.invoice_id), amount: String(row.amount), paidAt: row.paid_at, method: row.method, reference: row.reference }); }), offset, limit, complete:!truncated, truncated};
       }
       case "getOutstandingSummary": {
         strictArgs(rawArgs, []);
@@ -395,7 +405,7 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
         }
         const debtors = [...grouped.values()].sort((a,b) => a.currency.localeCompare(b.currency) || (a.balance > b.balance ? -1 : a.balance < b.balance ? 1 : a.customerId.localeCompare(b.customerId)));
         const leaders = debtors.filter((row,index) => index === 0 || row.currency !== debtors[index - 1].currency);
-        return { basis: "invoices.amount_paid", currencies: groupInvoiceAmounts(applicable), debtors: leaders.map(({balance,...row}) => ({...row,outstandingAmount: money(balance)})), debtorCount: debtors.length };
+        return { basis: "invoices.amount_paid", currencies: groupInvoiceAmounts(applicable), debtors: leaders.map(({balance,...row}) => ({...row,outstandingAmount: money(balance)})), debtorCount: debtors.length, complete:true, truncated:false };
       }
       case "getOverdueInvoices": {
         const args = strictArgs(rawArgs, ['dueDateFrom','dueDateTo']);
@@ -406,7 +416,8 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
         const overdueCustomers = await customersForInvoices(overdue);
         const balances = overdue.map((invoice) => ({ ...safeInvoice(invoice), customerName: overdueCustomers.get(invoice.customer_id)?.company_name || overdueCustomers.get(invoice.customer_id)?.name || null, outstandingAmount: money(cents(invoice.total_amount, "total_amount") - cents(invoice.amount_paid, "amount_paid")) }));
         balances.sort((a,b) => a.dueDate.localeCompare(b.dueDate) || a.id.localeCompare(b.id));
-        return { asOfUtcDate: todayUtc, count: balances.length, balancesByCurrency: groupInvoiceAmounts(overdue), invoices: balances.slice(0,100), truncated: balances.length > 100 };
+        const truncated=balances.length>100;
+        return { asOfUtcDate: todayUtc, count: balances.length, balancesByCurrency: groupInvoiceAmounts(overdue), invoices: balances.slice(0,100), complete:!truncated, truncated };
       }
       case "getActivity": {
         const args = strictArgs(rawArgs, ["invoiceId", "limit"]);
@@ -427,7 +438,8 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
         }
         for (const payment of payments) events.push({ type: "payment_recorded", occurredAt: payment.paid_at, invoiceId: payment.invoice_id, paymentId: payment.id, amount: String(payment.amount) });
         events.sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt)) || a.type.localeCompare(b.type) || String(a.invoiceId).localeCompare(String(b.invoiceId)));
-        return { verifiedFollowUpLogAvailable: false, note: "Invoice and payment events are shown; follow-up metadata, if present, is only a current invoice snapshot, not a verified follow-up event log.", events: events.slice(0, limit) };
+        const truncated=events.length>limit;
+        return { verifiedFollowUpLogAvailable: false, note: "Invoice and payment events are shown; follow-up metadata, if present, is only a current invoice snapshot, not a verified follow-up event log.", count:events.length, complete:!truncated, truncated, events: events.slice(0, limit) };
       }
       case "getZohoBooksData": {
         if (!accounting?.readZohoData && !accounting?.integration?.readZohoData) throw new TypeError("Zoho Books is not connected to this workspace");

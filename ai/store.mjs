@@ -57,14 +57,17 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
       return rows[0];
     },
     async createAssistantInvoice({customerId, invoice}) {
+      if (invoice.alreadyPaid) throw new APIError(400, 'PAID_INVOICES_REQUIRE_ATOMIC_SETTLEMENT');
       const params = new URLSearchParams({on_conflict: 'workspace_id,invoice_number', select: 'id,workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata,external_provider,external_invoice_id,last_synced_at,sync_status,last_sync_error,created_at,updated_at'});
-      const rows = checkRows(await request(`/rest/v1/invoices?${params}`, {method: 'POST', headers: {Prefer: 'resolution=ignore-duplicates,return=representation'}, body: JSON.stringify({workspace_id: workspaceId, customer_id: customerId, invoice_number: invoice.invoiceNumber, issue_date: invoice.invoiceDate, due_date: invoice.dueDate, currency: invoice.currency, total_amount: invoice.total, amount_paid: invoice.alreadyPaid ? invoice.total : 0, status: invoice.alreadyPaid ? 'paid' : 'draft', notes: invoice.notes || null, metadata: {assistant_idempotency_key: invoice.idempotencyKey, bookkeeping_sync_status: 'pending', followup_state: invoice.alreadyPaid ? 'cancelled' : 'draft', next_follow_up_at: null, subtotal: invoice.subtotal, tax: invoice.tax, outstanding_amount: invoice.alreadyPaid ? 0 : (invoice.outstanding ?? invoice.total), client_phone: invoice.clientPhone || null, client_email: invoice.clientEmail || null}})}));
-      const row = rows[0] || null;
-      if (row && invoice.alreadyPaid) {
-        const payments = checkRows(await request('/rest/v1/payments?select=id,workspace_id', {method: 'POST', headers: {Prefer: 'return=representation'}, body: JSON.stringify({workspace_id: workspaceId, invoice_id: row.id, amount: invoice.total, reference: 'Marked as already paid'})}));
-        if (payments.length !== 1) throw new APIError(503, 'PAYMENT_STATE_NOT_SAVED');
-      }
-      return row;
+      const rows = checkRows(await request(`/rest/v1/invoices?${params}`, {method: 'POST', headers: {Prefer: 'resolution=ignore-duplicates,return=representation'}, body: JSON.stringify({workspace_id: workspaceId, customer_id: customerId, invoice_number: invoice.invoiceNumber, issue_date: invoice.invoiceDate, due_date: invoice.dueDate, currency: invoice.currency, total_amount: invoice.total, notes: invoice.notes || null, metadata: {assistant_idempotency_key: invoice.idempotencyKey, bookkeeping_sync_status: 'pending', followup_state: 'draft', next_follow_up_at: null, subtotal: invoice.subtotal, tax: invoice.tax, outstanding_amount: invoice.outstanding ?? invoice.total, client_phone: invoice.clientPhone || null, client_email: invoice.clientEmail || null}})}));
+      return rows[0] || null;
+    },
+    async createPaidAssistantInvoice({customerId, invoice}) {
+      const metadata = {assistant_idempotency_key: invoice.idempotencyKey, bookkeeping_sync_status: 'pending', followup_state: 'draft', next_follow_up_at: null, subtotal: invoice.subtotal, tax: invoice.tax, outstanding_amount: 0, client_phone: invoice.clientPhone || null, client_email: invoice.clientEmail || null};
+      const result = await request('/rest/v1/rpc/create_paid_assistant_invoice', {method: 'POST', body: JSON.stringify({p_workspace_id: workspaceId, p_customer_id: customerId, p_invoice_number: invoice.invoiceNumber, p_issue_date: invoice.invoiceDate, p_due_date: invoice.dueDate, p_currency: invoice.currency, p_total_amount: invoice.total, p_notes: invoice.notes || null, p_metadata: metadata, p_idempotency_key: invoice.idempotencyKey, p_reference: 'Marked as already paid'})});
+      const rows = checkRows(Array.isArray(result) ? result : result ? [result] : []);
+      if (rows.length !== 1) throw new APIError(503, 'PAYMENT_STATE_NOT_SAVED');
+      return rows[0];
     },
     async getAssistantInvoice(invoiceId) {
       const rows = await store.query('invoices', {select: 'id,workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata,external_provider,external_invoice_id,last_synced_at,sync_status,last_sync_error,created_at,updated_at', filters: {id: `eq.${uuid(invoiceId)}`}, limit: 1});
