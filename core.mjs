@@ -61,7 +61,7 @@ export function paymentRequestKey(state,{amount,reference}={}) {
   state.paymentRequestKey=crypto.randomUUID();
   return state.paymentRequestKey;
 }
-export function canApprove(invoice) { return !['paid','void','cancelled'].includes(invoice.status) && remaining(invoice)>0 && ['draft','paused','cancelled'].includes(invoice.followup_state); }
+export function canApprove(invoice) { return (invoice.invoice_direction ?? invoice.metadata?.invoice_direction) === 'receivable' && /^\d{4}-\d{2}-\d{2}$/.test(String(invoice.due_date||'')) && !['paid','void','cancelled'].includes(invoice.status) && remaining(invoice)>0 && ['draft','paused','cancelled'].includes(invoice.followup_state); }
 export function csvCell(value) {
   const text=String(value ?? '');
   const safe=/^[\s]*[=+\-@\t\r]/.test(text)?"'"+text:text;

@@ -159,7 +159,7 @@ export function nextContactTime(value, settings = {}, timeZone = "UTC") {
 export function scheduleInitialFollowUp(invoice, settings = {}, now = new Date()) {
   const timeZone = invoice?.debtor_timezone || settings.timezone || "UTC";
   const due = dateOnlyParts(invoice?.due_date) || timezoneParts(now, timeZone);
-  const days = parseFirstReminder(settings.firstReminder ?? settings.first_reminder_days, 3);
+  const days = parseFirstReminder(settings.firstReminderDays ?? settings.firstReminder ?? settings.first_reminder_days, 3);
   const local = addLocalDays({ ...due, hour: parseClock(settings.hoursStart ?? settings.contactHoursStart).hour, minute: parseClock(settings.hoursStart ?? settings.contactHoursStart).minute, second: 0 }, days);
   return nextContactTime(localDateTimeToDate(local, timeZone), settings, timeZone);
 }

@@ -1,7 +1,11 @@
 # Cetld automation and accounting integration
 
-Server-only Node 24 modules, added without frontend changes. This branch extends
-`vedangsharma68/cetld_new` on `feat/automation-integrations`. No live deployment is performed.
+Server-only automation modules. The active pipeline uses `public.invoices`,
+`public.workspace_settings.follow_up_preferences`, and `public.customers`.
+Apply `supabase/migrations/20260927140000_core_followup_pipeline.sql` in a
+reviewed migration process before enabling a worker. It adds columns and durable
+claims without deleting existing invoice data. Existing invoices with no explicit
+`metadata.invoice_direction = "receivable"` remain ineligible for outbound sends.
 
 ## Run tests
 
@@ -31,6 +35,10 @@ disabled in production.
 `action: "tick"` instead requires `ownerId`, `workspaceId`, and the dedicated
 `AUTOMATION_WORKER_SECRET`. It processes a bounded batch using durable DB claims.
 Clients must never receive this secret or the Supabase service key.
+The worker generates an idempotent daily summary event for the previous day in
+the owner's timezone when that preference is enabled. `daily-summary` returns
+the current day's counts to the signed-in owner. There is no notification sink
+for daily summaries, so no summary message is sent.
 
 `POST /api/accounting` with `action: "start"`, `provider: "zoho_books"` or
 `"quickbooks"`, and `workspaceId` initiates accounting consent. Zoho also needs
@@ -59,6 +67,8 @@ Run `node automation/worker.mjs` once per minute from a scheduler with:
 - `AUTOMATION_APP_URL`: HTTPS application origin.
 - `AUTOMATION_WORKER_SECRET`: at least 32 random characters, matching the server.
 - `AUTOMATION_WORKSPACES`: JSON array of `{ "workspaceId": "...", "ownerId": "..." }`.
+- `AUTOMATION_OUTBOUND_ENABLED`: defaults to `false`; only the exact value `true`
+  allows `tick` to dispatch reminders, subject to every invoice and preference gate.
 
 This is an executable scheduler driver, not a scheduler registered in your live
 hosting account. Workspace registration belongs to backend onboarding. Overlapping
@@ -66,9 +76,9 @@ workers use database claims to prevent duplicate reminders.
 
 ## Setup and remaining live verification
 
-1. Apply the SQL installation files under `supabase/install/` to the cetld database
-   after reviewing them alongside the core-backend branch. They build on existing
-   `cetld_workspaces`, `cetld_invoices`, and auth tables.
+1. Review and apply the additive core follow-up migration listed above. The old
+   `supabase/install/automation_persistence.sql` targets legacy `cetld_*` tables
+   and is not the active core invoice pipeline.
 2. Configure server variables from `automation/.env.example`; keep token encryption
    keys durable and secret.
 3. Register the exact HTTPS callback URI in Zoho and Intuit, complete consent,

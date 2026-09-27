@@ -104,7 +104,9 @@ test('a partial payment changes the core invoice balance by only the received am
   assert.equal(Number(invoice.amount_paid), 50);
   assert.equal(invoice.status, 'sent');
   assert.equal(invoice.metadata.followup_state, 'approved');
-  assert.equal(invoice.metadata.next_follow_up_at, '2026-10-01T09:00:00Z');
+  // This legacy fixture has no confirmed receivable direction or reviewed draft.
+  // Payment must not re-enable a reminder schedule for an ineligible invoice.
+  assert.equal(invoice.metadata.next_follow_up_at, null);
 });
 
 test('marking a partially paid invoice already paid records only its remaining balance and stops follow-up', async () => {

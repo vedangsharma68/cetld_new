@@ -1,7 +1,7 @@
 import {APIError, object, uuid} from './http.mjs';
 import {AMOUNT_PRECISION_MESSAGE,CURRENCY_SUPPORT_MESSAGE,isSupportedCurrency} from '../currency-contract.mjs';
 
-const INPUT_FIELDS = ['invoiceNumber', 'clientName', 'clientEmail', 'clientPhone', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total', 'outstanding', 'currency', 'notes', 'alreadyPaid'];
+const INPUT_FIELDS = ['invoiceNumber', 'clientName', 'clientEmail', 'clientPhone', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total', 'outstanding', 'currency', 'notes', 'alreadyPaid', 'direction'];
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 function dateValue(value) {
@@ -20,29 +20,37 @@ function amount(value, required = false) {
   if (!/^\d+(?:\.\d+)?$/.test(text)) throw new APIError(422, 'INVALID_INVOICE_AMOUNT');
   if (/\.\d{3,}$/.test(text)) throw new APIError(422, 'AMOUNT_PRECISION_UNSUPPORTED', AMOUNT_PRECISION_MESSAGE);
   const n = Number(text);
-  if (!Number.isFinite(n) || n < 0 || n > 9999999999999999) throw new APIError(422, 'INVALID_INVOICE_AMOUNT');
+  if (!Number.isFinite(n) || n < 0 || !Number.isSafeInteger(Math.round(n * 100))) throw new APIError(422, 'INVALID_INVOICE_AMOUNT');
   return n;
 }
 
 export function validateAssistantInvoice(value) {
   object(value, INPUT_FIELDS);
+  if (value.direction !== 'receivable') throw new APIError(422, 'INVOICE_DIRECTION_REVIEW_REQUIRED');
   const invoiceNumber = String(value.invoiceNumber || '').trim();
   const clientName = String(value.clientName || '').trim();
   if (!invoiceNumber || invoiceNumber.length > 100) throw new APIError(422, 'INVOICE_NUMBER_REQUIRED');
   if (!clientName || clientName.length > 255) throw new APIError(422, 'CLIENT_REQUIRED');
   if (!dateValue(value.invoiceDate)) throw new APIError(422, 'INVOICE_DATE_REQUIRED');
-  if (!dateValue(value.dueDate)) return {missingDueDate: true};
-  if (value.dueDate < value.invoiceDate) throw new APIError(422, 'INVALID_DUE_DATE');
+  const missingDueDate = value.dueDate === null || value.dueDate === undefined || value.dueDate === '';
+  if (!missingDueDate && !dateValue(value.dueDate)) throw new APIError(422, 'INVALID_DUE_DATE');
+  if (!missingDueDate && value.dueDate < value.invoiceDate) throw new APIError(422, 'INVALID_DUE_DATE');
   const currency = String(value.currency || '').trim().toUpperCase();
   if (!currency) throw new APIError(422, 'CURRENCY_REQUIRED');
   if (!isSupportedCurrency(currency)) throw new APIError(422, 'UNSUPPORTED_CURRENCY', CURRENCY_SUPPORT_MESSAGE);
   const total = amount(value.total, true);
+  if (total === 0) throw new APIError(422, 'INVOICE_TOTAL_MUST_BE_POSITIVE');
   const subtotal = amount(value.subtotal);
   const tax = amount(value.tax);
   const outstanding = value.outstanding === null || value.outstanding === undefined ? null : amount(value.outstanding, true);
   if (outstanding !== null && outstanding > total) throw new APIError(422, 'INVALID_OUTSTANDING_AMOUNT');
   if (subtotal !== null && subtotal > total) throw new APIError(422, 'INVALID_SUBTOTAL');
   if (tax !== null && tax > total) throw new APIError(422, 'INVALID_TAX');
+  if (subtotal !== null && tax !== null) {
+    const partsMinor = Math.round(subtotal * 100) + Math.round(tax * 100);
+    const adjustmentMinor = Math.round(total * 100) - partsMinor;
+    if (!Number.isSafeInteger(partsMinor) || Math.abs(adjustmentMinor) > 1) throw new APIError(422, 'INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX');
+  }
   const email = value.clientEmail == null ? null : String(value.clientEmail).trim();
   if (email && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 320)) throw new APIError(422, 'INVALID_CLIENT_EMAIL');
   const phone = value.clientPhone == null ? null : String(value.clientPhone).trim();
@@ -50,7 +58,9 @@ export function validateAssistantInvoice(value) {
   const notes = value.notes == null ? null : String(value.notes).trim().slice(0, 2000) || null;
   if (value.alreadyPaid !== undefined && typeof value.alreadyPaid !== 'boolean') throw new APIError(422, 'INVALID_PAID_STATE');
   const alreadyPaid = value.alreadyPaid === true;
-  return {invoiceNumber, clientName, clientEmail: email || null, clientPhone: phone || null, invoiceDate: value.invoiceDate, dueDate: value.dueDate, subtotal, tax, total, outstanding: alreadyPaid ? 0 : (outstanding ?? total), currency, notes, alreadyPaid};
+  if (alreadyPaid && outstanding !== null && outstanding !== 0) throw new APIError(422, 'PAID_INVOICE_HAS_OUTSTANDING_BALANCE');
+  if (!alreadyPaid && outstanding !== null && outstanding !== total) throw new APIError(422, 'PARTIAL_BALANCE_REQUIRES_PAYMENT_RECORD');
+  return {invoiceNumber, clientName, clientEmail: email || null, clientPhone: phone || null, invoiceDate: value.invoiceDate, dueDate: value.dueDate, subtotal, tax, total, outstanding: alreadyPaid ? 0 : total, currency, notes, alreadyPaid, direction: 'receivable', missingDueDate};
 }
 
 function responseInvoice(row) {

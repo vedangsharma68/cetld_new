@@ -14,16 +14,16 @@ export async function handleAutomationRequest(request, response, dependencies = 
     } else {
       identity = await authorizeWorkspace(request, workspaceId, env, dependencies.fetchImpl);
     }
-    if (!['tick', 'pause', 'resume', 'configure', 'mock-reply'].includes(body.action)) throw new HttpError(400, 'Unknown automation action');
+    if (!['tick', 'pause', 'resume', 'configure', 'mock-reply', 'daily-summary'].includes(body.action)) throw new HttpError(400, 'Unknown automation action');
     const runtime = dependencies.runtime || await import('./runtime.mjs').then(module => module.createAutomationRuntime({ env }));
     let result;
     if (body.action === 'tick') result = await runtime.tick(identity);
     else {
-      const invoiceId = uuid(body.invoiceId);
-      const scope = { ...identity, invoiceId };
+      const scope = { ...identity, ...(body.action==='daily-summary'?{}:{invoiceId:uuid(body.invoiceId)}) };
       if (body.action === 'pause') result = await runtime.pause(scope);
       if (body.action === 'resume') result = await runtime.resume(scope);
       if (body.action === 'configure') result = await runtime.configure(scope, body.configuration);
+      if (body.action === 'daily-summary') result = await runtime.dailySummary(scope);
       if (body.action === 'mock-reply') {
         if (env.NODE_ENV === 'production' || env.WHATSAPP_PROVIDER !== 'mock') throw new HttpError(404, 'Unavailable');
         result = await runtime.receiveMockReply(scope, body.event);

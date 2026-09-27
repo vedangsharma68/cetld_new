@@ -56,14 +56,18 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
       if (rows.length !== 1) throw new APIError(503, 'CUSTOMER_NOT_SAVED');
       return rows[0];
     },
+    async getBusinessName() {
+      const rows = checkRows(await request('/rest/v1/workspace_settings?' + new URLSearchParams({workspace_id: `eq.${workspaceId}`, select: 'workspace_id,business_name', limit: '1'})));
+      return rows[0]?.business_name || null;
+    },
     async createAssistantInvoice({customerId, invoice}) {
       if (invoice.alreadyPaid) throw new APIError(400, 'PAID_INVOICES_REQUIRE_ATOMIC_SETTLEMENT');
       const params = new URLSearchParams({on_conflict: 'workspace_id,invoice_number', select: 'id,workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata,external_provider,external_invoice_id,last_synced_at,sync_status,last_sync_error,created_at,updated_at'});
-      const rows = checkRows(await request(`/rest/v1/invoices?${params}`, {method: 'POST', headers: {Prefer: 'resolution=ignore-duplicates,return=representation'}, body: JSON.stringify({workspace_id: workspaceId, customer_id: customerId, invoice_number: invoice.invoiceNumber, issue_date: invoice.invoiceDate, due_date: invoice.dueDate, currency: invoice.currency, total_amount: invoice.total, notes: invoice.notes || null, metadata: {assistant_idempotency_key: invoice.idempotencyKey, bookkeeping_sync_status: 'pending', followup_state: 'draft', next_follow_up_at: null, subtotal: invoice.subtotal, tax: invoice.tax, outstanding_amount: invoice.outstanding ?? invoice.total, client_phone: invoice.clientPhone || null, client_email: invoice.clientEmail || null}})}));
+      const rows = checkRows(await request(`/rest/v1/invoices?${params}`, {method: 'POST', headers: {Prefer: 'resolution=ignore-duplicates,return=representation'}, body: JSON.stringify({workspace_id: workspaceId, customer_id: customerId, invoice_number: invoice.invoiceNumber, issue_date: invoice.invoiceDate, due_date: invoice.dueDate, currency: invoice.currency, total_amount: invoice.total, notes: invoice.notes || null, metadata: {assistant_idempotency_key: invoice.idempotencyKey, invoice_direction: invoice.direction, bookkeeping_sync_status: 'pending', followup_state: 'draft', next_follow_up_at: null, subtotal: invoice.subtotal, tax: invoice.tax, outstanding_amount: invoice.outstanding ?? invoice.total, client_phone: invoice.clientPhone || null, client_email: invoice.clientEmail || null}})}));
       return rows[0] || null;
     },
     async createPaidAssistantInvoice({customerId, invoice}) {
-      const metadata = {assistant_idempotency_key: invoice.idempotencyKey, bookkeeping_sync_status: 'pending', followup_state: 'draft', next_follow_up_at: null, subtotal: invoice.subtotal, tax: invoice.tax, outstanding_amount: 0, client_phone: invoice.clientPhone || null, client_email: invoice.clientEmail || null};
+      const metadata = {assistant_idempotency_key: invoice.idempotencyKey, invoice_direction: invoice.direction, bookkeeping_sync_status: 'pending', followup_state: 'draft', next_follow_up_at: null, subtotal: invoice.subtotal, tax: invoice.tax, outstanding_amount: 0, client_phone: invoice.clientPhone || null, client_email: invoice.clientEmail || null};
       const result = await request('/rest/v1/rpc/create_paid_assistant_invoice', {method: 'POST', body: JSON.stringify({p_workspace_id: workspaceId, p_customer_id: customerId, p_invoice_number: invoice.invoiceNumber, p_issue_date: invoice.invoiceDate, p_due_date: invoice.dueDate, p_currency: invoice.currency, p_total_amount: invoice.total, p_notes: invoice.notes || null, p_metadata: metadata, p_idempotency_key: invoice.idempotencyKey, p_reference: 'Marked as already paid'})});
       const rows = checkRows(Array.isArray(result) ? result : result ? [result] : []);
       if (rows.length !== 1) throw new APIError(503, 'PAYMENT_STATE_NOT_SAVED');
