@@ -5,6 +5,7 @@ import {createAssistantClient} from './assistant-client.js';
 import {AI_MODELS as VERIFIED_AI_MODELS,AI_FALLBACK_MODELS as VERIFIED_AI_FALLBACK_MODELS} from './settings-ai.js';
 import {collectionsPulse} from './collections-pulse.mjs';
 import {AMOUNT_PRECISION_MESSAGE,CURRENCY_SUPPORT_MESSAGE,isSupportedCurrency} from './currency-contract.mjs';
+import {invoiceWhatsAppDisclosure} from './invoice/whatsapp-disclosure.mjs';
 
 const $=s=>document.querySelector(s);
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -127,6 +128,11 @@ async function saveInvoice(e,x){
     if(!/^[A-Z]{3}$/.test(currency))throw Error('Currency must be a three-letter code such as INR or USD.');
     const patch={number:String(f.get('number')||'').trim(),client:String(f.get('client')||'').trim(),email:String(f.get('email')||'').trim(),amount_minor:cents(rawAmount),currency,invoice_date:String(f.get('invoice_date')||'')||localDate(),tax_minor:rawTax?cents(rawTax):null,due_date:String(f.get('due_date')||'')||null,notes:String(f.get('notes')||'').trim(),seller_name:String(f.get('seller_name')||'').trim(),buyer_name:String(f.get('buyer_name')||'').trim()||String(f.get('client')||'').trim(),debtor_phone:String(f.get('debtor_phone')||'').trim(),payment_information:String(f.get('payment_information')||'').trim(),line_items:JSON.parse(form.dataset.lineItems||'[]'),extraction_status:state.pendingFile?'uploaded':'manual',bookkeeping_sync_status:'not_configured',alreadyPaid:f.has('alreadyPaid')};
     if(!patch.number||!patch.client)throw Error('Invoice number and client are required.');
+    if(patch.debtor_phone){
+      if(!state.settings?.whatsapp_owner_attested_at)throw Error('The workspace owner must confirm the WhatsApp client agreement in Settings before a client phone can be saved.');
+      if(!/^\+[1-9][0-9]{7,14}$/.test(patch.debtor_phone))throw Error('Enter the client phone in E.164 format, such as +919871367051.');
+      if(patch.debtor_phone!==String(x?.debtor_phone||'')&&!f.has('client_whatsapp_agreed'))throw Error('Confirm that this client agreed to WhatsApp invoice updates before saving the phone.');
+    }
     if(x&&patch.amount_minor<x.paid_minor)throw Error('Total cannot be less than payments already recorded.');
     if(patch.alreadyPaid&&terminalInvoice(x))throw Error('Paid, void, or cancelled invoices cannot be settled again.');
     if(state.invoices.some(y=>y.id!==x?.id&&y.number===patch.number))throw Error('This invoice number already exists.');
@@ -144,6 +150,10 @@ async function saveInvoice(e,x){
         const customerPayload={workspace_id:state.workspace.id,name:patch.client,company_name:patch.client,email:patch.email||null,phone:patch.debtor_phone||null};
         if(customer){const result=await db.from('customers').update(customerPayload).eq('workspace_id',state.workspace.id).eq('id',customer.id).select().single();if(result.error)throw result.error;customer=result.data}
         else{const result=await db.from('customers').insert(customerPayload).select().single();if(result.error)throw result.error;customer=result.data;state.customers.push(customer)}
+        if(patch.debtor_phone&&f.has('client_whatsapp_agreed')){
+          const consent=await db.rpc('whatsapp_record_verbal_consent',{p_workspace_id:state.workspace.id,p_customer_id:customer.id,p_phone:patch.debtor_phone,p_consent_text_version:'invoice_updates_v1'});
+          if(consent.error)throw consent.error;
+        }
         const metadata={followup_state:x?.followup_state||'draft',next_follow_up_at:x?.metadata?.next_follow_up_at||null,reminder_text:x?.reminder_text||'',bookkeeping_sync_status:'not_configured',tax_minor:patch.tax_minor,seller_name:patch.seller_name,buyer_name:patch.buyer_name,debtor_phone:patch.debtor_phone,payment_information:patch.payment_information,line_items:patch.line_items,extraction_status:patch.extraction_status};
         const invoicePayload={customer_id:customer.id,invoice_number:patch.number,issue_date:patch.invoice_date,due_date:patch.due_date,currency,total_amount:patch.amount_minor/100,notes:patch.notes||null,metadata};
         const query=x?db.from('invoices').update(invoicePayload).eq('workspace_id',state.workspace.id).eq('id',x.id).eq('updated_at',x.updated_at):db.from('invoices').insert({workspace_id:state.workspace.id,...invoicePayload});
@@ -193,6 +203,45 @@ const originalShowError=showError;
 showError=(container,error)=>{const friendly=error?.message==='UNSUPPORTED_CURRENCY'?CURRENCY_SUPPORT_MESSAGE:error?.message==='AMOUNT_PRECISION_UNSUPPORTED'?AMOUNT_PRECISION_MESSAGE:null;return originalShowError(container,friendly?new Error(friendly):error)};
 const originalSaveInvoice=saveInvoice;
 saveInvoice=async(event,invoice)=>{const form=event.currentTarget,currency=String(new FormData(form).get('currency')||'').trim().toUpperCase();if(invoice&&!isSupportedCurrency(invoice.currency)){event.preventDefault();showError(form,new Error(`${CURRENCY_SUPPORT_MESSAGE} This legacy invoice is view-only; create a corrected invoice in a supported currency to continue.`));return}if(!isSupportedCurrency(currency)){event.preventDefault();showError(form,new Error(CURRENCY_SUPPORT_MESSAGE));return}return originalSaveInvoice(event,invoice)};
+
+const originalSettings=settings;
+settings=()=>{
+  const content=originalSettings();
+  const attested=state.settings?.whatsapp_owner_attested_at;
+  const owner=state.demo||state.workspace?.owner_id===state.user?.id;
+  return content+`<section class="panel whatsapp-attestation" aria-labelledby="whatsapp-attestation-title"><div class="panel-head"><div><h2 id="whatsapp-attestation-title">WhatsApp client agreement</h2><p>Required before adding any client phone number.</p></div></div><div class="panel-body">${attested?`<p class="whatsapp-attestation-status">Confirmed on ${escape(new Date(attested).toLocaleString('en-IN'))} by the workspace owner.</p>`:owner?`<form id="whatsapp-attestation-form"><label class="whatsapp-attestation-check"><input type="checkbox" name="attest" required><span>I confirm my clients have agreed to receive invoice updates from my business on WhatsApp, and I will only add numbers where that is true.</span></label><p class="settings-hint">Each client's agreement must also be confirmed when you add their number. This owner confirmation alone does not make a number messageable.</p><div class="error hidden" data-error role="alert"></div><button class="btn primary" type="submit">Confirm agreement</button></form>`:'<p class="settings-hint">Ask the workspace owner to confirm this before adding client numbers.</p>'}</div></section>`;
+};
+
+document.addEventListener('submit',async event=>{
+  if(event.target.id!=='whatsapp-attestation-form')return;
+  event.preventDefault();
+  const form=event.target,submit=form.querySelector('[type=submit]');
+  if(!form.elements.attest.checked)return;
+  submit.disabled=true;
+  try{
+    if(state.demo){state.settings={...(state.settings||{}),whatsapp_owner_attested_at:new Date().toISOString(),whatsapp_owner_attested_by:state.user.id}}
+    else{
+      const {data,error}=await db.from('workspace_settings').update({whatsapp_owner_attested_at:new Date().toISOString(),whatsapp_owner_attested_by:state.user.id}).eq('workspace_id',state.workspace.id).select().single();
+      if(error)throw error;
+      state.settings=data;
+    }
+    render();toast('WhatsApp client agreement confirmed');
+  }catch(error){showError(form,error)}finally{submit.disabled=false}
+});
+
+const originalInvoiceForm=invoiceForm;
+invoiceForm=id=>{
+  originalInvoiceForm(id);
+  const form=$('#invoice-form'),phone=form?.elements.namedItem('debtor_phone');
+  phone?.closest('.field')?.insertAdjacentHTML('afterend',`<label class="whatsapp-client-agreement"><input type="checkbox" name="client_whatsapp_agreed"><span>This client agreed to receive invoice updates on WhatsApp at this number.</span></label><small class="whatsapp-client-help">Check this for a new or changed number. WhatsApp delivery remains subject to active consent and may still be unavailable.</small>`);
+};
+
+const originalDetail=detail;
+detail=id=>{
+  originalDetail(id);
+  const body=$('#dialog .detail-body');
+  if(body)body.insertAdjacentHTML('beforeend',`<p class="whatsapp-invoice-disclosure">${escape(invoiceWhatsAppDisclosure(state.settings?.business_name||state.workspace?.name||'your business'))}</p>`);
+};
 const originalSaveSettings=saveSettings;
 saveSettings=async event=>{const currency=String(new FormData(event.currentTarget).get('default_currency')||'').trim().toUpperCase();if(!isSupportedCurrency(currency)){event.preventDefault();showError(event.currentTarget,new Error(CURRENCY_SUPPORT_MESSAGE));return}return originalSaveSettings(event)};
 const originalPaymentForm=paymentForm;
