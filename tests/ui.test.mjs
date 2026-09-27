@@ -78,7 +78,9 @@ test('desktop, tablet and mobile layouts have explicit responsive rules', () => 
 
 test('motion remains optional and CSP-safe', () => {
   assert.match(css, /prefers-reduced-motion:reduce/);
-  assert.match(css, /\.reduce-motion \*/);
+  assert.doesNotMatch(css, /\.reduce-motion/);
+  assert.doesNotMatch(app, /data-setting="motion"|Reduce motion|pref\('cetld\.motion'/);
+  assert.match(app, /localStorage\.removeItem\('cetld\.motion'\)/);
   assert.doesNotMatch(app, /style=/);
   assert.doesNotMatch(html, /<style/i);
   const headers = JSON.parse(vercel).headers[0].headers;
@@ -249,7 +251,6 @@ test('sign-in brand panel fits desktop and tablet and respects reduced motion', 
   assert.match(css, /@media\(max-width:800px\)\{\.auth-brand-panel/);
   assert.match(css, /@media\(max-width:640px\)\{\.auth-brand-panel/);
   assert.match(css, /prefers-reduced-motion:reduce\)\{\.settlement-animation/);
-  assert.match(css, /\.reduce-motion \.settlement-animation/);
 });
 test('auth brand backdrop is subtle, theme-aware, lightweight, and motion-safe', () => {
   assert.match(css, /\.auth-brand-panel:before\{[^}]*pointer-events:none[^}]*radial-gradient/);
@@ -257,7 +258,6 @@ test('auth brand backdrop is subtle, theme-aware, lightweight, and motion-safe',
   assert.match(css, /\.dark \.auth-brand-panel:before\{[^}]*background-image:radial-gradient/);
   assert.match(css, /@media\(max-width:640px\)\{\.auth-brand-panel:before/);
   assert.match(css, /@media\(prefers-reduced-motion:reduce\)\{\.auth-brand-panel:before\{animation:none/);
-  assert.match(css, /\.reduce-motion \.auth-brand-panel:before\{animation:none/);
 });
 test('Google sign-in mark stays legible and consistent in light and dark themes', () => {
   assert.match(app, /class="google-mark"[^>]*>\s*<svg viewBox="0 0 18 18"/);

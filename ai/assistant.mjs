@@ -304,7 +304,7 @@ async function prepareProposal({name, args, accounting, clock}) {
     if (missing.length) return {answer:`I can prepare the Zoho invoice, but I still need: ${[...new Set(missing)].join(', ')}.`, pendingAction:null};
     if (!accounting) return {answer:'Connect Zoho Books before creating an invoice there.', pendingAction:null};
     if (typeof args.clientEmail === 'string' && args.clientEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(args.clientEmail)) return {answer:'I could not safely validate the customer email. Please correct it before continuing.', pendingAction:null};
-    const invoice = {invoiceNumber:args.invoiceNumber.trim(),clientName:args.clientName.trim(),clientEmail:args.clientEmail || null,clientPhone:args.clientPhone || null,invoiceDate,dueDate:args.dueDate,total:args.total,subtotal:args.subtotal ?? null,tax:args.tax ?? null,outstanding:args.total,currency:args.currency,notes:args.notes || null,alreadyPaid:false};
+    const invoice = {direction:'receivable',invoiceNumber:args.invoiceNumber.trim(),clientName:args.clientName.trim(),clientEmail:args.clientEmail || null,clientPhone:args.clientPhone || null,invoiceDate,dueDate:args.dueDate,total:args.total,subtotal:args.subtotal ?? null,tax:args.tax ?? null,outstanding:args.total,currency:args.currency,notes:args.notes || null,alreadyPaid:false};
     const payload = {invoice,idempotencyKey:`assistant_${randomUUID().replaceAll('-','')}`};
     return {answer:`Create ${invoice.invoiceNumber} for ${invoice.clientName}, ${invoice.currency} ${invoice.total.toFixed(2)}, due ${proposalDate(invoice.dueDate)} in Zoho Books?`, pendingAction:{type:'create_invoice',payload,invoiceDateDefaulted:!args.invoiceDate}};
   }

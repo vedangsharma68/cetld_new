@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {extractInvoice} from '../ai/extraction.mjs';
 
 const extracted={
+  direction:{value:'receivable',confidence:.98},
   invoiceNumber:{value:'INV-1048',confidence:.98},customerName:{value:'Arbor & Finch',confidence:.97},
   invoiceDate:{value:'2026-09-01',confidence:.96},dueDate:{value:null,confidence:0},
   subtotal:{value:100,confidence:.9},tax:{value:18,confidence:.9},total:{value:118,confidence:.99},
