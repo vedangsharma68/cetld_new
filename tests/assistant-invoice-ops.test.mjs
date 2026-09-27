@@ -5,7 +5,7 @@ import {createAIHandler} from '../ai/routes.mjs';
 
 const workspaceId='11111111-1111-4111-8111-111111111111';
 const invoiceId='22222222-2222-4222-8222-222222222222';
-const base={invoiceNumber:'INV-1048',clientName:'Arbor & Finch',invoiceDate:'2026-09-01',dueDate:'2026-10-01',subtotal:100,tax:18,total:118,outstanding:118,currency:'INR',clientEmail:null,clientPhone:null,notes:null};
+const base={direction:'receivable',invoiceNumber:'INV-1048',clientName:'Arbor & Finch',invoiceDate:'2026-09-01',dueDate:'2026-10-01',subtotal:100,tax:18,total:118,outstanding:118,currency:'INR',clientEmail:null,clientPhone:null,notes:null};
 
 function memoryStore(){
   let row=null,createdInput=null,paidInput=null;
@@ -30,9 +30,46 @@ test('missing due date asks the required question and performs no write',async()
   assert.equal(writes,0);
 });
 
+test('payable and uncertain invoices are rejected before any persistence',async()=>{
+  for(const direction of ['payable','uncertain',null]){
+    let calls=0;
+    const store=new Proxy({}, {get(){calls++;return async()=>null}});
+    await assert.rejects(saveAssistantInvoice({store,invoice:{...base,direction},confirmed:true,idempotencyKey:'invoice_direction_1048'}));
+    assert.equal(calls,0,`store was touched for ${direction}`);
+  }
+});
+
+test('zero total and inconsistent subtotal, tax, or outstanding cannot be saved',async()=>{
+  for(const patch of [
+    {subtotal:0,tax:0,total:0,outstanding:0},
+    {subtotal:100,tax:17.98,total:118,outstanding:118},
+    {subtotal:100,tax:18,total:118,outstanding:119},
+  ]){
+    let calls=0;
+    const store=new Proxy({}, {get(){calls++;return async()=>null}});
+    await assert.rejects(saveAssistantInvoice({store,invoice:{...base,...patch},confirmed:true,idempotencyKey:'invoice_amount_guard_1048'}));
+    assert.equal(calls,0,`store was touched for ${JSON.stringify(patch)}`);
+  }
+});
+
+test('one-cent printed rounding adjustment may be saved after review',async()=>{
+  const store=memoryStore();
+  const saved=await saveAssistantInvoice({store,invoice:{...base,tax:17.99},confirmed:true,idempotencyKey:'invoice_rounding_1048'});
+  assert.equal(saved.saved,true);
+  assert.equal(store.createdInput.invoice.tax,17.99);
+  assert.equal(store.createdInput.invoice.total,118);
+});
+
+test('partial outstanding requires a payment record before an invoice can be saved',async()=>{
+  let calls=0;
+  const store=new Proxy({}, {get(){calls++;return async()=>null}});
+  await assert.rejects(saveAssistantInvoice({store,invoice:{...base,outstanding:68},confirmed:true,idempotencyKey:'invoice_partial_1048'}),error=>error.code==='PARTIAL_BALANCE_REQUIRES_PAYMENT_RECORD');
+  assert.equal(calls,0);
+});
+
 test('confirmed paid invoice is settled before sync and cannot start reminders',async()=>{
   const store=memoryStore();let synced;
-  const result=await saveAssistantInvoice({store,invoice:{...base,alreadyPaid:true},confirmed:true,idempotencyKey:'invoice_paid_1048',accounting:{async syncInvoice(input){synced=input;return{provider:'quickbooks',externalId:'qb-1048'}}}});
+  const result=await saveAssistantInvoice({store,invoice:{...base,outstanding:0,alreadyPaid:true},confirmed:true,idempotencyKey:'invoice_paid_1048',accounting:{async syncInvoice(input){synced=input;return{provider:'quickbooks',externalId:'qb-1048'}}}});
   assert.equal(result.saved,true);assert.equal(result.invoice.status,'paid');assert.equal(result.invoice.amountPaid,118);
   assert.equal(store.paidInput.invoice.outstanding,0);assert.equal(store.createdInput,null);
   assert.equal(store.row.metadata.followup_state,'cancelled');assert.equal(store.row.metadata.next_follow_up_at,null);
@@ -58,5 +95,5 @@ test('AI save route returns 422 for a missing due date',async()=>{
 test('Assistant invoice API rejects currencies and amounts the two-decimal ledger cannot store',()=>{
   for(const currency of ['JPY','KWD','BHD','ZZZ'])assert.throws(()=>validateAssistantInvoice({...base,currency}),error=>error.code==='UNSUPPORTED_CURRENCY');
   for(const total of ['118.257',118.257])assert.throws(()=>validateAssistantInvoice({...base,total}),error=>error.code==='AMOUNT_PRECISION_UNSUPPORTED');
-  assert.equal(validateAssistantInvoice({...base,currency:'INR',total:'118.25'}).total,118.25);
+  assert.equal(validateAssistantInvoice({...base,currency:'INR',subtotal:'100.25',total:'118.25',outstanding:'118.25'}).total,118.25);
 });

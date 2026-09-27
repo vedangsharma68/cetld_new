@@ -1,5 +1,6 @@
 import { cadenceSettings, isWithinContactHours, nextContactTime, scheduleNextFollowUp } from './cadence.mjs';
 import { createHash } from 'node:crypto';
+import { normalizeFollowUpPreferences, reminderBody } from './preferences.mjs';
 const value = (row, camel, snake) => row[camel] ?? row[snake];
 const version = row => Number(value(row,'automationVersion','automation_version'));
 const state = row => value(row,'followupState','followup_state');
@@ -18,18 +19,28 @@ export class FollowUpEngine {
   async event(scope,type,payload={}) {
     await this.store.recordEvent({...scope,type,idempotencyKey:eventKey(scope,type,payload),payload});
   }
-  settingsFor(invoice) { return cadenceSettings({...this.settings,...(value(invoice,'followUpSettings','follow_up_settings') || {})}); }
+  async settingsFor(scope, invoice) {
+    const owner = typeof this.store.getWorkspacePreferences === 'function' ? await this.store.getWorkspacePreferences(scope) : null;
+    if (owner) return normalizeFollowUpPreferences({...owner.follow_up_preferences, version:owner.updated_at}, owner.default_timezone);
+    return cadenceSettings({...this.settings,...(value(invoice,'followUpSettings','follow_up_settings') || {})});
+  }
   async run(scope) {
     const {ownerId,workspaceId,invoiceId}=scope;
     if (!ownerId || !workspaceId || !invoiceId) throw new TypeError('Invoice scope required');
     let invoice=await this.store.getInvoice(scope);
     if (!invoice) throw new Error('Invoice not found');
+    if (Object.hasOwn(invoice,'total_amount')) {
+      const direction=invoice.metadata?.invoice_direction;
+      if (direction !== 'receivable' || !invoice.due_date || Number(invoice.total_amount) <= 0 || ['void','cancelled','paid'].includes(invoice.status)) return {status:'skipped',reason:'ineligible_invoice'};
+      if (typeof invoice.metadata?.approved_reminder_text !== 'string' || !invoice.metadata.approved_reminder_text.trim()) return {status:'skipped',reason:'unapproved_message'};
+      if (!invoice.metadata?.approved_preferences_updated_at) return {status:'skipped',reason:'unapproved_preferences'};
+    }
     if (isPaid(invoice)) {
       await this.store.updateInvoice({...scope,expectedVersion:version(invoice),followupState:'cancelled',nextFollowUpAt:null});
       return {status:'skipped',reason:'paid'};
     }
     if (!active(invoice)) return {status:'skipped',reason:state(invoice)};
-    const now=this.clock(), settings=this.settingsFor(invoice), timezone=invoice.debtor_timezone || settings.timezone || 'UTC';
+    const now=this.clock(), settings=await this.settingsFor(scope,invoice), timezone=invoice.debtor_timezone || settings.timezone || 'UTC';
     const due=value(invoice,'nextFollowUpAt','next_follow_up_at');
     if (!due || new Date(due)>now) return {status:'waiting'};
     if (!isWithinContactHours(now,settings,timezone)) {
@@ -38,7 +49,8 @@ export class FollowUpEngine {
       return {status:'waiting',reason:'contact_hours'};
     }
     const count=Number(value(invoice,'reminderCount','reminder_count') || 0);
-    if (count>=settings.escalationAfter) {
+    const limit=settings.maxReminders ?? settings.escalationAfter;
+    if (count>=limit) {
       await this.store.updateInvoice({...scope,expectedVersion:version(invoice),followupState:'paused',nextFollowUpAt:null});
       await this.event(scope,'needs_attention',{reason:'cadence_exhausted',count});
       return {status:'needs_attention'};
@@ -48,7 +60,7 @@ export class FollowUpEngine {
     const [claim]=await this.store.claimDueFollowups({...scope,now:now.toISOString(),limit:1});
     if (!claim) return {status:'waiting',reason:'not_claimed'};
     const key=`reminder:${workspaceId}:${claim.id}`;
-    const body=settings.reminderMessage || `A reminder that invoice ${invoice.number || invoiceId} remains outstanding. Please let us know if you have already paid.`;
+    const body=Object.hasOwn(invoice,'total_amount')?invoice.metadata.approved_reminder_text:(settings.reminderMessage || reminderBody(invoice,settings));
     // Persist intent BEFORE checking payment and obtaining final authorization.
     await this.store.recordMessage({...scope,direction:'outbound',kind:'reminder',status:'pending',idempotencyKey:key,payload:{to,body,claimId:claim.id}});
     let refreshed;
@@ -72,11 +84,24 @@ export class FollowUpEngine {
       await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:true,error:'payment_or_pause'});
       return {status:'skipped',reason:isPaid(invoice)?'paid':'paused'};
     }
-    if (!isWithinContactHours(this.clock(),this.settingsFor(invoice),invoice.debtor_timezone || settings.timezone || 'UTC')) {
+    const finalSettings=await this.settingsFor(scope,invoice);
+    if (Object.hasOwn(invoice,'total_amount') && invoice.metadata?.approved_reminder_text!==body) {
+      await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'message_changed'});
+      return {status:'skipped',reason:'message_changed'};
+    }
+    if (settings.version !== finalSettings.version) {
+      await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'preferences_changed'});
+      return {status:'waiting',reason:'preferences_changed'};
+    }
+    if (Number(value(invoice,'reminderCount','reminder_count') || 0) >= (finalSettings.maxReminders ?? finalSettings.escalationAfter)) {
+      await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'reminder_limit'});
+      return {status:'skipped',reason:'reminder_limit'};
+    }
+    if (!isWithinContactHours(this.clock(),finalSettings,invoice.debtor_timezone || finalSettings.timezone || 'UTC')) {
       await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'contact_hours'});
       return {status:'waiting',reason:'contact_hours'};
     }
-    const authorization=await this.store.authorizeDelivery({...scope,claimId:claim.id});
+    const authorization=await this.store.authorizeDelivery({...scope,claimId:claim.id,preferencesVersion:finalSettings.version});
     if (!authorization.authorized) return {status:'skipped',reason:authorization.reason};
     // No asynchronous work may be inserted between this gate and provider dispatch.
     let result;
@@ -90,9 +115,13 @@ export class FollowUpEngine {
     }
     const recorded=await this.store.markDeliverySent({...scope,claimId:claim.id,token:authorization.token,providerMessageId:result.providerMessageId});
     if (!recorded.ok) return {status:'quarantined',reason:'receipt_not_committed'};
-    const needsAttention=count+1>=settings.escalationAfter;
+    const needsAttention=count+1>=limit;
     // CAS preserves a pause/payment/reply that arrived while provider HTTP was in flight.
-    await this.store.updateInvoice({...scope,expectedVersion:version(invoice),reminderCount:count+1,lastFollowUpAt:this.clock().toISOString(),followupState:needsAttention?'paused':'approved',nextFollowUpAt:needsAttention?null:scheduleNextFollowUp(this.clock(),settings,timezone).toISOString()});
+    const committed=await this.store.updateInvoice({...scope,expectedVersion:version(invoice),reminderCount:count+1,lastFollowUpAt:this.clock().toISOString(),followupState:needsAttention?'paused':'approved',nextFollowUpAt:needsAttention?null:scheduleNextFollowUp(this.clock(),settings,timezone).toISOString()});
+    if (!committed) {
+      await this.event(scope,'needs_attention',{reason:'sent_state_changed',claimId:claim.id});
+      return {status:'quarantined',reason:'sent_state_changed'};
+    }
     await this.event(scope,needsAttention?'needs_attention':'followup_sent',{claimId:claim.id,providerMessageId:result.providerMessageId,reason:needsAttention?'cadence_exhausted':undefined});
     return {status:'sent',providerMessageId:result.providerMessageId};
   }
@@ -103,10 +132,11 @@ export class FollowUpEngine {
     if (!invoice || !messageId || !body || from!==value(invoice,'customerPhone','customer_phone')) throw new Error('Unmatched reply');
     const key=`reply:${workspaceId}:${messageId}`;
     // Stop first: failure persisting the reply must never allow another reminder.
-    if (!isPaid(invoice)) await this.store.updateInvoice({...scope,followupState:'paused',nextFollowUpAt:null});
+    const settings=await this.settingsFor(scope,invoice);
+    if (!isPaid(invoice) && settings.pauseOnReply !== false) await this.store.updateInvoice({...scope,followupState:'paused',nextFollowUpAt:null});
     const saved=await this.store.recordMessage({...scope,direction:'inbound',kind:'reply',status:'received',providerMessageId:messageId,idempotencyKey:key,payload:{body,from}});
     await this.event(scope,'needs_attention',{reason:'customer_reply',messageId});
-    return {status:isPaid(invoice)?'paid':'paused',duplicate:!saved.inserted};
+    return {status:isPaid(invoice)?'paid':settings.pauseOnReply===false?'active':'paused',duplicate:!saved.inserted};
   }
   handleReply(input) { return this.processReply(input); }
 }

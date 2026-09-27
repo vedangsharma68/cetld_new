@@ -76,7 +76,7 @@ test('confirmation endpoint executes only the signed, explicitly confirmed updat
 });
 
 test('confirmed create reports the real Zoho sync result', async () => {
-  const invoice={invoiceNumber:'INV-1048',clientName:'Shiv Engineering',invoiceDate:'2026-10-01',dueDate:'2026-10-15',total:84600,currency:'INR'};
+  const invoice={direction:'receivable',invoiceNumber:'INV-1048',clientName:'Shiv Engineering',invoiceDate:'2026-10-01',dueDate:'2026-10-15',total:84600,currency:'INR'};
   const store={userId:USER,workspaceId:WORKSPACE,findAssistantInvoice:async()=>null,findCustomer:async()=>({id:'customer-1'}),createAssistantInvoice:async()=>({id:'invoice-1',invoice_number:'INV-1048',customer_name:'Shiv Engineering',issue_date:'2026-10-01',due_date:'2026-10-15',currency:'INR',total_amount:84600,amount_paid:0,status:'draft',metadata:{}}),updateAssistantInvoiceMetadata:async(_id,metadata)=>({id:'invoice-1',invoice_number:'INV-1048',customer_name:'Shiv Engineering',issue_date:'2026-10-01',due_date:'2026-10-15',currency:'INR',total_amount:84600,amount_paid:0,status:'draft',metadata})};
   const integration={async connectionStatus(){return{status:'connected'};},async syncInvoice(){throw Object.assign(new Error('temporary'),{code:'ACCOUNTING_SYNC_FAILED'});}};
   const handler=createAIHandler({env:{ACCOUNTING_TOKEN_ENCRYPTION_KEY:SECRET},authorize:async()=>store,accountingFactory:async()=>integration});

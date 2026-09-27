@@ -71,7 +71,7 @@ PDFs may require another image upload or manual entry; model support is not a
 guarantee of OCR accuracy. Provide the appropriate privacy disclosure before
 enabling uploads.
 
-Response fields: `invoiceNumber`, `customerName`, `invoiceDate`, `dueDate`,
+Response fields: `direction` (`receivable`, `payable`, or `uncertain`), `invoiceNumber`, `customerName`, `invoiceDate`, `dueDate`,
 `subtotal`, `tax`, `total`, `outstandingAmount`, `currency`, `clientPhone`,
 `clientEmail`, `lineItems`, each with `value` and `confidence`.
 Also `uncertainFields`, `warnings`, `reviewRequired: true`, `model`, `usedFallback`.
@@ -83,9 +83,16 @@ Assistant invoice actions. Amounts with more than two decimal places are rejecte
 without rounding. Existing rows in unsupported currencies remain readable with
 their stored decimal value labeled as unsupported; repricing and payment
 recording are blocked, so create a corrected invoice in a supported currency.
-Confidence is model-reported, not calibrated probability. UI must display
-uncertainty/warnings and require review before using the existing invoice-save
-workflow.
+Confidence is model-reported, not calibrated probability. The extractor receives
+the workspace business name to classify whether the business issued the invoice
+or owes it. The UI displays uncertainty and warnings and requires an explicit
+direction choice. Only confirmed receivables can enter the collections ledger;
+payables and uncertain invoices remain unsaved. Zero totals, subtotal plus tax
+differences greater than one minor unit, and partial outstanding amounts are
+rejected at save time. A one-cent printed rounding adjustment remains visible
+as an extraction warning for owner review.
+A partial balance needs a separately recorded payment. Missing due dates require
+owner input before Assistant save or follow-up approval.
 
 ## Dashboard assistant
 

@@ -124,6 +124,7 @@ test('assistant uses only safe tools and renders factual results without model p
 
 test('pre-save PDF upload flows through centralized structured provider and validation',async()=>{
   const raw=Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes'].map(k=>[k,{value:null,confidence:0}]));
+  raw.direction={value:'uncertain',confidence:0};
   raw.lineItems={value:[],confidence:0};
   raw.currency={value:'USD',confidence:0.9};raw.total={value:0.29,confidence:0.9};
   let completions=0;

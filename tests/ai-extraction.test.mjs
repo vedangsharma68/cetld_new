@@ -7,6 +7,7 @@ const pdf = Buffer.from('%PDF-1.7\ninvoice');
 
 function response(overrides = {}) {
   const base = {
+    direction: { value: 'receivable', confidence: 0.98 },
     invoiceNumber: { value: ' INV-42 ', confidence: 0.98 },
     customerName: { value: 'Acme Ltd', confidence: 0.93 },
     invoiceDate: { value: '2026-02-28', confidence: 0.96 },

@@ -90,7 +90,8 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
           file = {bytes: Buffer.from(f.base64, 'base64'), mimeType: f.mimeType, fileName: f.fileName};
         } else file = await store.downloadInvoiceFile(uuid(body.fileId));
         const extractionProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL, fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY, fetchImpl, timeoutMs: 14000});
-        return res.status(200).json(await extractInvoice({provider: extractionProvider, ...file}));
+        const businessName = typeof store.getBusinessName === 'function' ? await store.getBusinessName() : null;
+        return res.status(200).json(await extractInvoice({provider: extractionProvider, businessName, ...file}));
       }
       let accounting = null;
       if (env.SUPABASE_SERVICE_ROLE_KEY && env.ACCOUNTING_TOKEN_ENCRYPTION_KEY) {
