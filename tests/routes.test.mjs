@@ -4,6 +4,13 @@ import { handleAutomationRequest } from '../automation/routes.mjs';
 const workspaceId = '00000000-0000-0000-0000-000000000001';
 const ownerId = '00000000-0000-0000-0000-000000000002';
 function response() { return { code: null, payload: null, setHeader() {}, status(code) { this.code = code; return this; }, json(payload) { this.payload = payload; return this; } }; }
+test('automation Vercel entrypoint loads and rejects GET', async () => {
+  const { default: handler } = await import('../api/automation.js');
+  const res = response();
+  await handler({ method: 'GET' }, res);
+  assert.equal(res.code, 405);
+  assert.deepEqual(res.payload, { error: 'POST required' });
+});
 test('unauthenticated tick never executes runtime', async () => {
   let called = false; const res = response();
   await handleAutomationRequest({ method: 'POST', headers: {}, body: { action: 'tick', workspaceId, ownerId } }, res, { env: { AUTOMATION_WORKER_SECRET: 'x'.repeat(32) }, runtime: { tick() { called = true; } } });
