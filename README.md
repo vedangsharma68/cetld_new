@@ -47,6 +47,14 @@ flag may be enabled only for that neutral test to the allowlisted number;
 automated debtor or payment reminders remain on hold. Saving a business owner's
 attestation does not replace each client's own agreement to receive WhatsApp
 invoice updates.
+To run that test, set `WHATSAPP_TEST_OPERATOR_USER_ID` to the signed-in
+workspace owner's Supabase user UUID. An authenticated `POST` to
+`/api/whatsapp-test-send` accepts only `workspaceId` and `invoiceId` in JSON.
+The server reads the current invoice, customer phone, and business name; it
+accepts only the fixed test number and derives a stable key per invoice
+revision. The sender checks active consent and suppression again immediately
+before the Graph API request. A blocked or uncertain result must not be retried
+with a new invoice revision solely to force a send.
 The invoice-detail view uses the shared WhatsApp disclosure text. This checkout
 has no invoice PDF renderer or customer portal; those outputs need the same
 disclosure added where they are generated.
