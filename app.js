@@ -209,7 +209,9 @@ settings=()=>{
   const content=originalSettings();
   const attested=state.settings?.whatsapp_owner_attested_at;
   const owner=state.demo||state.workspace?.owner_id===state.user?.id;
-  return content+`<section class="panel whatsapp-attestation" aria-labelledby="whatsapp-attestation-title"><div class="panel-head"><div><h2 id="whatsapp-attestation-title">WhatsApp client agreement</h2><p>Required before adding any client phone number.</p></div></div><div class="panel-body">${attested?`<p class="whatsapp-attestation-status">Confirmed on ${escape(new Date(attested).toLocaleString('en-IN'))} by the workspace owner.</p>`:owner?`<form id="whatsapp-attestation-form"><label class="whatsapp-attestation-check"><input type="checkbox" name="attest" required><span>I confirm my clients have agreed to receive invoice updates from my business on WhatsApp, and I will only add numbers where that is true.</span></label><p class="settings-hint">Each client's agreement must also be confirmed when you add their number. This owner confirmation alone does not make a number messageable.</p><div class="error hidden" data-error role="alert"></div><button class="btn primary" type="submit">Confirm agreement</button></form>`:'<p class="settings-hint">Ask the workspace owner to confirm this before adding client numbers.</p>'}</div></section>`;
+  const attestation=`<section class="panel whatsapp-attestation" id="whatsapp" aria-labelledby="whatsapp-attestation-title"><div class="panel-head"><div><h2 id="whatsapp-attestation-title">WhatsApp client agreement</h2><p>Required before adding any client phone number.</p></div></div><div class="panel-body">${attested?`<p class="whatsapp-attestation-status">Confirmed on ${escape(new Date(attested).toLocaleString('en-IN'))} by the workspace owner.</p>`:owner?`<form id="whatsapp-attestation-form"><label class="whatsapp-attestation-check"><input type="checkbox" name="attest" required><span>I confirm my clients have agreed to receive invoice updates from my business on WhatsApp, and I will only add numbers where that is true.</span></label><p class="settings-hint">Each client's agreement must also be confirmed when you add their number. This owner confirmation alone does not make a number messageable.</p><div class="error hidden" data-error role="alert"></div><button class="btn primary" type="submit">Confirm agreement</button></form>`:'<p class="settings-hint">Ask the workspace owner to confirm this before adding client numbers.</p>'}</div></section>`;
+  return content.replace('<a href="#account">Account</a>', '<a href="#account">Account</a><a href="#whatsapp">WhatsApp</a>')
+    .replace(/<\/div><\/div>$/, `${attestation}</div></div>`);
 };
 
 document.addEventListener('submit',async event=>{
@@ -233,14 +235,14 @@ const originalInvoiceForm=invoiceForm;
 invoiceForm=id=>{
   originalInvoiceForm(id);
   const form=$('#invoice-form'),phone=form?.elements.namedItem('debtor_phone');
-  phone?.closest('.field')?.insertAdjacentHTML('afterend',`<label class="whatsapp-client-agreement"><input type="checkbox" name="client_whatsapp_agreed"><span>This client agreed to receive invoice updates on WhatsApp at this number.</span></label><small class="whatsapp-client-help">Check this for a new or changed number. WhatsApp delivery remains subject to active consent and may still be unavailable.</small>`);
+  phone?.closest('.two-cols')?.insertAdjacentHTML('afterend',`<label class="whatsapp-client-agreement"><input type="checkbox" name="client_whatsapp_agreed"><span>This client agreed to receive invoice updates on WhatsApp at this number.</span></label><small class="whatsapp-client-help">Check this for a new or changed number. WhatsApp delivery remains subject to active consent and may still be unavailable.</small>`);
 };
 
 const originalDetail=detail;
 detail=id=>{
   originalDetail(id);
   const body=$('#dialog .detail-body');
-  if(body)body.insertAdjacentHTML('beforeend',`<p class="whatsapp-invoice-disclosure">${escape(invoiceWhatsAppDisclosure(state.settings?.business_name||state.workspace?.name||'your business'))}</p>`);
+  if(body)body.insertAdjacentHTML('beforeend',`<p class="whatsapp-invoice-disclosure">${escape(invoiceWhatsAppDisclosure(state.settings?.business_name||state.workspace?.name||state.profile?.businessName||'your business'))}</p>`);
 };
 const originalSaveSettings=saveSettings;
 saveSettings=async event=>{const currency=String(new FormData(event.currentTarget).get('default_currency')||'').trim().toUpperCase();if(!isSupportedCurrency(currency)){event.preventDefault();showError(event.currentTarget,new Error(CURRENCY_SUPPORT_MESSAGE));return}return originalSaveSettings(event)};
