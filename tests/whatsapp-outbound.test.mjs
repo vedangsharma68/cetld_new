@@ -6,7 +6,7 @@ import {createWhatsAppAssistantChannel, createCustomerScopedStore} from '../ai/w
 const PHONE = '+919871367051';
 const OTHER = '+15551234567';
 const NOW = '2026-09-27T12:00:00.000Z';
-const baseEnv = {WHATSAPP_OUTBOUND_ENABLED: 'true', WHATSAPP_ACCESS_TOKEN: 'test-token', WHATSAPP_PHONE_NUMBER_ID: '1234567890', WHATSAPP_GRAPH_API_VERSION: 'v24.0'};
+const baseEnv = {WHATSAPP_OUTBOUND_ENABLED: 'true', WHATSAPP_TEST_ALLOWLIST: PHONE, WHATSAPP_ACCESS_TOKEN: 'test-token', WHATSAPP_PHONE_NUMBER_ID: '1234567890', WHATSAPP_GRAPH_API_VERSION: 'v24.0'};
 const invoice = {workspaceId: 'workspace-a', customerId: 'customer-a', invoiceNumber: 'INV-1', status: 'sent', updatedAt: NOW};
 
 function fakeSupabase({suppressed = false, globallySuppressed = false, consented = true, customer = true, attested = true} = {}) {
@@ -19,10 +19,15 @@ function fakeSupabase({suppressed = false, globallySuppressed = false, consented
       const query = {
         select() { return query; },
         eq(key, value) { filters[key] = value; return query; },
+        async limit() {
+          reads.push({table, filters: {...filters}});
+          if (table === 'whatsapp_suppressions') return {data: (typeof suppressed === 'function' ? suppressed() : suppressed) ? [{workspace_id: 'workspace-a'}] : []};
+          throw new Error(`unexpected limited table: ${table}`);
+        },
         async maybeSingle() {
           reads.push({table, filters: {...filters}});
-          if (table === 'whatsapp_global_suppressions') return {data: globallySuppressed ? {suppressed_at: NOW} : null};
-          if (table === 'whatsapp_suppressions') return {data: suppressed ? {suppressed_at: NOW} : null};
+          if (table === 'whatsapp_global_suppressions') return {data: (typeof globallySuppressed === 'function' ? globallySuppressed() : globallySuppressed) ? {suppressed_at: NOW} : null};
+          if (table === 'whatsapp_suppressions') return {data: (typeof suppressed === 'function' ? suppressed() : suppressed) ? {suppressed_at: NOW} : null};
           if (table === 'workspace_settings') return {data: {business_name: 'Acme Studio', whatsapp_owner_attested_at: attested ? NOW : null}};
           if (table === 'whatsapp_consents') return {data: consented ? {source: 'inbound_message', categories: ['invoice_updates'], customer_id: 'customer-a', revoked_at: null} : null};
           if (table === 'customers') return {data: customer ? {id: 'customer-a', phone: PHONE} : null};
@@ -60,6 +65,8 @@ const sendInvoice = (outbound, overrides = {}) => outbound.sendInvoiceUpdateTemp
 test('outbound is disabled by default and makes no network call', async () => {
   const {outbound, calls} = harness({env: {...baseEnv, WHATSAPP_OUTBOUND_ENABLED: undefined}});
   assert.deepEqual(await sendInvoice(outbound), {status: 'blocked', reason: 'disabled'});
+  assert.deepEqual(await outbound.sendServiceReply({workspaceId: null, to: PHONE, kind: 'verification',
+    businessName: 'CETLD', messageId: 'inbound-disabled', lastInboundAt: NOW}), {status: 'blocked', reason: 'disabled'});
   assert.equal(calls.length, 0);
 });
 
@@ -71,6 +78,13 @@ test('default test allowlist blocks other numbers before DB or network access an
   assert.equal(logs[0].event, 'whatsapp_outbound_blocked');
   assert.equal(logs[0].recipient, '***4567');
   assert.doesNotMatch(JSON.stringify(logs), /15551234567/);
+});
+
+test('enabled outbound still requires an explicit server-side test allowlist', async () => {
+  const {outbound, calls, supabase} = harness({env: {...baseEnv, WHATSAPP_TEST_ALLOWLIST: undefined}});
+  assert.deepEqual(await sendInvoice(outbound), {status: 'blocked', reason: 'invalid_test_allowlist'});
+  assert.equal(supabase.reads.length, 0);
+  assert.equal(calls.length, 0);
 });
 
 test('custom allowlist cannot expand sending beyond Vedang test number', async () => {
@@ -128,6 +142,14 @@ test('template requires durable invoice event claim before Graph', async () => {
   assert.equal((await sendInvoice(accepted.outbound)).status, 'accepted');
   assert.deepEqual(seen[0], {workspaceId: 'workspace-a', invoiceId: 'invoice-a', customerId: 'customer-a', phone: PHONE,
     idempotencyKey: 'invoice-a:event-1', expectedUpdatedAt: NOW});
+});
+
+test('STOP committed during invoice claim blocks Graph after the claim', async () => {
+  let stopped = false;
+  const attempt = harness({supabase: fakeSupabase({suppressed: () => stopped}),
+    claimInvoiceUpdate: async () => { stopped = true; return {claimed: true}; }});
+  assert.equal((await sendInvoice(attempt.outbound)).reason, 'suppressed');
+  assert.equal(attempt.calls.length, 0);
 });
 
 test('sender identity must match current workspace business name', async () => {
@@ -193,6 +215,19 @@ test('unknown sender gets only fixed verification text after inbound authorizati
   assert.equal((await outbound.sendServiceReply({workspaceId: null, to: PHONE, kind: 'verification',
     body: 'Invoice INV-9 is paid', businessName: 'CETLD', messageId: 'unknown-1', lastInboundAt: NOW})).status, 'accepted');
   assert.doesNotMatch(JSON.parse(calls[0].options.body).text.body, /INV-9|paid/i);
+});
+
+test('STOP committed during inbound reply authorization blocks verification Graph reply', async () => {
+  for (const scope of ['global', 'workspace']) {
+    let stopped = false;
+    const attempt = harness({supabase: fakeSupabase({globallySuppressed: () => scope === 'global' && stopped,
+      suppressed: () => scope === 'workspace' && stopped}),
+      authorizeInboundReply: async () => { stopped = true; return {allowed: true}; }});
+    assert.equal((await attempt.outbound.sendServiceReply({workspaceId: null, to: PHONE, kind: 'verification',
+      businessName: 'CETLD', messageId: 'unknown-race', lastInboundAt: NOW})).reason,
+    scope === 'global' ? 'globally_suppressed' : 'suppressed');
+    assert.equal(attempt.calls.length, 0);
+  }
 });
 
 test('WhatsApp assistant requires current binding and a customer-scoped store', async () => {

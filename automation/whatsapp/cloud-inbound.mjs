@@ -120,8 +120,12 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
   }
   async function revokeOptOut(event) {
     if (event.stop_processed_at) return;
+    // Install the phone-wide barrier before discovering workspace scopes. A
+    // consent added in another workspace during this loop must stay blocked.
+    const global = await suppressUnknownPhone({ supabase, phone: event.sender_phone,
+      messageId: event.provider_message_id });
     const consents = dataOrThrow(await supabase.from('whatsapp_consents').select('workspace_id')
-      .eq('phone', event.sender_phone).is('revoked_at', null), 'find revocation scopes') || [];
+      .eq('phone', event.sender_phone), 'find revocation scopes') || [];
     let confirmation = null;
     // Revoke all consent scopes for this phone, including stale customer links.
     // A claimed name in the message never selects a workspace.
@@ -130,10 +134,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
         phone: event.sender_phone, via: /^stop\b/i.test(event.message_text.trim()) ? 'stop' : 'refusal', messageId: event.provider_message_id });
       if (result.confirmationDue && !confirmation) confirmation = workspaceId;
     }
-    const unknown = consents.length === 0
-      ? await suppressUnknownPhone({ supabase, phone: event.sender_phone, messageId: event.provider_message_id })
-      : {confirmationDue: false};
-    await inbox.markStop(event, { confirmationDue: Boolean(confirmation || unknown.confirmationDue), workspaceId: confirmation });
+    await inbox.markStop(event, { confirmationDue: Boolean(confirmation || global.confirmationDue), workspaceId: confirmation });
   }
   async function processEvent(event) {
     if (isOptOut(event.message_text)) {

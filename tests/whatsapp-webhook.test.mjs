@@ -53,6 +53,24 @@ test('HMAC uses exact raw bytes and rejects a changed body before storage', asyn
   await assert.rejects(readRawBody(oversized), { status: 413 });
 });
 
+test('POST rejects missing secret, missing signature, and malformed signature before enqueue', async () => {
+  const body = JSON.stringify(meta([message('wamid.unsigned')]));
+  let enqueues = 0;
+  const runtime = { enqueue: async () => { enqueues++; return []; } };
+  for (const [settings, signature] of [
+    [{ ...env, WHATSAPP_APP_SECRET: '' }, null],
+    [env, ''],
+    [env, 'sha256=not-a-valid-digest'],
+  ]) {
+    const request = signedRequest(body, signature ?? undefined);
+    if (signature === '') delete request.headers['x-hub-signature-256'];
+    const res = response();
+    await createWhatsAppWebhookHandler({ env: settings, runtime })(request, res);
+    assert.equal(res.statusCode, 403);
+  }
+  assert.equal(enqueues, 0);
+});
+
 test('signed events are durably enqueued once and STOP is revoked before 200', async () => {
   const accepted = new Set();
   const order = [];
@@ -94,6 +112,28 @@ test('a duplicate STOP remains actionable when the first delivery stored but fai
   const inbox = new SupabaseInboundInbox(supabase);
   const actionable = await inbox.enqueue([stored]);
   assert.deepEqual(actionable, [stored]);
+});
+
+test('duplicate ordinary events do not trigger another inbox continuation', async () => {
+  const seen = new Set();
+  let continuations = 0;
+  const pending = [];
+  const runtime = {
+    async enqueue(events) {
+      return events.filter(event => !seen.has(event.provider_message_id)
+        && Boolean(seen.add(event.provider_message_id)));
+    },
+    async processPending() { continuations++; return { claimed: 1, completed: 1 }; },
+  };
+  const handler = createWhatsAppWebhookHandler({ env, runtime, waitUntil: task => pending.push(task) });
+  const body = JSON.stringify(meta([message('wamid.once')]));
+  for (let index = 0; index < 2; index++) {
+    const res = response();
+    await handler(signedRequest(body), res);
+    assert.equal(res.statusCode, 200);
+  }
+  await Promise.all(pending);
+  assert.equal(continuations, 1);
 });
 
 test('Meta parsing ignores status callbacks and other phone IDs; it never reads a claimed name', () => {
@@ -155,6 +195,59 @@ test('unknown STOP gets a global suppression claim before acknowledgement', asyn
   const runtime = createInboundRuntime({supabase, inbox: {async markStop(_event, value) { marked = value; }}, env});
   await runtime.revokeOptOut(event);
   assert.deepEqual(marked, {confirmationDue: true, workspaceId: null});
+});
+
+test('a retried STOP recovers its workspace confirmation after revocation committed', async () => {
+  const event = { id: 13, sender_phone: '+919871367051', message_text: 'STOP',
+    provider_message_id: 'wamid.retry-after-revoke' };
+  const calls = [];
+  const supabase = {
+    from(table) {
+      assert.equal(table, 'whatsapp_consents');
+      return {
+        select() { return this; },
+        eq() { return this; },
+        is() { throw new Error('Revoked consent must remain visible to STOP recovery'); },
+        then(resolve) { return Promise.resolve({ data: [{ workspace_id: 'workspace-a' }], error: null }).then(resolve); },
+      };
+    },
+    async rpc(name, args) {
+      calls.push({ name, args });
+      if (name === 'whatsapp_suppress_unknown_phone') return { data: false, error: null };
+      assert.equal(name, 'whatsapp_revoke_phone');
+      return { data: [{ revoked: false, confirmation_due: true }], error: null };
+    },
+  };
+  const runtime = createInboundRuntime({ supabase, inbox: {
+    async markStop(_event, value) { calls.push({ markStop: value }); },
+  }, env });
+  await runtime.revokeOptOut(event);
+  assert.deepEqual(calls.at(-1), { markStop: { confirmationDue: true, workspaceId: 'workspace-a' } });
+});
+
+test('STOP installs phone-wide suppression before discovering workspace consents', async () => {
+  const calls = [];
+  const event = { id: 14, sender_phone: '+919871367051', message_text: 'STOP', provider_message_id: 'wamid.race' };
+  const supabase = {
+    from(table) {
+      assert.equal(table, 'whatsapp_consents');
+      return { select() { return this; }, eq() { return this; },
+        then(resolve) { calls.push('read-consents'); return Promise.resolve({
+          data: [{ workspace_id: 'workspace-a' }], error: null,
+        }).then(resolve); } };
+    },
+    async rpc(name) {
+      calls.push(name);
+      if (name === 'whatsapp_suppress_unknown_phone') return { data: false, error: null };
+      if (name === 'whatsapp_revoke_phone') return { data: [{ revoked: true, confirmation_due: true }], error: null };
+      throw new Error(`Unexpected RPC: ${name}`);
+    },
+  };
+  const runtime = createInboundRuntime({ supabase, inbox: {
+    async markStop() { calls.push('mark-stop'); },
+  }, env });
+  await runtime.revokeOptOut(event);
+  assert.deepEqual(calls, ['whatsapp_suppress_unknown_phone', 'read-consents', 'whatsapp_revoke_phone', 'mark-stop']);
 });
 
 test('Postgres inbox claims are atomic and verification replies are one-time', async () => {

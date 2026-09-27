@@ -7,7 +7,8 @@ const SERVICE_KINDS = new Set(['normal', 'verification', 'stop_confirmation']);
 const CURRENT_INVOICE_STATUSES = new Set(['sent', 'paid']);
 
 function allowlistFromEnv(env) {
-  const raw = env.WHATSAPP_TEST_ALLOWLIST === undefined ? DEFAULT_TEST_ALLOWLIST : env.WHATSAPP_TEST_ALLOWLIST;
+  const raw = env.WHATSAPP_TEST_ALLOWLIST;
+  if (typeof raw !== 'string') return null;
   const values = String(raw).split(',').map(value => value.trim()).filter(Boolean);
   if (!values.length || values.some(value => !E164.test(value))) return null;
   return new Set(values);
@@ -62,6 +63,18 @@ async function verifiedBusinessName(supabase, workspaceId, suppliedName) {
   if (fallback?.error) throw fallback.error;
   const workspaceName = fallback?.data?.name?.trim();
   return workspaceName && workspaceName === suppliedName ? workspaceName : null;
+}
+
+async function unboundSuppression(supabase, phone) {
+  if (!supabase?.from) return 'missing_store';
+  const global = await supabase.from('whatsapp_global_suppressions')
+    .select('suppressed_at').eq('phone', phone).maybeSingle();
+  if (global?.error) throw global.error;
+  if (global?.data) return 'globally_suppressed';
+  const scoped = await supabase.from('whatsapp_suppressions')
+    .select('workspace_id').eq('phone', phone).limit(1);
+  if (scoped?.error) throw scoped.error;
+  return scoped?.data?.length ? 'suppressed' : null;
 }
 
 /**
@@ -156,6 +169,10 @@ export function createWhatsAppOutbound({
     // Graph returns an uncertain outcome; callers must not retry blindly.
     const claim = await claimInvoiceUpdate({workspaceId, invoiceId, customerId, phone: to, idempotencyKey: eventKey, expectedUpdatedAt: revision});
     if (claim?.claimed !== true) return block(logger, claim?.reason || 'duplicate_invoice_update', {workspaceId, to, kind: 'invoice_update'});
+    const postClaimEligibility = await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
+    if (!postClaimEligibility.allowed || postClaimEligibility.customer?.id !== customerId) {
+      return block(logger, postClaimEligibility.reason || 'customer_mismatch', {workspaceId, to, kind: 'invoice_update'});
+    }
     // This is an explicitly neutral, fixed test template. The approved Meta
     // template must say "Hi, this is {{1}}" and provide an invoice update with
     // {{2}}. No caller-controlled reminder content is accepted.
@@ -194,6 +211,10 @@ export function createWhatsAppOutbound({
     }
     const authorization = await authorizeInboundReply({workspaceId, phone: to, kind, messageId: inboundId});
     if (authorization?.allowed !== true) return block(logger, authorization?.reason || 'inbound_reply_denied', {workspaceId, to, kind});
+    if (kind === 'verification') {
+      const suppression = await unboundSuppression(supabase, to);
+      if (suppression) return block(logger, suppression, {workspaceId, to, kind});
+    }
     if (kind === 'normal') {
       const finalEligibility = await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
       if (!finalEligibility.allowed) return block(logger, finalEligibility.reason, {workspaceId, to, kind});

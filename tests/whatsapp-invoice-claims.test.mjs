@@ -12,6 +12,7 @@ test('neutral invoice claim is atomic and refuses stale, suppressed, or unconsen
   const at = '2026-09-27T12:00:00Z';
   try {
     await db.exec(`create role anon; create role authenticated; create role service_role bypassrls;
+      create schema app; create schema auth;
       create table public.workspaces(id uuid primary key);
       create table public.customers(workspace_id uuid not null, id uuid not null, phone text, unique(workspace_id,id));
       create table public.invoices(workspace_id uuid not null, id uuid not null, customer_id uuid not null,
@@ -24,6 +25,9 @@ test('neutral invoice claim is atomic and refuses stale, suppressed, or unconsen
     `);
     const sql = await readFile(new URL('../supabase/migrations/20260927120000_whatsapp_invoice_update_claims.sql', import.meta.url), 'utf8');
     await db.exec(sql);
+    await db.exec(await readFile(new URL('../supabase/migrations/20260927130000_whatsapp_stop_claim_lock.sql', import.meta.url), 'utf8'));
+    const claimSql = (await db.query("select pg_get_functiondef(p.oid) as sql from pg_proc p where p.proname='whatsapp_claim_invoice_update'")).rows[0].sql;
+    assert.match(claimSql, /pg_advisory_xact_lock\s*\(/i);
     await db.query('insert into public.workspaces(id) values ($1)', [ws]);
     await db.query('insert into public.customers(workspace_id,id,phone) values ($1,$2,$3)', [ws,customer,phone]);
     await db.query('insert into public.invoices(workspace_id,id,customer_id,invoice_number,status,updated_at) values ($1,$2,$3,$4,$5,$6)', [ws,invoice,customer,'INV-1','sent',at]);

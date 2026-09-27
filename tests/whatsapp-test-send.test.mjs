@@ -81,7 +81,7 @@ test('same invoice revision crosses the real outbound path at most once', async 
   };
   const graph = [];
   const handler = createWhatsAppInvoiceTestHandler({
-    env: {WHATSAPP_TEST_OPERATOR_USER_ID: userId, WHATSAPP_OUTBOUND_ENABLED: 'true',
+    env: {WHATSAPP_TEST_OPERATOR_USER_ID: userId, WHATSAPP_OUTBOUND_ENABLED: 'true', WHATSAPP_TEST_ALLOWLIST: '+919871367051',
       WHATSAPP_ACCESS_TOKEN: 'test-token', WHATSAPP_PHONE_NUMBER_ID: '1234567890',
       WHATSAPP_GRAPH_API_VERSION: 'v24.0'},
     authorize: async () => ({workspaceId, userId, role: 'owner'}),
