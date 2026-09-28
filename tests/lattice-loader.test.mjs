@@ -36,8 +36,8 @@ test('Assistant uses a compact glowing orbit rather than the default pulse', () 
   assert.match(css, /\.assistant-lattice\[data-status=working\] \.lattice-loader__text\[data-active\]/);
   assert.match(css, /@keyframes assistant-status-shimmer/);
   assert.match(css, /background-clip:text/);
-  assert.match(css, /prefers-reduced-motion:reduce[^}]*[\s\S]*assistant-lattice\[data-status=working\] \.lattice-loader__grid::after\{animation:none/);
-  assert.match(css, /assistant-lattice\[data-status=working\] \.lattice-loader__text\[data-active\]\{animation:none;color:inherit;background:none\}/);
+  assert.match(css, /prefers-reduced-motion:reduce[^}]*[\s\S]*assistant-lattice\[data-status=working\] \.lattice-loader__grid::after\{animation:assistant-lattice-orbit calc\(var\(--ll-cycle\)\*3\.75\) linear infinite;box-shadow:none/);
+  assert.match(css, /assistant-lattice\[data-status=working\] \.lattice-loader__text\[data-active\]\{animation:assistant-status-breathe 5s ease-in-out infinite;color:inherit;background:none\}/);
 });
 
 test('lattice state marks and task labels are escaped', () => {
