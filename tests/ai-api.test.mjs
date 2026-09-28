@@ -4,7 +4,7 @@ import {authorizeAIWorkspace} from '../ai/store.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
 import {readFile} from 'node:fs/promises';
 import {answerWorkspaceQuestion} from '../ai/assistant.mjs';
-import {DEFAULT_EXTRACTION_MODEL, DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, OPENROUTER_FREE_MODEL, AIProvider} from '../ai/provider.mjs';
+import {DEFAULT_EXTRACTION_MODEL, DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, ZEN_FALLBACK_MODEL, ZEN_PRIMARY_MODEL, AIProvider} from '../ai/provider.mjs';
 const A='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', B='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', U='11111111-1111-4111-8111-111111111111', F='22222222-2222-4222-8222-222222222222';
 const env={SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUBLISHABLE_KEY:'public-test-key'};
 
@@ -72,17 +72,17 @@ test('file extraction download checks workspace and invoice path before accessin
   assert.equal(file.bytes.toString(),'%PDF-1.4\n');
 });
 function response(){return {headers:{},setHeader(k,v){this.headers[k]=v;},status(n){this.code=n;return this;},json(data){this.data=data;return this;}};}
-test('models endpoint separates verified Gemini primary, extraction, and OpenRouter fallback',async()=>{
+test('models endpoint separates verified Gemini primary, extraction, and Zen fallbacks',async()=>{
   const verified=[];
-  const handler=createAIHandler({env:{GEMINI_API_KEY:'gemini-secret',OPENROUTER_API_KEY:'router-secret'},verify:async(id,opts)=>{verified.push([id,opts.geminiApiKey,opts.openRouterApiKey]);return {id};}});
+  const handler=createAIHandler({env:{GEMINI_API_KEY:'gemini-secret',OPENCODE_ZEN_API_KEY:'zen-secret'},verify:async(id,opts)=>{verified.push([id,opts.geminiApiKey,opts.zenApiKey]);return {id};}});
   const res=response();await handler({method:'GET',query:{action:'models'}},res);
   assert.equal(res.code,200);
   assert.deepEqual(res.data.models,[DEFAULT_MODEL]);
-  assert.deepEqual(res.data.fallbackModels,[OPENROUTER_FREE_MODEL]);
+  assert.deepEqual(res.data.fallbackModels,[ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL]);
   assert.deepEqual(res.data.extractionModels,[DEFAULT_EXTRACTION_MODEL]);
-  assert.equal(res.data.openRouterFallback,true);
+  assert.equal(res.data.openRouterFallback,false);
   assert.ok(verified.some(([id])=>id===DEFAULT_MODEL));
-  assert.ok(verified.every(([,geminiKey,routerKey])=>geminiKey==='gemini-secret'&&routerKey==='router-secret'));
+  assert.ok(verified.every(([,geminiKey,zenKey])=>geminiKey==='gemini-secret'&&zenKey==='zen-secret'));
 });
 test('settings API validates models, permissions, and unknown fields before saving',async()=>{
   let saves=0,verified=[];
@@ -95,7 +95,7 @@ test('settings API validates models, permissions, and unknown fields before savi
   const unavailable=createAIHandler({authorize:async()=>({...store,role:'owner'}),verify:async()=>{throw new Error('upstream secret');}});
   const error=response();await unavailable(req,error);assert.equal(error.code,503);assert.ok(!JSON.stringify(error).includes('upstream secret'));
 });
-test('settings API rejects OpenRouter as primary and accepts only Gemini primary with OpenRouter free fallback',async()=>{
+test('settings API rejects Zen as primary and accepts Gemini with a Zen fallback',async()=>{
   let saved=[];
   const store={role:'owner',saveSettings:async value=>{saved.push(value);return value;}};
   const handler=createAIHandler({authorize:async()=>store,verify:async()=>({})});

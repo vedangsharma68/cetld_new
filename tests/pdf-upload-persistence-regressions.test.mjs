@@ -66,7 +66,7 @@ function makeExtractionProvider({bytes=SAMPLE_PDF,primaryContent,primaryFinishRe
     primaryModel:DEFAULT_EXTRACTION_MODEL,
     fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL,
     geminiApiKey:'test-gemini-key',
-    openRouterApiKey:'test-openrouter-key',
+    zenApiKey:'test-zen-key',
     maxAttempts:1,
     fetchImpl:async(url,init)=>{
       const payload=JSON.parse(init.body);
@@ -84,8 +84,8 @@ function assertPdfBytesReachedBothProviders(requests,bytes){
   const encoded=bytes.toString('base64');
   const geminiPart=requests[0]?.payload.contents?.[0]?.parts?.find(part=>part.inlineData);
   assert.deepEqual(geminiPart?.inlineData,{mimeType:'application/pdf',data:encoded});
-  const openRouterPart=requests[1]?.payload.messages?.[0]?.content?.find(part=>part.type==='file');
-  assert.equal(openRouterPart?.file?.file_data,`data:application/pdf;base64,${encoded}`);
+  const zenPart=requests[1]?.payload.messages?.[0]?.content?.find(part=>part.type==='file');
+  assert.equal(zenPart?.file?.file_data,`data:application/pdf;base64,${encoded}`);
 }
 
 function assertPdfTextReachedBothProviders(requests){
@@ -111,7 +111,7 @@ test('malformed or truncated PDF JSON falls back once to the configured free mod
 
   assert.equal(requests.length,2);
   assert.match(requests[0].url,/gemini-3\.5-flash-lite:generateContent/);
-  assert.match(requests[1].url,/openrouter\.ai\/api\/v1\/chat\/completions/);
+  assert.match(requests[1].url,/opencode\.ai\/zen\/v1\/chat\/completions/);
   assert.equal(requests[0].payload.generationConfig.maxOutputTokens,8192);
   assert.equal(result.model,DEFAULT_EXTRACTION_FALLBACK_MODEL);
   assert.equal(result.usedFallback,true);
@@ -143,7 +143,7 @@ test('a malformed fallback remains a bounded, sanitized INVALID_OUTPUT failure',
   assert.equal(scenario.requests.length,2,'structured extraction must stop after one configured fallback');
 });
 
-test('Gemini image capability errors fail over once to OpenRouter with the exact original image',async()=>{
+test('Gemini image capability errors fail over once to OpenCode Zen with the exact original image',async()=>{
   const bytes=Buffer.from([137,80,78,71,13,10,26,10,0,1,2,3,4]);
   for(const status of [415,422]){
     const requests=[];
@@ -151,7 +151,7 @@ test('Gemini image capability errors fail over once to OpenRouter with the exact
       primaryModel:DEFAULT_EXTRACTION_MODEL,
       fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL,
       geminiApiKey:'test-gemini-key',
-      openRouterApiKey:'test-openrouter-key',
+      zenApiKey:'test-zen-key',
       maxAttempts:1,
       fetchImpl:async(url,init)=>{
         const payload=JSON.parse(init.body);
@@ -166,7 +166,7 @@ test('Gemini image capability errors fail over once to OpenRouter with the exact
 
     assert.equal(requests.length,2,`Gemini ${status} must go directly to the one configured fallback`);
     assert.match(requests[0].url,/gemini-3\.5-flash-lite:generateContent/);
-    assert.match(requests[1].url,/openrouter\.ai\/api\/v1\/chat\/completions/);
+    assert.match(requests[1].url,/opencode\.ai\/zen\/v1\/chat\/completions/);
     assert.deepEqual(requests[0].payload.contents[0].parts.find(part=>part.inlineData)?.inlineData,{
       mimeType:'image/png',data:bytes.toString('base64'),
     });
@@ -187,7 +187,7 @@ function createExtractionHandler(){
     getSettings:async()=>({primary_model:DEFAULT_MODEL,fallback_model:DEFAULT_FALLBACK_MODEL}),
     getBusinessName:async()=>'Cetld',
   };
-  const env={GEMINI_API_KEY:'test-gemini-key',OPENROUTER_API_KEY:'test-openrouter-key'};
+  const env={GEMINI_API_KEY:'test-gemini-key',OPENCODE_ZEN_API_KEY:'test-zen-key'};
   const fetchImpl=async(url,init)=>{
     const payload=JSON.parse(init.body);
     requests.push({url:String(url),payload});

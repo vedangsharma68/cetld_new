@@ -5,12 +5,13 @@ import * as settings from '../settings-ai.js';
 
 const app = fs.readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 
-test('keeps Gemini primary choices distinct from the OpenRouter free fallback', () => {
+test('keeps Gemini primary choices distinct from the OpenCode Zen free fallbacks', () => {
   assert.deepEqual(settings.AI_MODELS, [
     'gemini-3.5-flash',
   ]);
   assert.deepEqual(settings.AI_FALLBACK_MODELS, [
-    'openrouter/free',
+    'space-bunny-free',
+    'longcat-2.5-preview-free',
   ]);
 });
 
