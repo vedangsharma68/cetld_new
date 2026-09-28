@@ -1,5 +1,6 @@
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+const ZEN_CHAT_COMPLETIONS_URL = 'https://opencode.ai/zen/v1/chat/completions';
 const DEFAULT_TIMEOUT_MS = 16_000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_CONTENT_CHARS = 256 * 1024;
@@ -9,16 +10,19 @@ function assertServerRuntime() {
 }
 
 export const DEFAULT_MODEL = 'gemini-3.5-flash';
-export const DEFAULT_FALLBACK_MODEL = 'openrouter/free';
+export const ZEN_PRIMARY_MODEL = globalThis.process?.env?.ZEN_PRIMARY_MODEL || 'space-bunny-free';
+export const ZEN_FALLBACK_MODEL = globalThis.process?.env?.ZEN_FALLBACK_MODEL || 'longcat-2.5-preview-free';
+export const DEFAULT_FALLBACK_MODEL = ZEN_PRIMARY_MODEL;
 export const DEFAULT_EXTRACTION_MODEL = 'gemini-3.5-flash-lite';
 export const OPENROUTER_FREE_MODEL = 'openrouter/free';
-export const DEFAULT_EXTRACTION_FALLBACK_MODEL = OPENROUTER_FREE_MODEL;
+export const DEFAULT_EXTRACTION_FALLBACK_MODEL = ZEN_PRIMARY_MODEL;
 export const VERIFIED_MODELS = Object.freeze([
   DEFAULT_MODEL,
   DEFAULT_FALLBACK_MODEL,
   DEFAULT_EXTRACTION_MODEL,
   DEFAULT_EXTRACTION_FALLBACK_MODEL,
-  OPENROUTER_FREE_MODEL,
+  ZEN_PRIMARY_MODEL,
+  ZEN_FALLBACK_MODEL,
 ]);
 export const VERIFIED_FREE_MODELS = VERIFIED_MODELS;
 
@@ -53,10 +57,10 @@ export function isPrimaryModelId(value) {
   return value === DEFAULT_MODEL;
 }
 export function isFallbackModelId(value) {
-  return value === OPENROUTER_FREE_MODEL;
+  return value === ZEN_PRIMARY_MODEL || value === ZEN_FALLBACK_MODEL;
 }
 export function isModelId(value) {
-  return value === OPENROUTER_FREE_MODEL || isGeminiModelId(value);
+  return value === OPENROUTER_FREE_MODEL || isFallbackModelId(value) || isGeminiModelId(value);
 }
 export const isFreeModelId = isModelId;
 
@@ -108,12 +112,16 @@ function validateMessages(messages) {
   if (!Array.isArray(messages) || !messages.length || messages.length > 200 || safeJsonStringify(messages).length > 15 * 1024 * 1024) throw invalidArgument();
 }
 
-export async function verifyModel(modelId, {fetchImpl = globalThis.fetch, timeoutMs = 10_000, geminiApiKey = globalThis.process?.env?.GEMINI_API_KEY, openRouterApiKey = globalThis.process?.env?.OPENROUTER_API_KEY} = {}) {
+export async function verifyModel(modelId, {fetchImpl = globalThis.fetch, timeoutMs = 10_000, geminiApiKey = globalThis.process?.env?.GEMINI_API_KEY, openRouterApiKey = globalThis.process?.env?.OPENROUTER_API_KEY, zenApiKey = globalThis.process?.env?.OPENCODE_ZEN_API_KEY} = {}) {
   assertServerRuntime();
   if (!isModelId(modelId)) throw new AIError('INVALID_MODEL', 400);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    if (isFallbackModelId(modelId)) {
+      if (!zenApiKey) throw new AIError('API_KEY_MISSING', 503);
+      return {id: modelId, provider: 'opencode-zen'};
+    }
     if (modelId === OPENROUTER_FREE_MODEL) {
       if (!openRouterApiKey) throw new AIError('API_KEY_MISSING', 503);
       const response = await fetchImpl(OPENROUTER_BASE_URL + '/models', {signal: controller.signal});
@@ -185,11 +193,13 @@ function openRouterRequest(messages, options) {
 export class AIProvider {
   #geminiApiKey;
   #openRouterApiKey;
+  #zenApiKey;
   constructor({
     primaryModel = DEFAULT_MODEL,
     fallbackModel = DEFAULT_FALLBACK_MODEL,
     geminiApiKey = globalThis.process?.env?.GEMINI_API_KEY,
     openRouterApiKey = globalThis.process?.env?.OPENROUTER_API_KEY,
+    zenApiKey = globalThis.process?.env?.OPENCODE_ZEN_API_KEY,
     apiKey,
     fetchImpl = globalThis.fetch,
     timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -204,6 +214,7 @@ export class AIProvider {
     this.fallbackModel = fallbackModel;
     this.#geminiApiKey = typeof geminiApiKey === 'string' ? geminiApiKey : '';
     this.#openRouterApiKey = typeof openRouterApiKey === 'string' ? openRouterApiKey : (typeof apiKey === 'string' ? apiKey : '');
+    this.#zenApiKey = typeof zenApiKey === 'string' ? zenApiKey : '';
     this.fetchImpl = fetchImpl;
     this.timeoutMs = Math.max(1, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
     this.maxAttempts = extractionPrimary ? 1 : Math.min(2, Math.max(1, Number(maxAttempts) || 2));
@@ -217,7 +228,7 @@ export class AIProvider {
     if (maxTokens !== undefined) requestOptions.max_tokens = maxTokens;
     if (tools !== undefined) requestOptions.tools = tools;
     if (toolChoice !== undefined) requestOptions.tool_choice = toolChoice;
-    const candidates = [this.primaryModel, this.fallbackModel].filter(Boolean);
+    const candidates = this.#candidates();
     let lastError;
     for (const model of candidates) {
       try { return await this.#generateWithModel(model, messages, requestOptions, model !== this.primaryModel); }
@@ -227,6 +238,11 @@ export class AIProvider {
       }
     }
     throw lastError || new AIError('PROVIDER_UNAVAILABLE', 503);
+  }
+
+  #candidates() {
+    if (!this.fallbackModel) return [this.primaryModel];
+    return [...new Set([this.primaryModel, this.fallbackModel, ZEN_FALLBACK_MODEL])];
   }
 
   async generateStructured({messages, schema, name, validate, maxTokens, ...options} = {}) {
@@ -254,13 +270,22 @@ export class AIProvider {
       if (!(error instanceof AIError) || error.code !== 'INVALID_OUTPUT' || result.usedFallback || !this.fallbackModel) throw error;
       // The general generate path only fails over for transport/provider errors. A
       // structured response can still be unusable despite a successful HTTP call,
-      // so make one direct, bounded attempt on the configured fallback.
+      // so make bounded attempts through the configured fallback chain.
       const {messages: _messages, maxTokens: _maxTokens, ...providerOptions} = requestOptions;
-      const fallback = await this.#generateWithModel(this.fallbackModel, messages, {
-        ...providerOptions,
-        ...(Number.isInteger(maxTokens) ? {max_tokens: maxTokens} : {}),
-      }, true);
-      return decode(fallback);
+      let lastError = error;
+      for (const fallbackModel of this.#candidates().slice(1)) {
+        try {
+          const fallback = await this.#generateWithModel(fallbackModel, messages, {
+            ...providerOptions,
+            ...(Number.isInteger(maxTokens) ? {max_tokens: maxTokens} : {}),
+          }, true);
+          return decode(fallback);
+        } catch (fallbackError) {
+          lastError = fallbackError;
+          if (!fallbackEligible(fallbackError)) throw fallbackError;
+        }
+      }
+      throw lastError;
     }
   }
 
@@ -278,6 +303,24 @@ export class AIProvider {
   }
 
   async #request(model, messages, options, usedFallback) {
+    if (isFallbackModelId(model)) {
+      if (!this.#zenApiKey) throw new AIError('API_KEY_MISSING', 503);
+      return this.#fetch(ZEN_CHAT_COMPLETIONS_URL, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', Authorization: `Bearer ${this.#zenApiKey}`},
+        body: safeJsonStringify({...options, model, messages, stream: false}),
+      }, async response => {
+        const body = await readBoundedJson(response);
+        if (!response.ok || body?.error) throw statusError(response.status || body?.error?.code || 502);
+        const choice = body?.choices?.[0];
+        const message = choice?.message;
+        if (!message) throw new AIError('INVALID_RESPONSE');
+        const content = typeof message.content === 'string' ? message.content : Array.isArray(message.content) ? message.content.map(part => part?.text || '').join('') : '';
+        const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+        if (!content && !toolCalls.length) throw new AIError('INVALID_RESPONSE');
+        return {content, finishReason: choice.finish_reason || null, toolCalls, model, usedFallback};
+      });
+    }
     if (model === OPENROUTER_FREE_MODEL) {
       if (!this.#openRouterApiKey) throw new AIError('API_KEY_MISSING', 503);
       return this.#fetch(OPENROUTER_BASE_URL + '/chat/completions', {
@@ -335,4 +378,3 @@ export class AIProvider {
     } finally { clearTimeout(timer); }
   }
 }
-
