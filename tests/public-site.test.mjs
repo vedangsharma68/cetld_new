@@ -20,6 +20,8 @@ test('public landing page contains crawlable business information without JavaSc
     '+91 73033 38959',
   ]) assert.match(home, new RegExp(detail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
   assert.match(home, /href="\/app\/"[^>]*>Sign in/);
+  assert.match(home, /class="wordmark brand-lockup"[^>]*>[\s\S]*?src="\/favicon\.svg"/);
+  assert.match(home, /class="hero-logo" src="\/favicon\.svg"/);
   assert.match(home, /href="\/privacy"/);
   assert.match(home, /href="\/terms"/);
 });
