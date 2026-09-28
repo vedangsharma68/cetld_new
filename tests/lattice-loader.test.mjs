@@ -4,7 +4,7 @@ import test from 'node:test';
 import {LatticeLoader} from '../LatticeLoader.js';
 
 const css = readFileSync(new URL('../LatticeLoader.css', import.meta.url), 'utf8');
-const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+const html = readFileSync(new URL('../app/index.html', import.meta.url), 'utf8');
 
 test('Assistant loads the lattice CSS and renders an animated task label without a timer', () => {
   assert.match(html, /LatticeLoader\.css/);
