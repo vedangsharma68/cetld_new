@@ -75,8 +75,10 @@ test('internal JSON and fenced tool payloads are replaced with factual user-faci
     content: '```json\n{"basis":"invoices.amount_paid","currencies":{"INR":{"invoiceCount":1}},"debtors":[{"customerName":"Arbor & Finch","outstandingAmount":"84600.00"}]}\n```',
     finishReason: 'STOP', model: 'test-model', usedFallback: false,
   }, calls: 0};
-  const result = await answerWorkspaceQuestion({provider, store, message: 'Who owes us the most?'});
-  assert.match(result.answer, /Arbor & Finch owes INR 84600\.00/);
+  const result = await answerWorkspaceQuestion({provider, store, message: 'What is outstanding?'});
+  assert.match(result.answer, /Unpaid ledger balances by currency: INR 84600\.00/);
+  assert.match(result.answer, /direction is unclassified/i);
+  assert.doesNotMatch(result.answer, /Arbor & Finch owes/);
   assert.doesNotMatch(result.answer, /basis|currencies|debtors|invoiceCount/);
   assert.equal(Object.hasOwn(result, 'sources'), false);
 });

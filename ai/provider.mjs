@@ -77,7 +77,10 @@ function statusError(status) {
   return new AIError('PROVIDER_ERROR', status);
 }
 function retryable(error) {
-  return error instanceof AIError && ['INVALID_MODEL','TIMEOUT','NETWORK_ERROR','RATE_LIMITED','PROVIDER_UNAVAILABLE','API_KEY_MISSING'].includes(error.code);
+  return error instanceof AIError && ['TIMEOUT','NETWORK_ERROR','RATE_LIMITED','PROVIDER_UNAVAILABLE'].includes(error.code);
+}
+function fallbackEligible(error) {
+  return retryable(error) || error instanceof AIError && ['INVALID_MODEL','API_KEY_MISSING','PROVIDER_ERROR','INVALID_RESPONSE'].includes(error.code);
 }
 function safeJsonStringify(value) {
   try { return JSON.stringify(value); } catch { throw invalidArgument(); }
@@ -213,7 +216,7 @@ export class AIProvider {
       try { return await this.#generateWithModel(model, messages, requestOptions, model !== this.primaryModel); }
       catch (error) {
         lastError = error;
-        if (!retryable(error)) throw error;
+        if (!fallbackEligible(error)) throw error;
       }
     }
     throw lastError || new AIError('PROVIDER_UNAVAILABLE', 503);
@@ -221,19 +224,37 @@ export class AIProvider {
 
   async generateStructured({messages, schema, name, validate, maxTokens, ...options} = {}) {
     if (!schema || typeof schema !== 'object' || typeof name !== 'string' || typeof validate !== 'function') throw invalidArgument();
-    const result = await this.generate({
+    const requestOptions = {
       ...options, messages, maxTokens,
       response_format: {type: 'json_schema', json_schema: {name, strict: true, schema}},
       temperature: 0,
-    });
-    let parsed;
-    try { parsed = JSON.parse(stripJsonFence(result.content)); }
-    catch { throw new AIError('INVALID_OUTPUT', 502); }
-    try {
-      const data = validate(parsed);
-      if (data === undefined || safeJsonStringify(data).length > MAX_CONTENT_CHARS) throw new Error();
-      return {data, model: result.model, usedFallback: result.usedFallback};
-    } catch { throw new AIError('INVALID_OUTPUT', 502); }
+    };
+    const decode = result => {
+      const finishReason = String(result.finishReason || '').toLowerCase();
+      if (['max_tokens','max_output_tokens','length'].includes(finishReason)) throw new AIError('INVALID_OUTPUT', 502);
+      let parsed;
+      try { parsed = JSON.parse(stripJsonFence(result.content)); }
+      catch { throw new AIError('INVALID_OUTPUT', 502); }
+      try {
+        const data = validate(parsed);
+        if (data === undefined || safeJsonStringify(data).length > MAX_CONTENT_CHARS) throw new Error();
+        return {data, model: result.model, usedFallback: result.usedFallback};
+      } catch { throw new AIError('INVALID_OUTPUT', 502); }
+    };
+    const result = await this.generate(requestOptions);
+    try { return decode(result); }
+    catch (error) {
+      if (!(error instanceof AIError) || error.code !== 'INVALID_OUTPUT' || result.usedFallback || !this.fallbackModel) throw error;
+      // The general generate path only fails over for transport/provider errors. A
+      // structured response can still be unusable despite a successful HTTP call,
+      // so make one direct, bounded attempt on the configured fallback.
+      const {messages: _messages, maxTokens: _maxTokens, ...providerOptions} = requestOptions;
+      const fallback = await this.#generateWithModel(this.fallbackModel, messages, {
+        ...providerOptions,
+        ...(Number.isInteger(maxTokens) ? {max_tokens: maxTokens} : {}),
+      }, true);
+      return decode(fallback);
+    }
   }
 
   async #generateWithModel(model, messages, options, usedFallback) {

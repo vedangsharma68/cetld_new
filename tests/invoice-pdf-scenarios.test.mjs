@@ -65,9 +65,10 @@ test('valid zero-total PDF keeps the zero value for the save-time eligibility ch
   assert.equal(result.outstandingAmount.value, 0);
 });
 
-test('valid PDF with a printed rounding adjustment surfaces arithmetic discrepancy', async () => {
+test('valid PDF with a printed rounding adjustment gets a review notice, not a false mismatch', async () => {
   const result = await extractFixture('rounding_adjustment', {
     invoiceNumber: field('INV-A-5048'), tax: field(17.99),
   });
-  assert.ok(result.warnings.some((warning) => /round|subtotal|tax|total/i.test(warning)));
+  assert.ok(result.warnings.some((warning) => /one minor currency unit.*rounding adjustment/i.test(warning)));
+  assert.equal(result.warnings.some((warning) => /Subtotal plus tax does not match total/i.test(warning)), false);
 });

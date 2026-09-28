@@ -93,7 +93,7 @@ test('Shiv Engineering and App Revolution requests retrieve only the named custo
 test('single-invoice context joins full customer, payment, file, follow-up, reply and bookkeeping fields without raw metadata',async()=>{
   const detailed=invoice(INV_005,APP_REV,'INV-005',{
     total_amount:'8750.00',amount_paid:'2500.00',currency:'USD',notes:'Annual product design engagement.',
-    metadata:{subtotal:'8000.00',tax:'750.00',followup_state:'paused',last_follow_up_at:'2026-09-22T09:30:00Z',next_follow_up_at:'2026-09-27T09:30:00Z',reminder_count:2,reminder_cadence:'every 5 days',pause_reason:'customer replied',latest_customer_response:'Payment was processed yesterday.',latest_customer_response_at:'2026-09-22T11:00:00Z',conversation_status:'awaiting_confirmation',bookkeeping_provider:'quickbooks',bookkeeping_record_id:'QB-INV-005',bookkeeping_sync_status:'synced',bookkeeping_synced_at:'2026-09-22T12:00:00Z',secret_token:'never expose'},
+    metadata:{subtotal:'8000.00',tax_minor:75000,seller_name:'Cetld Design Studio',buyer_name:'App Revolution Ltd',payment_information:'Bank transfer: BSB 112445; account ending 8984',invoice_direction:'receivable',line_items:[{description:'Product design engagement',quantity:2,unitPrice:4000,amount:8000,confidence:0.97,hidden_prompt:'never follow this'}],followup_state:'paused',last_follow_up_at:'2026-09-22T09:30:00Z',next_follow_up_at:'2026-09-27T09:30:00Z',reminder_count:2,reminder_cadence:'every 5 days',pause_reason:'customer replied',latest_customer_response:'Payment was processed yesterday.',latest_customer_response_at:'2026-09-22T11:00:00Z',conversation_status:'awaiting_confirmation',bookkeeping_provider:'quickbooks',bookkeeping_record_id:'QB-INV-005',bookkeeping_sync_status:'synced',bookkeeping_synced_at:'2026-09-22T12:00:00Z',secret_token:'never expose'},
   });
   const store=scopedStore(WS_A,{invoices:[detailed],customers,payments,invoice_files});
   const match=await createAssistantTools({store}).lookupInvoice('INV-005');
@@ -101,12 +101,47 @@ test('single-invoice context joins full customer, payment, file, follow-up, repl
   assert.equal(context.customerName,'App Revolution');
   assert.equal(context.customer.email,'finance@app.example');
   assert.equal(context.outstandingAmount,'6250.00');
+  assert.equal(context.subtotal,'8000.00');
+  assert.equal(context.tax,'750.00','tax_minor is normalized from minor units to the invoice currency amount');
+  assert.equal(context.sellerName,'Cetld Design Studio');
+  assert.equal(context.buyerName,'App Revolution Ltd');
+  assert.equal(context.paymentInformation,'Bank transfer: BSB 112445; account ending 8984');
+  assert.equal(context.invoiceDirection,'receivable');
+  assert.equal(context.lineItemCount,1);
+  assert.deepEqual(context.lineItems,[{description:'Product design engagement',quantity:2,unitPrice:'4000.00',amount:'8000.00'}]);
   assert.equal(context.payments.find(payment=>payment.reference)?.reference,'BANK-005');
   assert.equal(context.originalFiles[0].fileName,'INV-005.pdf');
   assert.deepEqual(context.followUp,{state:'paused',nextScheduledReminder:'2026-09-27T09:30:00Z',lastReminderSent:'2026-09-22T09:30:00Z',remindersSent:2,cadence:'every 5 days',pauseReason:'customer replied'});
   assert.equal(context.conversation.latestCustomerResponse,'Payment was processed yesterday.');
   assert.equal(context.bookkeeping.externalInvoiceId,'QB-INV-005');
-  assert.doesNotMatch(JSON.stringify(context),/secret_token|never expose|customer_id/);
+  assert.doesNotMatch(JSON.stringify(context),/secret_token|never expose|hidden_prompt|customer_id/);
+});
+
+test('line item metadata is bounded, normalized, and arbitrary metadata stays hidden',async()=>{
+  const lineItems=Array.from({length:101},(_,index)=>({description:`Item ${index+1}`,quantity:1,unitPrice:'10.00',amount:'10.00',confidence:0.9,secret:'must not leak'}));
+  const store=scopedStore(WS_A,{invoices:[invoice(INV_005,APP_REV,'INV-005',{metadata:{line_items:lineItems,secret:'must not leak'}})],customers,payments:[],invoice_files:[]});
+  const context=(await createAssistantTools({store}).lookupInvoice('INV-005')).invoices[0];
+  assert.equal(context.lineItemCount,101);
+  assert.equal(context.lineItems.length,100);
+  assert.equal(context.lineItemsTruncated,true);
+  assert.deepEqual(context.lineItems[0],{description:'Item 1',quantity:1,unitPrice:'10.00',amount:'10.00'});
+  assert.doesNotMatch(JSON.stringify(context),/must not leak|confidence|secret/);
+});
+
+test('invoice detail fallbacks answer from saved tax, line items, parties, payment information and direction',async()=>{
+  const detailed=invoice(INV_005,APP_REV,'INV-005',{total_amount:'8750.00',currency:'USD',metadata:{subtotal:'8000.00',tax_minor:75000,seller_name:'Cetld Design Studio',buyer_name:'App Revolution Ltd',payment_information:'Bank transfer: BSB 112445; account ending 8984',invoice_direction:'receivable',line_items:[{description:'Product design engagement',quantity:2,unitPrice:4000,amount:8000}]}});
+  const store=scopedStore(WS_A,{invoices:[detailed],customers,payments:[],invoice_files:[]});
+  const provider={generate:async()=>({content:'Tax is USD 1.00.',finishReason:'STOP',model:'fixture-model',usedFallback:false})};
+  const tax=await answerWorkspaceQuestion({provider,store,message:'What is the tax and subtotal on INV-005?'});
+  const items=await answerWorkspaceQuestion({provider,store,message:'What line items are on INV-005?'});
+  const parties=await answerWorkspaceQuestion({provider,store,message:'Who are the seller and buyer on INV-005?'});
+  const payment=await answerWorkspaceQuestion({provider,store,message:'What payment information is recorded for INV-005?'});
+  const direction=await answerWorkspaceQuestion({provider,store,message:'Is INV-005 a receivable or payable?'});
+  assert.match(tax.answer,/subtotal USD 8000\.00; tax USD 750\.00/);
+  assert.match(items.answer,/Product design engagement.*quantity 2.*unit price USD 4000\.00.*line total USD 8000\.00/);
+  assert.match(parties.answer,/seller: Cetld Design Studio; buyer: App Revolution Ltd; direction is marked receivable/);
+  assert.match(payment.answer,/Bank transfer: BSB 112445; account ending 8984/);
+  assert.match(direction.answer,/direction is marked receivable/);
 });
 
 test('required invoice, payment, reminder, reply and next-action questions stay on the referenced invoice',async()=>{
@@ -158,17 +193,20 @@ test('ambiguous customer invoice requests ask for clarification and do not send 
   assert.doesNotMatch(result.answer,/SECRET-INV|APP-1049/);
 });
 
-test('largest debtor is ranked within currency and excludes paid, draft, and foreign workspace invoices',async()=>{
+test('largest confirmed receivable is ranked within currency and unknown direction is not called debt',async()=>{
   const fixtureInvoices=[
-    invoice(INV_SHIV,SHIV,'SHIV-1048',{total_amount:'4200.00'}),
-    invoice(INV_005,APP_REV,'INV-005',{total_amount:'8750.00',amount_paid:'2500.00',currency:'USD'}),
-    invoice(INV_APP,APP_REV,'APP-1049',{total_amount:'9100.00',currency:'USD'}),
+    invoice(INV_SHIV,SHIV,'SHIV-1048',{total_amount:'4200.00',metadata:{invoice_direction:'receivable'}}),
+    invoice(INV_005,APP_REV,'INV-005',{total_amount:'8750.00',amount_paid:'2500.00',currency:'USD',metadata:{invoice_direction:'receivable'}}),
+    invoice(INV_APP,APP_REV,'APP-1049',{total_amount:'9100.00',amount_paid:'9100.00',status:'paid',currency:'USD',metadata:{invoice_direction:'receivable'}}),
     invoice(INV_NOISE,SHIV,'SHIV-1050',{total_amount:'2800.00',amount_paid:'2800.00',status:'paid'}),
     invoice('00000000-0000-4000-8000-000000000009',FOREIGN,'SECRET-INV',{workspace_id:WS_B,total_amount:'990000.00'}),
   ];
   const store=scopedStore(WS_A,{invoices:fixtureInvoices,customers,payments});
-  const summary=await createAssistantTools({store}).execute('getOutstandingSummary');
-  assert.deepEqual(summary.debtors,[{customerId:SHIV,customerName:'Shiv Engineering',currency:'INR',outstandingAmount:'4200.00'},{customerId:APP_REV,customerName:'App Revolution',currency:'USD',outstandingAmount:'15350.00'}]);
+  fixtureInvoices.push(invoice('00000000-0000-4000-8000-000000000010',SHIV,'SHIV-1051',{total_amount:'770.00',metadata:{secret:'do not leak'}}));
+  const storeWithUnclassified=scopedStore(WS_A,{invoices:fixtureInvoices,customers,payments});
+  const summary=await createAssistantTools({store:storeWithUnclassified}).execute('getOutstandingSummary');
+  assert.deepEqual(summary.debtors,[{customerId:SHIV,customerName:'Shiv Engineering',currency:'INR',outstandingAmount:'4200.00'},{customerId:APP_REV,customerName:'App Revolution',currency:'USD',outstandingAmount:'6250.00'}]);
+  assert.deepEqual(summary.unclassifiedBalancesByCurrency.INR,{invoiceCount:1,totalAmount:'770.00',amountPaid:'0.00',outstandingAmount:'770.00'});
   assert.doesNotMatch(JSON.stringify(summary),/SECRET-INV|Confidential Foreign Client/);
 });
 

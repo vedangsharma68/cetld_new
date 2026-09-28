@@ -5,7 +5,8 @@ import {authorizeAIWorkspace} from '../ai/store.mjs';
 const workspaceId='11111111-1111-4111-8111-111111111111';
 const userId='33333333-3333-4333-8333-333333333333';
 const customerId='44444444-4444-4444-8444-444444444444';
-const invoice={invoiceNumber:'INV-1048',invoiceDate:'2026-09-01',dueDate:'2026-10-01',currency:'INR',total:118,subtotal:100,tax:18,outstanding:0,notes:'Paid',clientEmail:null,clientPhone:null,alreadyPaid:true,idempotencyKey:'assistant_paid_invoice_1048'};
+const lineItems=[{description:'Labour',quantity:1,unitPrice:25,amount:25,confidence:0.99}];
+const invoice={invoiceNumber:'INV-1048',invoiceDate:'2026-09-01',dueDate:'2026-10-01',currency:'INR',total:118,subtotal:100,tax:18,outstanding:0,notes:'Paid',clientEmail:null,clientPhone:null,lineItems,alreadyPaid:true,idempotencyKey:'assistant_paid_invoice_1048'};
 
 test('paid Assistant invoices use the atomic workspace RPC and never direct payment-table writes',async()=>{
   const calls=[];
@@ -26,6 +27,7 @@ test('paid Assistant invoices use the atomic workspace RPC and never direct paym
   assert.equal(payload.p_customer_id,customerId);
   assert.equal(payload.p_idempotency_key,invoice.idempotencyKey);
   assert.equal(payload.p_total_amount,invoice.total);
+  assert.deepEqual(payload.p_metadata.line_items,lineItems);
   assert.equal(calls.some(call=>call.url.pathname==='/rest/v1/payments'),false);
   await assert.rejects(store.createAssistantInvoice({customerId,invoice}),/PAID_INVOICES_REQUIRE_ATOMIC_SETTLEMENT/);
 });
@@ -45,4 +47,5 @@ test('ordinary Assistant invoice creation relies on database settlement defaults
   const payload=JSON.parse(request.options.body);
   assert.equal(Object.hasOwn(payload,'amount_paid'),false);
   assert.equal(Object.hasOwn(payload,'status'),false);
+  assert.deepEqual(payload.metadata.line_items,lineItems);
 });

@@ -207,6 +207,73 @@ test('workspace AI settings and invoice extraction use the centralized server AP
   assert.doesNotMatch(app, /cetld_primary_ai_model:primaryModel/);
 });
 
+test('New Invoice extraction does not persist line items without an item review control', () => {
+  const items = [
+    { description: 'Labour', quantity: 3, unitPrice: 130, amount: 390, confidence: 0.99 },
+    { description: 'Oil filter', quantity: 1, unitPrice: 20, amount: 20, confidence: 0.98 },
+  ];
+  const form = { dataset: {}, elements: { namedItem: () => null } };
+  const apply = extractedAppFunction('function applyInvoiceExtraction(form,result){', 'async function ingestFile', {
+    setIngestionState() {},
+  });
+  apply(form, { reviewRequired: true, lineItems: { value: items, confidence: 0.98 } });
+  assert.equal(form.dataset.lineItems, '[]');
+});
+
+test('Assistant manual escape aborts extraction and keeps the original file for New Invoice', () => {
+  const file={name:'workshop.png'},controller={aborted:false,abort(){this.aborted=true}},form={};
+  const state={assistantInvoiceFile:file,assistantInvoiceExtractionController:controller,assistantStatus:'loading',assistantError:'',page:'Assistant',pendingFile:null};
+  let opened=false;
+  const continueManually=extractedAppFunction('function continueWithAssistantInvoiceManually(){','async function retryAssistantSync',{
+    state,render(){},invoiceForm(){opened=true;},setIngestionState(){},
+    $:()=>form,
+  });
+  continueManually();
+  assert.equal(controller.aborted,true);
+  assert.equal(state.assistantInvoiceFile,null);
+  assert.equal(state.pendingFile,file);
+  assert.equal(state.page,'Invoices');
+  assert.equal(opened,true);
+  assert.match(app,/const manual=busy&&state\.assistantInvoiceFile[\s\S]*Continue manually now/);
+});
+
+test('late extraction results do not overwrite manually edited invoice fields', () => {
+  const fields = {
+    client: { value: 'Workshop Software', dataset: { userEdited: 'true' } },
+    amount: { value: '', dataset: {} },
+  };
+  const form = { dataset: {}, elements: { namedItem: name => fields[name] || null } };
+  const apply = extractedAppFunction('function applyInvoiceExtraction(form,result){', 'async function ingestFile', {
+    setIngestionState() {},
+  });
+  apply(form, {
+    reviewRequired: true,
+    customerName: { value: 'ABC Electrical' },
+    total: { value: 472.7 },
+    lineItems: { value: [] },
+  });
+  assert.equal(fields.client.value, 'Workshop Software');
+  assert.equal(fields.amount.value, '472.7');
+});
+
+test('editing an invoice keeps its previously extracted itemized lines', () => {
+  const items = [{ description: 'Consulting', quantity: 2, unitPrice: 50, amount: 100, confidence: 0.9 }];
+  const invoice = { id: 'invoice-1', line_items: items, amount_minor: 10000, paid_minor: 0, currency: 'INR' };
+  const form = { dataset: {}, addEventListener() {} };
+  const renderForm = extractedAppFunction('function invoiceForm(id){', 'async function saveInvoice', {
+    state: { pendingFile: null, invoices: [invoice], settings: { default_currency: 'INR' } },
+    openDialog() {},
+    $: () => form,
+    escape: String,
+    remaining: () => 10000,
+    icon: () => '',
+    button: () => '',
+    currencyOptions: () => '',
+  });
+  renderForm(invoice.id);
+  assert.equal(form.dataset.lineItems, JSON.stringify(items));
+});
+
 test('invoice currency is a shared dropdown in manual, edit, extraction review, and Assistant review flows', () => {
   for (const code of ['INR','USD','EUR','GBP','AED','AUD','SGD','CAD','CHF']) {
     assert.match(app, new RegExp(`\\['${code}',`));

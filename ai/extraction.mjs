@@ -22,6 +22,7 @@ const FIELD_SCHEMA = {
   },
 };
 const nullable = (type) => ({ anyOf: [{ type }, { type: 'null' }] });
+const nullableNonNegativeNumber = () => ({anyOf: [{type: 'number', minimum: 0}, {type: 'null'}]});
 const responseSchema = {
   type: 'object',
   additionalProperties: false,
@@ -45,9 +46,9 @@ const responseSchema = {
       properties: {
         value: {type: 'array', maxItems: 100, items: {type: 'object', additionalProperties: false, required: LINE_ITEM_FIELDS, properties: {
           description: {type: 'string', maxLength: 500},
-          quantity: {type: 'number', minimum: 0},
-          unitPrice: {type: 'number', minimum: 0},
-          amount: {type: 'number', minimum: 0},
+          quantity: nullableNonNegativeNumber(),
+          unitPrice: nullableNonNegativeNumber(),
+          amount: nullableNonNegativeNumber(),
           confidence: {type: 'number', minimum: 0, maximum: 1},
         }}},
         confidence: {type: 'number', minimum: 0, maximum: 1},
@@ -216,9 +217,15 @@ function validateAndSanitize(raw) {
     warnings.push('Outstanding amount exceeds total.');
     uncertainFields.add('outstandingAmount');
   }
-  if (subtotal !== null && tax !== null && total !== null && Math.abs(subtotal + tax - total) > (0.5 / (10 ** digits))) {
-    warnings.push('Subtotal plus tax does not match total.');
-    uncertainFields.add('total');
+  if (subtotal !== null && tax !== null && total !== null) {
+    const scale = 10 ** digits;
+    const adjustmentMinor = Math.round(total * scale) - Math.round(subtotal * scale) - Math.round(tax * scale);
+    if (Math.abs(adjustmentMinor) === 1) {
+      warnings.push('Subtotal and tax differ from total by one minor currency unit; verify the printed rounding adjustment against the original.');
+    } else if (Math.abs(adjustmentMinor) > 1) {
+      warnings.push('Subtotal plus tax does not match total.');
+      uncertainFields.add('total');
+    }
   }
   if (total === 0) {
     warnings.push('Zero total cannot create an open receivable or follow-up.');
@@ -241,7 +248,7 @@ function validateAndSanitize(raw) {
     const description = field(item.description, 'string', `lineItems[${index}].description`, warnings);
     if (description === null) fail(`lineItems[${index}].description is required`);
     const quantity = item.quantity;
-    if (typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity < 0) fail(`lineItems[${index}].quantity must be finite and non-negative`);
+    if (quantity !== null && (typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity < 0)) fail(`lineItems[${index}].quantity must be finite, non-negative, or null`);
     const unitPrice = field(item.unitPrice, 'number', `lineItems[${index}].unitPrice`, warnings);
     const amount = field(item.amount, 'number', `lineItems[${index}].amount`, warnings);
     const confidence = finiteConfidence(item.confidence, `lineItems[${index}]`);
@@ -251,6 +258,18 @@ function validateAndSanitize(raw) {
     return {description, quantity, unitPrice, amount, confidence};
   });
   if (sanitizedLineItems.length === 0 || lineItemsConfidence < CONFIDENCE_THRESHOLD) uncertainFields.add('lineItems');
+  if (subtotal !== null && sanitizedLineItems.length && sanitizedLineItems.every(item => item.amount !== null)) {
+    const scale = 10 ** digits;
+    const itemSumMinor = sanitizedLineItems.reduce((sum, item) => sum + Math.round(item.amount * scale), 0);
+    const subtotalMinor = Math.round(subtotal * scale);
+    const differenceMinor = Math.abs(itemSumMinor - subtotalMinor);
+    if (differenceMinor === 1) {
+      warnings.push('Extracted line items differ from subtotal by one minor currency unit; verify any printed rounding adjustment against the original.');
+    } else if (differenceMinor > 1) {
+      warnings.push('Extracted line-item amounts do not match the printed subtotal; discounts, freight, or omitted items may explain the difference, so verify the original.');
+      uncertainFields.add('lineItems');
+    }
+  }
 
   return {
     ...result,
@@ -272,7 +291,7 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
     schema: responseSchema,
     name: 'invoice_extraction',
     validate,
-    maxTokens: 900,
+    maxTokens: 8192,
 
   });
   if (!response || typeof response !== 'object' || !Object.hasOwn(response, 'data')) fail('provider returned a malformed response');

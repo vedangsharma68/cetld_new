@@ -20,8 +20,8 @@ const definitions = [
     limit: { type: "integer", minimum: 1, maximum: MAX_PAGE_SIZE }, offset: { type: "integer", minimum: 0, maximum: MAX_OFFSET },
     invoiceId: { type: "string", format: "uuid" }, paidAtFrom: { type: "string", format: "date" }, paidAtTo: { type: "string", format: "date" },
   }),
-  tool("getOutstandingSummary", "Summarize remaining invoice balances grouped by currency. Uses invoices.amount_paid, not a sum of payment records.", {}),
-  tool("getOverdueInvoices", "List unpaid, non-draft invoices whose due date is before today's UTC date, optionally in an inclusive due-date range, grouped by currency in the summary.", {dueDateFrom:{type:'string',format:'date'},dueDateTo:{type:'string',format:'date'}}),
+  tool("getOutstandingSummary", "Summarize the full unpaid ledger by currency, including drafts. Only issued rows marked receivable are confirmed customer receivables; separate draft, payable, and unclassified-direction balances for review. Uses invoices.amount_paid, not payment rows.", {}),
+  tool("getOverdueInvoices", "List unpaid invoices whose due date is before today's UTC date, optionally in an inclusive due-date range, grouped by currency in the summary. The browser ledger uses the viewer's local date, so results may differ around midnight. Draft invoices are included as past-due records, but they have not been issued in Cetld.", {dueDateFrom:{type:'string',format:'date'},dueDateTo:{type:'string',format:'date'}}),
   tool("getActivity", "Show invoice creation/update timestamps and recorded payment transactions. No verified follow-up event log is available; safe follow-up metadata is only a current invoice snapshot.", {
     invoiceId: { type: "string", format: "uuid" }, limit: { type: "integer", minimum: 1, maximum: MAX_PAGE_SIZE },
   }),
@@ -166,10 +166,14 @@ function safeInvoice(invoice) {
   const paid = cents(invoice.amount_paid, "amount_paid");
   if (paid > total) throw new TypeError("Invoice amount_paid exceeds total_amount");
   const isFullyPaid = total > 0n && paid >= total;
+  const metadata = invoice.metadata;
+  const taxMinor = integerMetadata(metadata, ["tax_minor"]);
   return {
     id: invoice.id, invoiceNumber: invoice.invoice_number, customerId: invoice.customer_id,
     issueDate: invoice.issue_date, dueDate: invoice.due_date, currency: invoice.currency,
-    subtotal: decimalMetadata(invoice.metadata?.subtotal), tax: decimalMetadata(invoice.metadata?.tax),
+    subtotal: decimalMetadata(metadata?.subtotal), tax: taxMinor === null ? decimalMetadata(metadata?.tax) : money(BigInt(taxMinor)),
+    invoiceDirection: safeInvoiceDirection(metadata),
+    lineItemCount: Array.isArray(metadata?.line_items) ? metadata.line_items.length : null,
     totalAmount: String(invoice.total_amount), amountPaid: String(invoice.amount_paid), outstandingAmount: money(total - paid),
     paymentStatus: isFullyPaid ? "paid" : paid > 0n ? "partially_paid" : "unpaid", isFullyPaid,
     status: invoice.status, invoiceStatus: invoice.status, notes: safeText(invoice.notes, 4000),
@@ -193,6 +197,35 @@ function stringMetadata(metadata, keys, maximum = 500) {
     if (value) return value;
   }
   return null;
+}
+
+function safeInvoiceDirection(metadata) {
+  const direction = stringMetadata(metadata, ["invoice_direction"], 20)?.toLowerCase();
+  return ["receivable", "payable", "uncertain"].includes(direction) ? direction : null;
+}
+
+function normalizedInvoiceMetadata(metadata) {
+  const source = Array.isArray(metadata?.line_items) ? metadata.line_items : [];
+  const lineItems = source.slice(0, 100).flatMap(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const quantity = typeof item.quantity === "number" && Number.isFinite(item.quantity) && item.quantity >= 0 && item.quantity <= 1_000_000
+      ? Number(item.quantity.toFixed(4)) : null;
+    const normalized = cleanObject({
+      description: safeText(item.description, 500),
+      quantity,
+      unitPrice: decimalMetadata(item.unitPrice),
+      amount: decimalMetadata(item.amount),
+    });
+    return Object.keys(normalized).length ? [normalized] : [];
+  });
+  return cleanObject({
+    sellerName: safeText(metadata?.seller_name, 255),
+    buyerName: safeText(metadata?.buyer_name, 255),
+    paymentInformation: safeText(metadata?.payment_information, 1000),
+    invoiceDirection: safeInvoiceDirection(metadata),
+    lineItems,
+    lineItemsTruncated: source.length > 100,
+  });
 }
 
 function integerMetadata(metadata, keys) {
@@ -305,6 +338,7 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
     const paymentTotal = visiblePayments.reduce((total, payment) => total + cents(payment.amount, "payment amount"), 0n);
     const context = cleanObject({
       ...normalized,
+      ...normalizedInvoiceMetadata(invoice.metadata),
       customerName: customer?.company_name || customer?.name || null,
       customer: customer ? {
         name: customer.name, companyName: customer.company_name, email: customer.email, phone: customer.phone,
@@ -392,27 +426,45 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
       case "getOutstandingSummary": {
         strictArgs(rawArgs, []);
         const invoices = await query(store, "invoices", INVOICE_SELECT, { order: "id.asc" });
-        const applicable = invoices.filter((invoice) => !["draft", "void", "cancelled"].includes(invoice.status));
+        const positiveBalance = invoice => {
+          const total = cents(invoice.total_amount, "total_amount");
+          const paid = cents(invoice.amount_paid, "amount_paid");
+          if (paid > total) throw new TypeError("Invoice amount_paid exceeds total_amount");
+          return total - paid;
+        };
+        const applicable = invoices.filter((invoice) => !["void", "cancelled"].includes(invoice.status) && positiveBalance(invoice) > 0n);
+        const confirmedReceivables = applicable.filter(invoice => ["sent", "overdue"].includes(invoice.status) && safeInvoiceDirection(invoice.metadata) === "receivable" && positiveBalance(invoice) > 0n);
+        const drafts = applicable.filter(invoice => invoice.status === "draft" && positiveBalance(invoice) > 0n);
+        const payables = applicable.filter(invoice => safeInvoiceDirection(invoice.metadata) === "payable" && ["sent", "overdue"].includes(invoice.status) && positiveBalance(invoice) > 0n);
+        const unclassified = applicable.filter(invoice => safeInvoiceDirection(invoice.metadata) !== "receivable" && safeInvoiceDirection(invoice.metadata) !== "payable" && positiveBalance(invoice) > 0n);
         const customers = await query(store, 'customers', 'id,name,company_name');
         const names = new Map(customers.map(c => [c.id, c.company_name || c.name]));
         const grouped = new Map();
-        for (const invoice of applicable) {
-          const balance = cents(invoice.total_amount, 'total_amount') - cents(invoice.amount_paid, 'amount_paid');
-          if (balance <= 0n) continue;
+        for (const invoice of confirmedReceivables) {
+          const balance = positiveBalance(invoice);
           const key = invoice.customer_id + ':' + currencyCode(invoice.currency);
           const row = grouped.get(key) ?? {customerId: invoice.customer_id, customerName: names.get(invoice.customer_id) ?? null, currency: invoice.currency, balance: 0n};
           row.balance += balance; grouped.set(key, row);
         }
         const debtors = [...grouped.values()].sort((a,b) => a.currency.localeCompare(b.currency) || (a.balance > b.balance ? -1 : a.balance < b.balance ? 1 : a.customerId.localeCompare(b.customerId)));
         const leaders = debtors.filter((row,index) => index === 0 || row.currency !== debtors[index - 1].currency);
-        return { basis: "invoices.amount_paid", currencies: groupInvoiceAmounts(applicable), debtors: leaders.map(({balance,...row}) => ({...row,outstandingAmount: money(balance)})), debtorCount: debtors.length, complete:true, truncated:false };
+        return {
+          basis: "invoices.amount_paid; draft and unclassified balances require review",
+          currencies: groupInvoiceAmounts(applicable),
+          confirmedReceivablesByCurrency: groupInvoiceAmounts(confirmedReceivables),
+          draftBalancesByCurrency: groupInvoiceAmounts(drafts),
+          payablesByCurrency: groupInvoiceAmounts(payables),
+          unclassifiedBalancesByCurrency: groupInvoiceAmounts(unclassified),
+          debtors: leaders.map(({balance,...row}) => ({...row,outstandingAmount: money(balance)})),
+          debtorCount: debtors.length, complete:true, truncated:false,
+        };
       }
       case "getOverdueInvoices": {
         const args = strictArgs(rawArgs, ['dueDateFrom','dueDateTo']);
         const bounds = dateBounds(args.dueDateFrom,args.dueDateTo,'dueDateFrom','dueDateTo');
         const todayUtc = isoDay(clock);
         const invoices = await query(store, "invoices", INVOICE_SELECT, { order: "id.asc" });
-        const overdue = invoices.filter((invoice) => invoice.due_date && invoice.due_date < todayUtc && withinDateBounds(invoice.due_date,bounds) && !["draft", "paid", "void", "cancelled"].includes(invoice.status) && cents(invoice.amount_paid, "amount_paid") < cents(invoice.total_amount, "total_amount"));
+        const overdue = invoices.filter((invoice) => invoice.due_date && invoice.due_date < todayUtc && withinDateBounds(invoice.due_date,bounds) && !["paid", "void", "cancelled"].includes(invoice.status) && cents(invoice.amount_paid, "amount_paid") < cents(invoice.total_amount, "total_amount"));
         const overdueCustomers = await customersForInvoices(overdue);
         const balances = overdue.map((invoice) => ({ ...safeInvoice(invoice), customerName: overdueCustomers.get(invoice.customer_id)?.company_name || overdueCustomers.get(invoice.customer_id)?.name || null, outstandingAmount: money(cents(invoice.total_amount, "total_amount") - cents(invoice.amount_paid, "amount_paid")) }));
         balances.sort((a,b) => a.dueDate.localeCompare(b.dueDate) || a.id.localeCompare(b.id));

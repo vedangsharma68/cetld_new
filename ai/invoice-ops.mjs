@@ -1,8 +1,9 @@
 import {APIError, object, uuid} from './http.mjs';
 import {AMOUNT_PRECISION_MESSAGE,CURRENCY_SUPPORT_MESSAGE,isSupportedCurrency} from '../currency-contract.mjs';
 
-const INPUT_FIELDS = ['invoiceNumber', 'clientName', 'clientEmail', 'clientPhone', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total', 'outstanding', 'currency', 'notes', 'alreadyPaid', 'direction'];
+const INPUT_FIELDS = ['invoiceNumber', 'clientName', 'clientEmail', 'clientPhone', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total', 'outstanding', 'currency', 'notes', 'alreadyPaid', 'direction', 'lineItems'];
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const LINE_ITEM_FIELDS = ['description', 'quantity', 'unitPrice', 'amount', 'confidence'];
 
 function dateValue(value) {
   if (typeof value !== 'string' || !DATE.test(value)) return false;
@@ -22,6 +23,25 @@ function amount(value, required = false) {
   const n = Number(text);
   if (!Number.isFinite(n) || n < 0 || !Number.isSafeInteger(Math.round(n * 100))) throw new APIError(422, 'INVALID_INVOICE_AMOUNT');
   return n;
+}
+
+function lineItems(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 100) throw new APIError(422, 'INVALID_INVOICE_LINE_ITEMS');
+  return value.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some(key => !LINE_ITEM_FIELDS.includes(key))) throw new APIError(422, 'INVALID_INVOICE_LINE_ITEMS');
+    const description = typeof item.description === 'string' ? item.description.trim() : '';
+    if (!description || description.length > 500) throw new APIError(422, 'INVALID_INVOICE_LINE_ITEMS');
+    const numeric = (key, monetary = false) => {
+      const entry = item[key];
+      if (entry === null || entry === undefined) return null;
+      if (typeof entry !== 'number' || !Number.isFinite(entry) || entry < 0 || monetary && (!Number.isSafeInteger(Math.round(entry * 100)) || Math.abs(entry * 100 - Math.round(entry * 100)) > 1e-7)) throw new APIError(422, 'INVALID_INVOICE_LINE_ITEMS');
+      return entry;
+    };
+    const confidence = item.confidence === null || item.confidence === undefined ? null : item.confidence;
+    if (confidence !== null && (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1)) throw new APIError(422, 'INVALID_INVOICE_LINE_ITEMS');
+    return {description, quantity: numeric('quantity'), unitPrice: numeric('unitPrice', true), amount: numeric('amount', true), confidence};
+  });
 }
 
 export function validateAssistantInvoice(value) {
@@ -56,11 +76,12 @@ export function validateAssistantInvoice(value) {
   const phone = value.clientPhone == null ? null : String(value.clientPhone).trim();
   if (phone && phone.length > 40) throw new APIError(422, 'INVALID_CLIENT_PHONE');
   const notes = value.notes == null ? null : String(value.notes).trim().slice(0, 2000) || null;
+  const items = lineItems(value.lineItems);
   if (value.alreadyPaid !== undefined && typeof value.alreadyPaid !== 'boolean') throw new APIError(422, 'INVALID_PAID_STATE');
   const alreadyPaid = value.alreadyPaid === true;
   if (alreadyPaid && outstanding !== null && outstanding !== 0) throw new APIError(422, 'PAID_INVOICE_HAS_OUTSTANDING_BALANCE');
   if (!alreadyPaid && outstanding !== null && outstanding !== total) throw new APIError(422, 'PARTIAL_BALANCE_REQUIRES_PAYMENT_RECORD');
-  return {invoiceNumber, clientName, clientEmail: email || null, clientPhone: phone || null, invoiceDate: value.invoiceDate, dueDate: value.dueDate, subtotal, tax, total, outstanding: alreadyPaid ? 0 : total, currency, notes, alreadyPaid, direction: 'receivable', missingDueDate};
+  return {invoiceNumber, clientName, clientEmail: email || null, clientPhone: phone || null, invoiceDate: value.invoiceDate, dueDate: value.dueDate, subtotal, tax, total, outstanding: alreadyPaid ? 0 : total, currency, notes, lineItems: items, alreadyPaid, direction: 'receivable', missingDueDate};
 }
 
 function responseInvoice(row) {
@@ -131,7 +152,7 @@ export async function retryAssistantInvoiceSync({store, invoiceId, accounting} =
   const metadata = row.metadata || {};
   if (metadata.bookkeeping_record_id && metadata.bookkeeping_sync_status === 'synced') return {saved: true, invoice: responseInvoice(row), sync: {status: 'synced', provider: metadata.bookkeeping_provider || null, externalId: metadata.bookkeeping_record_id, retryable: false}, idempotent: true};
   const customer = (await store.query('customers', {select: 'id,workspace_id,name,email,phone', filters: {id: `eq.${row.customer_id}`}, limit: 1}))[0];
-  const invoice = {invoiceNumber: row.invoice_number, clientName: customer?.name || '', clientEmail: customer?.email || null, clientPhone: customer?.phone || null, invoiceDate: row.issue_date, dueDate: row.due_date, currency: row.currency, total: Number(row.total_amount), subtotal: metadata.subtotal ?? null, tax: metadata.tax ?? null, outstanding: Number(row.total_amount) - Number(row.amount_paid || 0), notes: row.notes || null, alreadyPaid: row.status === 'paid'};
+  const invoice = {invoiceNumber: row.invoice_number, clientName: customer?.name || '', clientEmail: customer?.email || null, clientPhone: customer?.phone || null, invoiceDate: row.issue_date, dueDate: row.due_date, currency: row.currency, total: Number(row.total_amount), subtotal: metadata.subtotal ?? null, tax: metadata.tax ?? null, outstanding: Number(row.total_amount) - Number(row.amount_paid || 0), notes: row.notes || null, lineItems: Array.isArray(metadata.line_items) ? metadata.line_items : [], alreadyPaid: row.status === 'paid'};
   const synced = await syncSavedInvoice({store, invoice, row, accounting});
   return {saved: true, invoice: responseInvoice(synced.row), sync: synced.sync, idempotent: true};
 }

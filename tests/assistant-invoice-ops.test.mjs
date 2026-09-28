@@ -60,6 +60,17 @@ test('one-cent printed rounding adjustment may be saved after review',async()=>{
   assert.equal(store.createdInput.invoice.total,118);
 });
 
+test('validated Assistant invoices keep bounded itemization and reject malformed item values',()=>{
+  const lineItems=[{description:' Labour ',quantity:3,unitPrice:130,amount:390,confidence:0.99}];
+  assert.deepEqual(validateAssistantInvoice({...base,lineItems}).lineItems,[{description:'Labour',quantity:3,unitPrice:130,amount:390,confidence:0.99}]);
+  for(const invalid of [
+    [{description:'Oil',quantity:-1,unitPrice:10,amount:10}],
+    [{description:'Oil',quantity:1,unitPrice:10.001,amount:10}],
+    [{description:'Oil',quantity:1,unitPrice:10,amount:10,extra:'ignored'}],
+    Array.from({length:101},()=>({description:'Item',quantity:1,unitPrice:1,amount:1})),
+  ]) assert.throws(()=>validateAssistantInvoice({...base,lineItems:invalid}),error=>error.code==='INVALID_INVOICE_LINE_ITEMS');
+});
+
 test('partial outstanding requires a payment record before an invoice can be saved',async()=>{
   let calls=0;
   const store=new Proxy({}, {get(){calls++;return async()=>null}});

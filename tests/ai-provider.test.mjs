@@ -215,12 +215,12 @@ test('structured JSON uses Gemini schema configuration and returns validated dat
   assert.deepEqual(result.data,{value:'clean'});assert.equal(result.model,DEFAULT_MODEL);assert.equal(result.usedFallback,false);
 });
 
-test('malformed or oversized structured output is rejected without retry or fallback',async()=>{
+test('malformed or oversized structured output is rejected when fallback is disabled',async()=>{
   let calls=0;
-  const malformed=provider(async()=>{calls++;return gemini('not json')});
+  const malformed=provider(async()=>{calls++;return gemini('not json')},{fallbackModel:null});
   await assert.rejects(malformed.generateStructured({messages:[{role:'user',content:'Return data'}],name:'sample',schema:{type:'object'},validate:value=>value}),error=>error.code==='INVALID_OUTPUT');
   assert.equal(calls,1);
-  const oversized=provider(async()=>{calls++;return gemini('{"value":"x"}')});
+  const oversized=provider(async()=>{calls++;return gemini('{"value":"x"}')},{fallbackModel:null});
   await assert.rejects(oversized.generateStructured({messages:[{role:'user',content:'Return data'}],name:'sample',schema:{type:'object'},validate:()=>({value:'x'.repeat(256*1024+1)})}),error=>error.code==='INVALID_OUTPUT');
   assert.equal(calls,2);
 });

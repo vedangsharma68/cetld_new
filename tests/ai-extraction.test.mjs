@@ -127,7 +127,7 @@ test('extracts PDFs through the shared file-part contract for Gemini provider ad
     inspect: (options) => { captured = options; },
   });
   assert.equal(captured.name,'invoice_extraction');
-  assert.equal(captured.maxTokens,900);
+  assert.equal(captured.maxTokens,8192);
   assert.equal(captured.plugins,undefined);
   const parts = captured.messages[0].content;
   assert.equal(parts[1].type, 'file');
@@ -159,4 +159,32 @@ test('flags arithmetic inconsistencies for review and caps line items', async ()
   assert.ok(result.warnings.some((warning) => /Subtotal plus tax/.test(warning)));
   const tooMany = Array.from({ length: 101 }, () => ({ description: 'x', quantity: 1, unitPrice: 1, amount: 1, confidence: 0.9 }));
   await assert.rejects(run(response({ lineItems: { value: tooMany, confidence: 0.9 } })), /at most 100/);
+});
+
+test('treats a one-cent printed rounding difference as reviewable rather than a mismatch', async () => {
+  const result = await run(response({
+    subtotal: { value: 430.61, confidence: 0.99 },
+    tax: { value: 42.10, confidence: 0.99 },
+    total: { value: 472.70, confidence: 0.99 },
+  }));
+  assert.ok(result.warnings.some(warning => /one minor currency unit.*rounding adjustment/i.test(warning)));
+  assert.equal(result.warnings.some(warning => /Subtotal plus tax does not match total/i.test(warning)), false);
+  assert.equal(result.uncertainFields.includes('total'), false);
+});
+
+test('flags material line-item sum differences from the printed subtotal', async () => {
+  const result = await run(response({
+    subtotal: { value: 106, confidence: 0.99 },
+  }));
+  assert.ok(result.warnings.some(warning => /line-item amounts do not match the printed subtotal/i.test(warning)));
+  assert.ok(result.uncertainFields.includes('lineItems'));
+});
+
+test('keeps unreadable line-item numbers null and marks itemization uncertain', async () => {
+  const result = await run(response({lineItems: {
+    value: [{description: 'Air hose', quantity: null, unitPrice: null, amount: null, confidence: 0.4}],
+    confidence: 0.4,
+  }}));
+  assert.deepEqual(result.lineItems.value[0], {description: 'Air hose', quantity: null, unitPrice: null, amount: null, confidence: 0.4});
+  assert.ok(result.uncertainFields.includes('lineItems'));
 });

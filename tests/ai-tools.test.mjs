@@ -104,23 +104,28 @@ test('live Zoho read tool returns currency major-units and never provider raw da
 
 test("outstanding math is decimal-exact and grouped by currency without summing payments", async () => {
   const store = makeStore({ invoices: [
-    invoice(INV_1, { total_amount: "0.30", amount_paid: "0.10", currency: "USD" }),
-    invoice(INV_2, { total_amount: "0.20", amount_paid: "0.20", currency: "USD", status: "paid" }),
-    invoice("33333333-3333-4333-8333-333333333333", { total_amount: "100.00", amount_paid: "20.00", currency: "EUR" }),
+    invoice(INV_1, { total_amount: "0.30", amount_paid: "0.10", currency: "USD", metadata: { invoice_direction: "receivable" } }),
+    invoice(INV_2, { total_amount: "0.20", amount_paid: "0.20", currency: "USD", status: "paid", metadata: { invoice_direction: "receivable" } }),
+    invoice("33333333-3333-4333-8333-333333333333", { total_amount: "100.00", amount_paid: "20.00", currency: "EUR", metadata: { secret: "do not include" } }),
     invoice("44444444-4444-4444-8444-444444444444", { status: "draft", total_amount: "900.00" }),
   ], payments: [{ id: "p1", workspace_id: WS_A, invoice_id: INV_1, amount: "7.77", paid_at: "2026-09-10T00:00:00.000Z" }] });
   const tools = createAssistantTools({ store });
   const summary = await tools.execute("getOutstandingSummary", {});
-  assert.equal(summary.basis, "invoices.amount_paid");
-  assert.deepEqual(summary.currencies.USD, { invoiceCount: 2, totalAmount: "0.50", amountPaid: "0.30", outstandingAmount: "0.20" });
+  assert.equal(summary.basis, "invoices.amount_paid; draft and unclassified balances require review");
+  assert.deepEqual(summary.currencies.USD, { invoiceCount: 1, totalAmount: "0.30", amountPaid: "0.10", outstandingAmount: "0.20" });
   assert.deepEqual(summary.currencies.EUR, { invoiceCount: 1, totalAmount: "100.00", amountPaid: "20.00", outstandingAmount: "80.00" });
-  assert.equal(summary.currencies.INR, undefined, "drafts do not count toward outstanding summary");
+  assert.deepEqual(summary.currencies.INR, { invoiceCount: 1, totalAmount: "900.00", amountPaid: "0.00", outstandingAmount: "900.00" });
+  assert.deepEqual(summary.confirmedReceivablesByCurrency.USD, { invoiceCount: 1, totalAmount: "0.30", amountPaid: "0.10", outstandingAmount: "0.20" });
+  assert.deepEqual(summary.unclassifiedBalancesByCurrency.EUR, { invoiceCount: 1, totalAmount: "100.00", amountPaid: "20.00", outstandingAmount: "80.00" });
+  assert.deepEqual(summary.draftBalancesByCurrency.INR, { invoiceCount: 1, totalAmount: "900.00", amountPaid: "0.00", outstandingAmount: "900.00" });
+  assert.equal(summary.debtors.length, 1, "unknown-direction balances must not be called customer debt");
+  assert.equal(summary.debtors[0].currency, "USD");
   const collected = await tools.execute("getPayments", {});
   assert.deepEqual(collected.totalsByCurrency, {USD: '7.77'});
   assert.equal(collected.payments[0].currency, 'USD');
 });
 
-test("overdue uses UTC calendar date, excludes due-today, paid, draft and zero balances", async () => {
+test("overdue uses UTC date and includes past-due drafts while excluding paid and zero balances", async () => {
   const store = makeStore({ invoices: [
     invoice(INV_1, { due_date: "2026-09-21", status: "overdue", total_amount: "10.00", amount_paid: "2.00" }),
     invoice(INV_2, { due_date: "2026-09-22", status: "sent" }),
@@ -131,9 +136,9 @@ test("overdue uses UTC calendar date, excludes due-today, paid, draft and zero b
   const tools = createAssistantTools({ store, clock: () => new Date("2026-09-21T23:59:59-07:00") });
   const overdue = await tools.execute("getOverdueInvoices", {});
   assert.equal(overdue.asOfUtcDate, "2026-09-22");
-  assert.equal(overdue.count, 1);
-  assert.equal(overdue.invoices[0].id, INV_1);
-  assert.deepEqual(overdue.balancesByCurrency.INR, { invoiceCount: 1, totalAmount: "10.00", amountPaid: "2.00", outstandingAmount: "8.00" });
+  assert.equal(overdue.count, 2);
+  assert.deepEqual(overdue.invoices.map(row => [row.id, row.invoiceStatus]), [["55555555-5555-4555-8555-555555555555", "draft"], [INV_1, "overdue"]]);
+  assert.deepEqual(overdue.balancesByCurrency.INR, { invoiceCount: 2, totalAmount: "11.00", amountPaid: "2.00", outstandingAmount: "9.00" });
 });
 
 test("date filters are validated, inclusive on UTC dates, and bounded before pagination", async () => {
