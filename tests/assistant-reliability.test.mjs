@@ -30,6 +30,68 @@ test('short conversational questions return immediately without planning tools',
   assert.equal(calls, 0);
 });
 
+test('short acknowledgements, including ok then, are answered without planner or tool calls', async () => {
+  for (const message of ['ok then', 'okay then', 'ok', 'okay', 'alright', 'all right', 'yep', 'yup', 'got it', 'understood', 'noted', 'thanks', 'thank you', 'sounds good', 'no problem']) {
+    let calls = 0;
+    const result = await answerWorkspaceQuestion({
+      provider: {generate: async () => { calls++; throw new Error('an acknowledgement must not need the model'); }},
+      store,
+      message,
+    });
+    assert.equal(calls, 0, `${message} should be answered without the model`);
+    assert.match(result.answer, /(?:okay|alright|welcome|here if you need)/i, `${message} should get a natural conversational reply`);
+    assert.equal(result.evidence.source, 'Cetld workspace');
+    assert.deepEqual(result.evidence.records, []);
+  }
+});
+
+test('recognized non-financial prompts get a safe scope reply when the planner returns no tool call', async () => {
+  const result = await answerWorkspaceQuestion({
+    provider:{generate:async()=>({content:'A joke from the model.',toolCalls:[]})},
+    store,
+    message:'Tell me a joke',
+  });
+  assert.match(result.answer, /focused on invoices, payments, customers, and balances/i);
+  assert.doesNotMatch(result.answer, /A joke from the model|INVALID_ASSISTANT_PLAN/);
+  assert.equal(result.model, null);
+  assert.equal(result.evidence.complete, false);
+});
+
+test('invalid planner output for a financial question returns an incomplete, claim-free answer', async () => {
+  const result = await answerWorkspaceQuestion({provider:{generate:async()=>({content:'Here is a guess.'})},store,message:'What is outstanding?'});
+  assert.match(result.answer, /couldn’t safely check that just now/i);
+  assert.doesNotMatch(result.answer, /guess|outstanding|\d|INR|USD/i);
+  assert.equal(result.evidence.complete, false);
+  assert.deepEqual(result.evidence.records, []);
+});
+
+test('malformed and unsupported tool plans do not expose planner error codes', async () => {
+  for (const plan of [
+    {toolCalls:[null]},
+    {toolCalls:[{function:{name:'unknownTool',arguments:'{}'}}]},
+    {toolCalls:[{function:{name:'getOverdueInvoices',arguments:'not-json'}}]},
+  ]) {
+    const result = await answerWorkspaceQuestion({provider:{generate:async()=>plan},store,message:'List overdue invoices'});
+    assert.match(result.answer, /couldn’t safely check that just now/i);
+    assert.doesNotMatch(result.answer, /TOOL_NOT_ALLOWED|INVALID_TOOL_ARGUMENTS|INVALID_ASSISTANT_PLAN/);
+    assert.equal(result.evidence.complete, false);
+    assert.deepEqual(result.evidence.records, []);
+  }
+});
+
+test('invalid invoice proposal planning never implies that an invoice was created or changed', async () => {
+  const result = await answerWorkspaceQuestion({
+    provider:{generate:async()=>({toolCalls:[]})},
+    store,
+    accounting:{readZohoData:async()=>({records:[]})},
+    message:'Create an invoice for Arbor & Finch',
+  });
+  assert.match(result.answer, /couldn’t safely prepare that invoice request/i);
+  assert.match(result.answer, /No change was made/i);
+  assert.equal(result.pendingAction, null);
+  assert.equal(result.evidence.complete, false);
+});
+
 test('final answer guidance favors brief direct answers and preserves financial caveats', async () => {
   const provider = plannedProvider('getOutstandingSummary');
   await answerWorkspaceQuestion({provider, store, message: 'What is outstanding?' });

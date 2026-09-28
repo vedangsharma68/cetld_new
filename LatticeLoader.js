@@ -5,7 +5,7 @@ const PATTERNS = {
   ripple: {3: {cells: [2, 1, 2, 1, 0, 1, 2, 1, 2], loop: 4.8, scale: 1.5}},
   spiral: {3: {cells: [0, 1, 2, 7, 8, 3, 6, 5, 4], loop: 9, scale: 1.2, lit: 0.35}},
   orbit: {
-    3: {cells: [0, 1, 2, 7, null, 3, 6, 5, 4], loop: 8, scale: 1.2},
+    3: {cells: [0, 1, 2, 7, null, 3, 6, 5, 4], loop: 8, scale: 1},
     4: {cells: [0, 1, 2, 3, 11, null, null, 4, 10, null, null, 5, 9, 8, 7, 6], loop: 6, scale: 1.2, lit: 0.45},
   },
   snake: {
@@ -33,7 +33,8 @@ export function LatticeLoader({
 } = {}) {
   const n = grid === 4 ? 4 : 3;
   const resolvedStatus = ['working', 'done', 'error'].includes(status) ? status : 'working';
-  const named = PATTERNS[pattern]?.[n] || PATTERNS[n === 3 ? 'orbit' : 'sweep'][n];
+  const patternName = typeof pattern === 'string' && PATTERNS[pattern]?.[n] ? pattern : n === 3 ? 'orbit' : 'sweep';
+  const named = PATTERNS[patternName][n];
   const pat = typeof pattern === 'object' && Array.isArray(pattern?.cells)
     ? {cells: Array.from({length: n * n}, (_, i) => pattern.cells[i] ?? null), loop: pattern.loop ?? 8, scale: pattern.scale ?? 1, lit: pattern.lit ?? 0.62}
     : named;
@@ -44,5 +45,5 @@ export function LatticeLoader({
   const seconds = size(elapsed, 0).toFixed(1);
   const spoken = resolvedStatus === 'working' ? `${label}, in progress` : `${resolvedStatus === 'done' ? doneLabel : errorLabel}${showTimer ? ` ${seconds} seconds` : ''}`;
   const css = `--ll-n:${n};--ll-cell:${size(cellSize, 6)}px;--ll-gap:${size(gap, 2)}px;--ll-font:${size(fontSize, 14)}px;--ll-color:${escape(color)};--ll-mark:${escape(resolvedStatus === 'error' ? errorColor : doneColor)};--ll-idle:${Math.min(1, size(idleOpacity, 0.15))};--ll-glow:${escape(glowColor || color)};--ll-mark-glow:${escape(glowColor || (resolvedStatus === 'error' ? errorColor : doneColor))};--ll-cycle:${cycle}ms`;
-  return `<span role="status" class="lattice-loader${className ? ` ${escape(className)}` : ''}" data-status="${resolvedStatus}" data-shape="${shape === 'square' ? 'square' : 'round'}"${glow ? ' data-glow=""' : ''} style="${css}"><span class="lattice-loader__grid" aria-hidden="true"><span class="lattice-loader__layer lattice-loader__run">${cells}</span><span class="lattice-loader__layer lattice-loader__mark">${mark}</span></span><span class="lattice-loader__label" aria-hidden="true"><span class="lattice-loader__text"${resolvedStatus === 'working' ? ' data-active=""' : ''}>${escape(label)}</span><span class="lattice-loader__text"${resolvedStatus === 'done' ? ' data-active=""' : ''}>${escape(doneLabel)}</span><span class="lattice-loader__text"${resolvedStatus === 'error' ? ' data-active=""' : ''}>${escape(errorLabel)}</span></span>${showTimer ? `<span class="lattice-loader__timer" aria-hidden="true">${seconds}s</span>` : ''}<span class="lattice-loader__sr">${escape(spoken)}</span></span>`;
+  return `<span role="status" class="lattice-loader${className ? ` ${escape(className)}` : ''}" data-status="${resolvedStatus}" data-pattern="${typeof pattern === 'object' ? 'custom' : patternName}" data-shape="${shape === 'square' ? 'square' : 'round'}"${glow ? ' data-glow=""' : ''} style="${css}"><span class="lattice-loader__grid" aria-hidden="true"><span class="lattice-loader__layer lattice-loader__run">${cells}</span><span class="lattice-loader__layer lattice-loader__mark">${mark}</span></span><span class="lattice-loader__label" aria-hidden="true"><span class="lattice-loader__text"${resolvedStatus === 'working' ? ' data-active=""' : ''}>${escape(label)}</span><span class="lattice-loader__text"${resolvedStatus === 'done' ? ' data-active=""' : ''}>${escape(doneLabel)}</span><span class="lattice-loader__text"${resolvedStatus === 'error' ? ' data-active=""' : ''}>${escape(errorLabel)}</span></span>${showTimer ? `<span class="lattice-loader__timer" aria-hidden="true">${seconds}s</span>` : ''}<span class="lattice-loader__sr">${escape(spoken)}</span></span>`;
 }

@@ -13,11 +13,20 @@ test('Assistant loads the lattice CSS and renders an animated task label without
   assert.match(loader, /data-status="working"/);
   assert.match(loader, /Checking invoices/);
   assert.match(loader, /Checking invoices, in progress/);
-  assert.match(loader, /--ll-cycle:1440ms/);
+  assert.match(loader, /data-pattern="orbit"/);
+  assert.match(loader, /--ll-cycle:1200ms/);
   assert.equal((loader.match(/class="lattice-loader__cell"/g) || []).length, 18);
   assert.doesNotMatch(loader, /lattice-loader__timer/);
   assert.match(css, /@keyframes lattice-on/);
+  assert.match(css, /@keyframes lattice-orbit/);
+  assert.match(css, /\[data-pattern=orbit\].*animation-name:lattice-orbit/);
   assert.match(css, /prefers-reduced-motion:reduce/);
+});
+
+test('Assistant uses a compact glowing orbit rather than the default pulse', () => {
+  const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
+  assert.match(app, /pattern:'orbit',grid:3,shape:'round',cellSize:4,gap:2,fontSize:12,step:105,idleOpacity:0\.12,glow:true/);
+  assert.match(css, /@keyframes lattice-orbit\{0%,8%/);
 });
 
 test('lattice state marks and task labels are escaped', () => {

@@ -1,6 +1,13 @@
 const DEFAULT_ENDPOINT = '/api/ai?action=assistant';
 const REQUEST_TIMEOUT_MS = 90_000;
 
+function publicErrorMessage(value) {
+  if (typeof value !== 'string' || !value.trim()) return 'The assistant is unavailable right now. Please try again.';
+  if (['INVALID_ASSISTANT_PLAN', 'INVALID_TOOL_ARGUMENTS', 'TOOL_NOT_ALLOWED'].includes(value)) return 'I couldn’t verify that answer. Please rephrase and try again.';
+  if (/^[A-Z][A-Z0-9_]+$/.test(value)) return 'The assistant couldn’t complete that request. Please try again.';
+  return value;
+}
+
 function responseMessage(payload) {
   const value = payload?.message?.content ?? payload?.content ?? payload?.answer;
   if (typeof value !== 'string' || !value.trim()) {
@@ -105,7 +112,7 @@ export function createAssistantClient({
         });
         if (!response.ok) {
           const payload = await response.json().catch(() => ({}));
-          throw new Error(typeof payload?.error === 'string' ? payload.error : 'The assistant is unavailable right now.');
+          throw new Error(publicErrorMessage(payload?.error));
         }
         return readAssistantResponse(response, onProgress);
       } catch (error) {

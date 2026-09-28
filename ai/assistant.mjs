@@ -9,10 +9,38 @@ const updateProposalTool = {type:'function',function:{name:'proposeUpdateInvoice
 const LABELS = {getZohoBooksData: 'Zoho Books records', getInvoices: 'Invoices', getCustomer: 'Customer', getPayments: 'Payments collected', getOutstandingSummary: 'Outstanding balances', getOverdueInvoices: 'Overdue invoices', getActivity: 'Recorded activity', getInvoiceDetails: 'Invoice details'};
 
 function conversationalAnswer(message) {
-  const text = message.trim().toLowerCase().replace(/[!?.,]+$/g, '');
+  const text = message.trim().toLowerCase().replace(/[!?.,]+$/g, '').replace(/\s+/g, ' ');
   if (/^(hi|hello|hey|hiya|good (morning|afternoon|evening))$/.test(text)) return 'Hi — how can I help with your receivables today?';
   if (/^(who are you|what are you|what can you do)$/.test(text)) return "I'm the cetld Assistant. I can help you understand invoices, payments, customers, outstanding balances, and follow-up activity in this workspace.";
+  if (/^(?:ok(?:ay)?(?: then)?|all right|alright|yep|yeah|yup|got it|understood|noted|sounds good|that works|no problem|cool|great|perfect|sure(?: thing)?|fine)$/.test(text)) return "Okay — let me know if you'd like me to check another invoice or balance.";
+  if (/^(?:thanks?|thank you|thx|appreciate it|i appreciate (?:it|that))$/.test(text)) return "You're welcome — I'm here if you need help with another invoice or payment.";
+  if (/^(?:how are you|how's it going|how is it going)$/.test(text)) return "I'm here and ready to help with invoices, payments, and balances.";
   return null;
+}
+
+function nonFinancialPromptFallback(message) {
+  const text = message.trim().toLowerCase().replace(/[!?.,]+$/g, '').replace(/\s+/g, ' ');
+  if (/^(?:tell me (?:a )?(?:joke|riddle|story)|make me laugh|write (?:me )?(?:a )?(?:poem|song|story))$/.test(text)) {
+    return 'I’m focused on invoices, payments, customers, and balances. What would you like to check?';
+  }
+  return null;
+}
+
+function plannerFailureResult(message, clock, writeIntent) {
+  const nonFinancialAnswer = nonFinancialPromptFallback(message);
+  const answer = writeIntent
+    ? 'I couldn’t safely prepare that invoice request just now. No change was made; please try again.'
+    : nonFinancialAnswer || 'I couldn’t safely check that just now. Please try again.';
+  const source = asksForZoho(message) ? 'getZohoBooksData' : 'none';
+  return withEvidence({
+    answer,
+    ...(writeIntent ? {pendingAction:null} : {}),
+    asOf:clock().toISOString(),
+    timezone:'UTC',
+    model:null,
+    usedFallback:true,
+    readOnly:true,
+  },{tool:source,data:{complete:false}});
 }
 function emptyAnswer(source) {
   const data = source?.data;
@@ -530,16 +558,21 @@ export async function answerWorkspaceQuestion({provider, store, message, history
     maxTokens: 350,
     temperature: 0,
   });
-  if (!Array.isArray(plan.toolCalls) || plan.toolCalls.length !== 1) throw new APIError(502, 'INVALID_ASSISTANT_PLAN');
+  if (!Array.isArray(plan?.toolCalls) || plan.toolCalls.length !== 1) {
+    return plannerFailureResult(message,clock,writeIntent);
+  }
   const sources = [];
   for (const call of plan.toolCalls) {
-    const name = call.function?.name;
-    if (!Object.hasOwn(LABELS, name) && !(writeIntent && ['proposeCreateInvoice','proposeUpdateInvoice'].includes(name))) throw new APIError(400, 'TOOL_NOT_ALLOWED');
+    const name = call?.function?.name;
+    if (typeof name !== 'string' || (!Object.hasOwn(LABELS, name) && !(writeIntent && ['proposeCreateInvoice','proposeUpdateInvoice'].includes(name)))) {
+      return plannerFailureResult(message,clock,writeIntent);
+    }
     let args;
     try {
       if (typeof call.function.arguments !== 'string' || call.function.arguments.length > 4096) throw new Error();
       args = JSON.parse(call.function.arguments);
-    } catch { throw new APIError(502, 'INVALID_TOOL_ARGUMENTS'); }
+      if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error();
+    } catch { return plannerFailureResult(message,clock,writeIntent); }
     if (name === 'proposeCreateInvoice' || name === 'proposeUpdateInvoice') {
       const proposal = await prepareProposal({name,args,accounting,clock});
       return {answer:redactInternalIds(proposal.answer),pendingAction:proposal.pendingAction,asOf:clock().toISOString(),timezone:'UTC',model:plan.model,usedFallback:plan.usedFallback,readOnly:true};

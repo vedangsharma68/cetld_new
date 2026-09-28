@@ -82,6 +82,17 @@ test('surfaces backend errors without inventing an answer', async () => {
   );
 });
 
+test('replaces internal assistant error codes with a clear retry message', async () => {
+  const client = createAssistantClient({
+    getAccessToken: async () => 'session-token',
+    fetchImpl: async () => ({ok: false, json: async () => ({error: 'INVALID_ASSISTANT_PLAN'})}),
+  });
+  await assert.rejects(
+    client.send({workspaceId: 'workspace-1', messages: [{role: 'user', content: 'What is overdue?'}]}),
+    error => /couldn.t verify.*try again/i.test(error.message) && !/INVALID_ASSISTANT_PLAN/.test(error.message),
+  );
+});
+
 test('rejects empty responses and invalid message history', async () => {
   const client = createAssistantClient({
     getAccessToken: async () => 'session-token',
