@@ -25,6 +25,12 @@ test('all requested Quiet Finance OS surfaces are present', () => {
   ]) assert.match(app, new RegExp(surface));
 });
 
+test('overview labels default-currency cards and counts invoices across currencies in agent status', () => {
+  assert.match(app, /Top cards show \$\{escape\(currency\)\} only\. Other currencies appear in Collections Pulse\./);
+  assert.match(app, /allOpen=state\.invoices\.filter\(x=>remaining\(x\)>0\)/);
+  assert.match(app, /<h2>\$\{allOpen\.length\} invoice/);
+});
+
 test('assistant page has an honest, accessible conversation flow', () => {
   for (const text of [
     'What needs my attention today?',
