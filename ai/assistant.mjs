@@ -300,18 +300,14 @@ function largestDebtorFallback(data) {
     .filter(([, row]) => Number(row?.outstandingAmount) > 0)
     .map(([currency, row]) => `${currency} ${row.outstandingAmount}`)
     .join(', ');
-  const draftBalances = format(data?.draftBalancesByCurrency);
-  const payableBalances = format(data?.payablesByCurrency);
-  const unclassifiedBalances = format(data?.unclassifiedBalancesByCurrency);
   const openBalances = format(data?.currencies);
-  if (!openBalances) return 'There are no unpaid ledger balances, so no customer can be confirmed as owing money.';
-
-  const currencies = Object.keys(data?.currencies || {});
-  const reviewTypes = [draftBalances ? 'draft' : '', unclassifiedBalances ? 'unclassified direction' : '', payableBalances ? 'payable' : ''].filter(Boolean);
-  const note = reviewTypes.length ? ` These open balances are ${reviewTypes.join(', ')} review items, not confirmed customer debt.` : ' These open balances are not confirmed customer receivables.';
-  const overlap = draftBalances && unclassifiedBalances ? ' Draft and unclassified figures may overlap.' : '';
-  const comparison = currencies.length > 1 ? ' Amounts in different currencies cannot be compared.' : '';
-  return `I cannot rank confirmed customer debt because no issued invoices are marked as receivable. Unconfirmed open balances by currency: ${openBalances}.${note}${overlap}${comparison}`;
+  if (!openBalances) return 'No confirmed customer receivables are outstanding.';
+  const draft = Boolean(format(data?.draftBalancesByCurrency));
+  const payable = Boolean(format(data?.payablesByCurrency));
+  const unclassified = Boolean(format(data?.unclassifiedBalancesByCurrency));
+  const types = [draft ? 'draft' : '', unclassified ? 'unclassified' : '', payable ? 'payable' : ''].filter(Boolean);
+  const review = types.length ? ` These ${types.join('/')} balances need review before any customer follow-up.` : ' Review status and direction before customer follow-up.';
+  return `No confirmed customer debtor can be ranked. Other open balances by currency: ${openBalances}.${review}`;
 }
 function containsUnsupportedNumber(answer, sources) {
   const sourceText = JSON.stringify(sources);

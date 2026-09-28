@@ -146,7 +146,7 @@ test('local largest-debtor questions bypass Zoho refresh and model latency while
   const local=await ask('who owes me the most');
   assert.equal(accountingFetches,0,'local ledger questions must not refresh Zoho');
   assert.equal(providerCalls,0,'largest-debtor questions should use the deterministic ledger summary');
-  assert.match(local.answer,/no issued invoices are marked as receivable/i);
+  assert.match(local.answer,/No confirmed customer debtor can be ranked/i);
   assert.match(local.answer,/AUD 1564\.00/);
   assert.match(local.answer,/draft|unclassified/i);
   assert.doesNotMatch(local.answer,/Green1 Materials LLC owes/i);
