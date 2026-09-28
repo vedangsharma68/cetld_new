@@ -57,7 +57,7 @@ test('recognized non-financial prompts get a safe scope reply when the planner r
   assert.equal(result.evidence.complete, false);
 });
 
-test('invalid planner output for a simple outstanding question recovers from the ledger', async () => {
+test('simple outstanding question reads the ledger without a model plan', async () => {
   const result = await answerWorkspaceQuestion({provider:{generate:async()=>({content:'Here is a guess.'})},store,message:'What is outstanding?'});
   assert.match(result.answer, /INR 84600\.00/);
   assert.doesNotMatch(result.answer, /guess|couldn.t safely check/i);
@@ -65,7 +65,7 @@ test('invalid planner output for a simple outstanding question recovers from the
   assert.deepEqual(result.evidence.records, []);
 });
 
-test('malformed and unsupported tool plans do not expose planner error codes', async () => {
+test('model plans cannot derail a simple overdue question', async () => {
   for (const plan of [
     {toolCalls:[null]},
     {toolCalls:[{function:{name:'unknownTool',arguments:'{}'}}]},
@@ -79,7 +79,7 @@ test('malformed and unsupported tool plans do not expose planner error codes', a
   }
 });
 
-test('a provider error on a simple ledger read still returns checked facts', async () => {
+test('simple ledger reads return checked facts without calling the provider', async () => {
   const emptyStore={query:async()=>[]};
   for (const [message, expected] of [
     ['Which invoices are overdue?', /There aren't any overdue invoices/],
@@ -88,7 +88,7 @@ test('a provider error on a simple ledger read still returns checked facts', asy
   ]) {
     const result=await answerWorkspaceQuestion({provider:{generate:async()=>{throw Error('provider unavailable');}},store:emptyStore,message});
     assert.match(result.answer,expected);
-    assert.equal(result.usedFallback,true);
+    assert.equal(result.usedFallback,false);
     assert.doesNotMatch(result.answer,/couldn.t safely check/i);
   }
 });
@@ -108,7 +108,7 @@ test('invalid invoice proposal planning never implies that an invoice was create
 
 test('final answer guidance favors brief direct answers and preserves financial caveats', async () => {
   const provider = plannedProvider('getOutstandingSummary');
-  await answerWorkspaceQuestion({provider, store, message: 'What is outstanding?' });
+  await answerWorkspaceQuestion({provider, store, message: 'Explain what is outstanding and what I should do next.' });
   const request = provider.requests.find(item => !item.tools);
   const guidance = request.messages.find(item => item.role === 'system').content;
 
@@ -164,7 +164,7 @@ test('internal JSON and fenced tool payloads are replaced with factual user-faci
     content: '```json\n{"basis":"invoices.amount_paid","currencies":{"INR":{"invoiceCount":1}},"debtors":[{"customerName":"Arbor & Finch","outstandingAmount":"84600.00"}]}\n```',
     finishReason: 'STOP', model: 'test-model', usedFallback: false,
   }, calls: 0};
-  const result = await answerWorkspaceQuestion({provider, store, message: 'What is outstanding?'});
+  const result = await answerWorkspaceQuestion({provider, store, message: 'Explain what is outstanding and what I should do next.'});
   assert.match(result.answer, /Unpaid ledger balances by currency: INR 84600\.00/);
   assert.match(result.answer, /direction is unclassified/i);
   assert.doesNotMatch(result.answer, /Arbor & Finch owes/);
@@ -172,16 +172,13 @@ test('internal JSON and fenced tool payloads are replaced with factual user-faci
   assert.equal(Object.hasOwn(result, 'sources'), false);
 });
 
-test('generic overdue invoice questions reach the planner instead of looking up "is"', async () => {
-  for (const [message, toolName, args] of [
-    ['Which invoice is overdue?', 'getOverdueInvoices', {}],
-  ]) {
-    const provider = plannedProvider(toolName, args);
+test('generic overdue invoice questions read the ledger without planning or a false invoice target', async () => {
+  for (const message of ['Which invoice is overdue?','Which invoices are overdue?']) {
+    const provider = {generate:async()=>{throw Error('No model call expected');}};
     const lookups=[];
     const trackingStore={query:async(table,options)=>{lookups.push({table,filters:options?.filters||{}});return store.query(table,options)}};
     await answerWorkspaceQuestion({provider,store:trackingStore,message});
-    assert.ok(provider.requests[0].tools, `${message} should be planned`);
-    assert.equal(provider.requests[0].tools.find(tool=>tool.function.name===toolName)?.function.name,toolName);
+    assert.ok(lookups.some(call=>call.table==='invoices'));
     assert.ok(!lookups.some(call=>call.table==='invoices'&&['is','was'].includes(call.filters.invoice_number?.replace(/^ilike\./,''))));
   }
 });

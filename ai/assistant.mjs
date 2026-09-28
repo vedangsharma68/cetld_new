@@ -577,16 +577,14 @@ export async function answerWorkspaceQuestion({provider, store, message, history
     const source = {tool:'getInvoices', label:'Fully paid invoices', data:await tools.execute('getFullyPaidInvoices',{})};
     return withEvidence({answer:paidInvoiceListAnswer(source.data),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
   }
-  const recoverSimpleRead = async () => {
-    const name = !writeIntent && !asksForZoho(message) ? simpleLedgerReadTool(message) : null;
-    if (!name) return null;
+  const simpleReadName = !writeIntent && !asksForZoho(message) ? simpleLedgerReadTool(message) : null;
+  if (simpleReadName) {
+    const name = simpleReadName;
     const source = {tool:name,label:LABELS[name],data:await tools.execute(name,{})};
-    return withEvidence({answer:factualFallback([source],message),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:true,readOnly:true},source);
-  };
-  const failedPlan = async () => (await recoverSimpleRead()) || plannerFailureResult(message,clock,writeIntent);
+    return withEvidence({answer:emptyAnswer(source) || factualFallback([source],message),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
+  }
   const allowedTools = writeIntent ? [...tools.definitions, createProposalTool, updateProposalTool] : tools.definitions;
-  let plan;
-  try { plan = await provider.generate({
+  const plan = await provider.generate({
     messages: [
       {role: 'system', content: `You are cetld's finance query planner and write-action proposal builder. Today is ${clock().toISOString().slice(0,10)} UTC. Use only the supplied tools when workspace facts are needed. Never invent identifiers or financial data. Choose exactly one minimum-scope tool. ${writeIntent ? 'For an explicit create or edit request, use exactly one propose tool; proposals are not writes. Only extract facts the user supplied. Do not execute or claim any change. Never invent an invoice number, customer, amount, currency, or due date; leave missing details out so cetld can ask. Use the current date only as the proposed invoice date when the user omitted it. For update requests, use the exact invoice target and only the changed fields explicitly requested.' : ''} ${accounting ? 'A question explicitly about connected Zoho Books: getZohoBooksData with the relevant receivables resource. ' : ''}A named cetld invoice or customer: getInvoiceDetails. Largest debtors: getOutstandingSummary. Overdue priorities: getOverdueInvoices. Paid invoice questions: getInvoices with status paid. Collections: getPayments. General activity: getActivity.`},
       ...history.map(item => ({role: item.role, content: redactInternalIds(item.content)})),
@@ -596,26 +594,22 @@ export async function answerWorkspaceQuestion({provider, store, message, history
     toolChoice: 'required',
     maxTokens: 350,
     temperature: 0,
-  }); } catch (error) {
-    const recovered = await recoverSimpleRead();
-    if (recovered) return recovered;
-    throw error;
-  }
+  });
   if (!Array.isArray(plan?.toolCalls) || plan.toolCalls.length !== 1) {
-    return failedPlan();
+    return plannerFailureResult(message,clock,writeIntent);
   }
   const sources = [];
   for (const call of plan.toolCalls) {
     const name = call?.function?.name;
     if (typeof name !== 'string' || (!Object.hasOwn(LABELS, name) && !(writeIntent && ['proposeCreateInvoice','proposeUpdateInvoice'].includes(name)))) {
-      return failedPlan();
+      return plannerFailureResult(message,clock,writeIntent);
     }
     let args;
     try {
       if (typeof call.function.arguments !== 'string' || call.function.arguments.length > 4096) throw new Error();
       args = JSON.parse(call.function.arguments);
       if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error();
-    } catch { return failedPlan(); }
+    } catch { return plannerFailureResult(message,clock,writeIntent); }
     if (name === 'proposeCreateInvoice' || name === 'proposeUpdateInvoice') {
       const proposal = await prepareProposal({name,args,accounting,clock});
       return {answer:redactInternalIds(proposal.answer),pendingAction:proposal.pendingAction,asOf:clock().toISOString(),timezone:'UTC',model:plan.model,usedFallback:plan.usedFallback,readOnly:true};

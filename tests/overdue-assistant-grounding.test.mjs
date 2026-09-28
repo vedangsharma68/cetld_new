@@ -115,11 +115,11 @@ test('Assistant replaces an incorrect empty-outstanding answer without calling u
   assert.doesNotMatch(result.answer,/customers? owe|debtor/i);
 });
 
-test('Assistant replaces an incorrect empty-overdue answer with all three grounded past-due balances',async()=>{
+test('Assistant bypasses an incorrect empty-overdue model answer and returns grounded balances',async()=>{
   const provider=providerWithOverdueToolAndFalseEmptyAnswer();
   const result=await answerWorkspaceQuestion({provider,store:workspaceStore(),message:'Which invoices are overdue?',clock:fixedClock});
 
-  assert.equal(provider.requests.length,2);
+  assert.equal(provider.requests.length,0);
   assert.match(result.answer,/3 overdue invoices \(as of 28 Sept? 2026 UTC\):/i);
   for(const [number,currency,amount,dueDate] of [
     ['INV-005','AUD','1564.00','2021-06-27'],
