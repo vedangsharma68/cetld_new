@@ -151,6 +151,11 @@ body{min-height:100vh;isolation:isolate;overflow-x:hidden}#app{position:relative
 
 /* Overview and app-chrome polish. */
 .sidebar{box-shadow:8px 0 28px rgba(13,28,38,.035)}
+.main{padding-top:68px}
+.topbar{position:fixed;top:0;left:238px;right:0}
+@media(max-width:1150px){.topbar{left:205px}}
+@media(min-width:801px){.shell.sidebar-collapsed .topbar{left:76px}}
+@media(max-width:800px){.main{padding-top:65px}.topbar{left:0}}
 .nav button{transition:background .18s ease,color .18s ease,transform .18s ease}
 .nav button:hover{transform:translateX(2px)}
 .nav button.active{background:rgba(159,227,196,.13);color:#c3f0dc;box-shadow:inset 2px 0 0 var(--mint)}
