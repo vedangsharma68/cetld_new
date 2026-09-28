@@ -8,6 +8,18 @@ test('invalid or image-only PDF bytes leave text extraction unavailable', async 
   assert.equal(await extractPdfText(Buffer.from('%PDF- invalid')), null);
 });
 
+test('PDF text parsing is bounded even when the parser never resolves', async () => {
+  let destroyed = false;
+  const started = Date.now();
+  const text = await extractPdfText(Buffer.from('%PDF-1.7'), {
+    timeoutMs: 5,
+    getDocumentImpl: () => ({promise: new Promise(() => {}), destroy: async () => {destroyed = true;}}),
+  });
+  assert.equal(text, null);
+  assert.equal(destroyed, true);
+  assert.ok(Date.now() - started < 1000);
+});
+
 test('supplied two-page invoice reaches AI as bounded selectable text with all item rows', {skip: !process.env.CETLD_TEST_PDF_PATH}, async () => {
   const bytes = await readFile(process.env.CETLD_TEST_PDF_PATH);
   const text = await extractPdfText(bytes);

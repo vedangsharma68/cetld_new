@@ -34,6 +34,7 @@ test('overview labels default-currency cards and counts invoices across currenci
 test('invoice extraction remains cancellable after an earlier Assistant answer', () => {
   assert.match(app, /streaming=busy&&!state\.assistantInvoiceExtractionController&&state\.assistantMessages\.at\(-1\)\?\.role==='assistant'/);
   assert.match(app, /data-action="assistant-manual-invoice">Continue manually now/);
+  assert.match(app, /state\.assistantInvoiceFile!==selected&&selected\.size<=10\*1024\*1024/, 'preflight size errors must remain visible');
 });
 
 test('assistant page has an honest, accessible conversation flow', () => {
