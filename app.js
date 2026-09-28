@@ -10,6 +10,7 @@ import {AMOUNT_PRECISION_MESSAGE,CURRENCY_SUPPORT_MESSAGE,isSupportedCurrency} f
 import {invoiceWhatsAppDisclosure} from './invoice/whatsapp-disclosure.mjs';
 import {followUpPreferencesForm,readFollowUpPreferences} from './followup-preferences-ui.mjs';
 import {reminderBody} from './automation/preferences.mjs';
+import {syncLandingSessionCookie} from './session-cookie.mjs';
 
 const $=s=>document.querySelector(s);
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -281,7 +282,7 @@ async function init(){
  try{
   const {createClient}=await import('https://esm.sh/@supabase/supabase-js@2.116.0');
   db=createClient(config.url,config.key,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true,flowType:'pkce'}});
-  db.auth.onAuthStateChange((event,session)=>{setTimeout(()=>{if(event==='PASSWORD_RECOVERY'){state.recovery=true;state.authMode='recovery';state.user=session?.user;state.profile=profileFromUser(session?.user);authPage();return}if(event==='SIGNED_OUT'&&!state.demo){++loadEpoch;state.user=null;state.profile=profileFromUser(null);state.workspace=null;state.settings=null;state.customers=[];state.invoices=[];state.payments=[];$('#dialog').close();authPage();return}if(['INITIAL_SESSION','SIGNED_IN','TOKEN_REFRESHED','USER_UPDATED'].includes(event)&&session?.user&&!state.demo)syncSession(session)},0)});
+  db.auth.onAuthStateChange((event,session)=>{syncLandingSessionCookie(session);setTimeout(()=>{if(event==='PASSWORD_RECOVERY'){state.recovery=true;state.authMode='recovery';state.user=session?.user;state.profile=profileFromUser(session?.user);authPage();return}if(event==='SIGNED_OUT'&&!state.demo){++loadEpoch;state.user=null;state.profile=profileFromUser(null);state.workspace=null;state.settings=null;state.customers=[];state.invoices=[];state.payments=[];$('#dialog').close();authPage();return}if(['INITIAL_SESSION','SIGNED_IN','TOKEN_REFRESHED','USER_UPDATED'].includes(event)&&session?.user&&!state.demo)syncSession(session)},0)});
   const {data,error}=await db.auth.getSession();if(error)throw error;
   authError='';
   if(state.recovery)return;
