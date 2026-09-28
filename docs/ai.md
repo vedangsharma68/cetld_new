@@ -13,26 +13,26 @@ prefix or put it in a database, URL, request from a browser, or source file.
 Rotate any key previously shared in chat before configuring hosting secrets.
 
 Apply the AI settings migrations, including
-`supabase/migrations/20260928100000_opencode_zen_fallback.sql`, to
+`supabase/migrations/20260928110000_zen_primary_gemini_fallback.sql`, to
 the target **non-production** database before integration testing. The forward
 migration normalizes legacy rows before enforcing the provider-specific model
 contract. This branch does not apply migrations remotely or deploy production.
 
-Workspace answers use `gemini-3.5-flash` as the primary model and the verified
-OpenCode Zen `space-bunny-free`, followed automatically by
-`longcat-2.5-preview-free`, as the optional fallback chain. Invoice extraction
-uses `gemini-3.5-flash-lite` with the same Zen chain. The Zen model IDs can be
+Workspace answers use OpenCode Zen `space-bunny-free` as the primary model,
+followed automatically by `longcat-2.5-preview-free`, with
+`gemini-3.5-flash` as the final backup. Invoice extraction continues to use
+`gemini-3.5-flash-lite`, followed by the Zen chain. The Zen model IDs can be
 overridden server-side with `ZEN_PRIMARY_MODEL` and `ZEN_FALLBACK_MODEL`.
 Unknown and paid IDs are rejected at the API, provider, and database boundaries;
-fallback must be a configured Zen free model and primary must be Gemini. The models endpoint and
+primary must be the configured Space Bunny model; fallback can be LongCat or Gemini. The models endpoint and
 settings writes verify current provider availability. A retryable provider failure receives bounded
 retries before the configured fallback is tried. A 429 is surfaced as a safe
 temporary rate-limit error after those attempts; no key or provider response
 body is returned. There is no automatic paid-model substitution.
 
 `AIProvider.generate()` / `generateStructured()` are the shared server abstraction
-for extraction and assistant planning. Authentication/malformed-output errors
-do not trigger fallback.
+for extraction and assistant planning. Authentication errors advance to the
+next model without retrying the rejected leg.
 Financial answers are **deterministically rendered tool results**, not LLM prose.
 The model selects tools; it cannot supply authoritative financial values.
 
@@ -41,13 +41,13 @@ The model selects tools; it cannot supply authoritative financial values.
 `GET /api/ai?action=settings&workspaceId=<uuid>` returns:
 
 ```json
-{"workspace_id":"...","primary_model":"gemini-3.5-flash","fallback_model":"space-bunny-free"}
+{"workspace_id":"...","primary_model":"space-bunny-free","fallback_model":"longcat-2.5-preview-free"}
 ```
 
 `PUT /api/ai?action=settings`, JSON body:
 
 ```json
-{"workspaceId":"...","primary_model":"gemini-3.5-flash","fallback_model":"space-bunny-free"}
+{"workspaceId":"...","primary_model":"space-bunny-free","fallback_model":"longcat-2.5-preview-free"}
 ```
 
 Owner/admin only; both IDs are checked against their provider catalogs. Members can read.

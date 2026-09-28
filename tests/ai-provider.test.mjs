@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   AIError, AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL,
-  DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, OPENROUTER_FREE_MODEL,
+  DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, GEMINI_FALLBACK_MODEL, OPENROUTER_FREE_MODEL,
   ZEN_FALLBACK_MODEL, ZEN_PRIMARY_MODEL,
   isFallbackModelId, isModelId, isPrimaryModelId, sanitizeModelSettings, verifyModel,
 } from '../ai/provider.mjs';
@@ -18,31 +18,31 @@ function provider(fetchImpl,options={}){
   return new AIProvider({primaryModel:DEFAULT_MODEL,fallbackModel:DEFAULT_FALLBACK_MODEL,geminiApiKey:'gemini-test-secret',openRouterApiKey:'router-test-secret',zenApiKey:'zen-test-secret',fetchImpl,retryDelayMs:1,sleepImpl:async()=>{},...options});
 }
 
-test('configuration exposes Gemini primary and both OpenCode Zen fallbacks',()=>{
-  assert.equal(DEFAULT_MODEL,'gemini-3.5-flash');
-  assert.equal(DEFAULT_FALLBACK_MODEL,ZEN_PRIMARY_MODEL);
+test('configuration exposes Space Bunny primary, LongCat fallback, and Gemini backup',()=>{
+  assert.equal(DEFAULT_MODEL,ZEN_PRIMARY_MODEL);
+  assert.equal(DEFAULT_FALLBACK_MODEL,ZEN_FALLBACK_MODEL);
   assert.equal(DEFAULT_EXTRACTION_MODEL,'gemini-3.5-flash-lite');
   assert.equal(DEFAULT_EXTRACTION_FALLBACK_MODEL,ZEN_PRIMARY_MODEL);
   assert.equal(isPrimaryModelId(DEFAULT_MODEL),true);
-  assert.equal(isPrimaryModelId(ZEN_PRIMARY_MODEL),false);
-  assert.equal(isFallbackModelId(ZEN_PRIMARY_MODEL),true);
+  assert.equal(isPrimaryModelId(ZEN_PRIMARY_MODEL),true);
+  assert.equal(isFallbackModelId(ZEN_PRIMARY_MODEL),false);
   assert.equal(isFallbackModelId(ZEN_FALLBACK_MODEL),true);
-  assert.equal(isFallbackModelId(DEFAULT_MODEL),false);
+  assert.equal(isFallbackModelId(GEMINI_FALLBACK_MODEL),true);
   assert.equal(isModelId(DEFAULT_MODEL),true);
   assert.equal(isModelId(ZEN_PRIMARY_MODEL),true);
   assert.equal(isModelId(ZEN_FALLBACK_MODEL),true);
   assert.equal(isModelId('openai/gpt-4.1-mini'),false);
-  assert.deepEqual(sanitizeModelSettings({primaryModel:'openrouter/free',fallbackModel:ZEN_FALLBACK_MODEL}),{primaryModel:DEFAULT_MODEL,fallbackModel:ZEN_FALLBACK_MODEL});
+  assert.deepEqual(sanitizeModelSettings({primaryModel:ZEN_PRIMARY_MODEL,fallbackModel:GEMINI_FALLBACK_MODEL}),{primaryModel:ZEN_PRIMARY_MODEL,fallbackModel:GEMINI_FALLBACK_MODEL});
 });
 
-test('Gemini primary sends native generation settings and normalizes text and function calls',async()=>{
+test('Gemini extraction sends native generation settings and normalizes text and function calls',async()=>{
   let sentUrl,sent;
   const ai=provider(async(url,init)=>{
     sentUrl=String(url);sent=JSON.parse(init.body);
     return gemini('',{parts:[{text:'Overdue count is two.'},{functionCall:{name:'getOverdueInvoices',args:{dueDateFrom:'2026-09-01'}}}]});
-  },{fallbackModel:null});
+  },{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null});
   const result=await ai.generate({messages:[{role:'system',content:'Use tools.'},{role:'user',content:'Overdue?'}],tools:[{type:'function',function:{name:'getOverdueInvoices',description:'List overdue',parameters:{type:'object',properties:{},additionalProperties:false}}}],toolChoice:'required',maxTokens:64,temperature:0});
-  assert.match(sentUrl,/generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-3\.5-flash:generateContent\?key=gemini-test-secret/);
+  assert.match(sentUrl,/generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-3\.5-flash-lite:generateContent\?key=gemini-test-secret/);
   assert.deepEqual(sent.systemInstruction,{parts:[{text:'Use tools.'}]});
   assert.deepEqual(sent.contents,[{role:'user',parts:[{text:'Overdue?'}]}]);
   assert.equal(sent.generationConfig.maxOutputTokens,64);
@@ -56,7 +56,7 @@ test('Gemini primary sends native generation settings and normalizes text and fu
 
 test('Gemini image and PDF parts become bounded native inlineData payloads',async()=>{
   let sent;
-  const ai=provider(async(_url,init)=>{sent=JSON.parse(init.body);return gemini('ok')},{fallbackModel:null});
+  const ai=provider(async(_url,init)=>{sent=JSON.parse(init.body);return gemini('ok')},{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null});
   await ai.generate({messages:[{role:'user',content:[
     {type:'text',text:'Read this invoice.'},
     {type:'image_url',image_url:{url:'data:image/png;base64,aGVsbG8='}},
@@ -71,23 +71,23 @@ test('Gemini image and PDF parts become bounded native inlineData payloads',asyn
 
 test('rejects malformed or oversized multimodal messages before contacting either provider',async()=>{
   let calls=0;
-  const ai=provider(async()=>{calls++;return gemini('unused')},{fallbackModel:null});
+  const ai=provider(async()=>{calls++;return gemini('unused')},{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null});
   await assert.rejects(ai.generate({messages:[{role:'user',content:[{type:'image_url',image_url:{url:'data:image/png;base64,not-valid!'}}]}]}),error=>error.code==='INVALID_ARGUMENT');
   await assert.rejects(ai.generate({messages:[{role:'user',content:'x'.repeat(15*1024*1024+1)}]}),error=>error.code==='INVALID_ARGUMENT');
   assert.equal(calls,0);
 });
 
-test('retries Gemini failures twice then uses the configured Zen fallback',async()=>{
+test('retries Space Bunny failures twice then uses the configured LongCat fallback',async()=>{
   const calls=[];
   const ai=provider(async(url,init)=>{
-    const target=String(url).includes('generativelanguage')?'gemini':'openrouter';
-    calls.push(target);
-    return target==='gemini'?gemini('',{status:503}):openRouter('Recovered');
+    const model=JSON.parse(init.body).model;
+    calls.push(model);
+    return model===ZEN_PRIMARY_MODEL?openRouter('',{status:503}):openRouter('Recovered');
   });
   const result=await ai.generate({messages:[{role:'user',content:'Hi'}]});
-  assert.deepEqual(calls,['gemini','gemini','openrouter']);
+  assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL]);
   assert.equal(result.content,'Recovered');
-  assert.equal(result.model,ZEN_PRIMARY_MODEL);
+  assert.equal(result.model,ZEN_FALLBACK_MODEL);
   assert.equal(result.usedFallback,true);
 });
 
@@ -106,7 +106,7 @@ test('OpenCode Zen request uses its chat-completions contract and keeps credenti
   assert.deepEqual(captured.body.messages,[{role:'user',content:'Can you summarize this?'}]);
   assert.equal(captured.url.includes('zen-test-secret'),false);
   assert.equal(result.content,'Recovered');
-  assert.equal(result.usedFallback,true);
+  assert.equal(result.usedFallback,false);
 });
 
 test('Zen fallback receives required Assistant tools and normalizes its function call',async()=>{
@@ -123,7 +123,7 @@ test('Zen fallback receives required Assistant tools and normalizes its function
   assert.deepEqual(fallbackBody.tools,[definition]);
   assert.equal(fallbackBody.tool_choice,'required');
   assert.deepEqual(result.toolCalls,returned);
-  assert.equal(result.usedFallback,true);
+  assert.equal(result.usedFallback,false);
 });
 
 test('Zen fallback receives structured extraction schema and its output is validated',async()=>{
@@ -132,7 +132,7 @@ test('Zen fallback receives structured extraction schema and its output is valid
     if(String(url).includes('generativelanguage'))return gemini('',{status:503});
     fallbackBody=JSON.parse(init.body);
     return openRouter('{"invoiceNumber":"INV-1048","total":84600.00}');
-  },{primaryModel:DEFAULT_EXTRACTION_MODEL,maxAttempts:1});
+  },{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL,maxAttempts:1});
   const result=await ai.generateStructured({
     messages:[{role:'user',content:'Extract invoice number and total.'}],
     name:'invoice_extraction',
@@ -149,25 +149,28 @@ test('Zen fallback receives structured extraction schema and its output is valid
   assert.equal(result.usedFallback,true);
 });
 
-test('network failures and abort timeouts can use the one configured fallback',async()=>{
+test('network failures and abort timeouts can use the configured fallback',async()=>{
   const networkCalls=[];
-  const network=provider(async url=>{
-    if(String(url).includes('generativelanguage')){networkCalls.push('gemini');throw Error('private transport detail');}
-    networkCalls.push('openrouter');return openRouter('network recovered');
+  const network=provider(async(url,init)=>{
+    const model=String(url).includes('generativelanguage')?GEMINI_FALLBACK_MODEL:JSON.parse(init.body).model;
+    networkCalls.push(model);
+    if(model===ZEN_PRIMARY_MODEL)throw Error('private transport detail');
+    return openRouter('network recovered');
   },{maxAttempts:1});
   assert.equal((await network.generate({messages:[{role:'user',content:'Hi'}]})).content,'network recovered');
-  assert.deepEqual(networkCalls,['gemini','openrouter']);
+  assert.deepEqual(networkCalls,[ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL]);
 
   const timeoutCalls=[];
   const timeout=provider((url,init)=>{
-    if(String(url).includes('generativelanguage')){
-      timeoutCalls.push('gemini');
+    const model=String(url).includes('generativelanguage')?GEMINI_FALLBACK_MODEL:JSON.parse(init.body).model;
+    if(model===ZEN_PRIMARY_MODEL){
+      timeoutCalls.push(model);
       return new Promise((_resolve,reject)=>init.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'})),{once:true}));
     }
-    timeoutCalls.push('openrouter');return Promise.resolve(openRouter('timeout recovered'));
+    timeoutCalls.push(model);return Promise.resolve(openRouter('timeout recovered'));
   },{timeoutMs:5,maxAttempts:1});
   assert.equal((await timeout.generate({messages:[{role:'user',content:'Hi'}]})).content,'timeout recovered');
-  assert.deepEqual(timeoutCalls,['gemini','openrouter']);
+  assert.deepEqual(timeoutCalls,[ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL]);
 });
 
 test('provider timeout stays active while reading an upstream response body',async()=>{
@@ -189,7 +192,7 @@ test('extraction models make one bounded attempt before using the free fallback'
   const ai=provider(async url=>{
     calls.push(String(url).includes('generativelanguage')?'gemini':'openrouter');
     return calls.at(-1)==='gemini'?gemini('',{status:503}):openRouter('',{status:503});
-  },{primaryModel:DEFAULT_EXTRACTION_MODEL});
+  },{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL});
   await assert.rejects(ai.generate({messages:[{role:'user',content:'Extract this invoice'}]}),error=>error.code==='PROVIDER_UNAVAILABLE');
   assert.deepEqual(calls,['gemini','openrouter','openrouter']);
 });
@@ -206,45 +209,70 @@ test('bounded retries preserve explicit rate limits and hide upstream response b
     assert.ok(error instanceof AIError);assert.equal(error.code,'RATE_LIMITED');assert.equal(error.status,429);
     assert.match(error.message,/temporarily rate limited/);assert.doesNotMatch(error.message,/private upstream/);return true;
   });
-  assert.deepEqual(calls,['gemini','gemini','openrouter','openrouter','openrouter','openrouter']);
+  assert.deepEqual(calls,['openrouter','openrouter','openrouter','openrouter','gemini','gemini']);
   assert.deepEqual(waits,[1,1,1]);
 });
 
-test('fails over in order from Gemini to Space Bunny to LongCat on 429 and 5xx',async()=>{
+test('fails over in order from Space Bunny to LongCat to Gemini on 429 and 5xx',async()=>{
   const calls=[];
-  const ai=provider(async(_url,init)=>{
-    const model=JSON.parse(init.body).model || DEFAULT_MODEL;
+  const ai=provider(async(url,init)=>{
+    const model=String(url).includes('generativelanguage')?GEMINI_FALLBACK_MODEL:JSON.parse(init.body).model;
     calls.push(model);
-    if(model===DEFAULT_MODEL)return gemini('',{status:429});
-    if(model===ZEN_PRIMARY_MODEL)return openRouter('',{status:503});
-    return openRouter('LongCat recovered');
+    if(model===ZEN_PRIMARY_MODEL)return openRouter('',{status:429});
+    if(model===ZEN_FALLBACK_MODEL)return openRouter('',{status:503});
+    return gemini('Gemini recovered');
   },{maxAttempts:1});
   const result=await ai.generate({messages:[{role:'user',content:'Hi'}]});
-  assert.deepEqual(calls,[DEFAULT_MODEL,ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL]);
-  assert.equal(result.model,ZEN_FALLBACK_MODEL);
-  assert.equal(result.content,'LongCat recovered');
+  assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL,GEMINI_FALLBACK_MODEL]);
+  assert.equal(result.model,GEMINI_FALLBACK_MODEL);
+  assert.equal(result.content,'Gemini recovered');
 });
 
-test('missing Zen key skips both Zen legs without making a Zen request',async()=>{
+test('missing Zen key skips both Zen legs and reaches the Gemini backup',async()=>{
   const calls=[];
-  const ai=provider(async url=>{calls.push(String(url));return gemini('',{status:503});},{zenApiKey:'',maxAttempts:1});
-  await assert.rejects(ai.generate({messages:[{role:'user',content:'Hi'}]}),error=>error.code==='API_KEY_MISSING');
+  const ai=provider(async url=>{calls.push(String(url));return gemini('Gemini recovered');},{zenApiKey:'',maxAttempts:1});
+  const result=await ai.generate({messages:[{role:'user',content:'Hi'}]});
+  assert.equal(result.model,GEMINI_FALLBACK_MODEL);
   assert.equal(calls.length,1);
   assert.match(calls[0],/generativelanguage/);
 });
 
-test('authentication errors do not fall back and provider bodies never escape',async()=>{
-  let calls=0;
-  const ai=provider(async()=>{calls++;return gemini('',{status:401});});
+test('authentication failures advance once per leg from Space Bunny to LongCat to Gemini',async()=>{
+  const calls=[],logs=[];
+  const ai=provider(async(url,init)=>{
+    const model=String(url).includes('generativelanguage')?GEMINI_FALLBACK_MODEL:JSON.parse(init.body).model;
+    calls.push(model);
+    if(model===ZEN_PRIMARY_MODEL)return openRouter('',{status:401});
+    if(model===ZEN_FALLBACK_MODEL)return openRouter('',{status:403});
+    return gemini('Gemini recovered');
+  },{logger:{warn:(message,details)=>logs.push({message,details}),info:(message,details)=>logs.push({message,details})}});
+  const result=await ai.generate({messages:[{role:'user',content:'Hi'}]});
+  assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL,GEMINI_FALLBACK_MODEL]);
+  assert.equal(result.model,GEMINI_FALLBACK_MODEL);
+  assert.equal(result.content,'Gemini recovered');
+  assert.deepEqual(logs,[
+    {message:'AI provider leg failed:',details:{provider:'opencode-zen',model:ZEN_PRIMARY_MODEL,status:401}},
+    {message:'AI provider leg failed:',details:{provider:'opencode-zen',model:ZEN_FALLBACK_MODEL,status:403}},
+    {message:'AI provider request served:',details:{provider:'google',model:GEMINI_FALLBACK_MODEL}},
+  ]);
+});
+
+test('all-leg authentication failure surfaces a safe AUTH_FAILED error without same-leg retries',async()=>{
+  const calls=[];
+  const ai=provider(async(url,init)=>{
+    const model=String(url).includes('generativelanguage')?GEMINI_FALLBACK_MODEL:JSON.parse(init.body).model;
+    calls.push(model);
+    return model===GEMINI_FALLBACK_MODEL?gemini('',{status:401}):openRouter('',{status:403});
+  },{logger:{warn(){}}});
   await assert.rejects(ai.generate({messages:[{role:'user',content:'Hi'}]}),error=>error.code==='AUTH_FAILED'&&!/private upstream/.test(error.message));
-  assert.equal(calls,1);
+  assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL,GEMINI_FALLBACK_MODEL]);
 });
 
 test('null fallback disables fallback instead of silently adding OpenRouter',async()=>{
   const calls=[];
   const ai=provider(async url=>{calls.push(String(url));return gemini('',{status:503});},{fallbackModel:null,maxAttempts:1});
   await assert.rejects(ai.generate({messages:[{role:'user',content:'Hi'}]}),error=>error.code==='PROVIDER_UNAVAILABLE');
-  assert.equal(calls.length,1);assert.match(calls[0],/generativelanguage/);
+  assert.equal(calls.length,1);assert.match(calls[0],/opencode\.ai/);
 });
 
 test('paid or reversed provider pairs are rejected before any upstream request',()=>{
@@ -258,19 +286,19 @@ test('paid or reversed provider pairs are rejected before any upstream request',
 
 test('structured JSON uses Gemini schema configuration and returns validated data',async()=>{
   let sent;
-  const ai=provider(async(_url,init)=>{sent=JSON.parse(init.body);return gemini('{"value":"clean","extra":"discard"}')},{fallbackModel:null});
+  const ai=provider(async(_url,init)=>{sent=JSON.parse(init.body);return gemini('{"value":"clean","extra":"discard"}')},{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null});
   const result=await ai.generateStructured({messages:[{role:'user',content:'Return data'}],name:'sample',schema:{type:'object',properties:{value:{type:'string'}}},validate:value=>({value:value.value}),maxTokens:64});
   assert.equal(sent.generationConfig.responseMimeType,'application/json');
   assert.deepEqual(sent.generationConfig.responseJsonSchema,{type:'object',properties:{value:{type:'string'}}});
-  assert.deepEqual(result.data,{value:'clean'});assert.equal(result.model,DEFAULT_MODEL);assert.equal(result.usedFallback,false);
+  assert.deepEqual(result.data,{value:'clean'});assert.equal(result.model,DEFAULT_EXTRACTION_MODEL);assert.equal(result.usedFallback,false);
 });
 
 test('malformed or oversized structured output is rejected when fallback is disabled',async()=>{
   let calls=0;
-  const malformed=provider(async()=>{calls++;return gemini('not json')},{fallbackModel:null});
+  const malformed=provider(async()=>{calls++;return gemini('not json')},{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null});
   await assert.rejects(malformed.generateStructured({messages:[{role:'user',content:'Return data'}],name:'sample',schema:{type:'object'},validate:value=>value}),error=>error.code==='INVALID_OUTPUT');
   assert.equal(calls,1);
-  const oversized=provider(async()=>{calls++;return gemini('{"value":"x"}')},{fallbackModel:null});
+  const oversized=provider(async()=>{calls++;return gemini('{"value":"x"}')},{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null});
   await assert.rejects(oversized.generateStructured({messages:[{role:'user',content:'Return data'}],name:'sample',schema:{type:'object'},validate:()=>({value:'x'.repeat(256*1024+1)})}),error=>error.code==='INVALID_OUTPUT');
   assert.equal(calls,2);
 });
@@ -283,7 +311,8 @@ test('catalog verification uses Gemini generation methods and the OpenRouter fre
       ? jsonResponse({supportedGenerationMethods:['generateContent']})
       : jsonResponse({data:[{id:'openrouter/free'}]});
   };
-  assert.deepEqual(await verifyModel(DEFAULT_MODEL,{fetchImpl,geminiApiKey:'gemini-key'}),{id:DEFAULT_MODEL,provider:'google'});
+  assert.deepEqual(await verifyModel(DEFAULT_MODEL,{fetchImpl,zenApiKey:'zen-key'}),{id:DEFAULT_MODEL,provider:'opencode-zen'});
+  assert.deepEqual(await verifyModel(GEMINI_FALLBACK_MODEL,{fetchImpl,geminiApiKey:'gemini-key'}),{id:GEMINI_FALLBACK_MODEL,provider:'google'});
   assert.deepEqual(await verifyModel(OPENROUTER_FREE_MODEL,{fetchImpl,openRouterApiKey:'router-key'}),{id:OPENROUTER_FREE_MODEL,provider:'openrouter'});
   assert.match(requests[0].url,/models\/gemini-3\.5-flash\?key=gemini-key/);
   assert.equal(requests[0].init.headers,undefined);

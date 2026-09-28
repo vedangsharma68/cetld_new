@@ -9,20 +9,20 @@ function assertServerRuntime() {
   if (typeof globalThis.window !== 'undefined') throw new AIError('INVALID_ARGUMENT', 400);
 }
 
-export const DEFAULT_MODEL = 'gemini-3.5-flash';
 export const ZEN_PRIMARY_MODEL = globalThis.process?.env?.ZEN_PRIMARY_MODEL || 'space-bunny-free';
 export const ZEN_FALLBACK_MODEL = globalThis.process?.env?.ZEN_FALLBACK_MODEL || 'longcat-2.5-preview-free';
-export const DEFAULT_FALLBACK_MODEL = ZEN_PRIMARY_MODEL;
+export const GEMINI_FALLBACK_MODEL = 'gemini-3.5-flash';
+export const DEFAULT_MODEL = ZEN_PRIMARY_MODEL;
+export const DEFAULT_FALLBACK_MODEL = ZEN_FALLBACK_MODEL;
 export const DEFAULT_EXTRACTION_MODEL = 'gemini-3.5-flash-lite';
 export const OPENROUTER_FREE_MODEL = 'openrouter/free';
 export const DEFAULT_EXTRACTION_FALLBACK_MODEL = ZEN_PRIMARY_MODEL;
 export const VERIFIED_MODELS = Object.freeze([
   DEFAULT_MODEL,
   DEFAULT_FALLBACK_MODEL,
+  GEMINI_FALLBACK_MODEL,
   DEFAULT_EXTRACTION_MODEL,
   DEFAULT_EXTRACTION_FALLBACK_MODEL,
-  ZEN_PRIMARY_MODEL,
-  ZEN_FALLBACK_MODEL,
 ]);
 export const VERIFIED_FREE_MODELS = VERIFIED_MODELS;
 
@@ -54,13 +54,14 @@ export function isGeminiModelId(value) {
   return typeof value === 'string' && /^gemini-[a-zA-Z0-9.-]{1,100}$/.test(value) && VERIFIED_MODELS.includes(value);
 }
 export function isPrimaryModelId(value) {
-  return value === DEFAULT_MODEL;
+  return value === ZEN_PRIMARY_MODEL;
 }
 export function isFallbackModelId(value) {
-  return value === ZEN_PRIMARY_MODEL || value === ZEN_FALLBACK_MODEL;
+  return value === ZEN_FALLBACK_MODEL || value === GEMINI_FALLBACK_MODEL;
 }
+function isZenModelId(value) { return value === ZEN_PRIMARY_MODEL || value === ZEN_FALLBACK_MODEL; }
 export function isModelId(value) {
-  return value === OPENROUTER_FREE_MODEL || isFallbackModelId(value) || isGeminiModelId(value);
+  return value === OPENROUTER_FREE_MODEL || isPrimaryModelId(value) || isFallbackModelId(value) || isGeminiModelId(value);
 }
 export const isFreeModelId = isModelId;
 
@@ -84,7 +85,7 @@ function retryable(error) {
   return error instanceof AIError && ['TIMEOUT','NETWORK_ERROR','RATE_LIMITED','PROVIDER_UNAVAILABLE'].includes(error.code);
 }
 function fallbackEligible(error) {
-  return retryable(error) || error instanceof AIError && ['INVALID_MODEL','API_KEY_MISSING','PROVIDER_ERROR','INVALID_RESPONSE'].includes(error.code);
+  return retryable(error) || error instanceof AIError && ['INVALID_MODEL','API_KEY_MISSING','AUTH_FAILED','PROVIDER_ERROR','INVALID_RESPONSE'].includes(error.code);
 }
 function safeJsonStringify(value) {
   try { return JSON.stringify(value); } catch { throw invalidArgument(); }
@@ -118,7 +119,7 @@ export async function verifyModel(modelId, {fetchImpl = globalThis.fetch, timeou
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    if (isFallbackModelId(modelId)) {
+    if (isZenModelId(modelId)) {
       if (!zenApiKey) throw new AIError('API_KEY_MISSING', 503);
       return {id: modelId, provider: 'opencode-zen'};
     }
@@ -206,10 +207,12 @@ export class AIProvider {
     maxAttempts = 2,
     retryDelayMs = 120,
     sleepImpl = delay => new Promise(resolve => setTimeout(resolve, delay)),
+    logger = console,
   } = {}) {
     assertServerRuntime();
     const extractionPrimary = primaryModel === DEFAULT_EXTRACTION_MODEL;
-    if ((!isPrimaryModelId(primaryModel) && !extractionPrimary) || (fallbackModel !== null && !isFallbackModelId(fallbackModel))) throw new AIError('INVALID_MODEL', 400);
+    const extractionFallback = extractionPrimary && fallbackModel === ZEN_PRIMARY_MODEL;
+    if ((!isPrimaryModelId(primaryModel) && !extractionPrimary) || (fallbackModel !== null && !isFallbackModelId(fallbackModel) && !extractionFallback)) throw new AIError('INVALID_MODEL', 400);
     this.primaryModel = primaryModel;
     this.fallbackModel = fallbackModel;
     this.#geminiApiKey = typeof geminiApiKey === 'string' ? geminiApiKey : '';
@@ -220,6 +223,7 @@ export class AIProvider {
     this.maxAttempts = extractionPrimary ? 1 : Math.min(2, Math.max(1, Number(maxAttempts) || 2));
     this.retryDelayMs = Math.min(500, Math.max(0, Number(retryDelayMs) || 0));
     this.sleepImpl = sleepImpl;
+    this.logger = logger;
   }
 
   async generate({messages, maxTokens, tools, toolChoice, ...options} = {}) {
@@ -234,6 +238,7 @@ export class AIProvider {
       try { return await this.#generateWithModel(model, messages, requestOptions, model !== this.primaryModel); }
       catch (error) {
         lastError = error;
+        this.#logLegFailure(model, error);
         if (!fallbackEligible(error)) throw error;
       }
     }
@@ -242,7 +247,8 @@ export class AIProvider {
 
   #candidates() {
     if (!this.fallbackModel) return [this.primaryModel];
-    return [...new Set([this.primaryModel, this.fallbackModel, ZEN_FALLBACK_MODEL])];
+    const finalModel = this.primaryModel === DEFAULT_EXTRACTION_MODEL ? ZEN_FALLBACK_MODEL : GEMINI_FALLBACK_MODEL;
+    return [...new Set([this.primaryModel, this.fallbackModel, finalModel])];
   }
 
   async generateStructured({messages, schema, name, validate, maxTokens, ...options} = {}) {
@@ -282,6 +288,7 @@ export class AIProvider {
           return decode(fallback);
         } catch (fallbackError) {
           lastError = fallbackError;
+          this.#logLegFailure(fallbackModel, fallbackError);
           if (!fallbackEligible(fallbackError)) throw fallbackError;
         }
       }
@@ -292,7 +299,11 @@ export class AIProvider {
   async #generateWithModel(model, messages, options, usedFallback) {
     let lastError;
     for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
-      try { return await this.#request(model, messages, options, usedFallback); }
+      try {
+        const result = await this.#request(model, messages, options, usedFallback);
+        this.#logLegServed(model);
+        return result;
+      }
       catch (error) {
         lastError = error;
         if (!retryable(error) || attempt + 1 >= this.maxAttempts) throw error;
@@ -302,8 +313,21 @@ export class AIProvider {
     throw lastError;
   }
 
+  #logLegFailure(model, error) {
+    const provider = this.#providerName(model);
+    this.logger?.warn?.('AI provider leg failed:', {provider, model, status: error instanceof AIError ? error.status : 502});
+  }
+
+  #logLegServed(model) {
+    this.logger?.info?.('AI provider request served:', {provider: this.#providerName(model), model});
+  }
+
+  #providerName(model) {
+    return isZenModelId(model) ? 'opencode-zen' : model === OPENROUTER_FREE_MODEL ? 'openrouter' : 'google';
+  }
+
   async #request(model, messages, options, usedFallback) {
-    if (isFallbackModelId(model)) {
+    if (isZenModelId(model)) {
       if (!this.#zenApiKey) throw new AIError('API_KEY_MISSING', 503);
       return this.#fetch(ZEN_CHAT_COMPLETIONS_URL, {
         method: 'POST',
