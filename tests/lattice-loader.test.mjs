@@ -26,6 +26,10 @@ test('Assistant loads the lattice CSS and renders an animated task label without
 test('Assistant uses a compact glowing orbit rather than the default pulse', () => {
   const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
   assert.match(app, /pattern:'orbit',grid:3,shape:'round',cellSize:4,gap:2,fontSize:12,step:105,idleOpacity:0\.12,glow:true/);
+  assert.match(app, /className:'assistant-lattice'/);
+  assert.match(css, /\.lattice-loader\.assistant-lattice\{--ll-cell:4px;--ll-gap:2px;--ll-font:12px;--ll-idle:\.12;--ll-cycle:840ms\}/);
+  assert.match(css, /nth-child\(6\)\{animation-delay:315ms\}/);
+  assert.match(css, /nth-child\(4\)\{animation-delay:735ms\}/);
   assert.match(css, /@keyframes lattice-orbit\{0%,8%/);
 });
 
