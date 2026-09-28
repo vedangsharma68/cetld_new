@@ -12,6 +12,6 @@ if (result) {
     try { window.opener.postMessage(payload, origin); } catch { /* The return link remains available. */ }
     if (result.dataset.autoClose === 'true') setTimeout(() => window.close(), 450);
   } else {
-    setTimeout(() => location.replace('/?page=Connections'), 900);
+    setTimeout(() => location.replace('/app/?page=Connections'), 900);
   }
 }

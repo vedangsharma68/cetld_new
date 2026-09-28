@@ -7,7 +7,7 @@ import {cents,remaining,payment,paymentRequestKey} from '../core.mjs';
 const [app, css, html, vercel] = await Promise.all([
   readFile(new URL('../app.js', import.meta.url), 'utf8'),
   readFile(new URL('../styles.css', import.meta.url), 'utf8'),
-  readFile(new URL('../index.html', import.meta.url), 'utf8'),
+  readFile(new URL('../app/index.html', import.meta.url), 'utf8'),
   readFile(new URL('../vercel.json', import.meta.url), 'utf8'),
 ]);
 
