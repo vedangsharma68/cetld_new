@@ -27,6 +27,7 @@ test('verbatim mark-latest-paid request is deterministically proposed without ca
   assert.equal(result.pendingAction.type,'update_invoice');
   assert.equal(result.pendingAction.payload.invoiceId,'33333333-3333-4333-8333-333333333333');
   assert.deepEqual(result.pendingAction.payload.changes,{status:'paid'});
+  assert.match(result.pendingAction.payload.idempotencyKey,/^assistant_payment_[a-f0-9]{32}$/);
 });
 
 test('Assistant create request returns a validated local proposal without writing', async () => {

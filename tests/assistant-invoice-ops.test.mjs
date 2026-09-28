@@ -119,3 +119,17 @@ test('chat invoice updates validate arguments and require confirmation before wr
   const result=await updateAssistantInvoice({store,invoiceId,changes:{dueDate:'2026-10-20',currency:'USD'},confirmed:true});
   assert.equal(result.updated,true);assert.equal(writes,1);assert.equal(result.invoice.dueDate,'2026-10-20');
 });
+
+test('chat invoice update settles a draft through the atomic payment store',async()=>{
+  let directWrites=0;
+  const key='assistant_payment_0123456789abcdef0123456789abcdef';
+  const store={
+    async updateAssistantInvoice(){directWrites++;},
+    async settleAssistantInvoice(id,idempotencyKey){
+      assert.equal(id,invoiceId);assert.equal(idempotencyKey,key);
+      return{id,invoice_number:'INV-1048',due_date:base.dueDate,currency:'INR',total_amount:'118.00',amount_paid:'118.00',status:'paid',metadata:{followup_state:'cancelled'}};
+    }
+  };
+  const result=await updateAssistantInvoice({store,invoiceId,changes:{status:'paid'},confirmed:true,idempotencyKey:key});
+  assert.equal(result.updated,true);assert.equal(result.invoice.status,'paid');assert.equal(result.invoice.amountPaid,118);assert.equal(directWrites,0);
+});
