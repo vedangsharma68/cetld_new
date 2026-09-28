@@ -31,7 +31,7 @@ test('real Postgres RLS: settings persist, isolate tenants, restrict members, pr
       await db.exec(sql.replace('create extension if not exists pgcrypto;', ''));
     }
     const migratedLegacy=(await db.query('select primary_model,fallback_model from workspace_ai_settings where workspace_id=$1',[legacyWorkspaceId])).rows[0];
-    assert.deepEqual(migratedLegacy,{primary_model:'gemini-3.5-flash',fallback_model:'space-bunny-free'});
+    assert.deepEqual(migratedLegacy,{primary_model:'space-bunny-free',fallback_model:'longcat-2.5-preview-free'});
     const a='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', b='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', member='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
     await db.exec(`insert into auth.users(id) values ('${a}'),('${b}'),('${member}'); set role authenticated;`);
     async function identity(id) { await db.query("select set_config('request.jwt.claim.sub',$1,false)",[id]); }
@@ -41,11 +41,12 @@ test('real Postgres RLS: settings persist, isolate tenants, restrict members, pr
     await db.query("insert into workspace_members(workspace_id,user_id,role) values ($1,$2,'member')",[wa,member]);
     await db.query('insert into workspace_ai_settings(workspace_id) values ($1)',[wa]);
     const initial=(await db.query('select primary_model,fallback_model from workspace_ai_settings')).rows[0];
-    assert.deepEqual(initial,{primary_model:'gemini-3.5-flash',fallback_model:'space-bunny-free'});
+    assert.deepEqual(initial,{primary_model:'space-bunny-free',fallback_model:'longcat-2.5-preview-free'});
     await db.query("update workspace_ai_settings set fallback_model='longcat-2.5-preview-free' where workspace_id=$1",[wa]);
     assert.equal((await db.query('select fallback_model from workspace_ai_settings')).rows[0].fallback_model,'longcat-2.5-preview-free');
     await assert.rejects(db.query("update workspace_ai_settings set primary_model='openrouter/free' where workspace_id=$1",[wa]),/check constraint/);
-    await assert.rejects(db.query("update workspace_ai_settings set fallback_model='gemini-3.5-flash' where workspace_id=$1",[wa]),/check constraint/);
+    await db.query("update workspace_ai_settings set fallback_model='gemini-3.5-flash' where workspace_id=$1",[wa]);
+    assert.equal((await db.query('select fallback_model from workspace_ai_settings where workspace_id=$1',[wa])).rows[0].fallback_model,'gemini-3.5-flash');
     await assert.rejects(db.query('update workspace_ai_settings set workspace_id=$1 where workspace_id=$2',[wa2,wa]), /immutable/);
     await identity(b);
     const wb=(await db.query("select (public.create_workspace('Beta','beta-space')).id")).rows[0].id;

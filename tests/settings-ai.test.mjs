@@ -5,13 +5,13 @@ import * as settings from '../settings-ai.js';
 
 const app = fs.readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 
-test('keeps Gemini primary choices distinct from the OpenCode Zen free fallbacks', () => {
+test('keeps Space Bunny primary distinct from LongCat and Gemini fallbacks', () => {
   assert.deepEqual(settings.AI_MODELS, [
-    'gemini-3.5-flash',
+    'space-bunny-free',
   ]);
   assert.deepEqual(settings.AI_FALLBACK_MODELS, [
-    'space-bunny-free',
     'longcat-2.5-preview-free',
+    'gemini-3.5-flash',
   ]);
 });
 
