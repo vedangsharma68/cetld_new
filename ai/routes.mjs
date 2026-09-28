@@ -3,7 +3,7 @@ import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL,
 import {authorizeAIWorkspace} from './store.mjs';
 import {extractInvoice} from './extraction.mjs';
 import {answerWorkspaceQuestion, shouldLoadAccountingConnection} from './assistant.mjs';
-import {saveAssistantInvoice, retryAssistantInvoiceSync} from './invoice-ops.mjs';
+import {saveAssistantInvoice, updateAssistantInvoice, retryAssistantInvoiceSync} from './invoice-ops.mjs';
 import {createAccountingTools} from './accounting-tools.mjs';
 import {createAccountingActionToken, verifyAccountingActionToken} from './accounting-actions.mjs';
 
@@ -54,18 +54,12 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
           if (body.confirmed !== true) throw new APIError(409, 'CONFIRMATION_REQUIRED');
           const secret = env.AI_ACCOUNTING_CONFIRMATION_SECRET || env.ACCOUNTING_TOKEN_ENCRYPTION_KEY || env.SUPABASE_SERVICE_ROLE_KEY;
           const action = verifyAccountingActionToken(body.confirmationToken, {userId:store.userId,workspaceId:store.workspaceId,secret,now:clock().getTime()});
-          if (!accounting?.connectionStatus) throw new APIError(503, 'ACCOUNTING_NOT_CONNECTED');
-          const status = await accounting.connectionStatus({userId:store.userId,workspaceId:store.workspaceId,provider:'zoho_books'});
-          if (status.status !== 'connected') throw new APIError(409, 'ACCOUNTING_NOT_CONNECTED');
           if (action.action === 'create_invoice') {
             const result = await saveAssistantInvoice({store,invoice:action.payload.invoice,confirmed:true,idempotencyKey:action.payload.idempotencyKey,accounting});
             if (result.needsInput) return res.status(422).json({error:'MISSING_DUE_DATE',question:result.question});
             return res.status(200).json(result);
           }
-          if (!accounting) throw new APIError(503, 'ACCOUNTING_NOT_CONNECTED');
-          const operations = createAccountingTools({integration:accounting,userId:store.userId,workspaceId:store.workspaceId,provider:'zoho_books'});
-          const result = await operations.updateInvoice({...action.payload,confirmed:true});
-          return res.status(200).json({updated:true,...result,sync:result.syncStatus || 'pending'});
+          return res.status(200).json(await updateAssistantInvoice({store,...action.payload,confirmed:true}));
         }
         if (typeof body.idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{12,100}$/.test(body.idempotencyKey)) throw new APIError(400, 'INVALID_IDEMPOTENCY_KEY');
         return res.status(200).json(await retryAssistantInvoiceSync({store, invoiceId: body.invoiceId, accounting}));

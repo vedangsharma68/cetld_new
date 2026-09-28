@@ -30,6 +30,16 @@ test('short conversational questions return immediately without planning tools',
   assert.equal(calls, 0);
 });
 
+test('combative and elliptical follow-ups never hit the planner failure message', async () => {
+  for (const message of ['no you are not', 'stop lying', 'again']) {
+    let calls = 0;
+    const result = await answerWorkspaceQuestion({provider:{generate:async()=>{calls++;throw Error('not expected');}},store,message,history:[{role:'assistant',content:"I'm the Cetld assistant."}]});
+    assert.equal(calls,0);
+    assert.doesNotMatch(result.answer,/couldn.t safely check/i);
+    assert.match(result.answer,/Cetld assistant|context|try again/i);
+  }
+});
+
 test('identity and model questions get the designed answer without calling a provider', async () => {
   for (const message of ['Who are you?', 'who are u', 'Which model are you?', 'What can you do?', 'What is Cetld assistant?']) {
     let calls = 0;
@@ -200,7 +210,7 @@ test('genuine planner failures keep the retry answer and emit a safe classified 
     const result=await answerWorkspaceQuestion({provider:{generate:async()=>({toolCalls:[],model:'planner-fixture'})},store,message:'Show recent collection activity for the last fortnight'});
     assert.match(result.answer,/Please try again/i);
     assert.equal(warnings.length,1);
-    assert.deepEqual(warnings[0].details,{provider:'Object',model:'planner-fixture',reason:'missing_or_multiple_tool_calls'});
+    assert.deepEqual(warnings[0].details,{provider:'Object',model:'planner-fixture',status:'missing_or_multiple_tool_calls',reason:'missing_or_multiple_tool_calls'});
     assert.doesNotMatch(JSON.stringify(warnings),/collection activity|fortnight/i);
   } finally { console.warn=original; }
 });

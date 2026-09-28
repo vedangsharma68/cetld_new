@@ -156,3 +156,41 @@ export async function retryAssistantInvoiceSync({store, invoiceId, accounting} =
   const synced = await syncSavedInvoice({store, invoice, row, accounting});
   return {saved: true, invoice: responseInvoice(synced.row), sync: synced.sync, idempotent: true};
 }
+
+export async function updateAssistantInvoice({store, invoiceId, changes, confirmed} = {}) {
+  if (confirmed !== true) throw new APIError(409, 'CONFIRMATION_REQUIRED');
+  const id = uuid(invoiceId);
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw new APIError(400, 'INVALID_INVOICE_CHANGES');
+  const allowed = ['total','dueDate','status','clientName','currency'];
+  const keys = Object.keys(changes);
+  if (!keys.length || keys.some(key => !allowed.includes(key))) throw new APIError(400, 'INVALID_INVOICE_CHANGES');
+  const patch = {};
+  if (Object.hasOwn(changes, 'total')) {
+    const total = Number(changes.total);
+    if (!Number.isFinite(total) || total <= 0 || Math.abs(total * 100 - Math.round(total * 100)) > 1e-7) throw new APIError(400, 'INVALID_INVOICE_AMOUNT');
+    patch.total_amount = total;
+  }
+  if (Object.hasOwn(changes, 'dueDate')) {
+    const date = String(changes.dueDate);
+    const parsed = new Date(`${date}T00:00:00.000Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0,10) !== date) throw new APIError(400, 'INVALID_DUE_DATE');
+    patch.due_date = date;
+  }
+  if (Object.hasOwn(changes, 'currency')) {
+    const currency = String(changes.currency).toUpperCase();
+    if (!isSupportedCurrency(currency)) throw new APIError(400, 'UNSUPPORTED_CURRENCY');
+    patch.currency = currency;
+  }
+  if (Object.hasOwn(changes, 'status')) {
+    if (!['draft','sent','overdue','paid','void','cancelled'].includes(changes.status)) throw new APIError(400, 'INVALID_INVOICE_STATUS');
+    patch.status = changes.status;
+  }
+  if (Object.hasOwn(changes, 'clientName')) {
+    if (typeof changes.clientName !== 'string' || !changes.clientName.trim() || changes.clientName.length > 255) throw new APIError(400, 'INVALID_CLIENT_NAME');
+    let customer = await store.findCustomer({name:changes.clientName.trim()});
+    if (!customer) customer = await store.createCustomer({name:changes.clientName.trim()});
+    patch.customer_id = customer.id;
+  }
+  const row = await store.updateAssistantInvoice(id, patch);
+  return {updated:true, invoice:responseInvoice(row)};
+}
