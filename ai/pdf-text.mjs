@@ -38,7 +38,8 @@ export async function extractPdfText(bytes, {getDocumentImpl, timeoutMs = DEFAUL
     const result = await Promise.race([parse, deadline]);
     if (!result) return null;
     return result.replace(/\s/g, '').length >= 80 ? result : null;
-  } catch {
+  } catch (error) {
+    console.warn('Invoice PDF text unavailable:', error instanceof Error ? error.message : 'unknown error');
     return null;
   } finally {
     clearTimeout(timer);

@@ -294,6 +294,7 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
   const pdfText = source.detected === 'application/pdf' ? await extractPdfText(source.bytes) : null;
   if (pdfText) {
     const printed = parsePdfInvoiceText(pdfText, {businessName});
+    console.info('Invoice PDF text parsed:', {characters: pdfText.length, deterministic: Boolean(printed)});
     if (printed) return {...validateAndSanitize(printed, {verifiedPrintedAdjustments: true}), model: 'verified-pdf-text', usedFallback: false};
   }
   const payload = makeMessages({ bytes, mimeType, fileName, businessName, pdfText });
