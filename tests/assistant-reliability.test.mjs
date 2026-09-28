@@ -30,6 +30,19 @@ test('short conversational questions return immediately without planning tools',
   assert.equal(calls, 0);
 });
 
+test('final answer guidance favors brief direct answers and preserves financial caveats', async () => {
+  const provider = plannedProvider('getOutstandingSummary');
+  await answerWorkspaceQuestion({provider, store, message: 'What is outstanding?' });
+  const request = provider.requests.find(item => !item.tools);
+  const guidance = request.messages.find(item => item.role === 'system').content;
+
+  assert.match(guidance, /1[-–]3 short sentences/i);
+  assert.match(guidance, /short paragraph|compact bullet/i);
+  assert.match(guidance, /exact amounts and currencies/i);
+  assert.match(guidance, /partial|incomplete/i);
+  assert.match(guidance, /direction|receivable|payable/i);
+});
+
 test('invoice questions bypass workspace-wide planning and give the model only the exact match', async () => {
   let call;
   const result = await answerWorkspaceQuestion({provider:{generate:async request=>{call=request;return {content:'INV-1048 for Arbor & Finch is INR 84600.00 and unpaid.',model:'test-model',usedFallback:false,finishReason:'STOP'}}},store,message:'tell me about the Arbor & Finch invoice'});

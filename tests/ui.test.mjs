@@ -57,16 +57,16 @@ test('assistant page has an honest, accessible conversation flow', () => {
 
 test('assistant progress line reflects loading versus streamed response without exposing reasoning', () => {
   assert.match(app, /const busy=state\.assistantStatus==='loading',streaming=busy/);
-  assert.match(app, /class="assistant-thought-line" role="status" aria-live="polite"/);
+  assert.match(app, /class="assistant-message assistant assistant-pending" role="status" aria-live="polite"/);
   assert.match(app, /const thought=busy&&!streaming/);
-  assert.match(app, /Preparing response…/);
-  assert.match(app, /Checking follow-up history…/);
-  assert.match(app, /busy&&!streaming\?/);
+  for (const label of ['Checking invoices', 'Checking payments', 'Checking follow-ups', 'Reading invoice', 'Syncing books', 'Preparing reply', 'Writing answer']) {
+    assert.match(app, new RegExp(label));
+  }
+  assert.doesNotMatch(app, /Thinking…|assistant-thinking/);
   assert.doesNotMatch(app, /chain.of.thought|internal reasoning/i);
   assert.match(css, /\.assistant-thought-line/);
-  assert.match(css, /\.assistant-thought-dot/);
-  assert.match(css, /@media\(prefers-reduced-motion:reduce\)\{\.assistant-thought-line/);
   assert.match(css, /@media\(max-width:520px\)\{\.assistant-thought-line/);
+  assert.doesNotMatch(css, /\.assistant-thinking|assistantDot|assistantThoughtPulse/);
 });
 
 test('liquid chrome is global, subtle and motion-aware', () => {

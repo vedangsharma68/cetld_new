@@ -3,6 +3,9 @@ import {answerWorkspaceQuestion} from './assistant.mjs';
 const E164 = /^\+[1-9]\d{6,14}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CONFIRMATION = /^(?:yes|y|ok|okay|confirm|confirmed|do it|go ahead|proceed|approve|send it|create it|update it)[.!\s]*$/i;
+const PROGRESS_LABEL = /^(?:thinking|looking up|searching|checking|reviewing|retrieving|processing|one moment)(?:\s*[.…!]+)?$/i;
+const EMPTY_REPLY = 'I couldn’t prepare a reply just now. Please try again.';
+const WHATSAPP_REPLY_GUIDANCE = 'WhatsApp reply guidance: Keep the final reply to 1-2 short sentences when that answers the question accurately. Include only requested facts and necessary caveats; preserve exact values, currencies, dates, and uncertainty from the supplied records. Do not dump records, add broad context, or include transient progress/status text such as “Thinking…” or “Looking up…”. Return only the final user-facing answer.';
 const TABLE_FIELDS = {
   invoices: new Set(['id','workspace_id','customer_id','invoice_number','issue_date','due_date','currency','total_amount','amount_paid','status','notes','metadata','created_at','updated_at']),
   customers: new Set(['id','workspace_id','name','company_name','email','phone','created_at','updated_at']),
@@ -13,6 +16,37 @@ const TABLE_FIELDS = {
 function required(value, field) {
   if (typeof value !== 'string' || !value.trim()) throw new TypeError(`${field} is required`);
   return value.trim();
+}
+
+function withWhatsAppReplyGuidance(provider) {
+  if (!provider || typeof provider.generate !== 'function') return provider;
+  return new Proxy(provider, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target);
+      if (property !== 'generate' || typeof value !== 'function') return value;
+      return (request, ...args) => {
+        if (!Array.isArray(request?.messages) || request.tools || request.toolChoice !== undefined) {
+          return Reflect.apply(value, target, [request, ...args]);
+        }
+        const systemIndex = request.messages.findIndex(message => message?.role === 'system' && typeof message.content === 'string');
+        if (systemIndex < 0) return Reflect.apply(value, target, [request, ...args]);
+        const messages = [...request.messages];
+        messages[systemIndex] = {
+          ...messages[systemIndex],
+          content: `${messages[systemIndex].content}\n\n${WHATSAPP_REPLY_GUIDANCE}`,
+        };
+        return Reflect.apply(value, target, [{...request, messages}, ...args]);
+      };
+    },
+  });
+}
+
+function formatWhatsAppReply(response) {
+  if (typeof response?.answer !== 'string') return response;
+  const lines = response.answer.split(/\r?\n/);
+  while (lines.length && (!lines[0].trim() || PROGRESS_LABEL.test(lines[0].trim()))) lines.shift();
+  const answer = lines.join('\n').trim();
+  return {...response, answer: answer || EMPTY_REPLY};
 }
 
 function checkedSelect(table, select) {
@@ -122,6 +156,7 @@ export function createWhatsAppAssistantChannel({
     throw new TypeError('WhatsApp channel requires authorization and a customer-scoped store factory');
   }
   if (typeof answer !== 'function') throw new TypeError('answer must be a function');
+  const replyProvider = withWhatsAppReplyGuidance(provider);
 
   async function ask({workspaceId, customerId, phone, message, history = []} = {}) {
     const scope = {workspaceId: required(workspaceId, 'workspaceId'), customerId: required(customerId, 'customerId'), phone: required(phone, 'phone')};
@@ -139,8 +174,8 @@ export function createWhatsAppAssistantChannel({
     // A workspace-wide accounting connector would bypass the customer store.
     // Customer-channel reads use the scoped store only. A proposal returned by
     // a future scoped assistant implementation still requires app review.
-    const response = await answer({provider, store: scopedStore, message: text, history, accounting: null, clock});
-    if (!response?.pendingAction) return {...response, pendingAction: null};
+    const response = await answer({provider: replyProvider, store: scopedStore, message: text, history, accounting: null, clock});
+    if (!response?.pendingAction) return {...formatWhatsAppReply(response), pendingAction: null};
     if (typeof storePendingAction !== 'function') return {
       answer: 'Please open cetld while signed in to prepare and confirm this change.',
       pendingAction: null,

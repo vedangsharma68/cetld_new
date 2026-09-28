@@ -245,6 +245,61 @@ test('WhatsApp assistant requires current binding and a customer-scoped store', 
   assert.equal(channel.confirmFromWhatsApp().executed, false);
 });
 
+test('WhatsApp final replies are concise, answer-only, and omit standalone progress labels', async () => {
+  const requests = [];
+  const provider = {async generate(request) {
+    requests.push(request);
+    return {content: 'Thinking…\n\nINV-42 has USD 500 due on 1 October.'};
+  }};
+  const planningRequest = {messages: [{role: 'system', content: 'Plan the query.'}], tools: [], toolChoice: 'required'};
+  const finalRequest = {messages: [
+    {role: 'system', content: 'You are the cetld Assistant. Answer only what the user asked, concisely; use only supplied records.'},
+    {role: 'user', content: 'Question: What is due?\nVerified record: INV-42, USD 500, due 1 October.'},
+  ], maxTokens: 700, temperature: 0.1};
+  const channel = createWhatsAppAssistantChannel({
+    provider,
+    authorizeChannel: async scope => ({...scope, allowed: true}),
+    createCustomerScopedStore: async () => ({query() { return []; }}),
+    answer: async ({provider: scopedProvider}) => {
+      await scopedProvider.generate(planningRequest);
+      const generated = await scopedProvider.generate(finalRequest);
+      return {answer: generated.content, pendingAction: null};
+    },
+  });
+  const result = await channel.ask({workspaceId: 'workspace-a', customerId: 'customer-a', phone: PHONE, message: 'What is due?'});
+
+  assert.deepEqual(requests[0], planningRequest, 'tool planning remains untouched');
+  assert.match(requests[1].messages[0].content, /WhatsApp reply guidance/i);
+  assert.match(requests[1].messages[0].content, /1-2 short sentences/i);
+  assert.match(requests[1].messages[0].content, /progress|status/i);
+  assert.equal(requests[1].messages[1].content, finalRequest.messages[1].content);
+  assert.equal(result.answer, 'INV-42 has USD 500 due on 1 October.');
+  assert.doesNotMatch(result.answer, /thinking|looking up|searching/i);
+});
+
+test('WhatsApp replaces a progress-only model result with a short retry message', async () => {
+  const channel = createWhatsAppAssistantChannel({
+    authorizeChannel: async scope => ({...scope, allowed: true}),
+    createCustomerScopedStore: async () => ({query() { return []; }}),
+    answer: async () => ({answer: 'Thinking…', pendingAction: null}),
+  });
+
+  const result = await channel.ask({workspaceId: 'workspace-a', customerId: 'customer-a', phone: PHONE, message: 'What is due?'});
+  assert.equal(result.answer, 'I couldn’t prepare a reply just now. Please try again.');
+  assert.doesNotMatch(result.answer, /thinking/i);
+});
+
+test('WhatsApp preserves quoted progress words after the answer begins', async () => {
+  const channel = createWhatsAppAssistantChannel({
+    authorizeChannel: async scope => ({...scope, allowed: true}),
+    createCustomerScopedStore: async () => ({query() { return []; }}),
+    answer: async () => ({answer: 'INV-42 is current.\nLatest customer reply:\nThinking…', pendingAction: null}),
+  });
+
+  const result = await channel.ask({workspaceId: 'workspace-a', customerId: 'customer-a', phone: PHONE, message: 'What is due?'});
+  assert.equal(result.answer, 'INV-42 is current.\nLatest customer reply:\nThinking…');
+});
+
 test('WhatsApp pending action is retained server-side for signed-in app review only', async () => {
   const saved = [];
   const channel = createWhatsAppAssistantChannel({
