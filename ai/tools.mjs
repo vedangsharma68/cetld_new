@@ -532,12 +532,15 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
   lookupInvoice = async (rawTarget) => {
     if (typeof rawTarget !== 'string' || !rawTarget.trim() || rawTarget.length > 160 || /[%*_]/.test(rawTarget)) throw new TypeError('Invoice lookup target is invalid');
     const target = rawTarget.trim().replace(/^the\s+/i, '').replace(/\s+invoice$/i, '').trim();
+    const mostRecent = /^(?:most recent|latest|newest)$/.test(target.toLowerCase());
     const uuidTarget = UUID_RE.test(target);
-    const numberRows = uuidTarget ? [] : await query(store, 'invoices', INVOICE_SELECT, {filters: {invoice_number: exactPattern(target)}, limit: 10});
+    const numberRows = uuidTarget ? [] : mostRecent
+      ? await query(store, 'invoices', INVOICE_SELECT, {limit: 1, order:'created_at.desc'})
+      : await query(store, 'invoices', INVOICE_SELECT, {filters: {invoice_number: exactPattern(target)}, limit: 10});
     let invoiceRows = numberRows;
     if (uuidTarget) invoiceRows = await query(store, 'invoices', INVOICE_SELECT, {filters: {id: `eq.${target}`}, limit: 3});
     let customerRows = [];
-    if (!invoiceRows.length && !uuidTarget) {
+    if (!invoiceRows.length && !uuidTarget && !mostRecent) {
       const [byName, byCompany] = await Promise.all([
         query(store, 'customers', CUSTOMER_SELECT, {filters: {name: exactPattern(target)}, limit: 10}),
         query(store, 'customers', CUSTOMER_SELECT, {filters: {company_name: exactPattern(target)}, limit: 10}),
