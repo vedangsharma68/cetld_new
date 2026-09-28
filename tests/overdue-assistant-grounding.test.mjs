@@ -109,9 +109,9 @@ function providerWithFalseEmptyOutstandingAnswer(){
 test('Assistant replaces an incorrect empty-outstanding answer without calling unknown-direction invoices customer debt',async()=>{
   const provider=providerWithFalseEmptyOutstandingAnswer();
   const result=await answerWorkspaceQuestion({provider,store:workspaceStore(),message:'How much is outstanding?',clock:fixedClock});
-  assert.match(result.answer,/unpaid ledger balances/i);
-  assert.match(result.answer,/draft.*not sent/i);
-  assert.match(result.answer,/direction.*unclassified|unclassified.*direction/i);
+  assert.match(result.answer,/^Unpaid balances total AUD 6054\.00 and INR 1725\.00 right now\./i);
+  assert.match(result.answer,/Some invoices need a quick review before these numbers are final\.$/i);
+  assert.equal(result.answer.split('review').length - 1, 1);
   assert.doesNotMatch(result.answer,/customers? owe|debtor/i);
 });
 
@@ -134,7 +134,7 @@ test('Assistant bypasses an incorrect empty-overdue model answer and returns gro
     ['GST-3425-26','Shiv Engineering'],
   ]) assert.match(result.answer,new RegExp(`${number} for ${customer}`));
   assert.match(result.answer,/draft; not sent/i,'draft invoices must be clearly identified as unsent');
-  assert.match(result.answer,/confirm draft direction before deciding whether to issue or follow up/i,'unclassified drafts need direction confirmed before deciding next steps');
+  assert.match(result.answer,/Some invoices need a quick review before follow-up\./i,'review flags should be one short plain-language line');
   assert.match(result.answer,/direction unclassified/i,'legacy rows without invoice direction cannot be called confirmed receivables');
   assert.doesNotMatch(result.answer,/Ann Revolution|1001|CHF 1650/);
   assert.deepEqual(result.evidence.records.map(row=>row.label),['INV-005','1223113','GST-3425-26']);
@@ -150,9 +150,9 @@ test('overdue summaries distinguish payable and uncertain direction with shared 
 
   assert.match(result.answer,/PAY-101.*INR 125\.00.*direction: payable/i);
   assert.match(result.answer,/UNC-202.*USD 240\.00.*direction uncertain/i);
-  assert.match(result.answer,/Payables are not customer receivables; do not follow up with customers/i);
-  assert.match(result.answer,/Confirm unclassified or uncertain direction before customer follow-up/i);
-  assert.equal((result.answer.match(/Confirm unclassified or uncertain direction before customer follow-up/g)||[]).length,1);
+  assert.match(result.answer,/Some invoices need a quick review before follow-up\./i);
+  assert.equal((result.answer.match(/quick review/g)||[]).length,1);
+  assert.doesNotMatch(result.answer,/confirm classification before treating|confirm unclassified/i);
 });
 
 test('dashboard overdue prompts bypass an AI planner that could add an unsupported date filter',async()=>{
