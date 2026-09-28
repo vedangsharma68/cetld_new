@@ -57,11 +57,11 @@ test('recognized non-financial prompts get a safe scope reply when the planner r
   assert.equal(result.evidence.complete, false);
 });
 
-test('invalid planner output for a financial question returns an incomplete, claim-free answer', async () => {
+test('invalid planner output for a simple outstanding question recovers from the ledger', async () => {
   const result = await answerWorkspaceQuestion({provider:{generate:async()=>({content:'Here is a guess.'})},store,message:'What is outstanding?'});
-  assert.match(result.answer, /couldn’t safely check that just now/i);
-  assert.doesNotMatch(result.answer, /guess|outstanding|\d|INR|USD/i);
-  assert.equal(result.evidence.complete, false);
+  assert.match(result.answer, /INR 84600\.00/);
+  assert.doesNotMatch(result.answer, /guess|couldn.t safely check/i);
+  assert.equal(result.evidence.complete, true);
   assert.deepEqual(result.evidence.records, []);
 });
 
@@ -72,10 +72,24 @@ test('malformed and unsupported tool plans do not expose planner error codes', a
     {toolCalls:[{function:{name:'getOverdueInvoices',arguments:'not-json'}}]},
   ]) {
     const result = await answerWorkspaceQuestion({provider:{generate:async()=>plan},store,message:'List overdue invoices'});
-    assert.match(result.answer, /couldn’t safely check that just now/i);
+    assert.match(result.answer, /There aren't any overdue invoices/i);
     assert.doesNotMatch(result.answer, /TOOL_NOT_ALLOWED|INVALID_TOOL_ARGUMENTS|INVALID_ASSISTANT_PLAN/);
-    assert.equal(result.evidence.complete, false);
+    assert.equal(result.evidence.complete, true);
     assert.deepEqual(result.evidence.records, []);
+  }
+});
+
+test('a provider error on a simple ledger read still returns checked facts', async () => {
+  const emptyStore={query:async()=>[]};
+  for (const [message, expected] of [
+    ['Which invoices are overdue?', /There aren't any overdue invoices/],
+    ['What payments were recorded?', /There are no recorded payments/],
+    ['What happened recently?', /no recorded invoice or payment activity/],
+  ]) {
+    const result=await answerWorkspaceQuestion({provider:{generate:async()=>{throw Error('provider unavailable');}},store:emptyStore,message});
+    assert.match(result.answer,expected);
+    assert.equal(result.usedFallback,true);
+    assert.doesNotMatch(result.answer,/couldn.t safely check/i);
   }
 });
 
