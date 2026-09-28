@@ -301,7 +301,7 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
   if (source.detected.startsWith('image/')) {
     try {
       const review = await extractInvoiceFromImage({bytes: source.bytes, mimeType: source.detected});
-      if (review.subtotal.value !== null && review.tax.value !== null && review.total.value !== null) {
+      if (review.subtotal.value !== null && review.total.value !== null) {
         // The OCR draft contains only evidence for review. No raw OCR text needs
         // to leave the server; a user must confirm every uncertain field.
         const {ocr, ...safeReview} = review;

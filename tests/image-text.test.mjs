@@ -63,6 +63,23 @@ test('offline invoice parsing leaves unlabelled money and invalid OCR confidence
   assert.equal(result.reviewRequired, true);
 });
 
+test('offline OCR reads split Indian tax and rupee amounts without inferring currency', () => {
+  const result = parseOfflineInvoiceText('Subtotal ₹1,000.00\nCGST 9% ₹90.00\nSGST 9% ₹90.00\nTotal ₹1,180.00', {ocrConfidence: 85});
+  assert.equal(result.subtotal.value, 1000);
+  assert.equal(result.tax.value, 180);
+  assert.equal(result.total.value, 1180);
+  assert.equal(result.currency.value, null);
+  assert.ok(result.uncertainFields.includes('tax'));
+});
+
+test('offline OCR leaves absent tax blank on a tax-free document', () => {
+  const result = parseOfflineInvoiceText('Subtotal ₹100.00\nTotal ₹100.00', {ocrConfidence: 85});
+  assert.equal(result.subtotal.value, 100);
+  assert.equal(result.tax.value, null);
+  assert.equal(result.total.value, 100);
+  assert.equal(result.reviewRequired, true);
+});
+
 test('the supplied image reaches review with printed totals before provider timeout', {skip: !process.env.CETLD_TEST_IMAGE_PATH}, async () => {
   const bytes = await readFile(process.env.CETLD_TEST_IMAGE_PATH);
   let providerCalls = 0;

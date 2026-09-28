@@ -76,10 +76,16 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   const cleanText = text.replace(/\r\n?/g, '\n').slice(0, MAX_TEXT_CHARS);
   const lines = cleanText.split('\n');
   const confidence = safeConfidence(ocrConfidence);
-  const subtotal = amountFromLine(lines, /^\s*subtotal\s*:?\s*\$?\s*(-?\d[\d,]*(?:\.\d{1,2})?)\s*$/i);
-  const tax = amountFromLine(lines, /^\s*(?:gst|tax|vat)\s*:?\s*\$?\s*(-?\d[\d,]*(?:\.\d{1,2})?)\s*$/i);
-  const total = amountFromLine(lines, /^\s*total\s*:?\s*\$?\s*(-?\d[\d,]*(?:\.\d{1,2})?)\s*$/i);
-  const outstandingAmount = amountFromLine(lines, /\b(?:balance\s+due|amount\s+due|outstanding(?:\s+amount)?)\s*:?\s*\$?\s*(-?\d[\d,]*(?:\.\d{1,2})?)/i);
+  const money = String.raw`[₹$€£]?\s*(-?\d[\d,]*(?:\.\d{1,2})?)`;
+  const subtotal = amountFromLine(lines, new RegExp(`^\\s*subtotal\\s*:?\\s*${money}\\s*$`, 'i'));
+  const components = ['CGST', 'SGST', 'IGST'].map(label => amountFromLine(lines,
+    new RegExp(`^\\s*${label}(?:\\s+\\d+(?:\\.\\d+)?\\s*%)?\\s*:?\\s*${money}\\s*$`, 'i'))).filter(value => value !== null);
+  const tax = components.length ? Math.round(components.reduce((sum, value) => sum + value, 0) * 100) / 100
+    : amountFromLine(lines, new RegExp(`^\\s*(?:GST|sales\\s+tax|tax|VAT)(?:\\s+\\d+(?:\\.\\d+)?\\s*%)?\\s*:?\\s*${money}\\s*$`, 'i'));
+  const total = amountFromLine(lines, new RegExp(`^\\s*total\\s*:?\\s*${money}\\s*$`, 'i'));
+  const outstandingAmount = amountFromLine(lines, new RegExp(`\\b(?:balance\\s+due|amount\\s+due|outstanding(?:\\s+amount)?)\\s*:?\\s*${money}`, 'i'));
+  const printedRounding = lines.map(line => line.match(/^\s*rounding\s*:?\s*[₹$€£]?\s*(-?\d[\d,]*(?:\.\d{1,2})?)\s*$/i)?.[1]).find(Boolean);
+  const rounding = printedRounding === undefined ? null : Number(printedRounding.replaceAll(',', ''));
   const explicitCurrency = cleanText.match(/\bcurrency(?:\s+code)?\s*[:=-]\s*(INR|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF)\b/i)?.[1]?.toUpperCase() || null;
   const currency = explicitCurrency && CURRENCIES.has(explicitCurrency) ? explicitCurrency : null;
   const lineItems = parseLineItems(lines, confidence);
@@ -89,7 +95,9 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   ];
   if (currency === null) warnings.push('Currency code was not explicitly printed; confirm the currency.');
   if (subtotal !== null && tax !== null && total !== null && Math.abs(subtotal + tax - total) > 0.005) {
-    warnings.push('Subtotal plus tax does not match total; check any printed rounding.');
+    warnings.push(rounding !== null && Number.isFinite(rounding) && Math.abs(subtotal + tax + rounding - total) < 0.005
+      ? 'Printed rounding reconciles the subtotal, tax, and total; verify it against the image.'
+      : 'Subtotal plus tax does not match total; check any printed rounding.');
   }
   if (lineItems.length === 0) warnings.push('No line items could be read reliably.');
 
