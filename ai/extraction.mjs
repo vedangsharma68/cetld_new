@@ -1,5 +1,6 @@
 import {SUPPORTED_TWO_DECIMAL_CURRENCIES} from '../currency-contract.mjs';
 import {extractPdfText} from './pdf-text.mjs';
+import {parsePdfInvoiceText} from './pdf-invoice-parser.mjs';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const CONFIDENCE_THRESHOLD = 0.75;
@@ -159,7 +160,7 @@ function makeMessages({ bytes, mimeType, fileName, businessName, pdfText }) {
   };
 }
 
-function validateAndSanitize(raw) {
+function validateAndSanitize(raw, {verifiedPrintedAdjustments = false} = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('response must be an object');
   exactKeys(raw, [...FIELD_NAMES, 'lineItems'], 'response');
   const warnings = [];
@@ -226,6 +227,8 @@ function validateAndSanitize(raw) {
     const adjustmentMinor = Math.round(total * scale) - Math.round(subtotal * scale) - Math.round(tax * scale);
     if (Math.abs(adjustmentMinor) === 1) {
       warnings.push('Subtotal and tax differ from total by one minor currency unit; verify the printed rounding adjustment against the original.');
+    } else if (Math.abs(adjustmentMinor) > 1 && verifiedPrintedAdjustments) {
+      warnings.push('Printed charges or discounts reconcile the subtotal, tax, and total; review the original before saving.');
     } else if (Math.abs(adjustmentMinor) > 1) {
       warnings.push('Subtotal plus tax does not match total.');
       uncertainFields.add('total');
@@ -289,6 +292,10 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
   if (!provider || typeof provider.generateStructured !== 'function') fail('provider.generateStructured is required');
   const source = detectFormat(bytes, mimeType);
   const pdfText = source.detected === 'application/pdf' ? await extractPdfText(source.bytes) : null;
+  if (pdfText) {
+    const printed = parsePdfInvoiceText(pdfText, {businessName});
+    if (printed) return {...validateAndSanitize(printed, {verifiedPrintedAdjustments: true}), model: 'verified-pdf-text', usedFallback: false};
+  }
   const payload = makeMessages({ bytes, mimeType, fileName, businessName, pdfText });
   let sanitized;
   const validate = (data) => (sanitized = validateAndSanitize(data));

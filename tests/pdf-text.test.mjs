@@ -20,19 +20,24 @@ test('PDF text parsing is bounded even when the parser never resolves', async ()
   assert.ok(Date.now() - started < 1000);
 });
 
-test('supplied two-page invoice reaches AI as bounded selectable text with all item rows', {skip: !process.env.CETLD_TEST_PDF_PATH}, async () => {
+test('supplied two-page invoice is extracted from printed text without a provider', {skip: !process.env.CETLD_TEST_PDF_PATH}, async () => {
   const bytes = await readFile(process.env.CETLD_TEST_PDF_PATH);
   const text = await extractPdfText(bytes);
   assert.match(text, /BPXINV-00550/);
   assert.match(text, /Page 2 of 2/);
   assert.equal((text.match(/BPXPN\s*-\s*\d{5}/g) || []).length, 28);
-  let sent;
-  const marker = new Error('captured');
-  await assert.rejects(extractInvoice({
-    provider: {generateStructured: async options => {sent = options.messages; throw marker;}},
+  let providerCalls = 0;
+  const result = await extractInvoice({
+    provider: {generateStructured: async () => {providerCalls += 1; throw new Error('provider should not be called');}},
     bytes, mimeType: 'application/pdf', fileName: 'invoice-0-4.pdf', businessName: 'CETLD QA',
-  }), error => error === marker);
-  assert.equal(typeof sent[0].content, 'string');
-  assert.match(sent[0].content, /BPXINV-00550/);
-  assert.match(sent[0].content, /Cavia porcellus hair/);
+  });
+  assert.equal(providerCalls, 0);
+  assert.equal(result.model, 'verified-pdf-text');
+  assert.equal(result.invoiceNumber.value, 'BPXINV-00550');
+  assert.equal(result.lineItems.value.length, 28);
+  assert.equal(result.subtotal.value, 5964.5);
+  assert.equal(result.tax.value, 596.45);
+  assert.equal(result.total.value, 6610.95);
+  assert.equal(result.currency.value, null);
+  assert.equal(result.dueDate.value, null);
 });

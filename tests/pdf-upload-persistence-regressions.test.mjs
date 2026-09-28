@@ -351,7 +351,7 @@ test('New Invoice upload failure keeps the original attached and restores manual
 });
 
 const suppliedPdfPath=process.env.CETLD_TEST_PDF_PATH;
-test('the supplied two-page invoice PDF reaches both providers as complete selectable text',{
+test('the supplied two-page invoice PDF extracts complete printed facts without provider latency',{
   skip:suppliedPdfPath?false:'Set CETLD_TEST_PDF_PATH to run this private local-PDF integration check.',
 },async()=>{
   const bytes=readFileSync(suppliedPdfPath);
@@ -363,6 +363,8 @@ test('the supplied two-page invoice PDF reaches both providers as complete selec
   assert.equal(response.data.customerName.value,'Roger Bigot');
   assert.equal(response.data.total.value,6610.95);
   assert.deepEqual(response.data.lineItems.value.map(({description,quantity,unitPrice,amount})=>({description,quantity,unitPrice,amount})),GROUND_TRUTH_LINE_ITEMS);
-  assert.equal(requests.length,2);
-  assertPdfTextReachedBothProviders(requests);
+  assert.equal(response.data.model,'verified-pdf-text');
+  assert.equal(response.data.currency.value,null);
+  assert.equal(response.data.dueDate.value,null);
+  assert.equal(requests.length,0);
 });
