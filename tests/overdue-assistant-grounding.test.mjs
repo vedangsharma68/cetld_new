@@ -86,7 +86,7 @@ test('Assistant replaces an incorrect empty-outstanding answer without calling u
 
 test('Assistant replaces an incorrect empty-overdue answer with all three grounded past-due balances',async()=>{
   const provider=providerWithOverdueToolAndFalseEmptyAnswer();
-  const result=await answerWorkspaceQuestion({provider,store:workspaceStore(),message:'What needs my attention today?',clock:fixedClock});
+  const result=await answerWorkspaceQuestion({provider,store:workspaceStore(),message:'Which invoices are overdue?',clock:fixedClock});
 
   assert.equal(provider.requests.length,2);
   assert.match(result.answer,/3 overdue invoices need attention/i);
@@ -107,6 +107,18 @@ test('Assistant replaces an incorrect empty-overdue answer with all three ground
   assert.match(result.answer,/direction.*unclassified/i,'legacy rows without invoice direction cannot be called confirmed receivables');
   assert.doesNotMatch(result.answer,/Ann Revolution|1001|CHF 1650/);
   assert.deepEqual(result.evidence.records.map(row=>row.label),['INV-005','1223113','GST-3425-26']);
+});
+
+test('dashboard overdue prompts bypass an AI planner that could add an unsupported date filter',async()=>{
+  const provider={async generate(){throw Error('The dashboard prompt must not call the AI planner');}};
+  for(const message of ['What needs my attention today?','Which invoices are most overdue?']){
+    const result=await answerWorkspaceQuestion({provider,store:workspaceStore(),message,clock:fixedClock});
+    assert.match(result.answer,/3 overdue invoices need attention/i);
+    assert.match(result.answer,/INV-005.*AUD 1564\.00/i);
+    assert.match(result.answer,/1223113.*INR 1725\.00/i);
+    assert.match(result.answer,/GST-3425-26.*AUD 4490\.00/i);
+    assert.equal(result.model,null);
+  }
 });
 
 test('truncated overdue results disclose partial details and evidence completeness',async()=>{

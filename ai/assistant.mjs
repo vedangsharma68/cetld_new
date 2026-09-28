@@ -429,6 +429,11 @@ export async function answerWorkspaceQuestion({provider, store, message, history
   if (asksForZoho(message) && !zohoAvailable(accounting)) {
     return withEvidence({answer:'Zoho Books is not connected or is currently unavailable, so I can’t retrieve Zoho records. Check the connection and try again.',asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true}, {tool:'getZohoBooksData',data:{complete:false,truncated:false}});
   }
+  const prompt = message.trim().toLowerCase().replace(/[!?.,]+$/g, '');
+  if (prompt === 'what needs my attention today' || prompt === 'which invoices are most overdue') {
+    const source = {tool:'getOverdueInvoices',label:LABELS.getOverdueInvoices,data:await tools.execute('getOverdueInvoices',{})};
+    return withEvidence({answer:factualFallback([source],message),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
+  }
   const writeIntent = isWriteIntent(message);
   if (writeIntent && !accounting) return withEvidence({answer:'Connect Zoho Books before creating or editing an invoice there.',asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true,pendingAction:null}, {tool:'getZohoBooksData',data:{complete:false,truncated:false}});
   const target = writeIntent ? null : contextualInvoiceTarget(message, history);
