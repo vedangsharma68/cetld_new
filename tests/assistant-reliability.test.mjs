@@ -30,6 +30,26 @@ test('short conversational questions return immediately without planning tools',
   assert.equal(calls, 0);
 });
 
+test('identity and model questions get the designed answer without calling a provider', async () => {
+  for (const message of ['Who are you?', 'who are u', 'Which model are you?', 'What can you do?', 'What is Cetld assistant?']) {
+    let calls = 0;
+    const result = await answerWorkspaceQuestion({provider:{generate:async()=>{ calls++; throw Error('not expected'); }},store,message});
+    assert.equal(calls, 0);
+    assert.match(result.answer, /^I'm the Cetld assistant/);
+    assert.match(result.answer, /what's overdue, who owes the most, or what got paid this week/i);
+    assert.doesNotMatch(result.answer, /GPT|Gemini|Claude|model|provider/i);
+  }
+});
+
+test('general chit-chat gets the friendly scope answer without calling a provider', async () => {
+  for (const message of ['Tell me a joke', 'What is the capital of France?', 'How is the weather?']) {
+    let calls = 0;
+    const result = await answerWorkspaceQuestion({provider:{generate:async()=>{ calls++; throw Error('not expected'); }},store,message});
+    assert.equal(calls, 0);
+    assert.match(result.answer, /Cetld workspace.*invoices, payments, customers, and balances/i);
+  }
+});
+
 test('short acknowledgements, including ok then, are answered without planner or tool calls', async () => {
   for (const message of ['ok then', 'okay then', 'ok', 'okay', 'alright', 'all right', 'yep', 'yup', 'got it', 'understood', 'noted', 'thanks', 'thank you', 'sounds good', 'no problem']) {
     let calls = 0;
@@ -51,10 +71,10 @@ test('recognized non-financial prompts get a safe scope reply when the planner r
     store,
     message:'Tell me a joke',
   });
-  assert.match(result.answer, /focused on invoices, payments, customers, and balances/i);
+  assert.match(result.answer, /invoices, payments, customers, and balances/i);
   assert.doesNotMatch(result.answer, /A joke from the model|INVALID_ASSISTANT_PLAN/);
   assert.equal(result.model, null);
-  assert.equal(result.evidence.complete, false);
+  assert.equal(result.evidence.complete, true);
 });
 
 test('simple outstanding question reads the ledger without a model plan', async () => {
@@ -165,11 +185,24 @@ test('internal JSON and fenced tool payloads are replaced with factual user-faci
     finishReason: 'STOP', model: 'test-model', usedFallback: false,
   }, calls: 0};
   const result = await answerWorkspaceQuestion({provider, store, message: 'Explain what is outstanding and what I should do next.'});
-  assert.match(result.answer, /Unpaid ledger balances by currency: INR 84600\.00/);
-  assert.match(result.answer, /direction is unclassified/i);
+  assert.match(result.answer, /^Unpaid balances total INR 84600\.00 right now\./);
+  assert.match(result.answer, /Some invoices need a quick review before these numbers are final\.$/);
   assert.doesNotMatch(result.answer, /Arbor & Finch owes/);
   assert.doesNotMatch(result.answer, /basis|currencies|debtors|invoiceCount/);
   assert.equal(Object.hasOwn(result, 'sources'), false);
+});
+
+test('genuine planner failures keep the retry answer and emit a safe classified warning', async () => {
+  const warnings=[];
+  const original=console.warn;
+  console.warn=(message,details)=>warnings.push({message,details});
+  try {
+    const result=await answerWorkspaceQuestion({provider:{generate:async()=>({toolCalls:[],model:'planner-fixture'})},store,message:'Show recent collection activity for the last fortnight'});
+    assert.match(result.answer,/Please try again/i);
+    assert.equal(warnings.length,1);
+    assert.deepEqual(warnings[0].details,{provider:'Object',model:'planner-fixture',reason:'missing_or_multiple_tool_calls'});
+    assert.doesNotMatch(JSON.stringify(warnings),/collection activity|fortnight/i);
+  } finally { console.warn=original; }
 });
 
 test('generic overdue invoice questions read the ledger without planning or a false invoice target', async () => {
