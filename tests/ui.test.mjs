@@ -31,6 +31,11 @@ test('overview labels default-currency cards and counts invoices across currenci
   assert.match(app, /<h2>\$\{allOpen\.length\} invoice/);
 });
 
+test('invoice extraction remains cancellable after an earlier Assistant answer', () => {
+  assert.match(app, /streaming=busy&&!state\.assistantInvoiceExtractionController&&state\.assistantMessages\.at\(-1\)\?\.role==='assistant'/);
+  assert.match(app, /data-action="assistant-manual-invoice">Continue manually now/);
+});
+
 test('assistant page has an honest, accessible conversation flow', () => {
   for (const text of [
     'What needs my attention today?',

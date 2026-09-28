@@ -88,6 +88,18 @@ function assertPdfBytesReachedBothProviders(requests,bytes){
   assert.equal(openRouterPart?.file?.file_data,`data:application/pdf;base64,${encoded}`);
 }
 
+function assertPdfTextReachedBothProviders(requests){
+  const geminiText=requests[0]?.payload.contents?.[0]?.parts?.[0]?.text;
+  const fallbackText=requests[1]?.payload.messages?.[0]?.content;
+  assert.equal(typeof geminiText,'string');
+  assert.equal(typeof fallbackText,'string');
+  for(const text of [geminiText,fallbackText]){
+    assert.match(text,/BPXINV-00550/);
+    assert.match(text,/Page 2 of 2/);
+    assert.equal((text.match(/BPXPN\s*-\s*\d{5}/g)||[]).length,28);
+  }
+}
+
 async function extractWithPrimaryOutput(primaryContent,primaryFinishReason='STOP',fallbackContent=JSON.stringify(SAMPLE_INVOICE),bytes=SAMPLE_PDF){
   const scenario=makeExtractionProvider({bytes,primaryContent,primaryFinishReason,fallbackContent});
   const result=await extractInvoice({provider:scenario.provider,bytes,mimeType:'application/pdf',fileName:'invoice-0-4.pdf',businessName:'Cetld'});
@@ -339,7 +351,7 @@ test('New Invoice upload failure keeps the original attached and restores manual
 });
 
 const suppliedPdfPath=process.env.CETLD_TEST_PDF_PATH;
-test('the supplied two-page invoice PDF survives API upload and extraction fallback',{
+test('the supplied two-page invoice PDF reaches both providers as complete selectable text',{
   skip:suppliedPdfPath?false:'Set CETLD_TEST_PDF_PATH to run this private local-PDF integration check.',
 },async()=>{
   const bytes=readFileSync(suppliedPdfPath);
@@ -352,5 +364,5 @@ test('the supplied two-page invoice PDF survives API upload and extraction fallb
   assert.equal(response.data.total.value,6610.95);
   assert.deepEqual(response.data.lineItems.value.map(({description,quantity,unitPrice,amount})=>({description,quantity,unitPrice,amount})),GROUND_TRUTH_LINE_ITEMS);
   assert.equal(requests.length,2);
-  assertPdfBytesReachedBothProviders(requests,bytes);
+  assertPdfTextReachedBothProviders(requests);
 });

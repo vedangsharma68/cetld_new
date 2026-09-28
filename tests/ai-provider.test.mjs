@@ -167,6 +167,30 @@ test('network failures and abort timeouts can use the one configured fallback',a
   assert.deepEqual(timeoutCalls,['gemini','openrouter']);
 });
 
+test('provider timeout stays active while reading an upstream response body',async()=>{
+  const ai=provider(async()=>new Response(new ReadableStream({
+    start(controller){controller.enqueue(new TextEncoder().encode('{"candidates":'));},
+  }),{status:200}),{fallbackModel:null,timeoutMs:5,maxAttempts:1});
+  const outcome=await Promise.race([
+    ai.generate({messages:[{role:'user',content:'Hi'}]}).then(
+      ()=>'resolved',
+      error=>error.code,
+    ),
+    new Promise(resolve=>setTimeout(()=>resolve('still-pending'),40)),
+  ]);
+  assert.equal(outcome,'TIMEOUT','a body that never finishes must not outlive the provider deadline');
+});
+
+test('extraction models make one bounded attempt before using the free fallback',async()=>{
+  const calls=[];
+  const ai=provider(async url=>{
+    calls.push(String(url).includes('generativelanguage')?'gemini':'openrouter');
+    return calls.at(-1)==='gemini'?gemini('',{status:503}):openRouter('',{status:503});
+  },{primaryModel:DEFAULT_EXTRACTION_MODEL});
+  await assert.rejects(ai.generate({messages:[{role:'user',content:'Extract this invoice'}]}),error=>error.code==='PROVIDER_UNAVAILABLE');
+  assert.deepEqual(calls,['gemini','openrouter']);
+});
+
 test('oversized upstream responses are rejected with a safe bounded error',async()=>{
   const ai=provider(async()=>new Response('x'.repeat(4*1024*1024+1),{status:200}),{fallbackModel:null,maxAttempts:1});
   await assert.rejects(ai.generate({messages:[{role:'user',content:'Hi'}]}),error=>error.code==='INVALID_RESPONSE'&&!/xxxx/.test(error.message));

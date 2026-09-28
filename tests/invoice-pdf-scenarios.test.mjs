@@ -25,9 +25,10 @@ async function extractFixture(name, overrides = {}) {
     return { data: options.validate({ ...base, ...overrides }), model: 'fixture-provider' };
   } };
   const result = await extractInvoice({ provider, bytes, mimeType: 'application/pdf', fileName: `${name}.pdf` });
-  const part = delivered.messages[0].content[1];
-  assert.equal(part.type, 'file');
-  assert.deepEqual(Buffer.from(part.file.file_data.split(',')[1], 'base64'), bytes);
+  const content = delivered.messages[0].content;
+  assert.equal(typeof content, 'string', 'selectable PDF text should reach the model without binary PDF processing');
+  assert.match(content, /Page 1 of 1/);
+  assert.match(content, /invoice/i);
   return result;
 }
 

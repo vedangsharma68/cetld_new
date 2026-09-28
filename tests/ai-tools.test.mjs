@@ -125,6 +125,15 @@ test("outstanding math is decimal-exact and grouped by currency without summing 
   assert.equal(collected.payments[0].currency, 'USD');
 });
 
+test('invoice amounts render with two decimal places even when Postgres omits a trailing zero', async () => {
+  const store = makeStore({invoices:[invoice(INV_1,{currency:'AUD',total_amount:'472.7',amount_paid:'0'})]});
+  const tools = createAssistantTools({store});
+  const rows = await tools.execute('getInvoices',{});
+  assert.equal(rows[0].totalAmount,'472.70');
+  assert.equal(rows[0].amountPaid,'0.00');
+  assert.equal(rows[0].outstandingAmount,'472.70');
+});
+
 test("overdue uses UTC date and includes past-due drafts while excluding paid and zero balances", async () => {
   const store = makeStore({ invoices: [
     invoice(INV_1, { due_date: "2026-09-21", status: "overdue", total_amount: "10.00", amount_paid: "2.00" }),

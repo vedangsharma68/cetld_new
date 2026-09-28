@@ -174,7 +174,7 @@ function safeInvoice(invoice) {
     subtotal: decimalMetadata(metadata?.subtotal), tax: taxMinor === null ? decimalMetadata(metadata?.tax) : money(BigInt(taxMinor)),
     invoiceDirection: safeInvoiceDirection(metadata),
     lineItemCount: Array.isArray(metadata?.line_items) ? metadata.line_items.length : null,
-    totalAmount: String(invoice.total_amount), amountPaid: String(invoice.amount_paid), outstandingAmount: money(total - paid),
+    totalAmount: money(total), amountPaid: money(paid), outstandingAmount: money(total - paid),
     paymentStatus: isFullyPaid ? "paid" : paid > 0n ? "partially_paid" : "unpaid", isFullyPaid,
     status: invoice.status, invoiceStatus: invoice.status, notes: safeText(invoice.notes, 4000),
     createdAt: invoice.created_at, updatedAt: invoice.updated_at,

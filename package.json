@@ -14,7 +14,8 @@
   "type": "module",
   "dependencies": {
     "@supabase/supabase-js": "2.116.0",
-    "@vercel/functions": "3.9.9"
+    "@vercel/functions": "3.9.9",
+    "pdfjs-dist": "5.4.394"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.8",

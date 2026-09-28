@@ -92,6 +92,13 @@ async function readBoundedText(response, maxBytes = MAX_RESPONSE_BYTES) {
   if (typeof text !== 'string' || new TextEncoder().encode(text).byteLength > maxBytes) throw new AIError('INVALID_RESPONSE');
   return text;
 }
+async function readBoundedJson(response) {
+  try { return JSON.parse(await readBoundedText(response)); }
+  catch (error) {
+    if (error instanceof AIError) throw error;
+    throw new AIError('INVALID_RESPONSE');
+  }
+}
 function stripJsonFence(content) {
   const text = String(content || '').trim();
   const match = text.match(/^\x60\x60\x60(?:json)?\s*([\s\S]*?)\s*\x60\x60\x60$/i);
@@ -199,7 +206,7 @@ export class AIProvider {
     this.#openRouterApiKey = typeof openRouterApiKey === 'string' ? openRouterApiKey : (typeof apiKey === 'string' ? apiKey : '');
     this.fetchImpl = fetchImpl;
     this.timeoutMs = Math.max(1, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
-    this.maxAttempts = Math.min(2, Math.max(1, Number(maxAttempts) || 2));
+    this.maxAttempts = extractionPrimary ? 1 : Math.min(2, Math.max(1, Number(maxAttempts) || 2));
     this.retryDelayMs = Math.min(500, Math.max(0, Number(retryDelayMs) || 0));
     this.sleepImpl = sleepImpl;
   }
@@ -273,48 +280,56 @@ export class AIProvider {
   async #request(model, messages, options, usedFallback) {
     if (model === OPENROUTER_FREE_MODEL) {
       if (!this.#openRouterApiKey) throw new AIError('API_KEY_MISSING', 503);
-      const response = await this.#fetch(OPENROUTER_BASE_URL + '/chat/completions', {
+      return this.#fetch(OPENROUTER_BASE_URL + '/chat/completions', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', Authorization: `Bearer ${this.#openRouterApiKey}`},
         body: safeJsonStringify(openRouterRequest(messages, options)),
+      }, async response => {
+        const body = await readBoundedJson(response);
+        if (!response.ok || body?.error) throw statusError(response.status || body?.error?.code || 502);
+        const choice = body?.choices?.[0];
+        const message = choice?.message;
+        if (!message) throw new AIError('INVALID_RESPONSE');
+        const content = typeof message.content === 'string' ? message.content : Array.isArray(message.content) ? message.content.map(part => part?.text || '').join('') : '';
+        return {content, finishReason: choice.finish_reason || null, toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [], model, usedFallback};
       });
-      const body = JSON.parse(await readBoundedText(response));
-      if (!response.ok || body?.error) throw statusError(response.status || body?.error?.code || 502);
-      const choice = body?.choices?.[0];
-      const message = choice?.message;
-      if (!message) throw new AIError('INVALID_RESPONSE');
-      const content = typeof message.content === 'string' ? message.content : Array.isArray(message.content) ? message.content.map(part => part?.text || '').join('') : '';
-      return {content, finishReason: choice.finish_reason || null, toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [], model, usedFallback};
     }
     if (!this.#geminiApiKey) throw new AIError('API_KEY_MISSING', 503);
-    const response = await this.#fetch(`${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.#geminiApiKey)}`, {
+    return this.#fetch(`${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.#geminiApiKey)}`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: safeJsonStringify(geminiRequest(messages, options)),
+    }, async response => {
+      const body = await readBoundedJson(response);
+      if (!response.ok || body?.error) throw statusError(response.status || body?.error?.code || 502);
+      const parts = body?.candidates?.[0]?.content?.parts;
+      if (!Array.isArray(parts)) throw new AIError('INVALID_RESPONSE');
+      const content = parts.filter(part => typeof part?.text === 'string').map(part => part.text).join('');
+      const finishReason = body?.candidates?.[0]?.finishReason || null;
+      const toolCalls = parts.filter(part => part?.functionCall?.name).map((part, index) => ({
+        id: `gemini-call-${index}`,
+        type: 'function',
+        function: {name: part.functionCall.name, arguments: safeJsonStringify(part.functionCall.args || {})},
+      }));
+      if (!content && !toolCalls.length) throw new AIError('INVALID_RESPONSE');
+      return {content, finishReason, toolCalls, model, usedFallback};
     });
-    const text = await readBoundedText(response);
-    let body;
-    try { body = JSON.parse(text); } catch { throw new AIError('INVALID_RESPONSE'); }
-    if (!response.ok || body?.error) throw statusError(response.status || body?.error?.code || 502);
-    const parts = body?.candidates?.[0]?.content?.parts;
-    if (!Array.isArray(parts)) throw new AIError('INVALID_RESPONSE');
-    const content = parts.filter(part => typeof part?.text === 'string').map(part => part.text).join('');
-    const finishReason = body?.candidates?.[0]?.finishReason || null;
-    const toolCalls = parts.filter(part => part?.functionCall?.name).map((part, index) => ({
-      id: `gemini-call-${index}`,
-      type: 'function',
-      function: {name: part.functionCall.name, arguments: safeJsonStringify(part.functionCall.args || {})},
-    }));
-    if (!content && !toolCalls.length) throw new AIError('INVALID_RESPONSE');
-    return {content, finishReason, toolCalls, model, usedFallback};
   }
 
-  async #fetch(url, init) {
+  async #fetch(url, init, consumeResponse = response => response) {
     if (typeof this.fetchImpl !== 'function') throw new AIError('NETWORK_ERROR', 503);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    try { return await this.fetchImpl(url, {...init, signal: controller.signal, redirect: 'error'}); }
+    let timer;
+    const request = (async () => consumeResponse(await this.fetchImpl(url, {...init, signal: controller.signal, redirect: 'error'})))();
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new AIError('TIMEOUT', 504));
+      }, this.timeoutMs);
+    });
+    try { return await Promise.race([request, timeout]); }
     catch (error) {
+      if (error instanceof AIError) throw error;
       if (error?.name === 'AbortError') throw new AIError('TIMEOUT', 504);
       throw new AIError('NETWORK_ERROR', 503);
     } finally { clearTimeout(timer); }
