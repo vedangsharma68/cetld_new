@@ -1,6 +1,7 @@
 import {SUPPORTED_TWO_DECIMAL_CURRENCIES} from '../currency-contract.mjs';
 import {extractPdfText} from './pdf-text.mjs';
 import {parsePdfInvoiceText} from './pdf-invoice-parser.mjs';
+import {extractInvoiceFromImage} from './image-text.mjs';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const CONFIDENCE_THRESHOLD = 0.75;
@@ -296,6 +297,19 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
     const printed = parsePdfInvoiceText(pdfText, {businessName});
     console.info('Invoice PDF text parsed:', {characters: pdfText.length, deterministic: Boolean(printed)});
     if (printed) return {...validateAndSanitize(printed, {verifiedPrintedAdjustments: true}), model: 'verified-pdf-text', usedFallback: false};
+  }
+  if (source.detected.startsWith('image/')) {
+    try {
+      const review = await extractInvoiceFromImage({bytes: source.bytes, mimeType: source.detected});
+      if (review.subtotal.value !== null && review.tax.value !== null && review.total.value !== null) {
+        // The OCR draft contains only evidence for review. No raw OCR text needs
+        // to leave the server; a user must confirm every uncertain field.
+        const {ocr, ...safeReview} = review;
+        return safeReview;
+      }
+    } catch (error) {
+      console.warn('Invoice image OCR unavailable:', error instanceof Error ? error.message : 'unknown error');
+    }
   }
   const payload = makeMessages({ bytes, mimeType, fileName, businessName, pdfText });
   let sanitized;

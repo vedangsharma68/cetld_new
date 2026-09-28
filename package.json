@@ -16,7 +16,9 @@
     "@napi-rs/canvas": "0.1.100",
     "@supabase/supabase-js": "2.116.0",
     "@vercel/functions": "3.9.9",
-    "pdfjs-dist": "5.4.394"
+    "pdfjs-dist": "5.4.394",
+    "sharp": "0.35.5",
+    "tesseract.js": "7.0.0"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.8",

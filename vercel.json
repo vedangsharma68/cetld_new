@@ -1,5 +1,8 @@
 {
   "framework": null,
+  "functions": {
+    "api/ai.js": {"includeFiles": "vendor/tessdata/**", "maxDuration": 60}
+  },
   "crons": [
     {"path": "/api/whatsapp-process", "schedule": "0 0 * * *"}
   ],
