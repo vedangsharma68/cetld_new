@@ -2,7 +2,7 @@ import {APIError, object, requestBody, sendError, uuid} from './http.mjs';
 import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL, OPENROUTER_FREE_MODEL, VERIFIED_MODELS, isFallbackModelId, isPrimaryModelId, verifyModel} from './provider.mjs';
 import {authorizeAIWorkspace} from './store.mjs';
 import {extractInvoice} from './extraction.mjs';
-import {answerWorkspaceQuestion} from './assistant.mjs';
+import {answerWorkspaceQuestion, shouldLoadAccountingConnection} from './assistant.mjs';
 import {saveAssistantInvoice, retryAssistantInvoiceSync} from './invoice-ops.mjs';
 import {createAccountingTools} from './accounting-tools.mjs';
 import {createAccountingActionToken, verifyAccountingActionToken} from './accounting-actions.mjs';
@@ -94,7 +94,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         return res.status(200).json(await extractInvoice({provider: extractionProvider, businessName, ...file}));
       }
       let accounting = null;
-      if (env.SUPABASE_SERVICE_ROLE_KEY && env.ACCOUNTING_TOKEN_ENCRYPTION_KEY) {
+      if (shouldLoadAccountingConnection(body.message) && env.SUPABASE_SERVICE_ROLE_KEY && env.ACCOUNTING_TOKEN_ENCRYPTION_KEY) {
         try {
           const {createAccountingRuntime} = await import('../automation/runtime.mjs');
           const integration = createAccountingRuntime({env, fetchImpl});

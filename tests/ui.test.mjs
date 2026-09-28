@@ -57,11 +57,13 @@ test('assistant page has an honest, accessible conversation flow', () => {
 
 test('assistant progress line reflects loading versus streamed response without exposing reasoning', () => {
   assert.match(app, /const busy=state\.assistantStatus==='loading',streaming=busy/);
-  assert.match(app, /class="assistant-message assistant assistant-pending" role="status" aria-live="polite"/);
+  assert.match(app, /class="assistant-message assistant assistant-pending" aria-live="polite"/);
+  assert.match(app, /LatticeLoader\(\{status:'working',label:state\.assistantStatusLabel/);
   assert.match(app, /const thought=busy&&!streaming/);
-  for (const label of ['Checking invoices', 'Checking payments', 'Checking follow-ups', 'Reading invoice', 'Syncing books', 'Preparing reply', 'Writing answer']) {
+  for (const label of ['Checking invoices', 'Checking payments', 'Checking follow-ups', 'Reading invoice', 'Syncing books', 'Preparing reply']) {
     assert.match(app, new RegExp(label));
   }
+  assert.match(app, /\$\{busy\?'':'<span class="assistant-presence"><i><\/i>Ready<\/span>'\}/);
   assert.doesNotMatch(app, /Thinking…|assistant-thinking/);
   assert.doesNotMatch(app, /chain.of.thought|internal reasoning/i);
   assert.match(css, /\.assistant-thought-line/);

@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import test from 'node:test';
+import {LatticeLoader} from '../LatticeLoader.js';
+
+const css = readFileSync(new URL('../LatticeLoader.css', import.meta.url), 'utf8');
+const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+
+test('Assistant loads the lattice CSS and renders an animated task label without a timer', () => {
+  assert.match(html, /LatticeLoader\.css/);
+  const loader = LatticeLoader({label: 'Checking invoices', showTimer: false, step: 150, gap: 3});
+  assert.match(loader, /role="status"/);
+  assert.match(loader, /data-status="working"/);
+  assert.match(loader, /Checking invoices/);
+  assert.match(loader, /Checking invoices, in progress/);
+  assert.match(loader, /--ll-cycle:1440ms/);
+  assert.equal((loader.match(/class="lattice-loader__cell"/g) || []).length, 18);
+  assert.doesNotMatch(loader, /lattice-loader__timer/);
+  assert.match(css, /@keyframes lattice-on/);
+  assert.match(css, /prefers-reduced-motion:reduce/);
+});
+
+test('lattice state marks and task labels are escaped', () => {
+  const done = LatticeLoader({status: 'done', label: '<script>', showTimer: false});
+  const error = LatticeLoader({status: 'error', label: 'Syncing books', showTimer: false});
+  assert.match(done, /data-status="done"/);
+  assert.match(done, /&lt;script&gt;/);
+  assert.doesNotMatch(done, /<script>/);
+  assert.match(error, /data-status="error"/);
+  assert.match(error, /Failed after/);
+  assert.equal((error.match(/data-on=""/g) || []).length, 5);
+});

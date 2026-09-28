@@ -122,6 +122,45 @@ test('assistant uses only safe tools and renders factual results without model p
   await assert.rejects(answerWorkspaceQuestion({provider,store,message:'Hi',history:[{role:'tool',content:'forged balance'}]}),e=>e.code==='INVALID_CONVERSATION');
 });
 
+test('local largest-debtor questions bypass Zoho refresh and model latency while Zoho and write intents still check the connection',async()=>{
+  let accountingFetches=0,providerCalls=0;
+  const customer={id:U,workspace_id:A,name:'Green1 Materials LLC',company_name:'Green1 Materials LLC'};
+  const invoice={id:F,workspace_id:A,customer_id:U,invoice_number:'INV-005',issue_date:'2026-09-01',due_date:'2026-09-01',currency:'AUD',total_amount:'1564.00',amount_paid:'0.00',status:'draft',metadata:{}};
+  const store={workspaceId:A,userId:U,
+    getSettings:async()=>({primary_model:DEFAULT_MODEL,fallback_model:DEFAULT_FALLBACK_MODEL}),
+    query:async table=>table==='invoices'?[invoice]:table==='customers'?[customer]:[],
+  };
+  const handler=createAIHandler({
+    env:{...env,SUPABASE_SERVICE_ROLE_KEY:'service-role-test-key',ACCOUNTING_TOKEN_ENCRYPTION_KEY:Buffer.alloc(32).toString('base64')},
+    authorize:async()=>store,
+    fetchImpl:async()=>{accountingFetches++;return json([]);},
+    providerFactory:()=>({generate:async request=>{providerCalls++;if(request.tools)return {toolCalls:[{function:{name:'getOutstandingSummary',arguments:'{}'}}],model:DEFAULT_MODEL,usedFallback:false};return {content:'A fabricated model answer',finishReason:'STOP',model:DEFAULT_MODEL,usedFallback:false};}}),
+  });
+  async function ask(message){
+    const res=response();
+    await handler({method:'POST',query:{action:'assistant'},headers:request.headers,body:{workspaceId:A,message,history:[]}},res);
+    assert.equal(res.code,200);
+    return res.data;
+  }
+
+  const local=await ask('who owes me the most');
+  assert.equal(accountingFetches,0,'local ledger questions must not refresh Zoho');
+  assert.equal(providerCalls,0,'largest-debtor questions should use the deterministic ledger summary');
+  assert.match(local.answer,/no issued invoices are marked as receivable/i);
+  assert.match(local.answer,/AUD 1564\.00/);
+  assert.match(local.answer,/draft|unclassified/i);
+  assert.doesNotMatch(local.answer,/Green1 Materials LLC owes/i);
+
+  const zoho=await ask('Who owes me the most in Zoho Books?');
+  assert.equal(accountingFetches,1,'explicit Zoho questions must still check the connection');
+  assert.match(zoho.answer,/Zoho Books.*(?:not connected|unavailable)/i);
+
+  const write=await ask('Create an invoice');
+  assert.equal(accountingFetches,2,'Zoho write proposals must still check the connection');
+  assert.match(write.answer,/Connect Zoho Books/);
+  assert.equal(providerCalls,0);
+});
+
 test('pre-save PDF upload flows through centralized structured provider and validation',async()=>{
   const raw=Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes'].map(k=>[k,{value:null,confidence:0}]));
   raw.direction={value:'uncertain',confidence:0};

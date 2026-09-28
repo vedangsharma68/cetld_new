@@ -51,6 +51,18 @@ function asksForZoho(message) {
   return /\bzoho(?:\s+books)?\b/i.test(message);
 }
 
+function isLargestDebtorQuestion(message) {
+  if (/\b(?:do|does|did)\s+(?:i|we)\s+owe\b|\b(?:i|we)\s+owe\b/i.test(message)) return false;
+  return /\b(?:who|which\s+(?:customer|client|company))\b.{0,80}\b(?:owe|owes|owing)\b.{0,40}\b(?:most|largest|biggest|highest)\b/i.test(message)
+    || /\b(?:largest|biggest|top)\s+(?:customer\s+)?(?:debtors?|balances?)\b/i.test(message)
+    || /\bwho\b.{0,40}\b(?:has|with)\b.{0,20}\b(?:largest|biggest|highest)\b.{0,20}\b(?:balance|debt|amount)\b/i.test(message);
+}
+
+export function shouldLoadAccountingConnection(message) {
+  return typeof message === 'string'
+    && (asksForZoho(message) || isWriteIntent(message) || !isLargestDebtorQuestion(message));
+}
+
 function evidenceFor(source, asOf) {
   const data = source?.data;
   let complete = null;
@@ -271,6 +283,36 @@ function factualFallback(sources, message = '') {
   }
   return 'I found workspace data, but there is not enough verified information to give a useful answer.';
 }
+
+function largestDebtorFallback(data) {
+  const debtors = Array.isArray(data?.debtors) ? data.debtors : [];
+  if (debtors.length) {
+    const ranks = debtors.map(row => `${row.customerName || 'Unknown customer'} — ${row.currency} ${row.outstandingAmount}`);
+    const ranking = debtors.length === 1
+      ? `The largest confirmed customer receivable is ${ranks[0]}.`
+      : `Largest confirmed customer receivables by currency: ${ranks.join('; ')}. Amounts in different currencies cannot be compared.`;
+    const excluded = Object.values(data.draftBalancesByCurrency || {}).some(row => Number(row?.outstandingAmount) > 0)
+      || Object.values(data.unclassifiedBalancesByCurrency || {}).some(row => Number(row?.outstandingAmount) > 0);
+    return excluded ? `${ranking} Draft and unclassified balances are excluded until their status and direction are confirmed.` : ranking;
+  }
+
+  const format = groups => Object.entries(groups || {})
+    .filter(([, row]) => Number(row?.outstandingAmount) > 0)
+    .map(([currency, row]) => `${currency} ${row.outstandingAmount}`)
+    .join(', ');
+  const draftBalances = format(data?.draftBalancesByCurrency);
+  const payableBalances = format(data?.payablesByCurrency);
+  const unclassifiedBalances = format(data?.unclassifiedBalancesByCurrency);
+  const openBalances = format(data?.currencies);
+  if (!openBalances) return 'There are no unpaid ledger balances, so no customer can be confirmed as owing money.';
+
+  const currencies = Object.keys(data?.currencies || {});
+  const reviewTypes = [draftBalances ? 'draft' : '', unclassifiedBalances ? 'unclassified direction' : '', payableBalances ? 'payable' : ''].filter(Boolean);
+  const note = reviewTypes.length ? ` These open balances are ${reviewTypes.join(', ')} review items, not confirmed customer debt.` : ' These open balances are not confirmed customer receivables.';
+  const overlap = draftBalances && unclassifiedBalances ? ' Draft and unclassified figures may overlap.' : '';
+  const comparison = currencies.length > 1 ? ' Amounts in different currencies cannot be compared.' : '';
+  return `I cannot rank confirmed customer debt because no issued invoices are marked as receivable. Unconfirmed open balances by currency: ${openBalances}.${note}${overlap}${comparison}`;
+}
 function containsUnsupportedNumber(answer, sources) {
   const sourceText = JSON.stringify(sources);
   const sourceNumbers = new Set(sourceText.match(/\d+(?:[.,]\d+)*/g) || []);
@@ -450,6 +492,10 @@ export async function answerWorkspaceQuestion({provider, store, message, history
   if (prompt === 'what needs my attention today' || prompt === 'which invoices are most overdue') {
     const source = {tool:'getOverdueInvoices',label:LABELS.getOverdueInvoices,data:await tools.execute('getOverdueInvoices',{})};
     return withEvidence({answer:factualFallback([source],message),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
+  }
+  if (!asksForZoho(message) && !isWriteIntent(message) && isLargestDebtorQuestion(message)) {
+    const source = {tool:'getOutstandingSummary',label:LABELS.getOutstandingSummary,data:await tools.execute('getOutstandingSummary',{})};
+    return withEvidence({answer:largestDebtorFallback(source.data),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
   }
   const writeIntent = isWriteIntent(message);
   if (writeIntent && !accounting) return withEvidence({answer:'Connect Zoho Books before creating or editing an invoice there.',asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true,pendingAction:null}, {tool:'getZohoBooksData',data:{complete:false,truncated:false}});

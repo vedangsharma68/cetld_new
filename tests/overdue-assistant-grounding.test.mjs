@@ -136,6 +136,67 @@ test('dashboard overdue prompts bypass an AI planner that could add an unsupport
   }
 });
 
+test('largest-debtor answers rank confirmed receivables per currency and exclude unconfirmed drafts',async()=>{
+  const rankedInvoices=[
+    {...invoice('10000000-0000-4000-8000-000000000011',CUSTOMER_GREEN,'AUD-100','2026-09-01','AUD','100.00','0.00','sent'),metadata:{invoice_direction:'receivable'}},
+    {...invoice('10000000-0000-4000-8000-000000000012',CUSTOMER_MINERAL,'AUD-250','2026-09-01','AUD','250.00','0.00','sent'),metadata:{invoice_direction:'receivable'}},
+    {...invoice('10000000-0000-4000-8000-000000000013',CUSTOMER_SHIV,'INR-500','2026-09-01','INR','500.00','0.00','sent'),metadata:{invoice_direction:'receivable'}},
+    invoice('10000000-0000-4000-8000-000000000014',CUSTOMER_GREEN,'AUD-DRAFT','2026-09-01','AUD','9000.00','0.00','draft'),
+  ];
+  const rankedCustomers=customers.map(row=>({...row,company_name:row.name}));
+  const store=workspaceStore({invoices:rankedInvoices,customers:rankedCustomers,payments:[],invoice_files:[]});
+  let providerCalls=0;
+  const result=await answerWorkspaceQuestion({
+    provider:{generate:async()=>{providerCalls++;throw Error('largest-debtor questions must not wait on a model');}},
+    store,
+    message:'Who owes me the most?',
+    clock:fixedClock,
+  });
+
+  assert.equal(providerCalls,0);
+  assert.match(result.answer,/MineralTree.*AUD 250\.00/i);
+  assert.match(result.answer,/Shiv Engineering.*INR 500\.00/i);
+  assert.match(result.answer,/by currency/i);
+  assert.match(result.answer,/cannot (?:be )?compared|can't compare/i);
+  assert.match(result.answer,/draft.*excluded|exclude.*draft/i);
+  assert.doesNotMatch(result.answer,/Green1 Materials LLC.*AUD 9000\.00/i);
+  assert.equal(result.model,null);
+
+  const usResult=await answerWorkspaceQuestion({provider:{generate:async()=>{providerCalls++;throw Error('largest-debtor questions must not wait on a model');}},store,message:'Who owes us the most?',clock:fixedClock});
+  assert.match(usResult.answer,/MineralTree.*AUD 250\.00/i);
+  assert.equal(providerCalls,0);
+});
+
+test('who-do-I-owe phrasing does not enter the largest customer debtor shortcut',async()=>{
+  let providerCalled=false;
+  await assert.rejects(answerWorkspaceQuestion({
+    provider:{generate:async()=>{providerCalled=true;throw Error('payer questions must stay on their own planner path');}},
+    store:workspaceStore(),
+    message:'Who do I owe the most?',
+    clock:fixedClock,
+  }),/payer questions must stay on their own planner path/);
+  assert.equal(providerCalled,true);
+});
+
+test('explicit Zoho largest-debtor questions use connected Zoho data rather than the local ledger',async()=>{
+  const requests=[];
+  let zohoReads=0;
+  const result=await answerWorkspaceQuestion({
+    provider:{generate:async request=>{
+      requests.push(request);
+      if(request.tools)return {toolCalls:[{function:{name:'getZohoBooksData',arguments:'{"resource":"invoices"}'}}],model:'test-model',usedFallback:false};
+      return {content:'No matching Zoho Books records are in the selected results.',finishReason:'STOP',model:'test-model',usedFallback:false};
+    }},
+    store:workspaceStore(),
+    accounting:{readZohoData:async()=>{zohoReads++;return {records:[]};}},
+    message:'Who owes me the most in Zoho Books?',
+    clock:fixedClock,
+  });
+  assert.equal(zohoReads,1);
+  assert.ok(requests[0].tools.some(item=>item.function.name==='getZohoBooksData'));
+  assert.match(result.answer,/Zoho Books/);
+});
+
 test('truncated overdue results disclose partial details and evidence completeness',async()=>{
   const manyInvoices=Array.from({length:101},(_,index)=>invoice(
     `10000000-0000-4000-8000-${String(index+100).padStart(12,'0')}`,
