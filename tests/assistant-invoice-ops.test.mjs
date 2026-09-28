@@ -119,3 +119,18 @@ test('chat invoice updates validate arguments and require confirmation before wr
   const result=await updateAssistantInvoice({store,invoiceId,changes:{dueDate:'2026-10-20',currency:'USD'},confirmed:true});
   assert.equal(result.updated,true);assert.equal(writes,1);assert.equal(result.invoice.dueDate,'2026-10-20');
 });
+
+test('confirmed draft-to-paid update atomically settles the remaining balance',async()=>{
+  let directWrites=0, settlement;
+  const store={
+    async updateAssistantInvoice(){directWrites++;throw new Error('paid status must not be patched directly')},
+    async settleAssistantInvoice(id,key){settlement={id,key};return{id,invoice_number:'INV-DRAFT',due_date:base.dueDate,currency:'INR',total_amount:'118',amount_paid:'118',status:'paid',metadata:{followup_state:'cancelled'}}},
+  };
+  const key='assistant_update_0123456789abcdef0123456789abcdef';
+  const result=await updateAssistantInvoice({store,invoiceId,changes:{status:'paid'},idempotencyKey:key,confirmed:true});
+  assert.equal(result.updated,true);
+  assert.equal(result.invoice.status,'paid');
+  assert.equal(result.invoice.amountPaid,118);
+  assert.deepEqual(settlement,{id:invoiceId,key});
+  assert.equal(directWrites,0);
+});

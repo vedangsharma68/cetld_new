@@ -49,3 +49,22 @@ test('ordinary Assistant invoice creation relies on database settlement defaults
   assert.equal(Object.hasOwn(payload,'status'),false);
   assert.deepEqual(payload.metadata.line_items,lineItems);
 });
+
+test('Assistant paid updates settle the invoice through the atomic payment RPC',async()=>{
+  const calls=[],invoiceId='22222222-2222-4222-8222-222222222222';
+  const fetchImpl=async(url,options={})=>{
+    const parsed=new URL(url);calls.push({url:parsed,options});
+    if(parsed.pathname==='/auth/v1/user')return new Response(JSON.stringify({id:userId}),{status:200});
+    if(parsed.pathname==='/rest/v1/workspace_members')return new Response(JSON.stringify([{workspace_id:workspaceId,user_id:userId,role:'owner'}]),{status:200});
+    if(parsed.pathname==='/rest/v1/rpc/record_invoice_payment')return new Response(JSON.stringify({id:'payment-id'}),{status:200});
+    if(parsed.pathname==='/rest/v1/invoices')return new Response(JSON.stringify([{id:invoiceId,workspace_id:workspaceId,customer_id:customerId,invoice_number:'INV-DRAFT',currency:'INR',total_amount:'118.00',amount_paid:'118.00',status:'paid',metadata:{followup_state:'cancelled'}}]),{status:200});
+    throw new Error(`Unexpected request ${parsed.pathname}`);
+  };
+  const store=await authorizeAIWorkspace({headers:{authorization:'Bearer token-value-long-enough'}},workspaceId,{env:{SUPABASE_URL:'https://db.example.test',SUPABASE_PUBLISHABLE_KEY:'publishable',NODE_ENV:'test'},fetchImpl});
+  const key='assistant_update_0123456789abcdef0123456789abcdef';
+  const settled=await store.settleAssistantInvoice(invoiceId,key);
+  assert.equal(settled.status,'paid');
+  const rpc=calls.find(call=>call.url.pathname==='/rest/v1/rpc/record_invoice_payment');
+  assert.deepEqual(JSON.parse(rpc.options.body),{p_workspace_id:workspaceId,p_invoice_id:invoiceId,p_amount:null,p_idempotency_key:key,p_reference:'Marked paid in Cetld Assistant',p_settle_remaining:true});
+  assert.equal(calls.some(call=>call.options.method==='PATCH'),false);
+});

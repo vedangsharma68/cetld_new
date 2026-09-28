@@ -106,6 +106,9 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         result.pendingAction = {...result.pendingAction,confirmationToken};
       }
       return res.status(200).json(result);
-    } catch (error) { return sendError(res, error); }
+    } catch (error) {
+      if (req.query?.action === 'confirm-accounting-action' && (!Number.isInteger(error?.status) || error.status >= 500)) console.warn('Cetld assistant confirmed write failed:', {status:error?.status || 503,reason:error?.code || error?.name || 'unknown'});
+      return sendError(res, error);
+    }
   };
 }

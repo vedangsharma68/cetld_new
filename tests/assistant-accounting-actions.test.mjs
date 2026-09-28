@@ -9,6 +9,35 @@ const WORKSPACE = '22222222-2222-4222-8222-222222222222';
 const SECRET = 'test-secret-with-at-least-thirty-two-characters';
 const EMPTY_STORE = {query:async()=>[]};
 
+test('verbatim add-invoice request is deterministically proposed without calling the planner', async () => {
+  const provider = {generate:async()=>{throw new Error('planner must not run');}};
+  const result = await answerWorkspaceQuestion({provider,store:EMPTY_STORE,message:'add a new invoice in the name of Google.com, for 30k rupees and due day after tomorrow',clock:()=>new Date('2026-09-28T12:00:00.000Z')});
+  assert.equal(result.pendingAction.type,'create_invoice');
+  assert.equal(result.pendingAction.payload.invoice.clientName,'Google.com');
+  assert.equal(result.pendingAction.payload.invoice.total,30000);
+  assert.equal(result.pendingAction.payload.invoice.currency,'INR');
+  assert.equal(result.pendingAction.payload.invoice.dueDate,'2026-09-30');
+  assert.equal(result.model,null);
+});
+
+test('verbatim mark-latest-paid request is deterministically proposed without calling the planner', async () => {
+  const provider = {generate:async()=>{throw new Error('planner must not run');}};
+  const localStore={query:async(table,options)=>table==='invoices'?[{id:'33333333-3333-4333-8333-333333333333',invoice_number:'INV-NEW',customer_id:'44444444-4444-4444-8444-444444444444',issue_date:'2026-09-28',due_date:'2026-10-01',currency:'INR',total_amount:'30000',amount_paid:'0',status:'sent',metadata:{},created_at:'2026-09-28',updated_at:'2026-09-28'}]:table==='customers'?[{id:'44444444-4444-4444-8444-444444444444',name:'Google.com'}]:[]};
+  const result = await answerWorkspaceQuestion({provider,store:localStore,message:'mark the most recent invoice as paid',clock:()=>new Date('2026-09-28T12:00:00.000Z')});
+  assert.equal(result.pendingAction.type,'update_invoice');
+  assert.equal(result.pendingAction.payload.invoiceId,'33333333-3333-4333-8333-333333333333');
+  assert.deepEqual(result.pendingAction.payload.changes,{status:'paid'});
+  assert.match(result.pendingAction.payload.idempotencyKey,/^assistant_update_[a-f0-9]{32}$/);
+});
+
+test('terminal invoices get a friendly warning instead of an impossible paid proposal',async()=>{
+  const provider={generate:async()=>{throw new Error('planner must not run')}};
+  const localStore={query:async table=>table==='invoices'?[{id:'33333333-3333-4333-8333-333333333333',invoice_number:'INV-VOID',customer_id:'44444444-4444-4444-8444-444444444444',issue_date:'2026-09-28',due_date:'2026-10-01',currency:'INR',total_amount:'30000',amount_paid:'0',status:'void',metadata:{},created_at:'2026-09-28',updated_at:'2026-09-28'}]:table==='customers'?[{id:'44444444-4444-4444-8444-444444444444',name:'Google.com'}]:[]};
+  const result=await answerWorkspaceQuestion({provider,store:localStore,message:'mark the most recent invoice as paid'});
+  assert.equal(result.pendingAction,null);
+  assert.equal(result.answer,'INV-VOID is void, so it can’t be marked paid.');
+});
+
 test('Assistant create request returns a validated local proposal without writing', async () => {
   let created = 0;
   const provider = {generate:async()=>({toolCalls:[{function:{name:'createInvoice',arguments:JSON.stringify({invoiceNumber:'INV-1048',clientName:'Shiv Engineering',dueDate:'2026-10-15',total:84600,currency:'INR'})}}],model:'test',usedFallback:false})};
@@ -66,6 +95,22 @@ test('confirmation endpoint executes only the signed, explicitly confirmed updat
   await handler({...req,body:{...req.body,confirmed:false}},rejected);
   assert.equal(rejected.code,409);
   assert.equal(calls.length,1);
+});
+
+test('confirmation endpoint settles a draft invoice through the atomic payment path',async()=>{
+  const calls=[];
+  const store={userId:USER,workspaceId:WORKSPACE,async settleAssistantInvoice(id,key){calls.push([id,key]);return{id,invoice_number:'INV-DRAFT',due_date:'2026-10-01',currency:'INR',total_amount:'30000',amount_paid:'30000',status:'paid',metadata:{followup_state:'cancelled'}}}};
+  const handler=createAIHandler({env:{ACCOUNTING_TOKEN_ENCRYPTION_KEY:SECRET},authorize:async()=>store,accountingFactory:async()=>null});
+  const idempotencyKey='assistant_update_0123456789abcdef0123456789abcdef';
+  const payload={invoiceId:'33333333-3333-4333-8333-333333333333',changes:{status:'paid'},idempotencyKey};
+  const confirmationToken=createAccountingActionToken({action:'update_invoice',payload,userId:USER,workspaceId:WORKSPACE,secret:SECRET});
+  const req={method:'POST',query:{action:'confirm-accounting-action'},body:{workspaceId:WORKSPACE,confirmed:true,confirmationToken},headers:{}};
+  const res={code:0,data:null,setHeader(){},status(code){this.code=code;return this},json(data){this.data=data;return this}};
+  await handler(req,res);
+  assert.equal(res.code,200);
+  assert.equal(res.data.updated,true);
+  assert.equal(res.data.invoice.status,'paid');
+  assert.deepEqual(calls,[[payload.invoiceId,idempotencyKey]]);
 });
 
 test('confirmed create reports the real Zoho sync result', async () => {

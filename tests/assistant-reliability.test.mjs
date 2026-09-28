@@ -123,17 +123,16 @@ test('simple ledger reads return checked facts without calling the provider', as
   }
 });
 
-test('invalid invoice proposal planning never implies that an invoice was created or changed', async () => {
+test('incomplete deterministic invoice proposals ask for missing fields without implying a write', async () => {
   const result = await answerWorkspaceQuestion({
     provider:{generate:async()=>({toolCalls:[]})},
     store,
     accounting:{readZohoData:async()=>({records:[]})},
     message:'Create an invoice for Arbor & Finch',
   });
-  assert.match(result.answer, /couldn’t safely prepare that invoice request/i);
-  assert.match(result.answer, /No change was made/i);
+  assert.match(result.answer, /still need: invoice amount, currency, due date/i);
   assert.equal(result.pendingAction, null);
-  assert.equal(result.evidence.complete, false);
+  assert.equal(result.readOnly, true);
 });
 
 test('final answer guidance favors brief direct answers and preserves financial caveats', async () => {

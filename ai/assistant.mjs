@@ -444,8 +444,57 @@ function invoiceClarification(invoices) {
 }
 
 function isWriteIntent(message) {
-  return /\b(?:create|make|issue|generate|draft)\b.{0,80}\binvoice\b/i.test(message)
-    || /\b(?:change|update|edit|move|set)\b.{0,80}\b(?:invoice|INV[-#]?[A-Z0-9-]+)\b/i.test(message);
+  return /\b(?:add|create|make|issue|generate|draft)\b.{0,80}\b(?:new\s+)?invoice\b/i.test(message)
+    || /\b(?:mark|change|update|edit|move|set)\b.{0,80}\b(?:invoice|INV[-#]?[A-Z0-9-]+)\b/i.test(message);
+}
+
+function addUtcDays(clock, days) {
+  const date = new Date(clock());
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function parseRequestedDate(message, clock) {
+  if (/\bday after tomorrow\b/i.test(message)) return addUtcDays(clock, 2);
+  if (/\btomorrow\b/i.test(message)) return addUtcDays(clock, 1);
+  const relative = message.match(/\bin\s+(\d{1,3})\s+days?\b/i);
+  if (relative) return addUtcDays(clock, Number(relative[1]));
+  const iso = message.match(/\b(\d{4}-\d{2}-\d{2})\b/)?.[1];
+  if (iso && isValidDay(iso)) return iso;
+  const named = message.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(January|February|March|April|May|June|July|August|September|October|November|December)(?:\s+(\d{4}))?\b/i);
+  if (!named) return null;
+  const year = named[3] || String(new Date(clock()).getUTCFullYear());
+  const candidate = new Date(`${named[2]} ${named[1]}, ${year} 00:00:00 UTC`);
+  return Number.isFinite(candidate.getTime()) ? candidate.toISOString().slice(0, 10) : null;
+}
+
+function parseRequestedAmount(message) {
+  const match = message.match(/(?:₹\s*|\b(?:INR|Rs\.?|rupees?)\s*)?([0-9][0-9,]*(?:\.\d{1,2})?)\s*(k|thousand|lakhs?|lacs?)?\b/i);
+  if (!match) return null;
+  const base = Number(match[1].replaceAll(',', ''));
+  const multiplier = /^(?:lakh|lakhs|lac|lacs)$/i.test(match[2] || '') ? 100000 : /^(?:k|thousand)$/i.test(match[2] || '') ? 1000 : 1;
+  return Number.isFinite(base) && base > 0 ? base * multiplier : null;
+}
+
+function deterministicWriteProposal(message, clock) {
+  const create = /\b(?:add|create|make|issue|generate|draft)\b.{0,80}\b(?:new\s+)?invoice\b/i.test(message)
+    || /\bnew\s+invoice\b/i.test(message);
+  if (create) {
+    const client = message.match(/\bin the name of\s+(.+?)(?=\s*,?\s+(?:for|of|worth|amount|due)\b|[,;]|$)/i)?.[1]
+      || message.match(/\binvoice\s+(?:for|to)\s+(.+?)(?=\s*,?\s+(?:for|of|worth|amount|due)\b|[,;]|$)/i)?.[1];
+    const currency = /₹|\b(?:INR|rupees?|Rs\.?)\b/i.test(message) ? 'INR' : message.match(/\b(USD|EUR|GBP|AED|AUD|SGD|CAD|CHF|JPY|KWD|BHD)\b/i)?.[1]?.toUpperCase();
+    return {name:'createInvoice',args:{clientName:client?.trim(),total:parseRequestedAmount(message),currency,dueDate:parseRequestedDate(message,clock)}};
+  }
+  if (!/\b(?:mark|change|update|edit|move|set)\b/i.test(message) || !/\b(?:invoice|INV[-#]?[A-Z0-9-]+)\b/i.test(message)) return null;
+  const target = /\b(?:most recent|latest|newest)\s+invoice\b/i.test(message) ? 'most recent invoice' : invoiceLookupTarget(message);
+  const changes = {};
+  if (/\bas\s+(?:fully\s+)?paid\b|\bstatus\s+(?:to\s+)?paid\b/i.test(message)) changes.status = 'paid';
+  else if (/\bas\s+unpaid\b|\bstatus\s+(?:to\s+)?unpaid\b/i.test(message)) changes.status = 'sent';
+  if (/\b(?:amount|total)\b/i.test(message)) changes.total = parseRequestedAmount(message);
+  if (/\bdue\s+date\b/i.test(message)) changes.dueDate = parseRequestedDate(message,clock);
+  const client = message.match(/\b(?:client|customer)\s+(?:name\s+)?(?:to\s+|as\s+)(.+?)(?=[,.;]|$)/i)?.[1];
+  if (client) changes.clientName = client.trim();
+  return target ? {name:'updateInvoice',args:{target,changes}} : null;
 }
 
 function isValidDay(value) {
@@ -489,8 +538,14 @@ async function prepareProposal({name, args, tools, clock}) {
     if (!keys.length || keys.some(key => !['total','dueDate','status','clientName','currency'].includes(key))) throw new APIError(502, 'INVALID_TOOL_ARGUMENTS');
     if (args.changes.dueDate !== undefined && !isValidDay(args.changes.dueDate)) return {answer:'I could not safely interpret the requested due date. Please provide it as a calendar date.',pendingAction:null};
     const changes = {...args.changes};
+    if (changes.status === 'paid' && ['void','cancelled'].includes(invoice.status)) {
+      return {answer:`${invoice.invoiceNumber} is ${invoice.status}, so it can’t be marked paid.`,pendingAction:null};
+    }
+    if (changes.status === 'paid' && invoice.isFullyPaid) {
+      return {answer:`${invoice.invoiceNumber} is already marked paid.`,pendingAction:null};
+    }
     const label = keys.map(key => `${key === 'dueDate' ? 'due date' : key} to ${key === 'dueDate' ? proposalDate(changes[key]) : changes[key]}`).join(', ');
-    return {answer:`Update ${invoice.invoiceNumber} for ${invoice.customerName || 'the customer'}: ${label}?`,pendingAction:{type:'update_invoice',payload:{invoiceId:invoice.id,changes},invoice:{number:invoice.invoiceNumber,customerName:invoice.customerName,currency:invoice.currency,total:invoice.totalAmount}}};
+    return {answer:`Update ${invoice.invoiceNumber} for ${invoice.customerName || 'the customer'}: ${label}?`,pendingAction:{type:'update_invoice',payload:{invoiceId:invoice.id,changes,idempotencyKey:`assistant_update_${randomUUID().replaceAll('-','')}`},invoice:{number:invoice.invoiceNumber,customerName:invoice.customerName,currency:invoice.currency,total:invoice.totalAmount}}};
   }
   throw new APIError(400, 'TOOL_NOT_ALLOWED');
 }
@@ -534,6 +589,11 @@ export async function answerWorkspaceQuestion({provider, store, message, history
   if (offScope) return withEvidence({answer: offScope, asOf: clock().toISOString(), timezone: 'UTC', model: null, usedFallback: false, readOnly: true}, {tool:'none',data:{complete:true,truncated:false}});
 
   const tools = createAssistantTools({store, clock, accounting});
+  const deterministicWrite = deterministicWriteProposal(message, clock);
+  if (deterministicWrite) {
+    const proposal = await prepareProposal({...deterministicWrite,tools,clock});
+    return {answer:redactInternalIds(proposal.answer),pendingAction:proposal.pendingAction,asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true};
+  }
   if (asksForZoho(message) && !zohoAvailable(accounting)) {
     return withEvidence({answer:'Zoho Books is not connected or is currently unavailable, so I can’t retrieve Zoho records. Check the connection and try again.',asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true}, {tool:'getZohoBooksData',data:{complete:false,truncated:false}});
   }

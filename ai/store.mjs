@@ -84,6 +84,13 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
       if (rows.length !== 1) throw new APIError(404, 'INVOICE_NOT_FOUND');
       return rows[0];
     },
+    async settleAssistantInvoice(invoiceId, idempotencyKey) {
+      if (typeof idempotencyKey !== 'string' || !/^assistant_update_[a-f0-9]{32}$/.test(idempotencyKey)) throw new APIError(400, 'INVALID_IDEMPOTENCY_KEY');
+      await request('/rest/v1/rpc/record_invoice_payment', {method: 'POST', body: JSON.stringify({p_workspace_id: workspaceId, p_invoice_id: uuid(invoiceId), p_amount: null, p_idempotency_key: idempotencyKey, p_reference: 'Marked paid in Cetld Assistant', p_settle_remaining: true})});
+      const row = await store.getAssistantInvoice(invoiceId);
+      if (!row) throw new APIError(404, 'INVOICE_NOT_FOUND');
+      return row;
+    },
     async updateAssistantInvoiceMetadata(invoiceId, metadata, synchronization = {}) {
       const allowed = ['external_provider', 'external_invoice_id', 'last_synced_at', 'sync_status', 'last_sync_error'];
       if (!synchronization || typeof synchronization !== 'object' || Object.keys(synchronization).some(key => !allowed.includes(key))) throw new APIError(400, 'INVALID_INVOICE_SYNC_STATE');

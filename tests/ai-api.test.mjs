@@ -161,7 +161,7 @@ test('local ledger reads and invoice writes bypass Zoho while explicit Zoho read
   assert.equal(accountingFetches,1,'Cetld write proposals must not require Zoho');
   assert.match(write.answer,/New invoice: Google\.com/);
   assert.equal(write.pendingAction.type,'create_invoice');
-  assert.equal(providerCalls,1);
+  assert.equal(providerCalls,0,'deterministic write proposals must bypass the planner');
 });
 
 test('pre-save PDF upload flows through centralized structured provider and validation',async()=>{
