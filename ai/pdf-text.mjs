@@ -1,5 +1,3 @@
-import {getDocument} from 'pdfjs-dist/legacy/build/pdf.mjs';
-
 const MAX_PAGES = 20;
 const MAX_TEXT_CHARS = 120_000;
 const DEFAULT_TIMEOUT_MS = 8_000;
@@ -7,10 +5,16 @@ const DEFAULT_TIMEOUT_MS = 8_000;
 // A selectable-text PDF is cheaper and more portable for free text models than
 // forwarding a binary PDF. Return null for scans or unsupported documents so
 // callers can use their existing document-understanding path.
-export async function extractPdfText(bytes, {getDocumentImpl = getDocument, timeoutMs = DEFAULT_TIMEOUT_MS} = {}) {
+export async function extractPdfText(bytes, {getDocumentImpl, timeoutMs = DEFAULT_TIMEOUT_MS} = {}) {
   let task;
   let timer;
   try {
+    // Keep PDF.js loading inside this optional path: a missing native canvas
+    // build must never take down unrelated Assistant requests at module load.
+    if (!getDocumentImpl) {
+      await import('@napi-rs/canvas');
+      ({getDocument: getDocumentImpl} = await import('pdfjs-dist/legacy/build/pdf.mjs'));
+    }
     task = getDocumentImpl({data: Uint8Array.from(bytes), useSystemFonts: true, disableFontFace: true});
     const parse = (async () => {
       const document = await task.promise;
