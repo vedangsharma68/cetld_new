@@ -13,6 +13,9 @@ export async function extractPdfText(bytes, {getDocumentImpl, timeoutMs = DEFAUL
     // build must never take down unrelated Assistant requests at module load.
     if (!getDocumentImpl) {
       await import('@napi-rs/canvas');
+      // Vercel's file tracer does not retain PDF.js's implicit worker file.
+      // The worker module registers its in-process handler for Node parsing.
+      await import('pdfjs-dist/legacy/build/pdf.worker.mjs');
       ({getDocument: getDocumentImpl} = await import('pdfjs-dist/legacy/build/pdf.mjs'));
     }
     task = getDocumentImpl({data: Uint8Array.from(bytes), useSystemFonts: true, disableFontFace: true});
