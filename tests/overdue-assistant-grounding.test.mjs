@@ -66,6 +66,37 @@ test('overdue results include unpaid past-due drafts from the ledger and exclude
   assert.equal(overdue.balancesByCurrency.CHF,undefined);
 });
 
+test('paid-invoice questions read verified settlement records without a model plan', async () => {
+  const provider={generate:async()=>{throw new Error('Paid invoice lookup must not call the model');}};
+  for (const message of ['which invoices are paid??','What invoice was paid?','List paid invoices','How many invoices are paid?']) {
+    const result=await answerWorkspaceQuestion({provider,store:workspaceStore(),message,clock:fixedClock});
+    assert.match(result.answer,/1 fully paid invoice: 1001 — Ann Revolution \(CHF 1650\.00\)/);
+    assert.doesNotMatch(result.answer,/INV-005|1223113|GST-3425-26|couldn.t safely check/i);
+    assert.deepEqual(result.evidence.records.map(row=>row.label),['1001']);
+    assert.equal(result.evidence.complete,true);
+  }
+});
+
+test('paid-invoice lookup validates the paid amount, does not equate partial payments with full settlement', async () => {
+  const records={invoices:invoices.map(row => row.invoice_number === '1001' ? {...row,amount_paid:'500.00'} : row),customers,payments:[],invoice_files:[]};
+  const result=await answerWorkspaceQuestion({provider:{generate:async()=>{throw Error('No model call expected');}},store:workspaceStore(records),message:'Are there any paid invoices?',clock:fixedClock});
+  assert.equal(result.answer,'There are no fully paid invoices in this workspace right now.');
+  assert.equal(result.evidence.complete,true);
+  assert.deepEqual(result.evidence.records,[]);
+});
+
+test('paid-invoice lookup includes fully settled legacy rows with stale status and marks a shortened list', async () => {
+  const legacy=invoices[3];
+  const paidRows=Array.from({length:11},(_,index)=>({...legacy,id:`20000000-0000-4000-8000-${String(index).padStart(12,'0')}`,invoice_number:`PAID-${index}`,status:'sent'}));
+  const result=await answerWorkspaceQuestion({provider:{generate:async()=>{throw Error('No model call expected');}},store:workspaceStore({invoices:paidRows,customers,payments:[],invoice_files:[]}),message:'Show me paid invoices',clock:fixedClock});
+  assert.match(result.answer,/11 fully paid invoices/);
+  assert.match(result.answer,/Showing the first 10\./);
+  assert.doesNotMatch(result.answer,/PAID-10/);
+  assert.equal(result.evidence.complete,false);
+  assert.equal(result.evidence.truncated,true);
+  assert.equal(result.evidence.records.length,10);
+});
+
 function providerWithFalseEmptyOutstandingAnswer(){
   const requests=[];
   return {requests,async generate(request){

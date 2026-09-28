@@ -158,10 +158,9 @@ test('internal JSON and fenced tool payloads are replaced with factual user-faci
   assert.equal(Object.hasOwn(result, 'sources'), false);
 });
 
-test('generic overdue and paid invoice questions reach the planner instead of looking up "is" or "was"', async () => {
+test('generic overdue invoice questions reach the planner instead of looking up "is"', async () => {
   for (const [message, toolName, args] of [
     ['Which invoice is overdue?', 'getOverdueInvoices', {}],
-    ['What invoice was paid?', 'getInvoices', {status:'paid'}],
   ]) {
     const provider = plannedProvider(toolName, args);
     const lookups=[];

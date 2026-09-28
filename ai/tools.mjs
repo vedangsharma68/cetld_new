@@ -371,6 +371,20 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
 
   const execute = async (name, rawArgs = {}) => {
     switch (name) {
+      case "getFullyPaidInvoices": {
+        strictArgs(rawArgs, []);
+        const rows = await query(store, "invoices", INVOICE_SELECT, {limit: MAX_ROWS + 1});
+        const settled = rows.map(safeInvoice).filter(row => row.isFullyPaid);
+        const settledIds = new Set(settled.map(row => row.id));
+        const visible = rows.filter(row => settledIds.has(row.id)).slice(0, 10);
+        const customers = await customersForInvoices(visible);
+        return {
+          count: settled.length,
+          invoices: visible.map(row => ({...safeInvoice(row), customerName: customers.get(row.customer_id)?.company_name || customers.get(row.customer_id)?.name || null})),
+          complete: settled.length <= 10,
+          truncated: settled.length > 10,
+        };
+      }
       case "getInvoices": {
         const args = strictArgs(rawArgs, ["limit", "offset", "status", "customerId", "issueDateFrom", "issueDateTo"]);
         const limit = boundedInteger(args.limit, 25, 1, MAX_PAGE_SIZE, "limit");

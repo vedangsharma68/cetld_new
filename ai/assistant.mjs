@@ -86,6 +86,23 @@ function isLargestDebtorQuestion(message) {
     || /\bwho\b.{0,40}\b(?:has|with)\b.{0,20}\b(?:largest|biggest|highest)\b.{0,20}\b(?:balance|debt|amount)\b/i.test(message);
 }
 
+function isPaidInvoiceListQuestion(message) {
+  const prompt = message.trim().toLowerCase().replace(/[!?.,]+$/g, '').replace(/\s+/g, ' ');
+  return /^(?:which|what) invoices? (?:are|were|is|was|have been|has been) (?:fully )?(?:paid|settled)$/.test(prompt)
+    || /^(?:show|list)(?: me)? (?:all )?(?:the )?(?:fully )?(?:paid|settled) invoices?$/.test(prompt)
+    || /^(?:paid|settled) invoices?$/.test(prompt)
+    || /^how many (?:fully )?(?:paid|settled) invoices?(?: (?:do (?:i|we) have|are there))?$/.test(prompt)
+    || /^how many invoices? (?:are|were|have been) (?:fully )?(?:paid|settled)$/.test(prompt)
+    || /^(?:are there|do (?:i|we) have) any (?:fully )?(?:paid|settled) invoices?$/.test(prompt);
+}
+
+function paidInvoiceListAnswer(data) {
+  if (!data.count) return 'There are no fully paid invoices in this workspace right now.';
+  const rows = data.invoices.map(row => `${redactInternalIds(row.invoiceNumber || 'Invoice')}${row.customerName ? ` — ${redactInternalIds(row.customerName)}` : ''} (${row.currency} ${row.totalAmount})`);
+  const count = `${data.count} fully paid invoice${data.count === 1 ? '' : 's'}`;
+  return `${count}: ${rows.join('; ')}.${data.truncated ? ` Showing the first ${rows.length}.` : ''}`;
+}
+
 export function shouldLoadAccountingConnection(message) {
   return typeof message === 'string'
     && (asksForZoho(message) || isWriteIntent(message) || !isLargestDebtorQuestion(message));
@@ -545,6 +562,10 @@ export async function answerWorkspaceQuestion({provider, store, message, history
       ? invoiceDetailsFallback(invoice, message)
       : answer;
     return withEvidence({answer: safeAnswer, asOf: clock().toISOString(), timezone: 'UTC', model: response.model, usedFallback: response.usedFallback, readOnly: true}, sources[0]);
+  }
+  if (!asksForZoho(message) && !writeIntent && isPaidInvoiceListQuestion(message)) {
+    const source = {tool:'getInvoices', label:'Fully paid invoices', data:await tools.execute('getFullyPaidInvoices',{})};
+    return withEvidence({answer:paidInvoiceListAnswer(source.data),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
   }
   const allowedTools = writeIntent ? [...tools.definitions, createProposalTool, updateProposalTool] : tools.definitions;
   const plan = await provider.generate({
