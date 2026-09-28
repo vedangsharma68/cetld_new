@@ -20,6 +20,7 @@ function response(overrides = {}) {
     clientPhone: { value: '+919876543210', confidence: 0.88 },
     clientEmail: { value: 'billing@example.com', confidence: 0.97 },
     notes: { value: 'Payment due within 30 days', confidence: 0.9 },
+    paymentStatus: { value: 'unpaid', confidence: 0.98 },
     lineItems: {
       value: [{ description: 'Consulting', quantity: 2, unitPrice: 50, amount: 100, confidence: 0.9 }],
       confidence: 0.91,
@@ -59,6 +60,23 @@ test('accepts explicit USD and EUR currency codes', async () => {
     assert.equal(result.currency.value, currency);
     assert.equal(result.uncertainFields.includes('currency'), false);
   }
+});
+
+test('auto-marks an invoice paid only for explicit paid evidence', async () => {
+  const stamped = await run(response({paymentStatus:{value:'paid',confidence:.99},notes:{value:'PAID',confidence:.99}}));
+  assert.equal(stamped.autoMarkedPaid,true);
+  assert.match(stamped.autoPaidReason,/explicitly says it is paid/i);
+  const zeroBalance = await run(response({outstandingAmount:{value:0,confidence:.99}}));
+  assert.equal(zeroBalance.autoMarkedPaid,true);
+  assert.match(zeroBalance.autoPaidReason,/zero balance/i);
+});
+
+test('ambiguous payment wording stays unpaid and flagged for review', async () => {
+  const result = await run(response({paymentStatus:{value:'ambiguous',confidence:.99},notes:{value:'Payment may have been received',confidence:.8}}));
+  assert.equal(result.autoMarkedPaid,false);
+  assert.equal(result.autoPaidReason,null);
+  assert.ok(result.uncertainFields.includes('paymentStatus'));
+  assert.ok(result.warnings.some(warning=>/ambiguous.*remain unpaid/i.test(warning)));
 });
 
 test('does not guess currency from an ambiguous symbol or accept an unknown currency', async () => {

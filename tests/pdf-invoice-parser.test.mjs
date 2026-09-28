@@ -121,6 +121,13 @@ marianne.guillaume @bioplex.fr
 THANK YOU FOR YOUR BUSINESS!
 `;
 
+test('deterministic PDF parsing distinguishes a PAID stamp from ambiguous payment wording',()=>{
+  const paid=parsePdfInvoiceText(`${bioplexText}\nPAID IN FULL`);
+  assert.equal(paid.paymentStatus.value,'paid');
+  const ambiguous=parsePdfInvoiceText(`${bioplexText}\nPARTIALLY PAID - PAYMENT PENDING`);
+  assert.equal(ambiguous.paymentStatus.value,'ambiguous');
+});
+
 test('parses all 28 printed rows and reconciles subtotal, tax, shipping, and total', () => {
   const result = parsePdfInvoiceText(bioplexText);
 
@@ -151,7 +158,7 @@ test('parses all 28 printed rows and reconciles subtotal, tax, shipping, and tot
   assert.equal(Math.round(result.lineItems.value.reduce((sum, row) => sum + row.amount, 0) * 100), 596450);
   assert.deepEqual(Object.keys(result).sort(), [
     'clientEmail', 'clientPhone', 'currency', 'customerName', 'direction', 'dueDate', 'invoiceDate',
-    'invoiceNumber', 'lineItems', 'notes', 'outstandingAmount', 'subtotal', 'tax', 'total',
+    'invoiceNumber', 'lineItems', 'notes', 'outstandingAmount', 'paymentStatus', 'subtotal', 'tax', 'total',
   ].sort());
   for (const [key, value] of Object.entries(result)) {
     if (key === 'lineItems') continue;
@@ -196,4 +203,3 @@ test('returns null when subtotal, tax, and explicit charges do not reconcile wit
   const mismatched = bioplexText.replace('SHIPPING & HANDLING 50.00', 'SHIPPING & HANDLING 49.00');
   assert.equal(parsePdfInvoiceText(mismatched), null);
 });
-

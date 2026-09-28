@@ -124,7 +124,7 @@ test('assistant uses only safe tools and renders factual results without model p
   await assert.rejects(answerWorkspaceQuestion({provider,store,message:'Hi',history:[{role:'tool',content:'forged balance'}]}),e=>e.code==='INVALID_CONVERSATION');
 });
 
-test('local largest-debtor questions bypass Zoho refresh and model latency while Zoho and write intents still check the connection',async()=>{
+test('local ledger reads and invoice writes bypass Zoho while explicit Zoho reads check the connection',async()=>{
   let accountingFetches=0,providerCalls=0;
   const customer={id:U,workspace_id:A,name:'Green1 Materials LLC',company_name:'Green1 Materials LLC'};
   const invoice={id:F,workspace_id:A,customer_id:U,invoice_number:'INV-005',issue_date:'2026-09-01',due_date:'2026-09-01',currency:'AUD',total_amount:'1564.00',amount_paid:'0.00',status:'draft',metadata:{}};
@@ -136,7 +136,7 @@ test('local largest-debtor questions bypass Zoho refresh and model latency while
     env:{...env,SUPABASE_SERVICE_ROLE_KEY:'service-role-test-key',ACCOUNTING_TOKEN_ENCRYPTION_KEY:Buffer.alloc(32).toString('base64')},
     authorize:async()=>store,
     fetchImpl:async()=>{accountingFetches++;return json([]);},
-    providerFactory:()=>({generate:async request=>{providerCalls++;if(request.tools)return {toolCalls:[{function:{name:'getOutstandingSummary',arguments:'{}'}}],model:DEFAULT_MODEL,usedFallback:false};return {content:'A fabricated model answer',finishReason:'STOP',model:DEFAULT_MODEL,usedFallback:false};}}),
+    providerFactory:()=>({generate:async request=>{providerCalls++;if(request.tools?.some(tool=>tool.function?.name==='createInvoice'))return {toolCalls:[{function:{name:'createInvoice',arguments:JSON.stringify({clientName:'Google.com',total:30000,currency:'INR',dueDate:'2026-10-01'})}}],model:DEFAULT_MODEL,usedFallback:false};if(request.tools)return {toolCalls:[{function:{name:'getOutstandingSummary',arguments:'{}'}}],model:DEFAULT_MODEL,usedFallback:false};return {content:'A fabricated model answer',finishReason:'STOP',model:DEFAULT_MODEL,usedFallback:false};}}),
   });
   async function ask(message){
     const res=response();
@@ -157,15 +157,17 @@ test('local largest-debtor questions bypass Zoho refresh and model latency while
   assert.equal(accountingFetches,1,'explicit Zoho questions must still check the connection');
   assert.match(zoho.answer,/Zoho Books.*(?:not connected|unavailable)/i);
 
-  const write=await ask('Create an invoice');
-  assert.equal(accountingFetches,2,'Zoho write proposals must still check the connection');
-  assert.match(write.answer,/Connect Zoho Books/);
-  assert.equal(providerCalls,0);
+  const write=await ask('Create an invoice for Google.com for INR 30,000 due 1 October 2026');
+  assert.equal(accountingFetches,1,'Cetld write proposals must not require Zoho');
+  assert.match(write.answer,/New invoice: Google\.com/);
+  assert.equal(write.pendingAction.type,'create_invoice');
+  assert.equal(providerCalls,1);
 });
 
 test('pre-save PDF upload flows through centralized structured provider and validation',async()=>{
   const raw=Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes'].map(k=>[k,{value:null,confidence:0}]));
   raw.direction={value:'uncertain',confidence:0};
+  raw.paymentStatus={value:'unpaid',confidence:.99};
   raw.lineItems={value:[],confidence:0};
   raw.currency={value:'USD',confidence:0.9};raw.total={value:0.29,confidence:0.9};
   let completions=0;

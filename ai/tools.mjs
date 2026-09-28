@@ -315,7 +315,7 @@ function optionalFollowUpSnapshot(metadata) {
 export function createAssistantTools({ store, clock = () => new Date(), accounting = null } = {}) {
   if (!store || typeof store.query !== "function") throw new TypeError("An authenticated workspace store with query() is required");
 
-  let lookupInvoice;
+  let lookupInvoice, lookupLatestInvoice;
   const activeDefinitions = (accounting?.readZohoData || accounting?.integration?.readZohoData) ? [...definitions, zohoBooksDataTool] : definitions;
 
   const customersForInvoices = async invoices => {
@@ -573,5 +573,12 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
     return result;
   };
 
-  return { definitions: activeDefinitions.map((item) => structuredClone(item)), tools: activeDefinitions.map((item) => structuredClone(item)), execute, lookupInvoice };
+  lookupLatestInvoice = async () => {
+    const rows = await query(store, 'invoices', INVOICE_SELECT, {order:'created_at.desc,id.desc',limit:2});
+    if (!rows.length) return null;
+    const customers = await customersForInvoices([rows[0]]);
+    return buildInvoiceContext(rows[0], customers.get(rows[0].customer_id));
+  };
+
+  return { definitions: activeDefinitions.map((item) => structuredClone(item)), tools: activeDefinitions.map((item) => structuredClone(item)), execute, lookupInvoice, lookupLatestInvoice };
 }

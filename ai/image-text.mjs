@@ -9,6 +9,7 @@ const MODEL_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 const UNCERTAIN_FIELDS = [
   'invoiceNumber', 'customerName', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total',
   'outstandingAmount', 'currency', 'clientPhone', 'clientEmail', 'notes', 'direction', 'lineItems',
+  'paymentStatus',
 ];
 const CURRENCIES = new Set(['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD', 'CHF']);
 
@@ -100,6 +101,9 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
       : 'Subtotal plus tax does not match total; check any printed rounding.');
   }
   if (lineItems.length === 0) warnings.push('No line items could be read reliably.');
+  const ambiguousPayment = /\b(?:part(?:ial(?:ly)?)?\s+paid|not\s+paid|unpaid|payment\s+(?:pending|expected))\b/i.test(cleanText);
+  const paidEvidence = !ambiguousPayment && (outstandingAmount === 0 || /\b(?:paid(?:\s+in\s+full)?|payment\s+received)\b/i.test(cleanText));
+  const paymentConfidence = confidence === null ? 0 : Math.min(.99, Math.max(.2, confidence / 100));
 
   return {
     invoiceNumber: field(null, confidence),
@@ -115,6 +119,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     clientEmail: field(null, confidence),
     notes: field(null, confidence),
     direction: {value: 'uncertain', confidence: 0},
+    paymentStatus: {value:ambiguousPayment?'ambiguous':paidEvidence?'paid':'unpaid', confidence:paymentConfidence},
     lineItems: {
       value: lineItems,
       confidence: lineItems.length && confidence !== null ? Math.min(FIELD_CONFIDENCE_CAP, confidence / 100) : 0,
@@ -122,6 +127,8 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     uncertainFields: [...UNCERTAIN_FIELDS],
     warnings: [...new Set(warnings)],
     reviewRequired: true,
+    autoMarkedPaid:paidEvidence&&paymentConfidence>=.75,
+    autoPaidReason:paidEvidence&&paymentConfidence>=.75?(outstandingAmount===0?'the document shows a zero balance due':'the document explicitly says it is paid'):null,
     ocr: {text: cleanText, confidence},
     model: 'tesseract.js-eng-offline',
     usedFallback: true,

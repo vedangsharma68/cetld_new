@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {extractInvoice} from '../ai/extraction.mjs';
+import {readFileSync} from 'node:fs';
 
 const extracted={
   direction:{value:'receivable',confidence:.98},
@@ -9,6 +10,7 @@ const extracted={
   subtotal:{value:100,confidence:.9},tax:{value:18,confidence:.9},total:{value:118,confidence:.99},
   outstandingAmount:{value:118,confidence:.9},currency:{value:'INR',confidence:.99},
   clientPhone:{value:null,confidence:0},clientEmail:{value:null,confidence:0},notes:{value:null,confidence:0},
+  paymentStatus:{value:'unpaid',confidence:.99},
   lineItems:{value:[],confidence:0},
 };
 
@@ -28,3 +30,9 @@ test('Assistant PDF upload uses Gemini native document content and preserves mis
   assert.equal(result.dueDate.value,null);assert.ok(result.uncertainFields.includes('dueDate'));
 });
 
+test('Assistant review explains system-detected paid status and preserves it through save confirmation',()=>{
+  const app=readFileSync(new URL('../app.js',import.meta.url),'utf8');
+  assert.match(app,/automatically marked paid because/);
+  assert.match(app,/name="autoMarkedPaid" value="true"/);
+  assert.match(app,/alreadyPaid:autoMarkedPaid\|\|values\.has\('alreadyPaid'\)/);
+});

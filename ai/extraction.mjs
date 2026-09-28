@@ -8,7 +8,7 @@ const CONFIDENCE_THRESHOLD = 0.75;
 
 const FIELD_NAMES = [
   'invoiceNumber', 'customerName', 'invoiceDate', 'dueDate', 'subtotal', 'tax',
-  'total', 'outstandingAmount', 'currency', 'clientPhone', 'clientEmail', 'notes', 'direction',
+  'total', 'outstandingAmount', 'currency', 'clientPhone', 'clientEmail', 'notes', 'direction', 'paymentStatus',
 ];
 const SCALAR_FIELDS = FIELD_NAMES;
 const LINE_ITEM_FIELDS = ['description', 'quantity', 'unitPrice', 'amount', 'confidence'];
@@ -29,7 +29,7 @@ const nullableNonNegativeNumber = () => ({anyOf: [{type: 'number', minimum: 0}, 
 const responseSchema = {
   type: 'object',
   additionalProperties: false,
-  required: [...FIELD_NAMES, 'lineItems'],
+  required: [...FIELD_NAMES.filter(name=>name!=='paymentStatus'), 'lineItems'],
   properties: {
     invoiceNumber: { ...FIELD_SCHEMA, properties: { ...FIELD_SCHEMA.properties, value: nullable('string') } },
     customerName: { ...FIELD_SCHEMA, properties: { ...FIELD_SCHEMA.properties, value: nullable('string') } },
@@ -44,6 +44,7 @@ const responseSchema = {
     clientEmail: { ...FIELD_SCHEMA, properties: { ...FIELD_SCHEMA.properties, value: nullable('string') } },
     notes: { ...FIELD_SCHEMA, properties: { ...FIELD_SCHEMA.properties, value: nullable('string') } },
     direction: { ...FIELD_SCHEMA, properties: { ...FIELD_SCHEMA.properties, value: {type:'string', enum:['receivable','payable','uncertain']} } },
+    paymentStatus: { ...FIELD_SCHEMA, properties: { ...FIELD_SCHEMA.properties, value: {type:'string', enum:['paid','unpaid','ambiguous']} } },
     lineItems: {
       type: 'object', additionalProperties: false, required: ['value', 'confidence'],
       properties: {
@@ -139,6 +140,7 @@ function makeMessages({ bytes, mimeType, fileName, businessName, pdfText }) {
     'For currency, return one of INR, USD, EUR, GBP, AED, SGD, AUD, CAD, or CHF only when printed explicitly; CETLD stores only two-decimal currencies. If another currency is printed, return null and mark the currency uncertain. Symbols such as $, £, or ¥ alone are ambiguous and must yield null. Monetary amounts may have no more than two decimal places.',
     'Return clientEmail exactly when a client/bill-to email address is explicitly printed; otherwise return null. Never infer an email address.',
     'Return clientPhone only when the complete number is explicitly present in valid E.164 form including its + country code. Do not invent a country prefix.',
+    'Classify paymentStatus as paid only when the document explicitly shows a PAID stamp or watermark, a zero balance due, or an unambiguous payment-received/paid-in-full statement. Use ambiguous for partial, conditional, questioned, negated, or unclear payment wording; otherwise use unpaid. Do not infer paid from a due date or payment instructions.',
     'Return short useful notes only when explicitly printed; otherwise return null. Extract up to 100 printed line items with description, quantity, unitPrice, and amount; return an empty array when none are legible. Set confidence per field and line item from 0 to 1 based only on legibility and direct support.',
   ].join(' ');
 
@@ -163,6 +165,7 @@ function makeMessages({ bytes, mimeType, fileName, businessName, pdfText }) {
 
 function validateAndSanitize(raw, {verifiedPrintedAdjustments = false} = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('response must be an object');
+  if (!Object.hasOwn(raw,'paymentStatus')) raw={...raw,paymentStatus:{value:'unpaid',confidence:0}};
   exactKeys(raw, [...FIELD_NAMES, 'lineItems'], 'response');
   const warnings = [];
   const uncertainFields = new Set();
@@ -174,6 +177,7 @@ function validateAndSanitize(raw, {verifiedPrintedAdjustments = false} = {}) {
     const confidence = finiteConfidence(item.confidence, name);
     let value = field(item.value, name === 'subtotal' || name === 'tax' || name === 'total' || name === 'outstandingAmount' ? 'number' : 'string', name, warnings);
     if (name === 'direction' && !['receivable','payable','uncertain'].includes(value)) fail('direction must be receivable, payable, or uncertain');
+    if (name === 'paymentStatus' && !['paid','unpaid','ambiguous'].includes(value)) fail('paymentStatus must be paid, unpaid, or ambiguous');
 
     if ((name === 'invoiceDate' || name === 'dueDate') && value !== null && !validIsoDate(value)) {
       value = null;
@@ -197,7 +201,7 @@ function validateAndSanitize(raw, {verifiedPrintedAdjustments = false} = {}) {
       }
     }
 
-    if (value === null || confidence < CONFIDENCE_THRESHOLD || (name === 'direction' && value === 'uncertain')) uncertainFields.add(name);
+    if (value === null || confidence < CONFIDENCE_THRESHOLD || (name === 'direction' && value === 'uncertain') || (name === 'paymentStatus' && value === 'ambiguous')) uncertainFields.add(name);
     result[name] = { value, confidence };
   }
 
@@ -246,6 +250,17 @@ function validateAndSanitize(raw, {verifiedPrintedAdjustments = false} = {}) {
     warnings.push('Due date is earlier than invoice date.');
   }
 
+  const zeroBalance = result.outstandingAmount.value === 0 && result.outstandingAmount.confidence >= CONFIDENCE_THRESHOLD && total !== null && total > 0;
+  const explicitPaid = result.paymentStatus.value === 'paid' && result.paymentStatus.confidence >= CONFIDENCE_THRESHOLD;
+  const autoMarkedPaid = explicitPaid || zeroBalance;
+  const autoPaidReason = zeroBalance ? 'the document shows a zero balance due' : explicitPaid ? 'the document explicitly says it is paid' : null;
+  if (autoMarkedPaid) {
+    result.paymentStatus = {value:'paid', confidence:Math.max(result.paymentStatus.confidence, result.outstandingAmount.confidence)};
+    uncertainFields.delete('paymentStatus');
+  } else if (result.paymentStatus.value === 'ambiguous') {
+    warnings.push('Payment wording is ambiguous, so this invoice will remain unpaid for review.');
+  }
+
   const lineItems = raw.lineItems;
   exactKeys(lineItems, ['value', 'confidence'], 'lineItems');
   const lineItemsConfidence = finiteConfidence(lineItems.confidence, 'lineItems');
@@ -284,6 +299,8 @@ function validateAndSanitize(raw, {verifiedPrintedAdjustments = false} = {}) {
     lineItems: {value: sanitizedLineItems, confidence: lineItemsConfidence},
     uncertainFields: [...uncertainFields],
     warnings: [...new Set(warnings)],
+    autoMarkedPaid,
+    autoPaidReason,
     reviewRequired: true,
   };
 }

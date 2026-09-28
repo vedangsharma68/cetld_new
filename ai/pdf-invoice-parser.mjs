@@ -28,7 +28,7 @@ function wrapped(value, confidence = 0.99) {
 function scalarFields(values) {
   return Object.fromEntries([
     'invoiceNumber', 'customerName', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total',
-    'outstandingAmount', 'currency', 'clientPhone', 'clientEmail', 'notes', 'direction',
+    'outstandingAmount', 'currency', 'clientPhone', 'clientEmail', 'notes', 'direction', 'paymentStatus',
   ].map((key) => [key, wrapped(values[key] ?? null, key === 'direction' && values[key] === 'uncertain' ? 0 : 0.99)]));
 }
 
@@ -300,6 +300,9 @@ export function parsePdfInvoiceText(text, { businessName = '' } = {}) {
     clientEmail,
     notes: [note, extraCharges || null].filter(Boolean).join('; ') || null,
     direction: classifyDirection(lines, businessName, buyerBlock, sellerBlock),
+    paymentStatus: /\b(?:part(?:ial(?:ly)?)?\s+paid|not\s+paid|unpaid|payment\s+(?:pending|expected))\b/i.test(text)
+      ? 'ambiguous'
+      : parsedTotals.outstanding === 0 || /\b(?:paid(?:\s+in\s+full)?|payment\s+received)\b/i.test(text) ? 'paid' : 'unpaid',
   };
 
   return {

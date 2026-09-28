@@ -3,8 +3,8 @@ import {createAssistantTools} from './tools.mjs';
 import {randomUUID} from 'node:crypto';
 import {AMOUNT_PRECISION_MESSAGE,CURRENCY_SUPPORT_MESSAGE,SUPPORTED_TWO_DECIMAL_CURRENCIES,isSupportedCurrency} from '../currency-contract.mjs';
 
-const createProposalTool = {type:'function',function:{name:'proposeCreateInvoice',description:'Prepare, but do not execute, a proposed Zoho Books invoice. Only include details explicitly supplied by the user. Return ISO dates. Never invent an invoice number, due date, customer, amount, or currency. CETLD supports only its listed two-decimal currencies.',parameters:{type:'object',properties:{invoiceNumber:{type:'string',maxLength:100},clientName:{type:'string',maxLength:255},clientEmail:{type:'string',maxLength:320},clientPhone:{type:'string',maxLength:40},invoiceDate:{type:'string',format:'date'},dueDate:{type:'string',format:'date'},total:{type:'number',minimum:0.01},subtotal:{type:'number',minimum:0},tax:{type:'number',minimum:0},currency:{type:'string',enum:SUPPORTED_TWO_DECIMAL_CURRENCIES},notes:{type:'string',maxLength:2000}},required:['clientName','total','currency'],additionalProperties:false}}};
-const updateProposalTool = {type:'function',function:{name:'proposeUpdateInvoice',description:'Prepare, but do not execute, a proposed update to one exact Zoho Books invoice. Only include the changed values explicitly requested by the user.',parameters:{type:'object',properties:{target:{type:'string',minLength:1,maxLength:100},changes:{type:'object',properties:{dueDate:{type:'string',format:'date'},invoiceDate:{type:'string',format:'date'},notes:{type:'string',maxLength:2000}},additionalProperties:false}},required:['target','changes'],additionalProperties:false}}};
+const createProposalTool = {type:'function',function:{name:'createInvoice',description:'Prepare, but do not execute, a Cetld invoice. Extract only user-supplied facts; invoice number is optional. Return ISO dates.',parameters:{type:'object',properties:{invoiceNumber:{type:'string',maxLength:100},clientName:{type:'string',maxLength:255},dueDate:{type:'string',format:'date'},total:{type:'number',minimum:0.01},subtotal:{type:'number',minimum:0},tax:{type:'number',minimum:0},currency:{type:'string',enum:SUPPORTED_TWO_DECIMAL_CURRENCIES},items:{type:'array',maxItems:100,items:{type:'object',properties:{description:{type:'string',maxLength:500},quantity:{type:'number',minimum:0},unitPrice:{type:'number',minimum:0},amount:{type:'number',minimum:0}},required:['description'],additionalProperties:false}},notes:{type:'string',maxLength:2000}},required:['clientName','total','currency','dueDate'],additionalProperties:false}}};
+const updateProposalTool = {type:'function',function:{name:'updateInvoice',description:'Prepare, but do not execute, an update to one exact Cetld invoice.',parameters:{type:'object',properties:{target:{type:'string',minLength:1,maxLength:100},changes:{type:'object',properties:{total:{type:'number',minimum:0.01},dueDate:{type:'string',format:'date'},status:{type:'string',enum:['draft','sent','overdue','paid','void','cancelled']},clientName:{type:'string',maxLength:255},currency:{type:'string',enum:SUPPORTED_TWO_DECIMAL_CURRENCIES}},additionalProperties:false}},required:['target','changes'],additionalProperties:false}}};
 
 const LABELS = {getZohoBooksData: 'Zoho Books records', getInvoices: 'Invoices', getCustomer: 'Customer', getPayments: 'Payments collected', getOutstandingSummary: 'Outstanding balances', getOverdueInvoices: 'Overdue invoices', getActivity: 'Recorded activity', getInvoiceDetails: 'Invoice details'};
 const SCOPE_ANSWER = "I'm here for your Cetld workspace — invoices, payments, customers, and balances. Try: what's overdue, who owes the most, or what got paid this week.";
@@ -24,6 +24,7 @@ function conversationalAnswer(message) {
   if (/^(?:ok(?:ay)?(?: then)?|all right|alright|yep|yeah|yup|got it|understood|noted|sounds good|that works|no problem|cool|great|perfect|sure(?: thing)?|fine)$/.test(text)) return "Okay — let me know if you'd like me to check another invoice or balance.";
   if (/^(?:thanks?|thank you|thx|appreciate it|i appreciate (?:it|that))$/.test(text)) return "You're welcome — I'm here if you need help with another invoice or payment.";
   if (/^(?:how are you|how's it going|how is it going)$/.test(text)) return "I'm here and ready to help with invoices, payments, and balances.";
+  if (/^(?:no you(?: are|'re) not|stop lying|again|that's not true|that is not true|you are wrong|you're wrong)$/.test(text)) return "I may have missed the context. I’m the Cetld assistant; tell me what you’d like me to correct or try again.";
   return null;
 }
 
@@ -39,6 +40,7 @@ function plannerFailureResult(message, clock, writeIntent, provider, plan, reaso
   console.warn('Cetld assistant planner failure:', {
     provider: provider?.constructor?.name || 'unknown',
     model: typeof plan?.model === 'string' ? plan.model : 'unknown',
+    status: plan?.status ?? reason,
     reason,
   });
   const answer = writeIntent
@@ -128,7 +130,7 @@ function simpleLedgerReadTool(message) {
 
 export function shouldLoadAccountingConnection(message) {
   return typeof message === 'string'
-    && (asksForZoho(message) || isWriteIntent(message) || !isLargestDebtorQuestion(message));
+    && (asksForZoho(message) || (!isWriteIntent(message) && !isLargestDebtorQuestion(message)));
 }
 
 function evidenceFor(source, asOf) {
@@ -442,8 +444,43 @@ function invoiceClarification(invoices) {
 }
 
 function isWriteIntent(message) {
-  return /\b(?:create|make|issue|generate|draft)\b.{0,80}\binvoice\b/i.test(message)
-    || /\b(?:change|update|edit|move|set)\b.{0,80}\b(?:invoice|INV[-#]?[A-Z0-9-]+)\b/i.test(message);
+  return /\b(?:add|create|make|issue|generate|draft)\b.{0,80}\binvoice\b/i.test(message)
+    || /\b(?:change|update|edit|move|set|mark)\b.{0,80}\b(?:invoice|INV[-#]?[A-Z0-9-]+)\b/i.test(message);
+}
+
+function addUtcDays(day, amount) {
+  const date=new Date(`${day}T00:00:00.000Z`);date.setUTCDate(date.getUTCDate()+amount);return date.toISOString().slice(0,10);
+}
+
+function deterministicCreateArgs(message, clock) {
+  if (!/\b(?:add|create|make|issue|generate|draft)\b.{0,80}\binvoice\b/i.test(message)) return null;
+  const client=message.match(/\b(?:in (?:the )?name of|for)\s+(.+?)(?=\s*,?\s+for\s+(?:₹|rs\.?|inr|[\d,.])|\s*,?\s+(?:worth|amount)|\s*,?\s+due\b|$)/i)?.[1]?.trim();
+  const amountMatch=message.match(/\b(?:for|worth|amount(?:\s+of)?)\s+(?:₹|rs\.?\s*|inr\s*)?([\d,.]+)\s*(k|thousand|lakh)?\s*(?:rupees?|inr)?\b/i);
+  if (!client || !amountMatch) return null;
+  let total=Number(amountMatch[1].replaceAll(',',''));
+  const unit=amountMatch[2]?.toLowerCase();if(unit==='k'||unit==='thousand')total*=1000;else if(unit==='lakh')total*=100000;
+  if (!Number.isFinite(total)||total<=0) return null;
+  const today=clock().toISOString().slice(0,10);
+  const dueDate=/\bday after tomorrow\b/i.test(message)?addUtcDays(today,2):/\btomorrow\b/i.test(message)?addUtcDays(today,1):message.match(/\bdue\s+(\d{4}-\d{2}-\d{2})\b/i)?.[1];
+  if (!dueDate) return null;
+  const currency=/\b(?:rupees?|inr|rs\.?)\b|₹/i.test(message)?'INR':message.match(/\b(USD|EUR|GBP|AED|SGD|AUD|CAD|CHF)\b/i)?.[1]?.toUpperCase();
+  return currency?{clientName:client,total,currency,dueDate}:null;
+}
+
+async function deterministicWriteProposal({message,tools,clock}) {
+  const createArgs=deterministicCreateArgs(message,clock);
+  if(createArgs)return prepareProposal({name:'createInvoice',args:createArgs,tools,clock});
+  if (/\bmark\s+(?:the\s+)?(?:most recent|latest)\s+invoice\s+(?:as\s+)?paid\b/i.test(message)) {
+    const invoice=await tools.lookupLatestInvoice();
+    if(!invoice)return {answer:"I couldn't find an invoice to mark as paid.",pendingAction:null};
+    return prepareUpdateForInvoice(invoice,{status:'paid'});
+  }
+  return null;
+}
+
+function prepareUpdateForInvoice(invoice, changes) {
+  const keys=Object.keys(changes),label=keys.map(key=>`${key==='dueDate'?'due date':key} to ${key==='dueDate'?proposalDate(changes[key]):changes[key]}`).join(', ');
+  return {answer:`Update ${invoice.invoiceNumber} for ${invoice.customerName||'the customer'}: ${label}?`,pendingAction:{type:'update_invoice',payload:{invoiceId:invoice.id,changes,idempotencyKey:`assistant_${randomUUID().replaceAll('-','')}`},invoice:{number:invoice.invoiceNumber,customerName:invoice.customerName,currency:invoice.currency,total:invoice.totalAmount}}};
 }
 
 function isValidDay(value) {
@@ -461,9 +498,9 @@ function hasAtMostTwoDecimalPlaces(value) {
   return Number.isFinite(value) && Math.abs(value * 100 - Math.round(value * 100)) < 1e-7;
 }
 
-async function prepareProposal({name, args, accounting, clock}) {
-  if (name === 'proposeCreateInvoice') {
-    const allowed = ['invoiceNumber','clientName','clientEmail','clientPhone','invoiceDate','dueDate','total','subtotal','tax','currency','notes'];
+async function prepareProposal({name, args, tools, clock}) {
+  if (name === 'createInvoice') {
+    const allowed = ['invoiceNumber','clientName','dueDate','total','subtotal','tax','currency','items','notes'];
     if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !allowed.includes(key))) throw new APIError(502, 'INVALID_TOOL_ARGUMENTS');
     const missing = [];
     if (typeof args.clientName !== 'string' || !args.clientName.trim()) missing.push('customer name');
@@ -471,31 +508,22 @@ async function prepareProposal({name, args, accounting, clock}) {
     if (typeof args.currency !== 'string' || !/^[A-Z]{3}$/.test(args.currency)) missing.push('currency');
     else if (!isSupportedCurrency(args.currency)) return {answer:CURRENCY_SUPPORT_MESSAGE,pendingAction:null};
     if ([args.total,args.subtotal,args.tax].some(value=>value!==undefined&&value!==null&&!hasAtMostTwoDecimalPlaces(value))) return {answer:AMOUNT_PRECISION_MESSAGE,pendingAction:null};
-    if (!args.invoiceNumber?.trim()) missing.push('invoice number');
     if (!isValidDay(args.dueDate)) missing.push('due date');
-    const invoiceDate = args.invoiceDate || clock().toISOString().slice(0,10);
-    if (!isValidDay(invoiceDate)) missing.push('invoice date');
-    if (missing.length) return {answer:`I can prepare the Zoho invoice, but I still need: ${[...new Set(missing)].join(', ')}.`, pendingAction:null};
-    if (!accounting) return {answer:'Connect Zoho Books before creating an invoice there.', pendingAction:null};
-    if (typeof args.clientEmail === 'string' && args.clientEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(args.clientEmail)) return {answer:'I could not safely validate the customer email. Please correct it before continuing.', pendingAction:null};
-    const invoice = {direction:'receivable',invoiceNumber:args.invoiceNumber.trim(),clientName:args.clientName.trim(),clientEmail:args.clientEmail || null,clientPhone:args.clientPhone || null,invoiceDate,dueDate:args.dueDate,total:args.total,subtotal:args.subtotal ?? null,tax:args.tax ?? null,outstanding:args.total,currency:args.currency,notes:args.notes || null,alreadyPaid:false};
+    if (missing.length) return {answer:`I can prepare the invoice, but I still need: ${[...new Set(missing)].join(', ')}.`, pendingAction:null};
+    const stamp = clock().toISOString().slice(0,10).replaceAll('-','');
+    const invoice = {direction:'receivable',invoiceNumber:args.invoiceNumber?.trim() || `INV-${stamp}-${randomUUID().slice(0,6).toUpperCase()}`,clientName:args.clientName.trim(),invoiceDate:clock().toISOString().slice(0,10),dueDate:args.dueDate,total:args.total,subtotal:args.subtotal ?? null,tax:args.tax ?? null,outstanding:args.total,currency:args.currency,notes:args.notes || null,lineItems:args.items || [],alreadyPaid:false};
     const payload = {invoice,idempotencyKey:`assistant_${randomUUID().replaceAll('-','')}`};
-    return {answer:`Create ${invoice.invoiceNumber} for ${invoice.clientName}, ${invoice.currency} ${invoice.total.toFixed(2)}, due ${proposalDate(invoice.dueDate)} in Zoho Books?`, pendingAction:{type:'create_invoice',payload,invoiceDateDefaulted:!args.invoiceDate}};
+    return {answer:`New invoice: ${invoice.clientName} — ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}, due ${proposalDate(invoice.dueDate)}.`, pendingAction:{type:'create_invoice',payload}};
   }
-  if (name === 'proposeUpdateInvoice') {
+  if (name === 'updateInvoice') {
     if (!args || typeof args !== 'object' || Array.isArray(args) || typeof args.target !== 'string' || !args.target.trim() || !args.changes || typeof args.changes !== 'object' || Array.isArray(args.changes)) throw new APIError(502, 'INVALID_TOOL_ARGUMENTS');
-    if (!accounting?.getInvoice) return {answer:'Connect Zoho Books before editing an invoice there.', pendingAction:null};
-    let invoice;
-    try { invoice = await accounting.getInvoice(args.target.trim()); }
-    catch (error) { if (error?.code === 'ACCOUNTING_INVOICE_AMBIGUOUS') return {answer:`I found more than one Zoho invoice matching “${args.target}”. Please specify its invoice number.`,pendingAction:null}; throw error; }
-    if (!invoice) return {answer:`I couldn't find Zoho Books invoice “${args.target}”.`,pendingAction:null};
+    const match = await tools.lookupInvoice(args.target.trim());
+    if (match.invoices.length !== 1 || match.truncated) return {answer:match.invoices.length ? invoiceClarification(match.invoices) : `I couldn't find Cetld invoice “${args.target}”.`,pendingAction:null};
+    const invoice = match.invoices[0];
     const keys = Object.keys(args.changes);
-    if (!keys.length || keys.some(key => !['dueDate','invoiceDate','notes'].includes(key))) throw new APIError(502, 'INVALID_TOOL_ARGUMENTS');
+    if (!keys.length || keys.some(key => !['total','dueDate','status','clientName','currency'].includes(key))) throw new APIError(502, 'INVALID_TOOL_ARGUMENTS');
     if (args.changes.dueDate !== undefined && !isValidDay(args.changes.dueDate)) return {answer:'I could not safely interpret the requested due date. Please provide it as a calendar date.',pendingAction:null};
-    if (args.changes.invoiceDate !== undefined && !isValidDay(args.changes.invoiceDate)) return {answer:'I could not safely interpret the requested invoice date. Please provide it as a calendar date.',pendingAction:null};
-    const changes = {...args.changes};
-    const label = keys.map(key => `${key === 'dueDate' ? 'due date' : key === 'invoiceDate' ? 'invoice date' : 'notes'} to ${key.endsWith('Date') ? proposalDate(changes[key]) : changes[key]}`).join(', ');
-    return {answer:`Change ${invoice.number} for ${invoice.customerName || 'the customer'} (${invoice.currency} ${accountingAmount(invoice.amountMinor,invoice.currency)}) ${label} in Zoho Books?`,pendingAction:{type:'update_invoice',payload:{invoiceId:invoice.externalId,changes},invoice}};
+    return prepareUpdateForInvoice(invoice,{...args.changes});
   }
   throw new APIError(400, 'TOOL_NOT_ALLOWED');
 }
@@ -552,7 +580,7 @@ export async function answerWorkspaceQuestion({provider, store, message, history
     return withEvidence({answer:largestDebtorFallback(source.data),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
   }
   const writeIntent = isWriteIntent(message);
-  if (writeIntent && !accounting) return withEvidence({answer:'Connect Zoho Books before creating or editing an invoice there.',asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true,pendingAction:null}, {tool:'getZohoBooksData',data:{complete:false,truncated:false}});
+  if(writeIntent){const proposal=await deterministicWriteProposal({message,tools,clock});if(proposal)return {answer:proposal.answer,pendingAction:proposal.pendingAction,asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true};}
   const target = writeIntent ? null : contextualInvoiceTarget(message, history);
   if (target) {
     const live = await liveZohoInvoice(accounting, target);
@@ -586,10 +614,13 @@ export async function answerWorkspaceQuestion({provider, store, message, history
     const source = {tool:name,label:LABELS[name],data:await tools.execute(name,{})};
     return withEvidence({answer:emptyAnswer(source) || factualFallback([source],message),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
   }
-  const allowedTools = writeIntent ? [...tools.definitions, createProposalTool, updateProposalTool] : tools.definitions;
-  const plan = await provider.generate({
+  // Write planning gets only the two proposal tools. Free/small models were
+  // selecting read tools from the larger catalog for clear write requests.
+  const allowedTools = writeIntent ? [createProposalTool, updateProposalTool] : tools.definitions;
+  let plan;
+  try { plan = await provider.generate({
     messages: [
-      {role: 'system', content: `You are cetld's finance query planner and write-action proposal builder. Today is ${clock().toISOString().slice(0,10)} UTC. Use only the supplied tools when workspace facts are needed. Never invent identifiers or financial data. Choose exactly one minimum-scope tool. ${writeIntent ? 'For an explicit create or edit request, use exactly one propose tool; proposals are not writes. Only extract facts the user supplied. Do not execute or claim any change. Never invent an invoice number, customer, amount, currency, or due date; leave missing details out so cetld can ask. Use the current date only as the proposed invoice date when the user omitted it. For update requests, use the exact invoice target and only the changed fields explicitly requested.' : ''} ${accounting ? 'A question explicitly about connected Zoho Books: getZohoBooksData with the relevant receivables resource. ' : ''}A named cetld invoice or customer: getInvoiceDetails. Largest debtors: getOutstandingSummary. Overdue priorities: getOverdueInvoices. Paid invoice questions: getInvoices with status paid. Collections: getPayments. General activity: getActivity.`},
+      {role: 'system', content: `You are cetld's finance query planner and write-action proposal builder. Today is ${clock().toISOString().slice(0,10)} UTC. Use only the supplied tools when workspace facts are needed. Never invent financial data. Choose exactly one minimum-scope tool. ${writeIntent ? 'For an explicit create request call createInvoice. For an edit, status, or mark-paid request call updateInvoice. Tool calls only prepare proposals and never write. Only extract facts the user supplied. An invoice number is optional and Cetld will generate one when absent. Never invent a customer, amount, currency, or due date. For update requests, use the exact invoice target and only the changed fields explicitly requested. Example: “create an invoice for Acme for INR 500 due 2026-10-01” -> createInvoice({"clientName":"Acme","total":500,"currency":"INR","dueDate":"2026-10-01"}). Example: “mark INV-9 paid” -> updateInvoice({"target":"INV-9","changes":{"status":"paid"}}).' : ''} ${accounting ? 'A question explicitly about connected Zoho Books: getZohoBooksData with the relevant receivables resource. ' : ''}A named cetld invoice or customer: getInvoiceDetails. Largest debtors: getOutstandingSummary. Overdue priorities: getOverdueInvoices. Paid invoice questions: getInvoices with status paid. Collections: getPayments. General activity: getActivity.`},
       ...history.map(item => ({role: item.role, content: redactInternalIds(item.content)})),
       {role: 'user', content: redactInternalIds(message)},
     ],
@@ -597,14 +628,16 @@ export async function answerWorkspaceQuestion({provider, store, message, history
     toolChoice: 'required',
     maxTokens: 350,
     temperature: 0,
-  });
+  }); } catch (error) {
+    return plannerFailureResult(message,clock,writeIntent,provider,{model:error?.model,status:error?.status || error?.code || 'provider_error'},'provider_error');
+  }
   if (!Array.isArray(plan?.toolCalls) || plan.toolCalls.length !== 1) {
     return plannerFailureResult(message,clock,writeIntent,provider,plan,'missing_or_multiple_tool_calls');
   }
   const sources = [];
   for (const call of plan.toolCalls) {
     const name = call?.function?.name;
-    if (typeof name !== 'string' || (!Object.hasOwn(LABELS, name) && !(writeIntent && ['proposeCreateInvoice','proposeUpdateInvoice'].includes(name)))) {
+    if (typeof name !== 'string' || (!Object.hasOwn(LABELS, name) && !(writeIntent && ['createInvoice','updateInvoice'].includes(name)))) {
       return plannerFailureResult(message,clock,writeIntent,provider,plan,'invalid_tool_name');
     }
     let args;
@@ -613,8 +646,8 @@ export async function answerWorkspaceQuestion({provider, store, message, history
       args = JSON.parse(call.function.arguments);
       if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error();
     } catch { return plannerFailureResult(message,clock,writeIntent,provider,plan,'invalid_tool_arguments'); }
-    if (name === 'proposeCreateInvoice' || name === 'proposeUpdateInvoice') {
-      const proposal = await prepareProposal({name,args,accounting,clock});
+    if (name === 'createInvoice' || name === 'updateInvoice') {
+      const proposal = await prepareProposal({name,args,tools,clock});
       return {answer:redactInternalIds(proposal.answer),pendingAction:proposal.pendingAction,asOf:clock().toISOString(),timezone:'UTC',model:plan.model,usedFallback:plan.usedFallback,readOnly:true};
     }
     sources.push({tool: name, label: LABELS[name], data: await tools.execute(name, args)});

@@ -77,6 +77,22 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
       const rows = await store.query('invoices', {select: 'id,workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata,external_provider,external_invoice_id,last_synced_at,sync_status,last_sync_error,created_at,updated_at', filters: {id: `eq.${uuid(invoiceId)}`}, limit: 1});
       return rows[0] || null;
     },
+    async updateAssistantInvoice(invoiceId, patch) {
+      const allowed = ['customer_id', 'due_date', 'currency', 'total_amount', 'status'];
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch) || !Object.keys(patch).length || Object.keys(patch).some(key => !allowed.includes(key))) throw new APIError(400, 'INVALID_INVOICE_CHANGES');
+      const rows = checkRows(await request(`/rest/v1/invoices?${new URLSearchParams({workspace_id: `eq.${workspaceId}`, id: `eq.${uuid(invoiceId)}`, select: 'id,workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata,created_at,updated_at'})}`, {method: 'PATCH', headers: {Prefer: 'return=representation'}, body: JSON.stringify(patch)}));
+      if (rows.length !== 1) throw new APIError(404, 'INVOICE_NOT_FOUND');
+      return rows[0];
+    },
+    async settleAssistantInvoice(invoiceId, idempotencyKey) {
+      if (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{12,100}$/.test(idempotencyKey)) throw new APIError(400, 'INVALID_IDEMPOTENCY_KEY');
+      const id=uuid(invoiceId),result=await request('/rest/v1/rpc/record_invoice_payment',{method:'POST',body:JSON.stringify({p_workspace_id:workspaceId,p_invoice_id:id,p_amount:null,p_idempotency_key:idempotencyKey,p_reference:'Marked as paid by Cetld Assistant',p_settle_remaining:true})});
+      const payments=checkRows(Array.isArray(result)?result:result?[result]:[]);
+      if(payments.length!==1||payments[0].invoice_id!==id)throw new APIError(503,'PAYMENT_STATE_NOT_SAVED');
+      const invoice=await store.getAssistantInvoice(id);
+      if(!invoice)throw new APIError(503,'PAYMENT_STATE_NOT_SAVED');
+      return invoice;
+    },
     async updateAssistantInvoiceMetadata(invoiceId, metadata, synchronization = {}) {
       const allowed = ['external_provider', 'external_invoice_id', 'last_synced_at', 'sync_status', 'last_sync_error'];
       if (!synchronization || typeof synchronization !== 'object' || Object.keys(synchronization).some(key => !allowed.includes(key))) throw new APIError(400, 'INVALID_INVOICE_SYNC_STATE');

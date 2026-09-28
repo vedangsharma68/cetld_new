@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {saveAssistantInvoice, retryAssistantInvoiceSync, validateAssistantInvoice} from '../ai/invoice-ops.mjs';
+import {saveAssistantInvoice, updateAssistantInvoice, retryAssistantInvoiceSync, validateAssistantInvoice} from '../ai/invoice-ops.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
 
 const workspaceId='11111111-1111-4111-8111-111111111111';
@@ -107,4 +107,22 @@ test('Assistant invoice API rejects currencies and amounts the two-decimal ledge
   for(const currency of ['JPY','KWD','BHD','ZZZ'])assert.throws(()=>validateAssistantInvoice({...base,currency}),error=>error.code==='UNSUPPORTED_CURRENCY');
   for(const total of ['118.257',118.257])assert.throws(()=>validateAssistantInvoice({...base,total}),error=>error.code==='AMOUNT_PRECISION_UNSUPPORTED');
   assert.equal(validateAssistantInvoice({...base,currency:'INR',subtotal:'100.25',total:'118.25',outstanding:'118.25'}).total,118.25);
+});
+
+test('chat invoice updates validate arguments and require confirmation before writing',async()=>{
+  let writes=0;
+  const store={async updateAssistantInvoice(id,patch){writes++;return{id,invoice_number:'INV-1048',due_date:patch.due_date||base.dueDate,currency:patch.currency||base.currency,total_amount:String(patch.total_amount||base.total),amount_paid:'0',status:patch.status||'draft',metadata:{}}}};
+  await assert.rejects(updateAssistantInvoice({store,invoiceId,changes:{dueDate:'2026-10-20'},confirmed:false}),error=>error.code==='CONFIRMATION_REQUIRED');
+  assert.equal(writes,0);
+  await assert.rejects(updateAssistantInvoice({store,invoiceId,changes:{total:-1},confirmed:true}),error=>error.code==='INVALID_INVOICE_AMOUNT');
+  assert.equal(writes,0);
+  const result=await updateAssistantInvoice({store,invoiceId,changes:{dueDate:'2026-10-20',currency:'USD'},confirmed:true});
+  assert.equal(result.updated,true);assert.equal(writes,1);assert.equal(result.invoice.dueDate,'2026-10-20');
+});
+
+test('mark-paid update uses the atomic settlement path after confirmation',async()=>{
+  let settled=0,patched=0;
+  const store={async settleAssistantInvoice(id,key){settled++;assert.equal(id,invoiceId);assert.equal(key,'assistant_paid_1048');return{id,invoice_number:'INV-1048',due_date:base.dueDate,currency:'INR',total_amount:'118',amount_paid:'118',status:'paid',metadata:{}}},async updateAssistantInvoice(){patched++}};
+  const result=await updateAssistantInvoice({store,invoiceId,changes:{status:'paid'},idempotencyKey:'assistant_paid_1048',confirmed:true});
+  assert.equal(result.updated,true);assert.equal(result.invoice.status,'paid');assert.equal(settled,1);assert.equal(patched,0);
 });

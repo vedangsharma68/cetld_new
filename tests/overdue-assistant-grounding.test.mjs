@@ -200,13 +200,14 @@ test('largest-debtor answers rank confirmed receivables per currency and exclude
 
 test('who-do-I-owe phrasing does not enter the largest customer debtor shortcut',async()=>{
   let providerCalled=false;
-  await assert.rejects(answerWorkspaceQuestion({
+  const result=await answerWorkspaceQuestion({
     provider:{generate:async()=>{providerCalled=true;throw Error('payer questions must stay on their own planner path');}},
     store:workspaceStore(),
     message:'Who do I owe the most?',
     clock:fixedClock,
-  }),/payer questions must stay on their own planner path/);
+  });
   assert.equal(providerCalled,true);
+  assert.match(result.answer,/couldn.t safely check/i);
 });
 
 test('explicit Zoho largest-debtor questions use connected Zoho data rather than the local ledger',async()=>{
