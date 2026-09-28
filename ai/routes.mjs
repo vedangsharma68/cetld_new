@@ -7,7 +7,7 @@ import {saveAssistantInvoice, updateAssistantInvoice, retryAssistantInvoiceSync}
 import {createAccountingTools} from './accounting-tools.mjs';
 import {createAccountingActionToken, verifyAccountingActionToken} from './accounting-actions.mjs';
 
-export function createAIHandler({env = process.env, fetchImpl = fetch, authorize = authorizeAIWorkspace, providerFactory = options => new AIProvider(options), verify = verifyModel, clock = () => new Date(), accountingFactory} = {}) {
+export function createAIHandler({env = process.env, fetchImpl = fetch, authorize = authorizeAIWorkspace, providerFactory = options => new AIProvider(options), verify = verifyModel, clock = () => new Date(), accountingFactory, logger = console} = {}) {
   return async function handler(req, res) {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -106,6 +106,9 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         result.pendingAction = {...result.pendingAction,confirmationToken};
       }
       return res.status(200).json(result);
-    } catch (error) { return sendError(res, error); }
+    } catch (error) {
+      if (req.query?.action === 'confirm-accounting-action' && req.body?.confirmed === true) logger.error?.('Assistant accounting confirmation failed', {code:error?.code || 'UNEXPECTED_ERROR', status:error?.status || 503});
+      return sendError(res, error);
+    }
   };
 }

@@ -157,7 +157,7 @@ export async function retryAssistantInvoiceSync({store, invoiceId, accounting} =
   return {saved: true, invoice: responseInvoice(synced.row), sync: synced.sync, idempotent: true};
 }
 
-export async function updateAssistantInvoice({store, invoiceId, changes, confirmed} = {}) {
+export async function updateAssistantInvoice({store, invoiceId, changes, confirmed, idempotencyKey} = {}) {
   if (confirmed !== true) throw new APIError(409, 'CONFIRMATION_REQUIRED');
   const id = uuid(invoiceId);
   if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw new APIError(400, 'INVALID_INVOICE_CHANGES');
@@ -183,6 +183,12 @@ export async function updateAssistantInvoice({store, invoiceId, changes, confirm
   }
   if (Object.hasOwn(changes, 'status')) {
     if (!['draft','sent','overdue','paid','void','cancelled'].includes(changes.status)) throw new APIError(400, 'INVALID_INVOICE_STATUS');
+    if (changes.status === 'paid') {
+      if (keys.length !== 1) throw new APIError(400, 'PAID_STATUS_MUST_BE_SEPARATE');
+      if (typeof idempotencyKey !== 'string' || !/^assistant_payment_[a-f0-9]{32}$/.test(idempotencyKey)) throw new APIError(400, 'INVALID_IDEMPOTENCY_KEY');
+      const row = await store.settleAssistantInvoice(id, idempotencyKey);
+      return {updated:true, invoice:responseInvoice(row)};
+    }
     patch.status = changes.status;
   }
   if (Object.hasOwn(changes, 'clientName')) {

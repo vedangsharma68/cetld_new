@@ -539,7 +539,9 @@ async function prepareProposal({name, args, tools, clock}) {
     if (args.changes.dueDate !== undefined && !isValidDay(args.changes.dueDate)) return {answer:'I could not safely interpret the requested due date. Please provide it as a calendar date.',pendingAction:null};
     const changes = {...args.changes};
     const label = keys.map(key => `${key === 'dueDate' ? 'due date' : key} to ${key === 'dueDate' ? proposalDate(changes[key]) : changes[key]}`).join(', ');
-    return {answer:`Update ${invoice.invoiceNumber} for ${invoice.customerName || 'the customer'}: ${label}?`,pendingAction:{type:'update_invoice',payload:{invoiceId:invoice.id,changes},invoice:{number:invoice.invoiceNumber,customerName:invoice.customerName,currency:invoice.currency,total:invoice.totalAmount}}};
+    const payload = {invoiceId:invoice.id,changes};
+    if (changes.status === 'paid') payload.idempotencyKey = `assistant_payment_${randomUUID().replaceAll('-','')}`;
+    return {answer:`Update ${invoice.invoiceNumber} for ${invoice.customerName || 'the customer'}: ${label}?`,pendingAction:{type:'update_invoice',payload,invoice:{number:invoice.invoiceNumber,customerName:invoice.customerName,currency:invoice.currency,total:invoice.totalAmount}}};
   }
   throw new APIError(400, 'TOOL_NOT_ALLOWED');
 }
