@@ -70,7 +70,8 @@ test('paid-invoice questions read verified settlement records without a model pl
   const provider={generate:async()=>{throw new Error('Paid invoice lookup must not call the model');}};
   for (const message of ['which invoices are paid??','What invoice was paid?','List paid invoices','How many invoices are paid?']) {
     const result=await answerWorkspaceQuestion({provider,store:workspaceStore(),message,clock:fixedClock});
-    assert.match(result.answer,/1 fully paid invoice: 1001 — Ann Revolution \(CHF 1650\.00\)/);
+    assert.match(result.answer,/1 fully paid invoice:\n- 1001 — Ann Revolution — 💰 CHF 1650\.00/);
+    assert.equal(result.answer.split('\n').length,2,'the lead and invoice should render on separate short lines');
     assert.doesNotMatch(result.answer,/INV-005|1223113|GST-3425-26|couldn.t safely check/i);
     assert.deepEqual(result.evidence.records.map(row=>row.label),['1001']);
     assert.equal(result.evidence.complete,true);
@@ -108,6 +109,7 @@ test('which invoice is due within the next week returns only unpaid invoices in 
 
   assert.match(result.answer,/1 unpaid invoice due from 2026-09-28 through 2026-10-05/i);
   assert.match(result.answer,/DUE-THIS-WEEK.*AUD 600\.00 outstanding.*2026-10-05/i);
+  assert.match(result.answer,/^1 unpaid invoice[^\n]+:\n- DUE-THIS-WEEK/m,'due items should render as bullets below a short lead');
   assert.doesNotMatch(result.answer,/INV-005|1223113|GST-3425-26|Ann Revolution|1001|CHF 1650/i);
   assert.deepEqual(result.evidence.records.map(row=>row.label),['DUE-THIS-WEEK']);
   assert.equal(result.model,null);
@@ -151,6 +153,7 @@ test('Assistant bypasses an incorrect empty-overdue model answer and returns gro
   ]) assert.match(result.answer,new RegExp(`${number} for ${customer}`));
   assert.match(result.answer,/draft; not sent/i,'draft invoices must be clearly identified as unsent');
   assert.match(result.answer,/Some invoices need a quick review before follow-up\./i,'review flags should be one short plain-language line');
+  assert.equal(result.answer.split('\n').filter(line=>line.startsWith('- ')).length,3,'each overdue invoice should have its own bullet');
   assert.match(result.answer,/direction unclassified/i,'legacy rows without invoice direction cannot be called confirmed receivables');
   assert.doesNotMatch(result.answer,/Ann Revolution|1001|CHF 1650/);
   assert.deepEqual(result.evidence.records.map(row=>row.label),['INV-005','1223113','GST-3425-26']);
