@@ -91,6 +91,7 @@ before(async () => {
     [workspaceA, invoiceIds.mismatch],
   ))).rows[0].id;
   await withOwner(() => db.exec(deferredIntegrityMigrations[1]));
+  await withOwner(async () => db.exec(await readFile(new URL('../supabase/migrations/20260929100000_consistent_invoice_numbers.sql', import.meta.url), 'utf8')));
 });
 
 after(async () => db.close());
@@ -289,7 +290,7 @@ test('the paid Assistant invoice RPC creates invoice and payment atomically and 
   const args = [workspaceA, customerAId, 'INV-assistant-paid', '2026-09-01', '2026-10-01', 'INR', 118, 'Paid at entry', JSON.stringify(metadata), 'assistant_paid_invoice_1048', 'Marked as already paid'];
   const call = () => db.query(`select * from public.create_paid_assistant_invoice($1::uuid,$2::uuid,$3::text,$4::date,$5::date,$6::text,$7::numeric,$8::text,$9::jsonb,$10::text,$11::text)`, args);
   const created = (await call()).rows[0];
-  assert.equal(created.invoice_number, 'INV-assistant-paid');
+  assert.match(created.invoice_number, /^INV-2026-\d{4,}$/);
   assert.equal(created.status, 'paid');
   assert.equal(Number(created.amount_paid), 118);
   assert.equal(created.metadata.followup_state, 'cancelled');

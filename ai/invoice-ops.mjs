@@ -141,6 +141,7 @@ export async function saveAssistantInvoice({store, invoice: input, confirmed, id
     }
   }
   if (row.metadata?.bookkeeping_sync_status === 'synced' && row.metadata?.bookkeeping_record_id) return {saved: true, invoice: responseInvoice(row), sync: {status: 'synced', provider: row.metadata.bookkeeping_provider || null, externalId: row.metadata.bookkeeping_record_id, retryable: false}, idempotent};
+  invoice.invoiceNumber = row.invoice_number;
   const synced = await syncSavedInvoice({store, invoice, row, accounting});
   return {saved: true, invoice: responseInvoice(synced.row), sync: synced.sync, idempotent};
 }
