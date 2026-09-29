@@ -6,7 +6,7 @@ import {AMOUNT_PRECISION_MESSAGE,CURRENCY_SUPPORT_MESSAGE,SUPPORTED_TWO_DECIMAL_
 const createProposalTool = {type:'function',function:{name:'createInvoice',description:'Prepare, but do not execute, a Cetld invoice. Extract only user-supplied facts; invoice number is optional. Return ISO dates.',parameters:{type:'object',properties:{invoiceNumber:{type:'string',maxLength:100},clientName:{type:'string',maxLength:255},dueDate:{type:'string',format:'date'},total:{type:'number',minimum:0.01},subtotal:{type:'number',minimum:0},tax:{type:'number',minimum:0},currency:{type:'string',enum:SUPPORTED_TWO_DECIMAL_CURRENCIES},items:{type:'array',maxItems:100,items:{type:'object',properties:{description:{type:'string',maxLength:500},quantity:{type:'number',minimum:0},unitPrice:{type:'number',minimum:0},amount:{type:'number',minimum:0}},required:['description'],additionalProperties:false}},notes:{type:'string',maxLength:2000}},required:['clientName','total','currency','dueDate'],additionalProperties:false}}};
 const updateProposalTool = {type:'function',function:{name:'updateInvoice',description:'Prepare, but do not execute, an update to one exact Cetld invoice.',parameters:{type:'object',properties:{target:{type:'string',minLength:1,maxLength:100},changes:{type:'object',properties:{total:{type:'number',minimum:0.01},dueDate:{type:'string',format:'date'},status:{type:'string',enum:['draft','sent','overdue','paid','void','cancelled']},clientName:{type:'string',maxLength:255},currency:{type:'string',enum:SUPPORTED_TWO_DECIMAL_CURRENCIES}},additionalProperties:false}},required:['target','changes'],additionalProperties:false}}};
 
-const LABELS = {getZohoBooksData: 'Zoho Books records', getInvoices: 'Invoices', getCustomer: 'Customer', getPayments: 'Payments collected', getOutstandingSummary: 'Outstanding balances', getOverdueInvoices: 'Overdue invoices', getActivity: 'Recorded activity', getInvoiceDetails: 'Invoice details'};
+const LABELS = {getZohoBooksData: 'Zoho Books records', getInvoices: 'Invoices', getCustomer: 'Customer', getPayments: 'Payments collected', getOutstandingSummary: 'Outstanding balances', getOverdueInvoices: 'Overdue invoices', getDueInvoices: 'Invoices due soon', getActivity: 'Recorded activity', getInvoiceDetails: 'Invoice details'};
 const SCOPE_ANSWER = "I'm here for your Cetld workspace — invoices, payments, customers, and balances. Try: what's overdue, who owes the most, or what got paid this week.";
 const IDENTITY_ANSWER = "I'm the Cetld assistant — I check invoices, payments, customers, and balances in your workspace. Try: what's overdue, who owes the most, or what got paid this week.";
 
@@ -66,6 +66,8 @@ function emptyAnswer(source) {
     }
     case 'getOverdueInvoices':
       return !data?.count && !(data?.invoices?.length) ? "There aren't any overdue invoices in this workspace right now." : null;
+    case 'getDueInvoices':
+      return !data?.count && !(data?.invoices?.length) ? `There aren't any unpaid invoices due from ${data?.dueDateFrom} through ${data?.dueDateTo}.` : null;
     case 'getPayments':
       return !data?.count && !(data?.payments?.length) ? 'There are no recorded payments for that period.' : null;
     case 'getActivity':
@@ -126,6 +128,17 @@ function simpleLedgerReadTool(message) {
   if (/^what payments were recorded$/.test(prompt)) return 'getPayments';
   if (/^what happened recently$/.test(prompt)) return 'getActivity';
   return null;
+}
+
+function isDueWithinNextWeekQuestion(message) {
+  const prompt = message.trim().toLowerCase().replace(/[!?.,]+$/g, '').replace(/\s+/g, ' ');
+  return /\bdue (?:this week|within (?:the )?next week|in (?:the )?next (?:7|seven) days)\b/.test(prompt);
+}
+
+function utcDayPlus(clock, days) {
+  const date = new Date(clock());
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 export function shouldLoadAccountingConnection(message) {
@@ -309,6 +322,14 @@ function factualFallback(sources, message = '') {
     const partial = count > descriptions.length ? ` Showing ${descriptions.length} of ${count}.` : '';
     const truncation = data.truncated ? ' Results truncated; check the ledger for the rest.' : '';
     return `${count} overdue invoice${count === 1 ? '' : 's'}${asOf}: ${descriptions.join(' ')}${needsReview ? ' Some invoices need a quick review before follow-up.' : ''}${partial}${truncation}`;
+  }
+  if (source?.tool === 'getDueInvoices') {
+    const rows = Array.isArray(data.invoices) ? data.invoices : [];
+    if (!rows.length) return `There aren't any unpaid invoices due from ${data.dueDateFrom} through ${data.dueDateTo}.`;
+    const details = rows.slice(0, 10).map(row => `${row.invoiceNumber || 'Invoice'}${row.customerName ? ` for ${redactInternalIds(row.customerName)}` : ''}: ${row.currency} ${row.outstandingAmount} outstanding, due ${row.dueDate}.`);
+    const partial = data.count > details.length ? ` Showing ${details.length} of ${data.count}.` : '';
+    const truncation = data.truncated ? ' Results truncated; check the ledger for the rest.' : '';
+    return `${data.count} unpaid invoice${data.count === 1 ? '' : 's'} due from ${data.dueDateFrom} through ${data.dueDateTo}: ${details.join(' ')}${partial}${truncation}`;
   }
   if (source?.tool === 'getPayments') {
     const totals = Object.entries(data.totalsByCurrency || {});
@@ -629,6 +650,12 @@ export async function answerWorkspaceQuestion({provider, store, message, history
   if (!asksForZoho(message) && !writeIntent && isPaidInvoiceListQuestion(message)) {
     const source = {tool:'getInvoices', label:'Fully paid invoices', data:await tools.execute('getFullyPaidInvoices',{})};
     return withEvidence({answer:paidInvoiceListAnswer(source.data),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
+  }
+  if (!asksForZoho(message) && !writeIntent && isDueWithinNextWeekQuestion(message)) {
+    const dueDateFrom = utcDayPlus(clock, 0);
+    const dueDateTo = utcDayPlus(clock, 7);
+    const source = {tool:'getDueInvoices',label:LABELS.getDueInvoices,data:await tools.execute('getDueInvoices',{dueDateFrom,dueDateTo})};
+    return withEvidence({answer:emptyAnswer(source) || factualFallback([source],message),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
   }
   const simpleReadName = !writeIntent && !asksForZoho(message) ? simpleLedgerReadTool(message) : null;
   if (simpleReadName) {
