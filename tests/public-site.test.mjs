@@ -9,8 +9,8 @@ const [home, privacy, terms, app] = await Promise.all([
   readFile(new URL('../app/index.html', import.meta.url), 'utf8'),
 ]);
 
-test('public landing page contains crawlable business information without JavaScript', () => {
-  assert.doesNotMatch(home, /<script\b/i);
+test('public landing page contains crawlable business information in static HTML', () => {
+  assert.match(home, /<script src="\/hero-rotation\.js" defer><\/script>/i);
   for (const detail of [
     'Cetld',
     'software that helps small businesses track invoices and follow up on payments',
