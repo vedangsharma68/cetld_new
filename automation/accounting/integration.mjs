@@ -69,12 +69,17 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     const encrypted = tokenEnvelope(cipher, token, provider, record.workspaceId);
     // Zoho organization IDs must be selected from the authenticated user's organization
     // list. Never trust an ID supplied by the browser/callback query as a substitute.
-    const selectedAccountId = provider === 'zoho_books'
+    let selectedAccountId = provider === 'zoho_books'
       ? chosenOrganization?.id || null
       : token.providerAccountId || providerAccountId || accountId || realmId || record.providerAccountId || null;
+    let qboCompany = null;
+    if (provider === 'quickbooks' && selectedAccountId && typeof providers[provider].fetchCompanyInfo === 'function') {
+      qboCompany = await providers[provider].fetchCompanyInfo({token, accountId: selectedAccountId});
+      selectedAccountId = qboCompany.id;
+    }
     const regionalReady = provider !== 'zoho_books' || Boolean(token.apiDomain && token.accountsDomain && token.region);
     const connectionStatus = selectedAccountId && token.refreshToken && regionalReady ? 'connected' : provider === 'zoho_books' && organizations.length > 1 ? 'needs_organization' : 'needs_attention';
-    const connection = { userId: record.userId, workspaceId: record.workspaceId, provider, providerAccountId: selectedAccountId, organizationName: chosenOrganization?.name || null, region: token.region || record.region || null, accountsDomain: token.accountsDomain || null, apiDomain: token.apiDomain || null, status: connectionStatus, lastSyncStatus: 'never', ...encrypted, tokenExpiresAt: token.expiresAt };
+    const connection = { userId: record.userId, workspaceId: record.workspaceId, provider, providerAccountId: selectedAccountId, organizationName: chosenOrganization?.name || qboCompany?.name || null, region: token.region || record.region || null, accountsDomain: token.accountsDomain || null, apiDomain: token.apiDomain || null, status: connectionStatus, lastSyncStatus: 'never', ...encrypted, tokenExpiresAt: token.expiresAt };
     const existing = await store.getConnection(connection);
     if (existing) {
       // Re-consent is an intentional replacement. A new revision invalidates an
@@ -110,7 +115,7 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
       const regionalReady = provider !== 'zoho_books' || Boolean(connection.apiDomain && connection.accountsDomain && connection.region);
       const usable = Boolean(connection.providerAccountId && regionalReady && refreshed.token.refreshToken && hasOrganization);
       const status = connection.status === 'disconnected' ? 'not_connected' : usable ? 'connected' : !connection.providerAccountId && organizations.length > 1 ? 'needs_organization' : 'needs_attention';
-      const problem = provider === 'zoho_books' && !regionalReady ? 'Zoho regional API access is unavailable.' : !connection.providerAccountId ? (organizations.length > 1 ? null : 'No Zoho Books organization is available.') : provider === 'zoho_books' && !selected ? 'The selected Zoho Books organization is unavailable.' : connection.lastSyncStatus === 'failed' ? connection.lastSyncError : null;
+      const problem = provider === 'zoho_books' && !regionalReady ? 'Zoho regional API access is unavailable.' : !connection.providerAccountId ? (organizations.length > 1 ? null : `No ${provider === 'quickbooks' ? 'QuickBooks company' : 'Zoho Books organization'} is available.`) : provider === 'zoho_books' && !selected ? 'The selected Zoho Books organization is unavailable.' : connection.lastSyncStatus === 'failed' ? connection.lastSyncError : null;
       if (status !== 'not_connected' && store.setConnectionStatus) await store.setConnectionStatus(context, status, problem).catch(() => {});
       return {
         provider,
@@ -123,7 +128,7 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
         problem,
       };
     } catch {
-      const problem = 'Zoho authorization needs to be renewed.';
+      const problem = `${provider === 'quickbooks' ? 'QuickBooks' : 'Zoho'} authorization needs to be renewed.`;
       if (store.setConnectionStatus) await store.setConnectionStatus(context, 'needs_attention', problem).catch(() => {});
       return { provider, status: 'needs_attention', organizationId: connection.providerAccountId || null, organizationName: connection.organizationName || null, organizations: [], lastSyncedAt: connection.lastSyncedAt || null, syncStatus: connection.lastSyncStatus || 'never', problem };
     }
@@ -203,7 +208,7 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
         const latestToken = await decryptConnection(latest);
         if (Number(latestToken.expiresAt || latest.tokenExpiresAt || 0) > now() + EXPIRY_SKEW) return { token: latestToken, connection: latest };
       }
-      if (store.setConnectionStatus) await store.setConnectionStatus(context, 'needs_attention', 'Zoho authorization needs to be renewed.').catch(() => {});
+      if (store.setConnectionStatus) await store.setConnectionStatus(context, 'needs_attention', `${provider === 'quickbooks' ? 'QuickBooks' : 'Zoho'} authorization needs to be renewed.`).catch(() => {});
       if (error?.code?.startsWith?.('ACCOUNTING_')) throw error;
       throw new AccountingError('ACCOUNTING_REFRESH_FAILED', 'Accounting credentials could not be refreshed', redactedError(error));
     }
@@ -225,7 +230,7 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     if (![invoicePage,paymentPage].every(p => Number.isInteger(p) && p>0 && p<=10000)) throw new AccountingError('ACCOUNTING_PAGE_INVALID','Invalid sync page');
     const adapter = providers[provider];
     let connection = await store.getConnection(context);
-    if (!connection?.providerAccountId || !connection.apiDomain) throw new AccountingError('ACCOUNTING_NOT_CONNECTED', 'A verified Zoho Books organization is required before syncing');
+    if (!connection?.providerAccountId || (provider === 'zoho_books' && !connection.apiDomain)) throw new AccountingError('ACCOUNTING_NOT_CONNECTED', `A verified ${provider === 'quickbooks' ? 'QuickBooks company' : 'Zoho Books organization'} is required before syncing`);
     await store.markSyncResult?.(context, { syncedAt: null, error: null });
     try {
       const fetchAll = async (method, firstPage) => {
@@ -239,7 +244,7 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
           if (!fetched.result.nextPage) return records;
           page = fetched.result.nextPage;
         }
-        throw new AccountingError('ACCOUNTING_RESULT_TOO_LARGE', 'Zoho Books synchronization exceeded the safe page limit');
+        throw new AccountingError('ACCOUNTING_RESULT_TOO_LARGE', 'Accounting synchronization exceeded the safe page limit');
       };
       const [customers, invoices, payments] = await Promise.all([
         fetchAll('fetchContacts', 1),
@@ -251,8 +256,8 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
       await store.markSyncResult?.(context, { syncedAt: lastSyncedAt, error: null });
       return { provider, userId: context.userId, workspaceId: context.workspaceId, customers, invoices, payments, lastSyncedAt, syncStatus: 'synced', pagination: { customers: { nextPage: null }, invoices: { nextPage: null }, payments: { nextPage: null } }, persisted };
     } catch (error) {
-      await store.markSyncResult?.(context, { syncedAt: null, error: 'Zoho Books synchronization failed.' }).catch(() => {});
-      throw new AccountingError('ACCOUNTING_SYNC_FAILED', 'Zoho Books synchronization failed', redactedError(error));
+      await store.markSyncResult?.(context, { syncedAt: null, error: `${provider === 'quickbooks' ? 'QuickBooks' : 'Zoho Books'} synchronization failed.` }).catch(() => {});
+      throw new AccountingError('ACCOUNTING_SYNC_FAILED', `${provider === 'quickbooks' ? 'QuickBooks' : 'Zoho Books'} synchronization failed`, redactedError(error));
     }
   }
 

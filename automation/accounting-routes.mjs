@@ -10,17 +10,19 @@ function redirectUri(env, provider) {
   const configured = required(env, provider === 'zoho_books' ? 'ZOHO_BOOKS_REDIRECT_URI' : 'QUICKBOOKS_REDIRECT_URI');
   const url = new URL(configured);
   if (url.protocol !== 'https:' || url.username || url.password) throw new HttpError(503, 'OAuth callback must use HTTPS');
+  if (provider === 'quickbooks' && (url.search || url.hash || url.pathname !== '/api/integrations/quickbooks/callback')) throw new HttpError(503, 'QuickBooks callback must be the dedicated path without query parameters');
   return configured;
 }
 function callbackOrigin(env, provider) {
   try { return new URL(redirectUri(env, provider)).origin; } catch { return null; }
 }
 function callbackPage(response, { provider = 'zoho_books', origin, status, organizations = [], organizationId = null, syncStatus = null, message = null, failed = false }) {
+  const providerName = provider === 'quickbooks' ? 'QuickBooks' : 'Zoho Books';
   const returnPath = '/?page=Connections';
   const payload = Buffer.from(JSON.stringify({ type: provider === 'zoho_books' ? 'cetld:zoho-oauth' : `cetld:${provider}-oauth`, provider, status, organizations, organizationId, syncStatus, message }), 'utf8').toString('base64url');
   const targetOrigin = Buffer.from(String(origin || ''), 'utf8').toString('base64url');
-  const title = failed ? 'Could not connect Zoho Books' : status === 'needs_organization' ? 'Choose your Zoho organization' : status === 'connected' ? 'Zoho Books connected' : 'Zoho connection needs attention';
-  const description = failed ? 'We could not finish connecting Zoho Books. Return to cetld and try again.' : status === 'needs_organization' ? 'Your Zoho account has more than one organization. Choose one in cetld to finish setup.' : status === 'connected' ? 'Your Zoho Books organization is connected. You can return to cetld.' : 'Zoho authorization finished, but cetld could not verify a usable organization. Return to cetld to review the connection.';
+  const title = failed ? `Could not connect ${providerName}` : status === 'needs_organization' ? 'Choose your Zoho organization' : status === 'connected' ? `${providerName} connected` : `${providerName} connection needs attention`;
+  const description = failed ? `We could not finish connecting ${providerName}. Return to cetld and try again.` : status === 'needs_organization' ? 'Your Zoho account has more than one organization. Choose one in cetld to finish setup.' : status === 'connected' ? `${providerName} is connected for read-only snapshot sync. Imported snapshots are not active cetld invoices and cannot trigger reminders.` : `${providerName} authorization finished, but cetld could not verify a usable account. Return to cetld to review the connection.`;
   const autoClose = status === 'connected';
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${title}</title><link rel="stylesheet" href="/oauth-callback.css"><script src="/oauth-callback.js" defer></script></head><body><main id="oauth-result" class="card" data-payload="${payload}" data-origin="${targetOrigin}" data-auto-close="${autoClose ? 'true' : 'false'}"><h1>${title}</h1><p>${description}</p><a href="${returnPath}">Return to cetld</a></main></body></html>`;
   response.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -43,13 +45,12 @@ export async function handleAccountingRequest(request, response, dependencies = 
       const integration = await getIntegration();
       const result = await integration.callback({ provider, state: input.state, code: input.code, error: input.error, realmId: input.realmId, location: input.location, browserSession, redirectUri: redirectUri(env, provider) });
       response.setHeader('Set-Cookie', `${cookieName(provider)}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
-      if (provider !== 'zoho_books') return response.status(200).json({ connected: true, provider: result.provider, workspaceId: result.workspaceId });
       let syncStatus = null;
       if (result.status === 'connected') {
         try { await integration.sync({ userId: result.userId, workspaceId: result.workspaceId, provider }); syncStatus = 'synced'; }
         catch { syncStatus = 'failed'; }
       }
-      return callbackPage(response, { provider, origin: callbackOrigin(env, provider), status: result.status || (result.providerAccountId ? 'connected' : 'needs_attention'), organizations: (result.organizations || []).map(({id, name}) => ({id, name})), organizationId: result.providerAccountId || null, syncStatus, message: syncStatus === 'failed' ? 'Zoho Books is connected, but the first sync did not finish. Use Sync now to retry.' : null });
+      return callbackPage(response, { provider, origin: callbackOrigin(env, provider), status: result.status || (result.providerAccountId ? 'connected' : 'needs_attention'), organizations: (result.organizations || []).map(({id, name}) => ({id, name})), organizationId: result.providerAccountId || null, syncStatus, message: syncStatus === 'failed' ? `${provider === 'quickbooks' ? 'QuickBooks' : 'Zoho Books'} is connected, but the first snapshot sync did not finish. Use Sync now to retry.` : null });
     }
     if (request.method !== 'POST') throw new HttpError(405, 'GET or POST required');
     const identity = await authorizeWorkspace(request, input.workspaceId, env, dependencies.fetchImpl);
@@ -72,11 +73,13 @@ export async function handleAccountingRequest(request, response, dependencies = 
     if (input.action === 'sync') { const integration = await getIntegration(); return response.status(200).json(await integration.sync({ ...identity, provider, invoicePage:input.invoicePage ?? 1, paymentPage:input.paymentPage ?? 1 })); }
     throw new HttpError(400, 'Unknown accounting action');
   } catch (error) {
-    if (request.method === 'GET' && new URL(request.url, 'https://cetld.invalid').searchParams.get('provider') === 'zoho_books') {
-      response.setHeader('Set-Cookie', `${cookieName('zoho_books')}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+    const callbackProvider = request.method === 'GET' ? new URL(request.url, 'https://cetld.invalid').searchParams.get('provider') : null;
+    if (providers.has(callbackProvider) && cookieValue(request, cookieName(callbackProvider))) {
+      response.setHeader('Set-Cookie', `${cookieName(callbackProvider)}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
       const status = error?.code === 'ACCOUNTING_OAUTH_DENIED' ? 'not_connected' : 'needs_attention';
-      const message = error?.code === 'ACCOUNTING_OAUTH_DENIED' ? 'Zoho authorization was cancelled.' : 'Zoho could not complete the connection. Restart the connection from cetld.';
-      return callbackPage(response, { origin: callbackOrigin(dependencies.env || process.env, 'zoho_books'), status, message, failed: true });
+      const name = callbackProvider === 'quickbooks' ? 'QuickBooks' : 'Zoho';
+      const message = error?.code === 'ACCOUNTING_OAUTH_DENIED' ? `${name} authorization was cancelled.` : `${name} could not complete the connection. Restart the connection from cetld.`;
+      return callbackPage(response, { provider: callbackProvider, origin: callbackOrigin(dependencies.env || process.env, callbackProvider), status, message, failed: true });
     }
     return respondError(response, error);
   }
