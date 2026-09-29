@@ -182,6 +182,16 @@ test('mobile tables, drawers and navigation remain usable at small widths', () =
   assert.match(app, /aria-controls="app-navigation"/);
   assert.match(app, /action="collapse-nav"/);
 });
+test('shared modal shell stays within the viewport and keeps actions reachable', () => {
+  assert.match(css, /dialog\{[^}]*max-height:calc\(100dvh - 32px\)[^}]*overflow:hidden/);
+  assert.match(css, /dialog:not\(\.detail-drawer\)\[open\]\{display:flex;flex-direction:column\}/);
+  assert.match(css, /dialog:not\(\.detail-drawer\)>form\{[^}]*min-height:0[^}]*flex-direction:column/);
+  assert.match(css, /\.dialog-body\{[^}]*overflow-y:auto/);
+  assert.match(css, /\.dialog-foot\{[^}]*flex:0 0 auto/);
+  assert.match(css, /body:has\(#dialog\[open\]\)\{overflow:hidden\}/);
+  assert.doesNotMatch(css, /#dialog:has\(\.invoice-entry-form\)[^}]*max-height:none/);
+  assert.doesNotMatch(css, /#dialog:has\(\.invoice-entry-form\)[^}]*overflow:(?:auto|visible)/);
+});
 test('settings persist workspace currency and account model preferences', () => {
   for (const code of ['INR','USD','EUR','GBP','AED','SGD','AUD','CAD','CHF']) assert.ok(app.includes("['"+code+"'"));
   assert.match(app, /name="primary_ai_model"/);
