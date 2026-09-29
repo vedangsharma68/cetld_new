@@ -97,6 +97,22 @@ test('paid-invoice lookup includes fully settled legacy rows with stale status a
   assert.equal(result.evidence.records.length,10);
 });
 
+test('which invoice is due within the next week returns only unpaid invoices in the next seven days', async () => {
+  const dueSoon=invoice('10000000-0000-4000-8000-000000000005',CUSTOMER_GREEN,'DUE-THIS-WEEK','2026-10-05','AUD','720.00','120.00','sent');
+  const result=await answerWorkspaceQuestion({
+    provider:{generate:async()=>{throw Error('Due-within-period lookup must not call the model');}},
+    store:workspaceStore({invoices:[...invoices,dueSoon],customers,payments:[],invoice_files:[]}),
+    message:'which invoice is due within the next week',
+    clock:fixedClock,
+  });
+
+  assert.match(result.answer,/1 unpaid invoice due from 2026-09-28 through 2026-10-05/i);
+  assert.match(result.answer,/DUE-THIS-WEEK.*AUD 600\.00 outstanding.*2026-10-05/i);
+  assert.doesNotMatch(result.answer,/INV-005|1223113|GST-3425-26|Ann Revolution|1001|CHF 1650/i);
+  assert.deepEqual(result.evidence.records.map(row=>row.label),['DUE-THIS-WEEK']);
+  assert.equal(result.model,null);
+});
+
 function providerWithFalseEmptyOutstandingAnswer(){
   const requests=[];
   return {requests,async generate(request){
@@ -200,13 +216,14 @@ test('largest-debtor answers rank confirmed receivables per currency and exclude
 
 test('who-do-I-owe phrasing does not enter the largest customer debtor shortcut',async()=>{
   let providerCalled=false;
-  await assert.rejects(answerWorkspaceQuestion({
+  const result=await answerWorkspaceQuestion({
     provider:{generate:async()=>{providerCalled=true;throw Error('payer questions must stay on their own planner path');}},
     store:workspaceStore(),
     message:'Who do I owe the most?',
     clock:fixedClock,
-  }),/payer questions must stay on their own planner path/);
+  });
   assert.equal(providerCalled,true);
+  assert.match(result.answer,/couldn.t safely check that just now/i);
 });
 
 test('explicit Zoho largest-debtor questions use connected Zoho data rather than the local ledger',async()=>{

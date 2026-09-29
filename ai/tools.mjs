@@ -22,6 +22,9 @@ const definitions = [
   }),
   tool("getOutstandingSummary", "Summarize the full unpaid ledger by currency, including drafts. Only issued rows marked receivable are confirmed customer receivables; separate draft, payable, and unclassified-direction balances for review. Uses invoices.amount_paid, not payment rows.", {}),
   tool("getOverdueInvoices", "List unpaid invoices whose due date is before today's UTC date, optionally in an inclusive due-date range, grouped by currency in the summary. The browser ledger uses the viewer's local date, so results may differ around midnight. Draft invoices are included as past-due records, but they have not been issued in Cetld.", {dueDateFrom:{type:'string',format:'date'},dueDateTo:{type:'string',format:'date'}}),
+  tool("getDueInvoices", "List unpaid invoices due in an inclusive UTC date range. Fully paid, void, and cancelled invoices are excluded.", {
+    dueDateFrom:{type:'string',format:'date'}, dueDateTo:{type:'string',format:'date'},
+  }, ["dueDateFrom", "dueDateTo"]),
   tool("getActivity", "Show invoice creation/update timestamps and recorded payment transactions. No verified follow-up event log is available; safe follow-up metadata is only a current invoice snapshot.", {
     invoiceId: { type: "string", format: "uuid" }, limit: { type: "integer", minimum: 1, maximum: MAX_PAGE_SIZE },
   }),
@@ -484,6 +487,21 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
         balances.sort((a,b) => a.dueDate.localeCompare(b.dueDate) || a.id.localeCompare(b.id));
         const truncated=balances.length>100;
         return { asOfUtcDate: todayUtc, count: balances.length, balancesByCurrency: groupInvoiceAmounts(overdue), invoices: balances.slice(0,100), complete:!truncated, truncated };
+      }
+      case "getDueInvoices": {
+        const args = strictArgs(rawArgs, ['dueDateFrom','dueDateTo']);
+        const bounds = dateBounds(args.dueDateFrom,args.dueDateTo,'dueDateFrom','dueDateTo');
+        if (!bounds.lower || !bounds.upper) throw new TypeError('A complete due-date range is required');
+        const invoices = await query(store, "invoices", INVOICE_SELECT, { order: "id.asc" });
+        const due = invoices.filter(invoice => invoice.due_date
+          && withinDateBounds(invoice.due_date,bounds)
+          && !["paid", "void", "cancelled"].includes(invoice.status)
+          && cents(invoice.amount_paid, "amount_paid") < cents(invoice.total_amount, "total_amount"));
+        const dueCustomers = await customersForInvoices(due);
+        const balances = due.map(invoice => ({...safeInvoice(invoice), customerName:dueCustomers.get(invoice.customer_id)?.company_name || dueCustomers.get(invoice.customer_id)?.name || null}));
+        balances.sort((a,b) => a.dueDate.localeCompare(b.dueDate) || a.id.localeCompare(b.id));
+        const truncated = balances.length > 100;
+        return {dueDateFrom:bounds.lower,dueDateTo:bounds.upper,count:balances.length,invoices:balances.slice(0,100),complete:!truncated,truncated};
       }
       case "getActivity": {
         const args = strictArgs(rawArgs, ["invoiceId", "limit"]);

@@ -81,7 +81,7 @@ test('deterministic invoice lookup can use an exact displayed amount without loa
 
 test("tool definitions are OpenAI function tools with no workspace or owner inputs", () => {
   const { definitions } = createAssistantTools({ store: makeStore() });
-  assert.deepEqual(definitions.map((item) => item.function.name), ["getInvoices", "getCustomer", "getPayments", "getOutstandingSummary", "getOverdueInvoices", "getActivity", "getInvoiceDetails"]);
+  assert.deepEqual(definitions.map((item) => item.function.name), ["getInvoices", "getCustomer", "getPayments", "getOutstandingSummary", "getOverdueInvoices", "getDueInvoices", "getActivity", "getInvoiceDetails"]);
   for (const item of definitions) {
     assert.equal(item.type, "function");
     assert.equal(item.function.parameters.additionalProperties, false);
