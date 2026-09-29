@@ -23,7 +23,7 @@ test('Assistant loads the lattice CSS and renders an animated task label without
   assert.match(css, /prefers-reduced-motion:reduce/);
 });
 
-test('Assistant uses a compact glowing orbit rather than the default pulse', () => {
+test('Assistant uses only the compact lattice orbit rather than the default pulse', () => {
   const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
   assert.match(app, /pattern:'orbit',grid:3,shape:'round',cellSize:4,gap:2,fontSize:12,step:105,idleOpacity:0\.12,glow:true/);
   assert.match(app, /className:'assistant-lattice'/);
@@ -31,12 +31,11 @@ test('Assistant uses a compact glowing orbit rather than the default pulse', () 
   assert.match(css, /nth-child\(6\)\{animation-delay:315ms\}/);
   assert.match(css, /nth-child\(4\)\{animation-delay:735ms\}/);
   assert.match(css, /@keyframes lattice-orbit\{0%,8%/);
-  assert.match(css, /\.assistant-lattice\[data-status=working\] \.lattice-loader__grid::after/);
-  assert.match(css, /animation:assistant-lattice-orbit var\(--ll-cycle\) linear infinite/);
+  assert.doesNotMatch(css, /\.assistant-lattice\[data-status=working\] \.lattice-loader__grid::(?:before|after)/);
+  assert.doesNotMatch(css, /assistant-lattice-orbit/);
   assert.match(css, /\.assistant-lattice\[data-status=working\] \.lattice-loader__text\[data-active\]/);
   assert.match(css, /@keyframes assistant-status-shimmer/);
   assert.match(css, /background-clip:text/);
-  assert.match(css, /prefers-reduced-motion:reduce[^}]*[\s\S]*assistant-lattice\[data-status=working\] \.lattice-loader__grid::after\{animation:assistant-lattice-orbit calc\(var\(--ll-cycle\)\*3\.75\) linear infinite;box-shadow:none/);
   assert.match(css, /assistant-lattice\[data-status=working\] \.lattice-loader__text\[data-active\]\{animation:assistant-status-breathe 5s ease-in-out infinite;color:inherit;background:none\}/);
 });
 
