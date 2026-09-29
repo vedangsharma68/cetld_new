@@ -40,7 +40,7 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
       return checkRows(await request(`/rest/v1/${table}?${query}`));
     },
     async findAssistantInvoice({invoiceNumber, idempotencyKey}) {
-      const rows = await store.query('invoices', {select: 'id,workspace_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata,created_at,updated_at', filters: {invoice_number: `eq.${invoiceNumber}`}, limit: 1});
+      const rows = await store.query('invoices', {select: 'id,workspace_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata,created_at,updated_at', filters: {'metadata->>assistant_idempotency_key': `eq.${idempotencyKey}`}, limit: 1});
       const row = rows[0] || null;
       if (row && row.metadata?.assistant_idempotency_key !== idempotencyKey) throw new APIError(409, 'INVOICE_ALREADY_EXISTS');
       return row;
