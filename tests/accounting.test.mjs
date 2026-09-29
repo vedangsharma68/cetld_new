@@ -78,6 +78,26 @@ test('provider errors are redacted', async () => {
   });
 });
 
+test('QuickBooks adapter reads and normalizes customers with bounded pagination and no writes', async () => {
+  const calls=[];
+  const qbo=createQuickBooksProvider({clientId:'sandbox-id',clientSecret:'sandbox-secret',redirectUri:'https://app.test/api/integrations/quickbooks/callback',sandbox:true,fetchImpl:async(url,options={})=>{calls.push({url:String(url),options});return new Response(JSON.stringify({QueryResponse:{Customer:[{Id:'41',DisplayName:'Acme',CompanyName:'Acme Ltd',PrimaryEmailAddr:{Address:'owner@example.test'},PrimaryPhone:{FreeFormNumber:'+15550001111'},Active:true,MetaData:{LastUpdatedTime:'2026-09-29T00:00:00Z'}}]}}),{status:200,headers:{'content-type':'application/json'}})}});
+  const customers=await qbo.fetchContacts({token:{accessToken:'access'},accountId:'realm-123',page:2,perPage:200});
+  assert.equal(customers[0].externalId,'41');assert.equal(customers[0].email,'owner@example.test');assert.equal(customers.nextPage,null);
+  assert.match(decodeURIComponent(calls[0].url),/STARTPOSITION 201 MAXRESULTS 200/);
+  assert.match(calls[0].url,/sandbox-quickbooks/);assert.equal(calls[0].options.method,undefined);
+  assert.equal(typeof qbo.createInvoice,'undefined');
+});
+
+test('QuickBooks callback verifies realmId against CompanyInfo before storing it', async () => {
+  const store=new InMemoryAccountingStore();let checked;
+  const provider=fakeProvider({exchangeCode:async()=>({accessToken:'access',refreshToken:'refresh',expiresAt:Date.now()+3600000}),fetchCompanyInfo:async({accountId})=>{checked=accountId;return{id:accountId,name:'Sandbox Co'};}});
+  const integration=createAccountingIntegration({store,cipher:new TokenCipher(key),providers:{zoho_books:fakeProvider(),quickbooks:provider}});
+  const start=await integration.startOAuth({...identity,provider:'quickbooks',redirectUri:'https://app.test/api/integrations/quickbooks/callback',browserSession:'browser'});
+  await integration.callback({provider:'quickbooks',state:start.state,code:'code',browserSession:'browser',realmId:'realm-verified'});
+  const row=await store.getConnection({...identity,provider:'quickbooks'});
+  assert.equal(checked,'realm-verified');assert.equal(row.providerAccountId,'realm-verified');assert.equal(row.organizationName,'Sandbox Co');
+});
+
 
 test('mismatched browser and expired state cannot exchange credentials',async()=>{
   let exchanged=0;let now=Date.now();const store=new InMemoryAccountingStore({now:()=>now});

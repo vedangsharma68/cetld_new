@@ -14,7 +14,7 @@ export function createAccountingRuntime({env=process.env,fetchImpl=fetch}={}) {
     cipher:new TokenCipher(encryptionKeyFromEnv(env.ACCOUNTING_TOKEN_ENCRYPTION_KEY)),
     providers:createAccountingProviders({
       zoho_books:{clientId:env.ZOHO_BOOKS_CLIENT_ID,clientSecret:env.ZOHO_BOOKS_CLIENT_SECRET,redirectUri:env.ZOHO_BOOKS_REDIRECT_URI,region:env.ZOHO_BOOKS_REGION || 'com',fetchImpl},
-      quickbooks:{clientId:env.QUICKBOOKS_CLIENT_ID,clientSecret:env.QUICKBOOKS_CLIENT_SECRET,redirectUri:env.QUICKBOOKS_REDIRECT_URI,sandbox:env.QUICKBOOKS_SANDBOX==='true',fetchImpl}
+      quickbooks:{clientId:env.QUICKBOOKS_SANDBOX==='true'?env.QUICKBOOKS_SANDBOX_CLIENT_ID:env.QUICKBOOKS_PRODUCTION_CLIENT_ID,clientSecret:env.QUICKBOOKS_SANDBOX==='true'?env.QUICKBOOKS_SANDBOX_CLIENT_SECRET:env.QUICKBOOKS_PRODUCTION_CLIENT_SECRET,redirectUri:env.QUICKBOOKS_REDIRECT_URI,sandbox:env.QUICKBOOKS_SANDBOX==='true',fetchImpl}
     })
   });
 }

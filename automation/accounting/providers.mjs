@@ -135,6 +135,23 @@ function normalizeQboPayment(item) {
   };
 }
 
+function normalizeQboCustomer(item) {
+  if (!item?.Id) return null;
+  return {
+    externalId: String(item.Id),
+    name: item.DisplayName || item.FullyQualifiedName || null,
+    companyName: item.CompanyName || null,
+    email: item.PrimaryEmailAddr?.Address || null,
+    phone: item.PrimaryPhone?.FreeFormNumber || null,
+    contactType: 'customer',
+    status: item.Active === false ? 'inactive' : 'active',
+    currency: item.CurrencyRef?.value || null,
+    updatedAt: item.MetaData?.LastUpdatedTime || null,
+    source: 'quickbooks',
+    raw: item,
+  };
+}
+
 function basic(clientId, clientSecret) {
   return `Basic ${Buffer.from(`${clientId}:${clientSecret}`, 'utf8').toString('base64')}`;
 }
@@ -295,7 +312,7 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
   };
 }
 
-export function createQuickBooksProvider({ clientId = process.env.QUICKBOOKS_CLIENT_ID, clientSecret = process.env.QUICKBOOKS_CLIENT_SECRET, redirectUri = process.env.QUICKBOOKS_REDIRECT_URI, sandbox = String(process.env.QUICKBOOKS_SANDBOX || '').toLowerCase() === 'true', fetchImpl = globalThis.fetch } = {}) {
+export function createQuickBooksProvider({ sandbox = String(process.env.QUICKBOOKS_SANDBOX || '').toLowerCase() === 'true', clientId = sandbox ? process.env.QUICKBOOKS_SANDBOX_CLIENT_ID : process.env.QUICKBOOKS_PRODUCTION_CLIENT_ID, clientSecret = sandbox ? process.env.QUICKBOOKS_SANDBOX_CLIENT_SECRET : process.env.QUICKBOOKS_PRODUCTION_CLIENT_SECRET, redirectUri = process.env.QUICKBOOKS_REDIRECT_URI, fetchImpl = globalThis.fetch } = {}) {
   const apiRoot = sandbox ? 'https://sandbox-quickbooks.api.intuit.com' : 'https://quickbooks.api.intuit.com';
   const scopes = 'com.intuit.quickbooks.accounting';
   return {
@@ -321,11 +338,14 @@ export function createQuickBooksProvider({ clientId = process.env.QUICKBOOKS_CLI
       if (!body.access_token) throw new Error('QuickBooks did not return an access token');
       return { accessToken: body.access_token, refreshToken: body.refresh_token || refreshToken, expiresAt: Date.now() + Number(body.expires_in || 3600) * 1000 };
     },
-    async fetchInvoices({ token, accountId, page = 1 }) {
-      return queryQbo(fetchImpl, token, accountId, 'Invoice', normalizeQboInvoice, apiRoot, page);
+    async fetchInvoices({ token, accountId, page = 1, perPage = 1000 }) {
+      return queryQbo(fetchImpl, token, accountId, 'Invoice', normalizeQboInvoice, apiRoot, page, perPage);
     },
-    async fetchPayments({ token, accountId, page = 1 }) {
-      return queryQbo(fetchImpl, token, accountId, 'Payment', normalizeQboPayment, apiRoot, page);
+    async fetchContacts({ token, accountId, page = 1, perPage = 1000 }) {
+      return queryQbo(fetchImpl, token, accountId, 'Customer', normalizeQboCustomer, apiRoot, page, perPage);
+    },
+    async fetchPayments({ token, accountId, page = 1, perPage = 1000 }) {
+      return queryQbo(fetchImpl, token, accountId, 'Payment', normalizeQboPayment, apiRoot, page, perPage);
     },
     async fetchInvoiceBalance({ token, accountId, invoiceId }) {
       if (!accountId || !invoiceId) throw new Error('QuickBooks company and invoice IDs are required');
@@ -336,45 +356,25 @@ export function createQuickBooksProvider({ clientId = process.env.QUICKBOOKS_CLI
       if (!invoice || invoice.externalId !== String(invoiceId)) throw new Error('QuickBooks returned an invalid invoice balance');
       return { balanceMinor: invoice.balanceMinor, currency: invoice.currency, totalMinor: invoice.amountMinor, externalId: invoice.externalId };
     },
-    async createInvoice({ token, accountId, invoice }) {
+    async fetchCompanyInfo({ token, accountId }) {
       if (!accountId) throw new Error('QuickBooks company ID is required');
-      const headers = {Authorization: `Bearer ${token.accessToken}`, Accept: 'application/json'};
-      const quote = value => String(value).replaceAll("'", "\\'");
-      const query = async statement => {
-        const url = `${apiRoot}/v3/company/${encodeURIComponent(accountId)}/query?query=${encodeURIComponent(statement)}&minorversion=75`;
-        return jsonResponse(await providerFetch(fetchImpl, 'quickbooks', url, {headers}), 'quickbooks');
-      };
-      const existingBody = await query(`select * from Invoice where DocNumber = '${quote(invoice.invoiceNumber)}' MAXRESULTS 1`);
-      const existing = existingBody.QueryResponse?.Invoice?.[0];
-      if (existing?.Id) return {externalId: String(existing.Id), duplicate: true};
-      const customerBody = await query(`select * from Customer where DisplayName = '${quote(invoice.clientName)}' MAXRESULTS 1`);
-      let customer = customerBody.QueryResponse?.Customer?.[0];
-      if (!customer) {
-        const url = `${apiRoot}/v3/company/${encodeURIComponent(accountId)}/customer?minorversion=75`;
-        const payload = {DisplayName: invoice.clientName, CompanyName: invoice.clientName};
-        if (invoice.clientEmail) payload.PrimaryEmailAddr = {Address: invoice.clientEmail};
-        if (invoice.clientPhone) payload.PrimaryPhone = {FreeFormNumber: invoice.clientPhone};
-        const created = await jsonResponse(await providerFetch(fetchImpl, 'quickbooks', url, {method: 'POST', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify(payload)}), 'quickbooks');
-        customer = created.Customer;
-      }
-      if (!customer?.Id) throw new Error('QuickBooks customer could not be resolved');
-      const url = `${apiRoot}/v3/company/${encodeURIComponent(accountId)}/invoice?minorversion=75`;
-      const payload = {DocNumber: invoice.invoiceNumber, CustomerRef: {value: String(customer.Id)}, TxnDate: invoice.invoiceDate, DueDate: invoice.dueDate, CurrencyRef: {value: invoice.currency}, PrivateNote: invoice.notes || undefined, Line: [{Amount: invoice.total, DetailType: 'SalesItemLineDetail', Description: invoice.notes || `Invoice ${invoice.invoiceNumber}`, SalesItemLineDetail: {Qty: 1, UnitPrice: invoice.total}}]};
-      const created = await jsonResponse(await providerFetch(fetchImpl, 'quickbooks', url, {method: 'POST', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify(payload)}), 'quickbooks');
-      if (!created.Invoice?.Id) throw new Error('QuickBooks did not return an invoice ID');
-      return {externalId: String(created.Invoice.Id), duplicate: false};
+      const url = `${apiRoot}/v3/company/${encodeURIComponent(accountId)}/companyinfo/${encodeURIComponent(accountId)}?minorversion=75`;
+      const body = await jsonResponse(await providerFetch(fetchImpl, 'quickbooks', url, {headers: {Authorization: `Bearer ${token.accessToken}`, Accept: 'application/json'}}), 'quickbooks');
+      if (!body.CompanyInfo?.Id || String(body.CompanyInfo.Id) !== String(accountId)) throw new Error('QuickBooks returned a different company');
+      return {id: String(body.CompanyInfo.Id), name: body.CompanyInfo.CompanyName || body.CompanyInfo.LegalName || 'QuickBooks company'};
     },
   };
 }
 
-async function queryQbo(fetchImpl, token, accountId, entity, normalize, apiRoot, page = 1) {
+async function queryQbo(fetchImpl, token, accountId, entity, normalize, apiRoot, page = 1, perPage = 1000) {
   if (!accountId) throw new Error('QuickBooks company ID is required');
-  const query = `select * from ${entity} STARTPOSITION ${(page-1)*1000+1} MAXRESULTS 1000`;
+  const size = Math.min(1000, Math.max(1, Number(perPage) || 1000));
+  const query = `select * from ${entity} STARTPOSITION ${(page-1)*size+1} MAXRESULTS ${size}`;
   const url = `${apiRoot}/v3/company/${encodeURIComponent(accountId)}/query?query=${encodeURIComponent(query)}&minorversion=75`;
   const response = await providerFetch(fetchImpl, 'quickbooks', url, { headers: { Authorization: `Bearer ${token.accessToken}`, Accept: 'application/json' } });
   const body = await jsonResponse(response, 'quickbooks');
   const result = (Array.isArray(body.QueryResponse?.[entity]) ? body.QueryResponse[entity] : []).map(normalize).filter(Boolean);
-  result.nextPage = result.length >= 1000 ? page+1 : null;
+  result.nextPage = result.length === size ? page+1 : null;
   return result;
 }
 
