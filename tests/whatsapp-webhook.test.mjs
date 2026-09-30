@@ -355,11 +355,12 @@ test('inbox stores terminal planner diagnostics while marking the event done', a
   assert.equal(update.error_detail, '{"reason":"provider_error"}');
 });
 
-test('inbound processing failure log includes the truncated error message', async () => {
+test('inbound processing failure log and durable event include the truncated error message', async () => {
   const logs = [];
   const event = {id: 22, claim_token: 'claim', attempts: 1, provider_message_id: 'wamid.failure',
     sender_phone: '+919871367051', message_text: 'hello'};
-  const inbox = {async claim() { return [event]; }, async complete(_item, errorCode) { assert.equal(errorCode, 'PROCESSING_FAILED'); }};
+  let completion;
+  const inbox = {async claim() { return [event]; }, async complete(...args) { completion = args; }};
   const supabase = {rpc() {}, from() { throw new Error('database lookup failed: ' + 'x'.repeat(250)); }};
   const runtime = createInboundRuntime({supabase, inbox, env,
     logger: {error(label, fields) { logs.push({label, fields}); }}});
@@ -368,6 +369,8 @@ test('inbound processing failure log includes the truncated error message', asyn
   assert.equal(logs[0].label, 'WhatsApp inbound event failed');
   assert.equal(logs[0].fields.name, 'Error');
   assert.equal(logs[0].fields.message, ('database lookup failed: ' + 'x'.repeat(250)).slice(0, 200));
+  assert.equal(completion[1], 'PROCESSING_FAILED');
+  assert.equal(completion[2], 'database lookup failed: ' + 'x'.repeat(250));
 });
 
 test('processing stops before the deadline and leaves the next event pending', async () => {
@@ -418,7 +421,7 @@ test('a transient failure before the final attempt remains retryable', async () 
     inbox, env, logger: {error() {}}});
 
   assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 0});
-  assert.deepEqual(completions[0].slice(1), ['PROCESSING_FAILED']);
+  assert.deepEqual(completions[0].slice(1), ['PROCESSING_FAILED', 'Supabase client is required']);
 });
 
 test('unknown STOP gets a global suppression claim before acknowledgement', async () => {
