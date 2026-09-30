@@ -8,6 +8,8 @@ const DEFAULT_PROCESS_BUDGET_MS = 40_000;
 // planner work may use the first slot, but is never started near the deadline.
 const MIN_EVENT_BUDGET_MS = 5_000;
 const SAFE_FALLBACK_REPLY = "I couldn't safely check that just now. Please try again.";
+const MEDIA_FETCH_FAILED_REPLY = "I couldn't fetch that photo. Please resend it and I'll try again.";
+const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
 const E164 = /^\+[1-9]\d{6,14}$/;
 const refusal = /^(?:stop|unsubscribe|opt[ -]?out|cancel(?: whatsapp)?|remove me|no more (?:messages|texts|whatsapp(?: updates)?)|(?:do not|don't) (?:message|text|contact) me|(?:do not|don't) send me (?:messages|texts|whatsapp updates)|please (?:stop(?: sending me (?:messages|texts|whatsapp updates))?|remove me|(?:do not|don't) (?:message|text|contact) me)|i (?:do not|don't|no longer) (?:consent|agree|want (?:these |whatsapp )?(?:messages|updates)))\b[.!\s]*$/i;
 
@@ -31,11 +33,13 @@ export function parseMetaMessages(payload, expectedPhoneNumberId, expectedWabaId
       const sender = String(message?.from || '');
       const phone = sender.startsWith('+') ? sender : `+${sender}`;
       const type = String(message?.type || '');
-      const body = type === 'text' ? message?.text?.body : type === 'button' ? message?.button?.text : type === 'interactive' ? (message?.interactive?.button_reply?.title || message?.interactive?.list_reply?.title) : '';
+      const media = type === 'image' || type === 'document' ? message?.[type] : null;
+      const body = type === 'text' ? message?.text?.body : type === 'button' ? message?.button?.text : type === 'interactive' ? (message?.interactive?.button_reply?.title || message?.interactive?.list_reply?.title) : media?.caption || '';
       if (!id || id.length > 256 || !E164.test(phone) || !type || type.length > 64 || typeof body !== 'string' || body.length > 4000) continue;
       const seconds = Number(message?.timestamp);
       const timestamp = Number.isSafeInteger(seconds) && seconds > 0 ? new Date(seconds * 1000).toISOString() : null;
-      found.push({ provider_message_id: id, phone_number_id: String(expectedPhoneNumberId), sender_phone: phone, message_type: type, message_text: body, provider_timestamp: timestamp });
+      found.push({ provider_message_id: id, phone_number_id: String(expectedPhoneNumberId), sender_phone: phone, message_type: type, message_text: body, provider_timestamp: timestamp,
+        ...(media ? {media_id: String(media.id || ''), media_mime_type: String(media.mime_type || ''), media_caption: String(media.caption || '')} : {}) });
     }
   }
   return found;
@@ -65,6 +69,27 @@ export class SupabaseInboundInbox {
     const byId = new Map(inserted.map(event => [event.provider_message_id, event]));
     for (const event of pendingStops) byId.set(event.provider_message_id, event);
     return [...byId.values()];
+  }
+
+  async hasMedia(providerMessageId) {
+    const row = dataOrThrow(await this.supabase.from('whatsapp_inbound_media').select('provider_message_id')
+      .eq('provider_message_id', providerMessageId).maybeSingle(), 'check media');
+    return Boolean(row);
+  }
+
+  async storeMedia(message, bytes, mimeType) {
+    dataOrThrow(await this.supabase.from('whatsapp_inbound_media').upsert({provider_message_id: message.provider_message_id,
+      media_id: message.media_id, mime_type: mimeType, bytes: `\\x${Buffer.from(bytes).toString('hex')}`,
+      size_bytes: bytes.byteLength}, {onConflict: 'provider_message_id', ignoreDuplicates: true}), 'store media');
+  }
+
+  async getMedia(event) {
+    const row = dataOrThrow(await this.supabase.from('whatsapp_inbound_media').select('mime_type,bytes,size_bytes')
+      .eq('provider_message_id', event.media_ref).maybeSingle(), 'read media');
+    if (!row) return null;
+    const bytes = typeof row.bytes === 'string' && row.bytes.startsWith('\\x')
+      ? Buffer.from(row.bytes.slice(2), 'hex') : Buffer.from(row.bytes || []);
+    return {bytes, mimeType: row.mime_type, fileName: event.message_type === 'document' ? 'invoice.pdf' : 'invoice-image'};
   }
 
   async claim(limit = 10) {
@@ -115,6 +140,28 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     });
     return outboundPromise;
   };
+  async function downloadMedia(message) {
+    if (!message.media_id) throw new Error('Media ID missing');
+    const version = String(env.WHATSAPP_GRAPH_API_VERSION || '');
+    const token = String(env.WHATSAPP_ACCESS_TOKEN || '');
+    if (!/^v\d+\.\d+$/.test(version) || !token) throw new Error('WhatsApp media credentials unavailable');
+    const headers = {Authorization: `Bearer ${token}`};
+    const metadata = await fetchImpl(`https://graph.facebook.com/${version}/${encodeURIComponent(message.media_id)}`,
+      {headers, redirect: 'error', signal: AbortSignal.timeout(10000)});
+    if (!metadata.ok) throw new Error('Media lookup failed');
+    const details = await metadata.json();
+    if (typeof details?.url !== 'string' || !details.url.startsWith('https://')) throw new Error('Invalid media URL');
+    const response = await fetchImpl(details.url, {headers, redirect: 'error', signal: AbortSignal.timeout(15000)});
+    if (!response.ok) throw new Error('Media download failed');
+    const declared = String(details.mime_type || message.media_mime_type || '').split(';')[0].toLowerCase();
+    const allowed = message.message_type === 'document' ? ['application/pdf'] : ['image/png','image/jpeg','image/webp'];
+    if (!allowed.includes(declared)) throw new Error('Unsupported media type');
+    const length = Number(response.headers?.get?.('content-length'));
+    if (Number.isFinite(length) && length > MAX_MEDIA_BYTES) throw new Error('Media exceeds 10 MiB');
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (!bytes.length || bytes.length > MAX_MEDIA_BYTES) throw new Error('Media exceeds 10 MiB');
+    return {bytes, mimeType: declared};
+  }
   async function businessName(workspaceId) {
     if (!workspaceId) return 'CETLD';
     const settings = dataOrThrow(await supabase.from('workspace_settings').select('business_name')
@@ -180,8 +227,10 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
         logger?.error?.('WhatsApp typing indicator failed', {messageId: event.provider_message_id,
           message: String(error?.message || '').slice(0, 200)});
       }
-      const response = await onBoundMessage({ workspaceId: binding.workspaceId, customerId: binding.customerId,
-        phone: event.sender_phone, message: event.message_text, messageId: event.provider_message_id });
+      const media = event.media_ref && !event.media_error ? await inbox.getMedia(event) : null;
+      const response = event.media_error ? MEDIA_FETCH_FAILED_REPLY : await onBoundMessage({ workspaceId: binding.workspaceId, customerId: binding.customerId,
+        phone: event.sender_phone, message: event.message_text, messageId: event.provider_message_id, media,
+        mediaError: event.media_ref && !media ? 'Stored media unavailable' : null });
       const answer = typeof response === 'string' ? response : response?.answer;
       if (typeof answer === 'string' && answer.trim()) {
         const sender = await getOutbound();
@@ -215,7 +264,23 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     await inbox.complete(event, 'PROCESSING_FAILED', null, false);
   }
   return {
-    enqueue: messages => inbox.enqueue(messages),
+    async enqueue(messages) {
+      for (const message of messages) {
+        if (!['image','document'].includes(message.message_type)) continue;
+        message.media_ref = message.provider_message_id;
+        try {
+          if (!await inbox.hasMedia(message.provider_message_id)) {
+            const media = await downloadMedia(message);
+            await inbox.storeMedia(message, media.bytes, media.mimeType);
+          }
+        } catch (error) {
+          message.media_error = String(error?.message || 'Media download failed').slice(0, 500);
+          logger?.error?.('WhatsApp media ingest failed', {messageId: message.provider_message_id,
+            message: message.media_error});
+        }
+      }
+      return inbox.enqueue(messages);
+    },
     revokeOptOut,
     async processPending() {
       const configuredBudget = Number(env.WHATSAPP_PROCESS_BUDGET_MS);

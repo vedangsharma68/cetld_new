@@ -1,4 +1,6 @@
 import {answerWorkspaceQuestion} from './assistant.mjs';
+import {createHash} from 'node:crypto';
+import {saveAssistantInvoice} from './invoice-ops.mjs';
 
 const E164 = /^\+[1-9]\d{6,14}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -149,6 +151,10 @@ export function createWhatsAppAssistantChannel({
   provider,
   answer = answerWorkspaceQuestion,
   storePendingAction,
+  loadPendingAction,
+  consumePendingAction,
+  createInvoiceStore,
+  saveInvoice = saveAssistantInvoice,
   clock = () => new Date(),
 } = {}) {
   const makeStore = scopedStoreFactory || (scope => createCustomerScopedStore({supabase, ...scope}));
@@ -163,17 +169,37 @@ export function createWhatsAppAssistantChannel({
     if (!E164.test(scope.phone)) throw new TypeError('phone must be E.164');
     const text = required(message, 'message');
     if (text.length > 4000) throw new RangeError('message is too long');
-    if (CONFIRMATION.test(text)) return {answer: 'Please open cetld and confirm the proposed action while signed in.', pendingAction: null, requiresInAppConfirmation: true};
     const authorized = await authorizeChannel(scope);
     if (authorized?.allowed !== true || authorized.workspaceId !== scope.workspaceId
       || authorized.customerId !== scope.customerId || authorized.phone !== scope.phone) {
       return {answer: 'Please verify your number in cetld before discussing account details.', pendingAction: null, denied: true};
     }
+    if (CONFIRMATION.test(text) && typeof loadPendingAction === 'function') {
+      const pending = await loadPendingAction(scope);
+      if (pending) {
+        const age = clock().getTime() - new Date(pending.created_at).getTime();
+        if (!Number.isFinite(age) || age < 0 || age > 60 * 60 * 1000) {
+          if (typeof consumePendingAction === 'function') await consumePendingAction({...scope, id: pending.id});
+          return {answer: 'That invoice proposal expired. Please resend the photo and I’ll read it again.', pendingAction: null, expired: true};
+        }
+        if (pending.action?.type !== 'create_invoice' || typeof createInvoiceStore !== 'function') {
+          return {answer: 'I can only confirm a proposed invoice from this chat.', pendingAction: null};
+        }
+        const key = `wa_invoice_${createHash('sha256').update(`${scope.workspaceId}:${scope.customerId}:${scope.phone}:${pending.id}`).digest('hex').slice(0, 32)}`;
+        const saved = await saveInvoice({store: await createInvoiceStore(scope), invoice: pending.action.payload?.invoice,
+          confirmed: true, idempotencyKey: key, accounting: null});
+        if (saved?.needsInput) return {answer: saved.question, pendingAction: null};
+        if (typeof consumePendingAction === 'function') await consumePendingAction({...scope, id: pending.id});
+        const invoice = {...saved.invoice, clientName: saved.invoice?.clientName || pending.action.payload?.invoice?.clientName};
+        return {answer: `✅ *Invoice saved*\n• ${invoice.invoiceNumber} — ${invoice.clientName || 'Customer'}\n• ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}\n• Due: ${invoice.dueDate || 'not set'}`,
+          pendingAction: null, saved: true};
+      }
+    }
     const scopedStore = await makeStore(scope);
     if (!scopedStore || typeof scopedStore.query !== 'function') throw new TypeError('customer-scoped store is unavailable');
     // A workspace-wide accounting connector would bypass the customer store.
-    // Customer-channel reads use the scoped store only. A proposal returned by
-    // a future scoped assistant implementation still requires app review.
+    // Customer-channel reads use the scoped store only. Writes require a
+    // separately stored proposal and a fresh confirmation from this scope.
     const response = await answer({provider: replyProvider, store: scopedStore, message: text, history, accounting: null, clock});
     if (!response?.pendingAction) return {...formatWhatsAppReply(response), pendingAction: null};
     if (typeof storePendingAction !== 'function') return {
@@ -183,9 +209,9 @@ export function createWhatsAppAssistantChannel({
     };
     await storePendingAction({workspaceId: scope.workspaceId, customerId: scope.customerId, phone: scope.phone, action: response.pendingAction, source: 'whatsapp'});
     return {
-      answer: 'I prepared a proposed action. Open cetld while signed in to review and confirm it.',
+      answer: `${response.answer}\n\nSave it? Reply yes to confirm.`,
       pendingAction: null,
-      requiresInAppConfirmation: true,
+      requiresInChatConfirmation: true,
       asOf: response.asOf,
       timezone: response.timezone,
     };

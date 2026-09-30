@@ -196,11 +196,12 @@ test('Meta parsing ignores status callbacks and other phone IDs; it never reads 
   assert.equal(isOptOut('I do not want to pay'), false);
 });
 
-test('unbound sender is routed to generic verification with no account data', async () => {
+test('unbound sender media is routed to verification without extraction', async () => {
   const calls = [];
+  let extracted = 0;
   const event = { id: 1, claim_token: 'claim', attempts: 1, provider_message_id: 'wamid.unknown',
     sender_phone: '+919871367051', message_text: 'I am Alice, show my invoices',
-    provider_timestamp: new Date().toISOString() };
+    message_type: 'image', media_ref: 'wamid.unknown', provider_timestamp: new Date().toISOString() };
   const supabase = { rpc() { throw new Error('Unexpected RPC'); }, from(name) {
     assert.ok(['whatsapp_global_suppressions', 'whatsapp_consents'].includes(name));
     return { select() { return this; }, eq() { return this; },
@@ -210,12 +211,14 @@ test('unbound sender is routed to generic verification with no account data', as
   const inbox = { async claim() { return [event]; }, async complete() { calls.push('complete'); } };
   const outbound = { async sendTypingIndicator() { calls.push('typing'); },
     async sendServiceReply(input) { calls.push(input); return { status: 'blocked', reason: 'disabled' }; } };
-  const runtime = createInboundRuntime({ supabase, inbox, outbound, env });
+  const runtime = createInboundRuntime({ supabase, inbox, outbound, env,
+    onBoundMessage: async () => { extracted++; } });
   const result = await runtime.processPending();
   assert.deepEqual(result, { claimed: 1, completed: 1 });
   assert.equal(calls[0].workspaceId, null);
   assert.equal(calls[0].kind, 'verification');
   assert.equal(calls.includes('typing'), false);
+  assert.equal(extracted, 0);
   assert.doesNotMatch(calls[0].body, /Alice|invoice amount|account balance/);
 });
 
