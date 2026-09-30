@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistant-handler.mjs';
 
 const scope = {workspaceId: 'workspace-a', customerId: 'customer-a', phone: '+919871367051', message: 'What is my invoice status?'};
@@ -20,6 +21,12 @@ function fakeSupabase({customerId = 'customer-a'} = {}) {
   }};
 }
 
+test('WhatsApp functions have enough execution time for AI-backed replies', async () => {
+  const vercel = JSON.parse(await readFile(new URL('../vercel.json', import.meta.url), 'utf8'));
+  assert.equal(vercel.functions['api/whatsapp.js'].maxDuration, 60);
+  assert.equal(vercel.functions['api/whatsapp-process.js'].maxDuration, 60);
+});
+
 test('verified inbound binding is rechecked before the customer-scoped assistant runs', async () => {
   let asks = 0;
   const handler = createWhatsAppBoundMessageHandler({supabase: fakeSupabase(),
@@ -33,6 +40,29 @@ test('verified inbound binding is rechecked before the customer-scoped assistant
   });
   assert.equal(await handler(scope), 'Invoice INV-1 is sent.');
   assert.equal(asks, 1);
+});
+
+test('WhatsApp provider attempts are bounded to fit the function duration', async () => {
+  let providerOptions;
+  const fetchImpl = () => {};
+  const handler = createWhatsAppBoundMessageHandler({
+    supabase: fakeSupabase(),
+    env: {GEMINI_API_KEY: 'gemini-key', OPENROUTER_API_KEY: 'openrouter-key'},
+    fetchImpl,
+    providerFactory(options) {
+      providerOptions = options;
+      return {};
+    },
+    channelFactory: () => ({async ask() { return {answer: 'Invoice INV-1 is sent.'}; }}),
+  });
+
+  await handler(scope);
+
+  assert.equal(providerOptions.timeoutMs, 8000);
+  assert.equal(providerOptions.maxAttempts, 1);
+  assert.equal(providerOptions.geminiApiKey, 'gemini-key');
+  assert.equal(providerOptions.openRouterApiKey, 'openrouter-key');
+  assert.equal(providerOptions.fetchImpl, fetchImpl);
 });
 
 test('a customer mismatch fails channel authorization', async () => {
