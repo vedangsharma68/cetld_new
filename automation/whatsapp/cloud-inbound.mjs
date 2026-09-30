@@ -165,6 +165,15 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     const binding = bindings[0];
     if (!binding.customerId || !binding.customer || !binding.workspaceId) throw new Error('Incomplete customer binding');
     if (onBoundMessage) {
+      // This UX signal must never affect durable event processing. In
+      // particular, Graph failures must not cause the inbound event to retry.
+      try {
+        const sender = await getOutbound();
+        await sender.sendTypingIndicator({messageId: event.provider_message_id});
+      } catch (error) {
+        logger?.error?.('WhatsApp typing indicator failed', {messageId: event.provider_message_id,
+          message: String(error?.message || '').slice(0, 200)});
+      }
       const response = await onBoundMessage({ workspaceId: binding.workspaceId, customerId: binding.customerId,
         phone: event.sender_phone, message: event.message_text, messageId: event.provider_message_id });
       const answer = typeof response === 'string' ? response : response?.answer;
