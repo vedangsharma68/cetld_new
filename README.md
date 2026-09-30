@@ -37,9 +37,11 @@ inbound-event processor at `/api/whatsapp-process`. Never expose either key to
 the browser.
 
 Keep `WHATSAPP_OUTBOUND_ENABLED=false` while Meta reviews the proposed use.
-`WHATSAPP_TEST_ALLOWLIST` defaults to `+919871367051` and accepts only
-comma-separated E.164 test numbers. Code additionally hard blocks every
-number other than `+919871367051`, even if it appears in that variable. The
+`WHATSAPP_TEST_ALLOWLIST` is required and accepts only comma-separated E.164
+test numbers. For the authorized QA demo, configure the Vercel environment as
+`WHATSAPP_TEST_ALLOWLIST=+919871367051,+919818685252`. Code additionally hard
+blocks every number outside that fixed approved QA set, even if it appears in
+the environment variable. The
 only business-initiated template name accepted by the code is
 `cetld_invoice_update_test`; Meta must approve its neutral invoice-update text
 with business name and invoice number parameters before testing. The outbound

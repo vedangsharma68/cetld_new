@@ -5,6 +5,7 @@ import {createWhatsAppAssistantChannel, createCustomerScopedStore} from '../ai/w
 import {IDENTITY_ANSWER, SCOPE_ANSWER} from '../ai/assistant.mjs';
 
 const PHONE = '+919871367051';
+const DAD_PHONE = '+919818685252';
 const OTHER = '+15551234567';
 const NOW = '2026-09-27T12:00:00.000Z';
 const baseEnv = {WHATSAPP_OUTBOUND_ENABLED: 'true', WHATSAPP_TEST_ALLOWLIST: PHONE, WHATSAPP_ACCESS_TOKEN: 'test-token', WHATSAPP_PHONE_NUMBER_ID: '1234567890', WHATSAPP_GRAPH_API_VERSION: 'v24.0'};
@@ -87,7 +88,7 @@ test('outbound is disabled by default and makes no network call', async () => {
   assert.equal(calls.length, 0);
 });
 
-test('default test allowlist blocks other numbers before DB or network access and logs block', async () => {
+test('single-number test allowlist blocks other numbers before DB or network access and logs block', async () => {
   const {outbound, calls, logs, supabase} = harness();
   assert.deepEqual(await sendInvoice(outbound, {to: OTHER}), {status: 'blocked', reason: 'test_allowlist'});
   assert.equal(supabase.reads.length, 0);
@@ -104,7 +105,20 @@ test('enabled outbound still requires an explicit server-side test allowlist', a
   assert.equal(calls.length, 0);
 });
 
-test('custom allowlist cannot expand sending beyond Vedang test number', async () => {
+test('dad is allowed only when explicitly included in the configured test allowlist', async () => {
+  const oldAllowlist = harness();
+  assert.equal((await oldAllowlist.outbound.sendServiceReply({workspaceId: null, to: DAD_PHONE, kind: 'verification',
+    businessName: 'CETLD', messageId: 'dad-old-allowlist', lastInboundAt: NOW})).reason, 'test_allowlist');
+  assert.equal(oldAllowlist.calls.length, 0);
+
+  const expanded = harness({env: {...baseEnv, WHATSAPP_TEST_ALLOWLIST: `${PHONE},${DAD_PHONE}`}});
+  assert.equal((await expanded.outbound.sendServiceReply({workspaceId: null, to: DAD_PHONE, kind: 'verification',
+    businessName: 'CETLD', messageId: 'dad-expanded-allowlist', lastInboundAt: NOW})).status, 'accepted');
+  assert.equal(expanded.calls.length, 1);
+  assert.equal(JSON.parse(expanded.calls[0].options.body).to, DAD_PHONE.slice(1));
+});
+
+test('configured allowlist cannot expand sending beyond the fixed approved QA recipients', async () => {
   const {outbound, calls} = harness({env: {...baseEnv, WHATSAPP_TEST_ALLOWLIST: `${PHONE},${OTHER}`}});
   assert.equal((await sendInvoice(outbound, {to: OTHER})).reason, 'test_allowlist');
   assert.equal(calls.length, 0);

@@ -1,6 +1,6 @@
 import {getSendEligibility} from './consent.mjs';
 
-const DEFAULT_TEST_ALLOWLIST = '+919871367051';
+const APPROVED_QA_RECIPIENTS = new Set(['+919871367051', '+919818685252']);
 const E164 = /^\+[1-9]\d{6,14}$/;
 const TEMPLATE_NAME = 'cetld_invoice_update_test';
 const SERVICE_KINDS = new Set(['normal', 'verification', 'stop_confirmation']);
@@ -103,8 +103,8 @@ export function createWhatsAppOutbound({
     if (env.WHATSAPP_OUTBOUND_ENABLED !== 'true') return block(logger, 'disabled', {workspaceId, to, kind});
     if (!allowlist) return block(logger, 'invalid_test_allowlist', {workspaceId, to, kind});
     // The configured allowlist may narrow the test, never widen it beyond the
-    // single contact authorized by this objective.
-    if (!E164.test(to) || to !== DEFAULT_TEST_ALLOWLIST || !allowlist.has(to)) return block(logger, 'test_allowlist', {workspaceId, to, kind});
+    // fixed contacts authorized for QA.
+    if (!E164.test(to) || !APPROVED_QA_RECIPIENTS.has(to) || !allowlist.has(to)) return block(logger, 'test_allowlist', {workspaceId, to, kind});
     if (!env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) return block(logger, 'missing_credentials', {workspaceId, to, kind});
     if (!/^\d{5,30}$/.test(String(env.WHATSAPP_PHONE_NUMBER_ID))) return block(logger, 'invalid_phone_number_id', {workspaceId, to, kind});
     if (!/^v\d+\.\d+$/.test(String(env.WHATSAPP_GRAPH_API_VERSION || ''))) return block(logger, 'missing_graph_api_version', {workspaceId, to, kind});
