@@ -118,6 +118,19 @@ test('interactive controls preserve delegated action contracts', () => {
   ]) assert.match(app, new RegExp(`['\"]${action}['\"]`));
 });
 
+test('invoice detail exposes the operator-gated TEST review and one-shot confirmation flow', () => {
+  assert.match(app, /whatsappTestRequest\(id\)\.then/);
+  assert.match(app, /data-action="whatsapp-test-send"/);
+  assert.match(app, /Send test update/);
+  assert.match(app, /Actual recipient/);
+  assert.match(app, /Sending bot/);
+  assert.match(app, /escape\(cost\.currency\).*escape\(cost\.amount\)/);
+  assert.match(app, /Meta acceptance is not delivery confirmation/);
+  assert.match(app, /Result unknown · do not retry/);
+  assert.match(app, /body:JSON\.stringify\(body\)/);
+  assert.doesNotMatch(app, /WHATSAPP_TEST_OPERATOR_USER_ID|WHATSAPP_ACCESS_TOKEN/);
+});
+
 test('payment retries bind the same idempotency key to amount and reference', () => {
   assert.match(app, /paymentRequestKey\(form\.dataset,\{amount,reference\}\)/);
   assert.match(app, /p_reference:reference/);
