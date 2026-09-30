@@ -7,8 +7,8 @@ const createProposalTool = {type:'function',function:{name:'createInvoice',descr
 const updateProposalTool = {type:'function',function:{name:'updateInvoice',description:'Prepare, but do not execute, an update to one exact Cetld invoice.',parameters:{type:'object',properties:{target:{type:'string',minLength:1,maxLength:100},changes:{type:'object',properties:{total:{type:'number',minimum:0.01},dueDate:{type:'string',format:'date'},status:{type:'string',enum:['draft','sent','overdue','paid','void','cancelled']},clientName:{type:'string',maxLength:255},currency:{type:'string',enum:SUPPORTED_TWO_DECIMAL_CURRENCIES}},additionalProperties:false}},required:['target','changes'],additionalProperties:false}}};
 
 const LABELS = {getZohoBooksData: 'Zoho Books records', getInvoices: 'Invoices', getCustomer: 'Customer', getPayments: 'Payments collected', getOutstandingSummary: 'Outstanding balances', getOverdueInvoices: 'Overdue invoices', getDueInvoices: 'Invoices due soon', getActivity: 'Recorded activity', getInvoiceDetails: 'Invoice details'};
-const SCOPE_ANSWER = "I'm here for your Cetld workspace — invoices, payments, customers, and balances. Try: what's overdue, who owes the most, or what got paid this week.";
-const IDENTITY_ANSWER = "I'm the Cetld assistant — I check invoices, payments, customers, and balances in your workspace. Try: what's overdue, who owes the most, or what got paid this week.";
+export const SCOPE_ANSWER = "I'm here for your Cetld workspace — invoices, payments, customers, and balances. Try: which invoices are unpaid, who owes the most, or what got paid this week.";
+export const IDENTITY_ANSWER = "I'm the Cetld assistant — I check invoices, payments, customers, and balances in your workspace. Try: which invoices are unpaid, who owes the most, or what got paid this week.";
 
 function identityAnswer(message) {
   const text = message.trim().toLowerCase().replace(/[!?.,]+$/g, '').replace(/\s+/g, ' ');

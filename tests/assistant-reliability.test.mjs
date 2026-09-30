@@ -46,7 +46,7 @@ test('identity and model questions get the designed answer without calling a pro
     const result = await answerWorkspaceQuestion({provider:{generate:async()=>{ calls++; throw Error('not expected'); }},store,message});
     assert.equal(calls, 0);
     assert.match(result.answer, /^I'm the Cetld assistant/);
-    assert.match(result.answer, /what's overdue, who owes the most, or what got paid this week/i);
+    assert.match(result.answer, /which invoices are unpaid, who owes the most, or what got paid this week/i);
     assert.doesNotMatch(result.answer, /GPT|Gemini|Claude|model|provider/i);
   }
 });
