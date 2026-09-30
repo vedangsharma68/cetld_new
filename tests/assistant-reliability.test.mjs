@@ -145,11 +145,54 @@ test('general invoice-list questions deterministically return unfiltered invoice
       message,
     });
     assert.equal(providerCalls, 0, message);
-    assert.match(result.answer, /Here are the matching invoices:[\s\S]*INV-1048/);
+    assert.match(result.answer, /\*\*1 invoice • Total: INR 84600\.00\*\*[\s\S]*INV-1048/);
+    assert.match(result.answer, /INR 84600\.00 outstanding.*unpaid.*due 2026-10-01/i);
     assert.equal(result.readOnly, true);
     assert.equal(result.usedFallback, false);
     assert.deepEqual(result.evidence.records, [{type:'invoice',label:'INV-1048',reference:'invoice:INV-1048'}]);
   }
+});
+
+test('conversation recall returns the latest preceding user message without records or provider calls', async () => {
+  let providerCalls = 0;
+  let storeCalls = 0;
+  const isolatedStore = {query:async()=>{storeCalls++;throw new Error('recall must not read records');}};
+  const provider = {generate:async()=>{providerCalls++;throw new Error('recall must not call a provider');}};
+  const history = [
+    {role:'user',content:'which invoices do i have logged'},
+    {role:'assistant',content:'WA-TEST-0001 is fully paid.'},
+  ];
+  for (const message of ['what did i ask?', 'what was my last question', 'what did I just ask']) {
+    const result = await answerWorkspaceQuestion({provider,store:isolatedStore,message,history});
+    assert.equal(result.answer,'Your latest question was: “which invoices do i have logged”');
+    assert.doesNotMatch(result.answer,/WA-TEST-0001|fully paid|tool|schema|[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/i);
+  }
+  assert.equal(providerCalls,0);
+  assert.equal(storeCalls,0);
+});
+
+test('conversation recall with no preceding user message says so and ignores assistant answers', async () => {
+  const provider = {generate:async()=>{throw new Error('provider must not run');}};
+  for (const history of [[],[{role:'assistant',content:'The invoice is WA-TEST-0001.'}]]) {
+    const result = await answerWorkspaceQuestion({provider,store,message:'What was my last question?',history});
+    assert.equal(result.answer,"I don't have an earlier question from you in this chat.");
+  }
+});
+
+test('deterministic invoice dashboard keeps currencies separate and paid balances explicit', async () => {
+  const eurCustomer = '33333333-3333-4333-8333-333333333333';
+  const rows = [
+    {...invoice,invoice_number:'WA-TEST-0001',amount_paid:'84600.00',status:'paid'},
+    {...invoice,id:'44444444-4444-4444-8444-444444444444',customer_id:eurCustomer,invoice_number:'EU-2',currency:'EUR',total_amount:'50.00',amount_paid:'10.00'},
+  ];
+  const dashboardStore = {query:async table => table === 'invoices' ? rows : [
+    {id:customerId,name:'Arbor & Finch',company_name:'Arbor & Finch'},
+    {id:eurCustomer,name:'Euro Client',company_name:'Euro Client'},
+  ]};
+  const result = await answerWorkspaceQuestion({provider:{generate:async()=>{throw new Error('provider must not run');}},store:dashboardStore,message:'which invoices do i have logged'});
+  assert.match(result.answer,/Total: EUR 50\.00 \| INR 84600\.00/);
+  assert.match(result.answer,/WA-TEST-0001[\s\S]*INR 0\.00 outstanding[\s\S]*fully paid/);
+  assert.doesNotMatch(result.answer,/EUR 84650|INR 84650|customer_id|workspace_id|tool|schema|[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/i);
 });
 
 test('overdue and paid invoice lists retain their specialized deterministic routes', async () => {

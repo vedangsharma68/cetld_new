@@ -70,7 +70,7 @@ test('paid-invoice questions read verified settlement records without a model pl
   const provider={generate:async()=>{throw new Error('Paid invoice lookup must not call the model');}};
   for (const message of ['which invoices are paid??','What invoice was paid?','List paid invoices','How many invoices are paid?']) {
     const result=await answerWorkspaceQuestion({provider,store:workspaceStore(),message,clock:fixedClock});
-    assert.match(result.answer,/1 fully paid invoice:\n- 1001 — Ann Revolution — 💰 CHF 1650\.00/);
+    assert.match(result.answer,/\*\*1 fully paid invoice • Total: CHF 1650\.00\*\*[\s\S]*1001 — Ann Revolution — CHF 1650\.00 total \/ CHF 0\.00 outstanding — fully paid/);
     assert.equal(result.answer.split('\n').length,2,'the lead and invoice should render on separate short lines');
     assert.doesNotMatch(result.answer,/INV-005|1223113|GST-3425-26|couldn.t safely check/i);
     assert.deepEqual(result.evidence.records.map(row=>row.label),['1001']);
@@ -91,7 +91,7 @@ test('paid-invoice lookup includes fully settled legacy rows with stale status a
   const paidRows=Array.from({length:11},(_,index)=>({...legacy,id:`20000000-0000-4000-8000-${String(index).padStart(12,'0')}`,invoice_number:`PAID-${index}`,status:'sent'}));
   const result=await answerWorkspaceQuestion({provider:{generate:async()=>{throw Error('No model call expected');}},store:workspaceStore({invoices:paidRows,customers,payments:[],invoice_files:[]}),message:'Show me paid invoices',clock:fixedClock});
   assert.match(result.answer,/11 fully paid invoices/);
-  assert.match(result.answer,/Showing the first 10\./);
+  assert.match(result.answer,/Showing the first 10 of 11; more invoices and their amounts were not included\./);
   assert.doesNotMatch(result.answer,/PAID-10/);
   assert.equal(result.evidence.complete,false);
   assert.equal(result.evidence.truncated,true);

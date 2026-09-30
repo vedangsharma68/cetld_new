@@ -162,12 +162,16 @@ test('required invoice, payment, reminder, reply and next-action questions stay 
   const paid=await answerWorkspaceQuestion({provider,store:appStore,message:'is the App Revolution invoice paid?'});
   const reminded=await answerWorkspaceQuestion({provider,store:scopedStore(WS_A,{invoices:[shiv],customers,payments:[],invoice_files:[]}),message:'when did we last remind Shiv?'});
   const replied=await answerWorkspaceQuestion({provider,store:scopedStore(WS_A,{invoices:[shiv],customers,payments:[],invoice_files:[]}),message:'what did they say?',history:[{role:'user',content:'tell me about the Shiv Engineering invoice'},{role:'assistant',content:about.answer}]});
+  const them=await answerWorkspaceQuestion({provider,store:scopedStore(WS_A,{invoices:[shiv],customers,payments:[],invoice_files:[]}),message:'gimme the details for them',history:[{role:'user',content:'tell me about the Shiv Engineering invoice'},{role:'assistant',content:about.answer}]});
+  const it=await answerWorkspaceQuestion({provider,store:scopedStore(WS_A,{invoices:[shiv],customers,payments:[],invoice_files:[]}),message:'what happened to that invoice?',history:[{role:'user',content:'tell me about the Shiv Engineering invoice'},{role:'assistant',content:about.answer}]});
   const next=await answerWorkspaceQuestion({provider,store:shivStore,message:'what happens next on INV-005?'});
   assert.match(about.answer,/SHIV-1048.*Shiv Engineering.*4200\.00/);
   assert.equal(paid.answer,'APP-1049 for App Revolution is fully paid.');
   assert.equal(paid.answer.split('\n').length,1,'a simple single-fact question should get one short line');
   assert.match(reminded.answer,/2026-09-22/);
   assert.match(replied.answer,/Payment was processed yesterday/);
+  assert.match(them.answer,/SHIV-1048/);
+  assert.match(it.answer,/SHIV-1048/);
   assert.match(next.answer,/2026-09-27/);
   for(const answer of [about.answer,paid.answer,reminded.answer,replied.answer,next.answer])assert.doesNotMatch(answer,/customer_id|UUID|workspace_id|SECRET-INV/i);
 });
