@@ -121,11 +121,51 @@ export function isGeneralInvoiceListQuestion(message) {
   return /^(?:(?:which|what) invoices? (?:do (?:i|we) have(?: logged)?|(?:are|is) logged)|list(?: me)? (?:all )?(?:my )?invoices?|show(?: me)? (?:all )?(?:my )?invoices?|my invoices?)$/.test(prompt);
 }
 
+function sumInvoiceAmountsByCurrency(rows, field) {
+  const totals = new Map();
+  for (const row of rows) {
+    const currency = typeof row.currency === 'string' ? row.currency : null;
+    const value = String(row[field] ?? '');
+    const match = value.match(/^(\d+)(?:\.(\d{1,2}))?$/);
+    if (!currency || !match) continue;
+    const minor = BigInt(match[1]) * 100n + BigInt((match[2] || '').padEnd(2, '0'));
+    totals.set(currency, (totals.get(currency) || 0n) + minor);
+  }
+  return [...totals.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([currency, minor]) =>
+    `${currency} ${minor / 100n}.${String(minor % 100n).padStart(2, '0')}`);
+}
+
+function invoicePaymentLabel(row) {
+  if (row.paymentStatus === 'paid' || row.isFullyPaid === true) return 'fully paid';
+  if (row.paymentStatus === 'partially_paid') return 'partially paid';
+  if (row.paymentStatus === 'unpaid') return 'unpaid';
+  return redactInternalIds(row.invoiceStatus || row.status || 'status not recorded');
+}
+
+function invoiceListAnswer(rows, {count = rows.length, truncated = false, paidOnly = false} = {}) {
+  if (!count) return paidOnly ? 'There are no fully paid invoices in this workspace right now.' : "I couldn't find invoices matching those filters.";
+  const visible = rows.slice(0, 10);
+  const totals = sumInvoiceAmountsByCurrency(rows, 'totalAmount');
+  const totalLabel = totals.length ? ` • ${truncated || count > rows.length ? 'Listed total' : 'Total'}: ${totals.join(' | ')}` : '';
+  const heading = `**${count}${paidOnly ? ' fully paid' : ''} invoice${count === 1 ? '' : 's'}${totalLabel}**`;
+  const bullets = visible.map(row => {
+    const number = redactInternalIds(row.invoiceNumber || 'Invoice');
+    const customer = redactInternalIds(row.customerName || 'customer not recorded');
+    const currency = redactInternalIds(row.currency || 'currency not recorded');
+    const total = redactInternalIds(row.totalAmount ?? 'not recorded');
+    const outstanding = redactInternalIds(row.outstandingAmount ?? 'not recorded');
+    const due = redactInternalIds(row.dueDate || 'not recorded');
+    const direction = row.invoiceDirection === 'payable' ? ' • payable' : !row.invoiceDirection || row.invoiceDirection === 'uncertain' ? ' • direction needs review' : '';
+    return `- 🧾 ${number} — ${customer} — ${currency} ${total} total / ${currency} ${outstanding} outstanding — ${invoicePaymentLabel(row)} — due ${due}${direction}`;
+  });
+  const partial = count > visible.length || truncated || rows.length > visible.length
+    ? `\nShowing the first ${visible.length} of ${count}${truncated ? '; more invoices and their amounts were not included' : ''}.`
+    : '';
+  return `${heading}\n${bullets.join('\n')}${partial}`;
+}
+
 function paidInvoiceListAnswer(data) {
-  if (!data.count) return 'There are no fully paid invoices in this workspace right now.';
-  const rows = data.invoices.map(row => `- ${redactInternalIds(row.invoiceNumber || 'Invoice')} — ${redactInternalIds(row.customerName || 'customer not recorded')} — 💰 ${row.currency} ${row.totalAmount}`);
-  const count = `${data.count} fully paid invoice${data.count === 1 ? '' : 's'}`;
-  return `${count}:\n${rows.join('\n')}${data.truncated ? `\nShowing the first ${rows.length}.` : ''}`;
+  return invoiceListAnswer(data.invoices || [], {count:data.count || 0,truncated:data.truncated,paidOnly:true});
 }
 
 function simpleLedgerReadTool(message) {
@@ -278,13 +318,12 @@ function invoiceDetailsFallback(invoice, message = '') {
   const dueDate = redactInternalIds(invoice.dueDate || 'not recorded');
   const directionNote = direction === 'receivable' ? ' Direction is marked receivable.' : direction === 'payable' ? ' Direction is marked payable.' : ' Invoice direction needs a quick review.';
   const details = [invoice.subtotal !== undefined && invoice.subtotal !== null ? `subtotal ${invoice.currency} ${invoice.subtotal}` : '', invoice.tax !== undefined && invoice.tax !== null ? `tax ${invoice.currency} ${invoice.tax}` : ''].filter(Boolean);
-  const amounts = details.length ? ` ${details.join('; ')}.` : '';
-  return `${number} for ${customer} is ${paymentState} (invoice status: ${invoiceStatus}). Total: ${invoice.currency} ${total}; paid: ${invoice.currency} ${paid}; outstanding: ${invoice.currency} ${outstanding}. Due date: ${dueDate}.${amounts}${directionNote}`;
+  const amounts = details.length ? `\n- ${details.join(' • ')}` : '';
+  return `**1 invoice • Total: ${invoice.currency} ${total}**\n- 🧾 ${number} — ${customer} — ${invoice.currency} ${total} total\n- ${invoice.currency} ${outstanding} outstanding • ${invoice.currency} ${paid} paid • ${paymentState}\n- Status: ${invoiceStatus} • Due: ${dueDate}${amounts}\n${directionNote.trim()}`;
 }
 
 function invoiceListFallback(rows) {
-  if (!rows.length) return "I couldn't find invoices matching those filters.";
-  return `Here are the matching invoices:\n${rows.slice(0, 10).map(row => `- ${invoiceDetailsFallback(row)}`).join('\n')}`;
+  return invoiceListAnswer(rows);
 }
 
 function factualFallback(sources, message = '') {
@@ -460,6 +499,7 @@ function invoiceLookupTarget(message) {
 }
 
 function contextualInvoiceTarget(message, history) {
+  if (isConversationRecallQuestion(message)) return null;
   const current = invoiceLookupTarget(message);
   if (current) return current;
   if (!/\b(?:they|them|their|it|that invoice|next reminder|last reminder|what happens next|what did)\b/i.test(message)) return null;
@@ -468,6 +508,18 @@ function contextualInvoiceTarget(message, history) {
     if (target) return target;
   }
   return null;
+}
+
+function isConversationRecallQuestion(message) {
+  const prompt = message.trim().toLowerCase().replace(/[!?.,]+$/g, '').replace(/\s+/g, ' ');
+  return /^(?:what did i (?:just )?ask(?: you)?|what was my (?:last|previous|most recent) question|what did i (?:last|previously) ask(?: you)?|remind me what i (?:just |last |previously )?asked(?: you)?)$/.test(prompt);
+}
+
+function conversationRecallAnswer(history) {
+  const previous = [...history].reverse().find(item => item.role === 'user');
+  return previous
+    ? `Your latest question was: “${redactInternalIds(previous.content)}”`
+    : "I don't have an earlier question from you in this chat.";
 }
 
 function invoiceClarification(invoices) {
@@ -609,6 +661,7 @@ async function liveZohoInvoice(accounting, target) {
 
 export async function answerWorkspaceQuestion({provider, store, message, history = [], clock = () => new Date(), accounting = null}) {
   if (typeof message !== 'string' || !message.trim() || message.length > 4000 || !Array.isArray(history) || history.length > 20 || history.some(x => !x || !['user', 'assistant'].includes(x.role) || typeof x.content !== 'string' || x.content.length > 4000 || Object.keys(x).some(k => !['role', 'content'].includes(k)))) throw new APIError(400, 'INVALID_CONVERSATION');
+  if (isConversationRecallQuestion(message)) return withEvidence({answer:conversationRecallAnswer(history),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},{tool:'none',data:{complete:true,truncated:false}});
   const identity = identityAnswer(message);
   if (identity) return withEvidence({answer: identity, asOf: clock().toISOString(), timezone: 'UTC', model: null, usedFallback: false, readOnly: true}, {tool:'none',data:{complete:true,truncated:false}});
   const direct = conversationalAnswer(message);
