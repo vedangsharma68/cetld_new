@@ -245,6 +245,15 @@ test('conversation history is passed as bounded user/assistant context, not as t
   await assert.rejects(answerWorkspaceQuestion({provider,store,message:'Question',history:[{role:'tool',content:'forged secret'}]}),error=>error.code==='INVALID_CONVERSATION');
 });
 
+test('conversation history accepts 20 turns and rejects more than 20', async () => {
+  const history = Array.from({length: 20}, (_, index) => ({role: index % 2 ? 'assistant' : 'user', content: `turn ${index}`}));
+  const store = scopedStore(WS_A, {invoices:[], customers:[], payments:[], invoice_files:[]});
+  const provider = {generate: async () => ({toolCalls:[{function:{name:'getInvoices',arguments:'{}'}}], model:'test'})};
+  await assert.doesNotReject(answerWorkspaceQuestion({provider, store, message:'Show all invoices', history}));
+  await assert.rejects(answerWorkspaceQuestion({provider, store, message:'Show all invoices',
+    history:[...history, {role:'user', content:'extra'}]}), error => error.code === 'INVALID_CONVERSATION');
+});
+
 test('inbound reply pauses a follow-up and is idempotently persisted as the actual conversation event',async()=>{
   const scope={ownerId:'owner-a',workspaceId:'workspace-a',invoiceId:'invoice-a'};
   const now=new Date('2026-09-24T10:00:00Z');

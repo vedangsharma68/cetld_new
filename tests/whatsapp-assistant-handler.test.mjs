@@ -5,8 +5,17 @@ import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistan
 
 const scope = {workspaceId: 'workspace-a', customerId: 'customer-a', phone: '+919871367051', message: 'What is my invoice status?'};
 
-function fakeSupabase({customerId = 'customer-a'} = {}) {
+function fakeSupabase({customerId = 'customer-a', turns = [], memoryError = null} = {}) {
   return {rpc() {}, from(table) {
+    if (table === 'whatsapp_conversation_turns') {
+      if (memoryError) throw memoryError;
+      const query = {select() { return query; }, eq() { return query; }, order() { return query; },
+        limit() { return Promise.resolve({data: [...turns].reverse(), error: null}); },
+        range() { return Promise.resolve({data: [], error: null}); },
+        insert(row) { turns.push({...row, id: turns.length + 1, created_at: new Date().toISOString()}); return Promise.resolve({error: null}); },
+        delete() { return query; }, in() { return Promise.resolve({error: null}); }};
+      return query;
+    }
     const query = {select() { return query; }, eq() { return query; },
       async maybeSingle() {
         if (table === 'workspace_ai_settings') return {data: {primary_model: 'gemini-3.5-flash', fallback_model: null}};
@@ -20,6 +29,33 @@ function fakeSupabase({customerId = 'customer-a'} = {}) {
     return query;
   }};
 }
+
+test('stored WhatsApp turns flow into ask and the inbound user turn is persisted', async () => {
+  const turns = [
+    {id: 1, role: 'user', content: 'Show invoice INV-1', created_at: '2026-09-30T10:00:00Z'},
+    {id: 2, role: 'assistant', content: 'INV-1 is open.', created_at: '2026-09-30T10:00:01Z'},
+  ];
+  const handler = createWhatsAppBoundMessageHandler({supabase: fakeSupabase({turns}), logger: {error() {}},
+    providerFactory: () => ({}), channelFactory: () => ({async ask(input) {
+      assert.deepEqual(input.history, [{role: 'user', content: 'Show invoice INV-1'},
+        {role: 'assistant', content: 'INV-1 is open.'}]);
+      return {answer: 'It is still open.'};
+    }})});
+  assert.equal(await handler({...scope, message: 'Is it still open?'}), 'It is still open.');
+  assert.equal(turns.at(-1).content, 'Is it still open?');
+});
+
+test('missing conversation table falls back to empty history and still answers', async () => {
+  const logs = [];
+  const handler = createWhatsAppBoundMessageHandler({
+    supabase: fakeSupabase({memoryError: new Error('relation does not exist')}), logger: {error(...args) { logs.push(args); }},
+    providerFactory: () => ({}), channelFactory: () => ({async ask(input) {
+      assert.deepEqual(input.history, []);
+      return {answer: 'Invoice INV-1 is sent.'};
+    }})});
+  assert.equal(await handler(scope), 'Invoice INV-1 is sent.');
+  assert.equal(logs.length, 2);
+});
 
 test('WhatsApp functions have enough execution time for AI-backed replies', async () => {
   const vercel = JSON.parse(await readFile(new URL('../vercel.json', import.meta.url), 'utf8'));

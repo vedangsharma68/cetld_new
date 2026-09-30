@@ -1,10 +1,12 @@
 import {AIProvider, sanitizeModelSettings} from '../../ai/provider.mjs';
 import {createWhatsAppAssistantChannel} from '../../ai/whatsapp-channel.mjs';
 import {getSendEligibility} from './consent.mjs';
+import {readConversationHistory, writeConversationTurn} from './conversation-memory.mjs';
 
 /** Create an inbound assistant handler only after the webhook has verified Meta. */
 export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl = fetch, supabase,
-  providerFactory = options => new AIProvider(options), channelFactory = createWhatsAppAssistantChannel} = {}) {
+  providerFactory = options => new AIProvider(options), channelFactory = createWhatsAppAssistantChannel,
+  logger = console} = {}) {
   if (!supabase?.from) throw new TypeError('A server-side Supabase client is required');
 
   return async ({workspaceId, customerId, phone, message}) => {
@@ -23,7 +25,18 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           workspaceId: scope.workspaceId, customerId: scope.customerId, phone: scope.phone};
       },
     });
-    const input = {workspaceId, customerId, phone, message};
+    let history = [];
+    try { history = await readConversationHistory({supabase, workspaceId, phone}); }
+    catch (memoryError) {
+      logger?.error?.('WhatsApp conversation memory read failed', {workspaceId,
+        message: String(memoryError?.message || '').slice(0, 200)});
+    }
+    try { await writeConversationTurn({supabase, workspaceId, customerId, phone, role: 'user', content: message}); }
+    catch (memoryError) {
+      logger?.error?.('WhatsApp conversation memory write failed', {workspaceId, role: 'user',
+        message: String(memoryError?.message || '').slice(0, 200)});
+    }
+    const input = {workspaceId, customerId, phone, message, history};
     let response = await channel.ask(input);
     // Planner failures are safe, read-only fallbacks. Retry only this narrowly
     // identified class, once, to absorb transient free-tier provider failures.

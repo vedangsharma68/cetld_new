@@ -1,5 +1,6 @@
 import { resolveActiveBindings, revokeConsentForPhone, suppressUnknownPhone } from './consent.mjs';
 import {createWhatsAppInvoiceUpdateStore} from './invoice-update-store.mjs';
+import {writeConversationTurn} from './conversation-memory.mjs';
 
 const MAX_MESSAGES = 100;
 const DEFAULT_PROCESS_BUDGET_MS = 40_000;
@@ -184,9 +185,18 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       const answer = typeof response === 'string' ? response : response?.answer;
       if (typeof answer === 'string' && answer.trim()) {
         const sender = await getOutbound();
-        await sender.sendServiceReply({ workspaceId: binding.workspaceId, to: event.sender_phone, body: answer,
+        const sent = await sender.sendServiceReply({ workspaceId: binding.workspaceId, to: event.sender_phone, body: answer,
           lastInboundAt: event.provider_timestamp || event.received_at, kind: 'normal', messageId: event.provider_message_id,
           businessName: await businessName(binding.workspaceId) });
+        if (sent?.status === 'accepted') {
+          try {
+            await writeConversationTurn({supabase, workspaceId: binding.workspaceId,
+              customerId: binding.customerId, phone: event.sender_phone, role: 'assistant', content: answer});
+          } catch (memoryError) {
+            logger?.error?.('WhatsApp conversation memory write failed', {workspaceId: binding.workspaceId,
+              role: 'assistant', message: String(memoryError?.message || '').slice(0, 200)});
+          }
+        }
       }
       if (response?.plannerFailure) return {outcome: 'bound', plannerFailure: response.plannerFailure};
     }
