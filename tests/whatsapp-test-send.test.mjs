@@ -39,7 +39,7 @@ test('review derives dad recipient and fixed display values without sending or c
   let claims = 0; const rpc = supabase.rpc; supabase.rpc = (...args) => {claims++; return rpc(...args);};
   const res = await preview(handler);
   assert.equal(res.code, 200); assert.equal(res.body.recipient, dad); assert.equal(res.body.sendingBot, '+917303338959');
-  assert.equal(res.body.text, 'Hi, this is QA Workspace. Here is an update for invoice INV-2026-0002.');
+  assert.equal(res.body.text, 'Hi, this is QA Workspace. Invoice INV-2026-0002 has an update. Reply STOP anytime.');
   assert.deepEqual(res.body.estimatedBaseCost, {currency: 'INR', amount: '0.1150', beforeTax: true, asOf: '2026-09-30'});
   assert.equal(sends, 0); assert.equal(claims, 0); assert.ok(res.body.previewToken);
 });
