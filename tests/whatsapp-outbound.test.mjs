@@ -15,6 +15,17 @@ test('assistant canned scope and identity replies pass the collection-language g
   assert.equal(neutralText(IDENTITY_ANSWER), IDENTITY_ANSWER);
 });
 
+test('session guard permits factual invoice vocabulary but business-initiated guards remain neutral', () => {
+  for (const body of ['This invoice is overdue.', 'INR 500 is outstanding.', 'The amount due is INR 500.',
+    'This is past due.', 'The invoice is unpaid with a balance partially paid.']) {
+    assert.equal(neutralText(body, 'normal'), body);
+  }
+  for (const body of ['This invoice is overdue.', 'INR 500 is outstanding.', 'The amount due is INR 500.', 'This is past due.']) {
+    assert.throws(() => neutralText(body, 'verification'), /collection content is disabled/);
+    assert.throws(() => neutralText(body, 'invoice_update'), /collection content is disabled/);
+  }
+});
+
 function fakeSupabase({suppressed = false, globallySuppressed = false, consented = true, customer = true, attested = true} = {}) {
   const reads = [];
   return {
@@ -215,6 +226,22 @@ test('service replies require an open 24-hour window and atomic inbound authoriz
   assert.equal(JSON.parse(accepted.calls[0].options.body).text.body, args.body);
   const unix = harness();
   assert.equal((await unix.outbound.sendServiceReply({...args, lastInboundAt: String(Date.parse(NOW) / 1000)})).status, 'accepted');
+});
+
+test('session replies send factual invoice terms and replace pressure phrases with a safe fallback', async () => {
+  for (const body of ['Invoice INV-1 is overdue.', 'Outstanding: INR 500.', 'Amount due: INR 500.']) {
+    const attempt = harness();
+    assert.equal((await attempt.outbound.sendServiceReply({workspaceId: 'workspace-a', to: PHONE, body,
+      businessName: 'Acme Studio', kind: 'normal', messageId: `inbound-${attempt.calls.length}`, lastInboundAt: NOW})).status, 'accepted');
+    assert.equal(JSON.parse(attempt.calls[0].options.body).text.body, body);
+  }
+  for (const phrase of ['final notice', 'pay now', 'pay immediately', 'pay today', 'late fee', 'legal action']) {
+    const attempt = harness();
+    assert.equal((await attempt.outbound.sendServiceReply({workspaceId: 'workspace-a', to: PHONE, body: `This is a ${phrase}.`,
+      businessName: 'Acme Studio', kind: 'normal', messageId: `pressure-${phrase}`, lastInboundAt: NOW})).status, 'accepted');
+    assert.equal(JSON.parse(attempt.calls[0].options.body).text.body,
+      "I have your answer, but couldn't phrase it safely for WhatsApp - please check the cetld app for details.");
+  }
 });
 
 test('STOP confirmation is the only suppression exception and still needs one-time claim', async () => {

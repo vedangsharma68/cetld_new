@@ -5,6 +5,9 @@ const E164 = /^\+[1-9]\d{6,14}$/;
 const TEMPLATE_NAME = 'cetld_invoice_update_test';
 const SERVICE_KINDS = new Set(['normal', 'verification', 'stop_confirmation']);
 const CURRENT_INVOICE_STATUSES = new Set(['sent', 'paid']);
+const SAFE_GUARD_REPLY = "I have your answer, but couldn't phrase it safely for WhatsApp - please check the cetld app for details.";
+const NEUTRAL_CONTENT = /\b(?:overdue|past[ -]?due|debt|debtor|collect(?:ion)?|pay(?:ment)?\s+(?:now|today|immediately)|amount\s+due|outstanding|final\s+notice|late\s+fee)\b/i;
+const SESSION_PRESSURE_CONTENT = /\b(?:final\s+notice|pay\s+(?:now|immediately|today)|late\s+fee|legal\s+action)\b/i;
 
 function allowlistFromEnv(env) {
   const raw = env.WHATSAPP_TEST_ALLOWLIST;
@@ -41,11 +44,12 @@ function withinServiceWindow(lastInboundAt, clock) {
   return Number.isFinite(received) && Number.isFinite(now) && now >= received && now - received < 24 * 60 * 60 * 1000;
 }
 
-export function neutralText(value) {
+export function neutralText(value, kind = 'business_initiated') {
   const body = nonempty(value, 'body', 1000);
-  // The reply path is restricted to operational responses. Collection language
-  // remains disabled even when test sending is enabled.
-  if (/\b(?:overdue|past[ -]?due|debt|debtor|collect(?:ion)?|pay(?:ment)?\s+(?:now|today|immediately)|amount\s+due|outstanding|final\s+notice|late\s+fee)\b/i.test(body)) {
+  // Factual invoice vocabulary is permitted only for user-initiated replies in
+  // the service window. Business-initiated surfaces retain the original guard.
+  const blockedContent = kind === 'normal' ? SESSION_PRESSURE_CONTENT : NEUTRAL_CONTENT;
+  if (blockedContent.test(body)) {
     throw new TypeError('collection content is disabled');
   }
   return body;
@@ -222,11 +226,20 @@ export function createWhatsAppOutbound({
     } else if (!await verifiedBusinessName(supabase, workspaceId, owner)) {
       return block(logger, 'business_name_mismatch', {workspaceId, to, kind});
     }
-    const text = kind === 'verification'
+    let text = kind === 'verification'
       ? 'Please contact the business that issued your invoice to verify your WhatsApp number. Reply STOP to opt out.'
       : kind === 'stop_confirmation'
         ? "You've been opted out of WhatsApp updates. We won't message you again."
-        : neutralText(body);
+        : null;
+    if (kind === 'normal') {
+      try {
+        text = neutralText(body, kind);
+      } catch (error) {
+        if (!(error instanceof TypeError) || error.message !== 'collection content is disabled') throw error;
+        logger?.warn?.({event: 'whatsapp_outbound_guard_fallback', workspaceId, recipient: maskedPhone(to), kind});
+        text = SAFE_GUARD_REPLY;
+      }
+    }
     if (kind === 'normal') {
       if (!supabase) return block(logger, 'missing_store', {workspaceId, to, kind});
       const eligibility = await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
