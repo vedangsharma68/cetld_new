@@ -45,19 +45,26 @@ test('the existing client application is available from the app route', () => {
 
 test('landing hero rotation reserves descender room and animates a measured width', () => {
   assert.doesNotMatch(home, /rotating-word-sizer/);
-  assert.match(home, /class="rotating-word"><span class="rotating-word-current">confidence<\/span><span class="rotating-word-next"/);
+  const rotatingMarkup = home.match(/<span class="rotating-word">([\s\S]*?)<\/span><\/em>/)?.[1] ?? '';
+  assert.match(rotatingMarkup, /class="rotating-word-current">confidence<\/span>/);
+  assert.match(rotatingMarkup, /class="rotating-word-period"[^>]*>\.<\/span>/);
+  assert.doesNotMatch(home, /<\/span>\.<\/em>/, 'the period cannot sit outside the rotation window');
 
   const windowRule = siteCss.match(/\.rotating-word\s*\{([^}]+)\}/)?.[1] ?? '';
   const lineHeight = Number(windowRule.match(/line-height:\s*([\d.]+)/)?.[1]);
   const paddingBottom = Number(windowRule.match(/padding-block:\s*[\d.]+em\s+([\d.]+)em/)?.[1]);
   assert.ok(lineHeight >= 1.1, 'rotation window line-height leaves glyph breathing room');
-  assert.ok(paddingBottom >= 0.2, 'bottom padding accommodates a typical serif descender');
+  assert.ok(paddingBottom >= 0.3, 'bottom padding accommodates WebKit descenders throughout the roll');
   assert.match(windowRule, /transition:\s*width 360ms cubic-bezier/);
 
   assert.match(heroRotation, /probe\.getBoundingClientRect\(\)\.width/);
   assert.equal((heroRotation.match(/getBoundingClientRect/g) ?? []).length, 1);
+  assert.match(heroRotation, /probe\.textContent = `\$\{word\}\.`/, 'measured width includes the unbreakable period');
   assert.match(heroRotation, /rotatingWord\.style\.width = `\$\{nextWidth\}px`/);
   assert.match(siteCss, /will-change:\s*transform, opacity/);
+  for (const distance of siteCss.matchAll(/translate3d\(0,\s*(-?[\d.]+)%,\s*0\)/g)) {
+    assert.ok(Math.abs(Number(distance[1])) <= 100, 'roll translation stays within the padded clip geometry');
+  }
   assert.match(siteCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*animation: none !important;[\s\S]*transition: none !important;/);
   assert.match(heroRotation, /matchMedia\('\(prefers-reduced-motion: reduce\)'\)/);
 });

@@ -24,15 +24,21 @@
 }
 
 .rotating-word {
-  display: inline-grid;
+  display: inline-flex;
+  align-items: baseline;
   overflow: hidden;
   vertical-align: bottom;
   line-height: 1.12;
-  padding-block: .04em .2em;
-  margin-block: -.04em -.2em;
+  padding-block: .04em .3em;
+  margin-block: -.04em -.3em;
   white-space: nowrap;
   contain: layout paint;
   transition: width 360ms cubic-bezier(.4, 0, .2, 1);
+}
+
+.rotating-word-text {
+  display: inline-grid;
+  min-width: 0;
 }
 
 .rotating-word-current,
