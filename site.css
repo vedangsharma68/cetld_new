@@ -5,12 +5,13 @@
   position: relative;
   isolation: isolate;
   overflow: hidden;
+  max-width: none;
 }
 
 .hero::before {
   position: absolute;
   z-index: -1;
-  inset: 16px -12% 0;
+  inset: 0;
   content: "";
   pointer-events: none;
   background:
@@ -26,21 +27,23 @@
   display: inline-grid;
   overflow: hidden;
   vertical-align: bottom;
+  line-height: 1.12;
+  padding-block: .04em .2em;
+  margin-block: -.04em -.2em;
+  white-space: nowrap;
+  contain: layout paint;
+  transition: width 360ms cubic-bezier(.4, 0, .2, 1);
 }
 
-.rotating-word-sizer,
 .rotating-word-current,
 .rotating-word-next {
   grid-area: 1 / 1;
 }
 
-.rotating-word-sizer {
-  visibility: hidden;
-}
-
 .rotating-word-current,
 .rotating-word-next {
   display: inline-block;
+  will-change: transform, opacity;
 }
 
 .rotating-word-current.is-exiting {
@@ -56,17 +59,25 @@
   animation: rotating-word-in 360ms cubic-bezier(.4, 0, .2, 1) both;
 }
 
+.rotating-word-probe {
+  position: absolute;
+  visibility: hidden;
+  width: max-content;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 @keyframes hero-wave-drift {
   to { transform: scale(1.12) translate3d(2.5%, -1.5%, 0); }
 }
 
 @keyframes rotating-word-out {
-  to { opacity: 0; transform: translateY(-100%); }
+  to { opacity: 0; transform: translate3d(0, -100%, 0); }
 }
 
 @keyframes rotating-word-in {
-  from { opacity: 0; transform: translateY(100%); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translate3d(0, 100%, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 
 @media (prefers-reduced-motion: reduce) {
