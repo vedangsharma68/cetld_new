@@ -57,7 +57,7 @@ export function createWhatsAppWebhookHandler({ env = process.env, fetchImpl = gl
     if (runtime) return runtime;
     const supabase = createSupabase(env, fetchImpl);
     return createInboundRuntime({ env, fetchImpl, supabase, logger,
-      onBoundMessage: boundMessageFactory?.({ env, fetchImpl, supabase }) });
+      onBoundMessage: boundMessageFactory?.({ env, fetchImpl, supabase, logger }) });
   };
   return async function handleWhatsAppWebhook(request, response) {
     response.setHeader('Cache-Control', 'no-store');

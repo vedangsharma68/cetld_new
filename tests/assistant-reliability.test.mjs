@@ -180,14 +180,15 @@ test('incomplete deterministic invoice proposals ask for missing fields without 
   assert.equal(result.readOnly, true);
 });
 
-test('final answer guidance favors brief direct answers and preserves financial caveats', async () => {
+test('final answer guidance uses mini dashboards and preserves financial caveats', async () => {
   const provider = plannedProvider('getOutstandingSummary');
   await answerWorkspaceQuestion({provider, store, message: 'Explain what is outstanding and what I should do next.' });
   const request = provider.requests.find(item => !item.tools);
   const guidance = request.messages.find(item => item.role === 'system').content;
 
-  assert.match(guidance, /1[-–]3 short sentences/i);
-  assert.match(guidance, /short paragraph|compact bullet/i);
+  assert.match(guidance, /Lead with the answer in one line/i);
+  assert.match(guidance, /mini dashboard/i);
+  assert.match(guidance, /under about 120 words/i);
   assert.match(guidance, /exact amounts and currencies/i);
   assert.match(guidance, /partial|incomplete/i);
   assert.match(guidance, /direction|receivable|payable/i);

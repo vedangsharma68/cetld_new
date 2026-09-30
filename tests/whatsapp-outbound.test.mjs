@@ -301,7 +301,7 @@ test('WhatsApp assistant requires current binding and a customer-scoped store', 
   assert.equal(channel.confirmFromWhatsApp().executed, false);
 });
 
-test('WhatsApp final replies are concise, answer-only, and omit standalone progress labels', async () => {
+test('WhatsApp final replies use dashboard guidance, are answer-only, and omit standalone progress labels', async () => {
   const requests = [];
   const provider = {async generate(request) {
     requests.push(request);
@@ -326,7 +326,10 @@ test('WhatsApp final replies are concise, answer-only, and omit standalone progr
 
   assert.deepEqual(requests[0], planningRequest, 'tool planning remains untouched');
   assert.match(requests[1].messages[0].content, /WhatsApp reply guidance/i);
-  assert.match(requests[1].messages[0].content, /1-2 short sentences/i);
+  assert.match(requests[1].messages[0].content, /Lead with the answer in one line/i);
+  assert.match(requests[1].messages[0].content, /mini dashboard/i);
+  assert.match(requests[1].messages[0].content, /under about 120 words/i);
+  assert.match(requests[1].messages[0].content, /retry or narrower question/i);
   assert.match(requests[1].messages[0].content, /progress|status/i);
   assert.equal(requests[1].messages[1].content, finalRequest.messages[1].content);
   assert.equal(result.answer, 'INV-42 has USD 500 due on 1 October.');
