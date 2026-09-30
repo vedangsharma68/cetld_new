@@ -219,8 +219,7 @@ export function createWhatsAppOutbound({
       const finalEligibility = await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
       if (!finalEligibility.allowed) return block(logger, finalEligibility.reason, {workspaceId, to, kind});
     }
-    const prefixed = owner && !text.toLowerCase().includes(owner.toLowerCase()) ? `Hi, this is ${owner}. ${text}` : text;
-    return postMessage({workspaceId, to, kind, payload: {type: 'text', text: {preview_url: false, body: prefixed}}});
+    return postMessage({workspaceId, to, kind, payload: {type: 'text', text: {preview_url: false, body: text}}});
   }
 
   // Intentionally no sendReminder method. Collection content remains on hold.

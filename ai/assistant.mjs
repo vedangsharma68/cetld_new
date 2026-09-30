@@ -37,17 +37,18 @@ function nonFinancialPromptFallback(message) {
 }
 
 function plannerFailureResult(message, clock, writeIntent, provider, plan, reason) {
-  console.warn('Cetld assistant planner failure:', {
+  const plannerFailure = {
     provider: provider?.constructor?.name || 'unknown',
     model: typeof plan?.model === 'string' ? plan.model : 'unknown',
     status: plan?.status ?? reason,
     reason,
-  });
+  };
+  console.warn('Cetld assistant planner failure:', plannerFailure);
   const answer = writeIntent
     ? 'I couldn’t safely prepare that invoice request just now. No change was made; please try again.'
     : 'I couldn’t safely check that just now. Please try again.';
   const source = asksForZoho(message) ? 'getZohoBooksData' : 'none';
-  return withEvidence({
+  const result = withEvidence({
     answer,
     ...(writeIntent ? {pendingAction:null} : {}),
     asOf:clock().toISOString(),
@@ -56,6 +57,7 @@ function plannerFailureResult(message, clock, writeIntent, provider, plan, reaso
     usedFallback:true,
     readOnly:true,
   },{tool:source,data:{complete:false}});
+  return {...result, evidence: {...result.evidence, plannerFailure}};
 }
 function emptyAnswer(source) {
   const data = source?.data;

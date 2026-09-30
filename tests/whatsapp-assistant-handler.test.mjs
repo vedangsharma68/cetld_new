@@ -45,3 +45,36 @@ test('a customer mismatch fails channel authorization', async () => {
   });
   assert.equal(await handler(scope), 'Please verify your number.');
 });
+
+test('planner failure is retried exactly once and its final diagnostic is returned', async () => {
+  let asks = 0;
+  const handler = createWhatsAppBoundMessageHandler({supabase: fakeSupabase(),
+    providerFactory: () => ({}),
+    channelFactory: () => ({async ask() {
+      asks++;
+      return {answer: "I couldn't safely check that just now. Please try again.", model: null,
+        usedFallback: true, evidence: {plannerFailure: {provider: 'AIProvider', model: 'free-model',
+          status: 429, reason: 'provider_error'}}};
+    }}),
+  });
+  assert.deepEqual(await handler(scope), {
+    answer: "I couldn't safely check that just now. Please try again.",
+    plannerFailure: {provider: 'AIProvider', model: 'free-model', status: 429, reason: 'provider_error'},
+  });
+  assert.equal(asks, 2);
+});
+
+test('a successful planner retry returns the recovered answer without diagnostics', async () => {
+  let asks = 0;
+  const handler = createWhatsAppBoundMessageHandler({supabase: fakeSupabase(),
+    providerFactory: () => ({}),
+    channelFactory: () => ({async ask() {
+      asks++;
+      return asks === 1
+        ? {answer: 'safe fallback', model: null, usedFallback: true}
+        : {answer: 'Invoice INV-1 is paid.', model: 'free-model', usedFallback: false};
+    }}),
+  });
+  assert.equal(await handler(scope), 'Invoice INV-1 is paid.');
+  assert.equal(asks, 2);
+});

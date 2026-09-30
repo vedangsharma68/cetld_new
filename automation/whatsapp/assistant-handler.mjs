@@ -23,7 +23,13 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           workspaceId: scope.workspaceId, customerId: scope.customerId, phone: scope.phone};
       },
     });
-    const response = await channel.ask({workspaceId, customerId, phone, message});
-    return typeof response?.answer === 'string' ? response.answer : '';
+    const input = {workspaceId, customerId, phone, message};
+    let response = await channel.ask(input);
+    // Planner failures are safe, read-only fallbacks. Retry only this narrowly
+    // identified class, once, to absorb transient free-tier provider failures.
+    if (response?.model === null && response?.usedFallback === true) response = await channel.ask(input);
+    const answer = typeof response?.answer === 'string' ? response.answer : '';
+    if (response?.model !== null || response?.usedFallback !== true) return answer;
+    return {answer, plannerFailure: response?.evidence?.plannerFailure || null};
   };
 }

@@ -270,6 +270,58 @@ test('bound customer hi webhook completes and attempts a guarded greeting servic
   assert.match(sends[0].body, /^Hi! I'm here for your Cetld workspace/);
 });
 
+test('planner fallback is sent and completed as done with bounded diagnostics and no queue retry', async () => {
+  const event = {id: 23, claim_token: 'claim', attempts: 1, provider_message_id: 'wamid.planner-failure',
+    sender_phone: '+919871367051', message_text: 'What do I owe?', provider_timestamp: new Date().toISOString()};
+  const consent = {workspace_id: 'workspace-a', customer_id: 'customer-a', source: 'inbound_message',
+    categories: ['invoice_updates'], revoked_at: null};
+  const rows = {
+    whatsapp_global_suppressions: null, whatsapp_consents: [consent], whatsapp_suppressions: [],
+    workspace_settings: {whatsapp_owner_attested_at: new Date().toISOString(), business_name: 'Acme Studio'},
+    customers: {id: 'customer-a', workspace_id: 'workspace-a', phone: '+919871367051'},
+  };
+  const supabase = {rpc() {}, from(table) {
+    const query = {select() { return query; }, eq() { return query; },
+      is() { return Promise.resolve({data: rows[table], error: null}); },
+      maybeSingle() { return Promise.resolve({data: rows[table], error: null}); },
+      then(resolve) { return Promise.resolve({data: rows[table], error: null}).then(resolve); }};
+    return query;
+  }};
+  const completions = [];
+  const sends = [];
+  const inbox = {async claim() { return [event]; }, async complete(...args) { completions.push(args); }};
+  const runtime = createInboundRuntime({supabase, inbox, env,
+    outbound: {async sendServiceReply(input) { sends.push(input); return {status: 'accepted'}; }},
+    onBoundMessage: async () => ({
+      answer: "I couldn't safely check that just now. Please try again.",
+      plannerFailure: {provider: 'AIProvider', model: 'free-model', status: 429, reason: 'provider_error'},
+    })});
+
+  assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 1});
+  assert.equal(sends[0].body, "I couldn't safely check that just now. Please try again.");
+  assert.equal(completions[0][1], 'ASSISTANT_PLANNER_FAILED');
+  assert.deepEqual(JSON.parse(completions[0][2]),
+    {provider: 'AIProvider', model: 'free-model', status: 429, reason: 'provider_error'});
+  assert.equal(completions[0][3], false);
+});
+
+test('inbox stores terminal planner diagnostics while marking the event done', async () => {
+  let update;
+  const supabase = {from(table) {
+    assert.equal(table, 'whatsapp_inbound_events');
+    return {update(value) { update = value; return this; }, eq() { return this; },
+      then(resolve) { return Promise.resolve({data: null, error: null}).then(resolve); }};
+  }};
+  const inbox = new SupabaseInboundInbox(supabase);
+  await inbox.complete({id: 23, claim_token: 'claim', attempts: 1, next_attempt_at: 'unchanged'},
+    'ASSISTANT_PLANNER_FAILED', '{"reason":"provider_error"}', false);
+  assert.equal(update.status, 'done');
+  assert.ok(update.processed_at);
+  assert.equal(update.next_attempt_at, 'unchanged');
+  assert.equal(update.error_code, 'ASSISTANT_PLANNER_FAILED');
+  assert.equal(update.error_detail, '{"reason":"provider_error"}');
+});
+
 test('inbound processing failure log includes the truncated error message', async () => {
   const logs = [];
   const event = {id: 22, claim_token: 'claim', attempts: 1, provider_message_id: 'wamid.failure',

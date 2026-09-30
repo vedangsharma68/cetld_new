@@ -80,14 +80,14 @@ export class SupabaseInboundInbox {
     return { allowed: data === true };
   }
 
-  async complete(event, errorCode = null) {
+  async complete(event, errorCode = null, errorDetail = null, retryable = true) {
     const failed = Boolean(errorCode);
-    const retry = failed && event.attempts < 5;
+    const retry = failed && retryable && event.attempts < 5;
     const next = new Date(Date.now() + Math.min(60_000 * 2 ** Math.max(0, event.attempts - 1), 60 * 60_000)).toISOString();
     dataOrThrow(await this.supabase.from('whatsapp_inbound_events')
-      .update({ status: retry ? 'pending' : failed ? 'failed' : 'done', processed_at: retry ? null : new Date().toISOString(),
+      .update({ status: retry ? 'pending' : failed && retryable ? 'failed' : 'done', processed_at: retry ? null : new Date().toISOString(),
         claim_token: null, claimed_at: null, next_attempt_at: retry ? next : event.next_attempt_at,
-        error_code: errorCode })
+        error_code: errorCode, error_detail: errorDetail })
       .eq('id', event.id).eq('claim_token', event.claim_token), 'complete');
   }
 }
@@ -165,14 +165,16 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     const binding = bindings[0];
     if (!binding.customerId || !binding.customer || !binding.workspaceId) throw new Error('Incomplete customer binding');
     if (onBoundMessage) {
-      const answer = await onBoundMessage({ workspaceId: binding.workspaceId, customerId: binding.customerId,
+      const response = await onBoundMessage({ workspaceId: binding.workspaceId, customerId: binding.customerId,
         phone: event.sender_phone, message: event.message_text, messageId: event.provider_message_id });
+      const answer = typeof response === 'string' ? response : response?.answer;
       if (typeof answer === 'string' && answer.trim()) {
         const sender = await getOutbound();
         await sender.sendServiceReply({ workspaceId: binding.workspaceId, to: event.sender_phone, body: answer,
           lastInboundAt: event.provider_timestamp || event.received_at, kind: 'normal', messageId: event.provider_message_id,
           businessName: await businessName(binding.workspaceId) });
       }
+      if (response?.plannerFailure) return {outcome: 'bound', plannerFailure: response.plannerFailure};
     }
     return 'bound';
   }
@@ -183,7 +185,14 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       const claimed = await inbox.claim(10);
       let completed = 0;
       for (const event of claimed) {
-        try { await processEvent(event); await inbox.complete(event); completed++; }
+        try {
+          const result = await processEvent(event);
+          if (result?.plannerFailure) {
+            const detail = JSON.stringify(result.plannerFailure).slice(0, 1000);
+            await inbox.complete(event, 'ASSISTANT_PLANNER_FAILED', detail, false);
+          } else await inbox.complete(event);
+          completed++;
+        }
         catch (error) {
           logger.error('WhatsApp inbound event failed', { messageId: event.provider_message_id, name: error?.name || 'Error',
             message: String(error?.message || '').slice(0, 200) });
