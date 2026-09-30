@@ -33,7 +33,7 @@ function allowedRecipient(env, phone) {
 }
 
 function templateText(businessName, invoiceNumber) {
-  return `Hi, this is ${businessName}. Here is an update for invoice ${invoiceNumber}.`;
+  return `Hi, this is ${businessName}. Invoice ${invoiceNumber} has an update. Reply STOP anytime.`;
 }
 
 function tokenSecret(env) {
