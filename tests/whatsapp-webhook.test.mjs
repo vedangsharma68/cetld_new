@@ -98,6 +98,45 @@ test('signed events are durably enqueued once and STOP is revoked before 200', a
   await Promise.all(pending);
 });
 
+test('status-only callbacks are acknowledged and logged without enqueuing an event', async () => {
+  const payload = meta([]);
+  payload.entry[0].changes[0].value.statuses = [{
+    id: 'wamid.outbound', status: 'failed', recipient_id: '919871367051', timestamp: '1750000000',
+    errors: [{ code: 131026, title: 'Message undeliverable', message: 'Message undeliverable',
+      error_data: { details: 'Delivery failed' } }],
+  }];
+  const enqueued = [];
+  const logs = [];
+  const runtime = { async enqueue(events) { enqueued.push(...events); return []; } };
+  const handler = createWhatsAppWebhookHandler({ env, runtime, logger: { log: line => logs.push(line) } });
+  const res = response();
+
+  await handler(signedRequest(JSON.stringify(payload)), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, { received: true });
+  assert.deepEqual(enqueued, []);
+  assert.ok(logs.some(line => line.startsWith('whatsapp-status ') && line.includes('"code":131026')));
+  assert.ok(logs.includes('whatsapp-callback {"messages":0,"statuses":1}'));
+});
+
+test('callbacks containing messages and statuses log a summary and enqueue the message', async () => {
+  const payload = meta([message('wamid.inbound')]);
+  payload.entry[0].changes[0].value.statuses = [{ id: 'wamid.outbound', status: 'delivered' }];
+  const enqueued = [];
+  const logs = [];
+  const runtime = { async enqueue(events) { enqueued.push(...events); return events; } };
+  const handler = createWhatsAppWebhookHandler({ env, runtime, logger: { log: line => logs.push(line) } });
+  const res = response();
+
+  await handler(signedRequest(JSON.stringify(payload)), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(enqueued.length, 1);
+  assert.equal(enqueued[0].provider_message_id, 'wamid.inbound');
+  assert.ok(logs.includes('whatsapp-callback {"messages":1,"statuses":1}'));
+});
+
 test('a duplicate STOP remains actionable when the first delivery stored but failed to revoke', async () => {
   const stored = { id: 4, ...parseMetaMessages(meta([message('wamid.retry', 'STOP')]), env.WHATSAPP_PHONE_NUMBER_ID, env.WHATSAPP_WABA_ID)[0],
     stop_processed_at: null };

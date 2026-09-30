@@ -84,6 +84,37 @@ export function createWhatsAppWebhookHandler({ env = process.env, fetchImpl = gl
       let payload;
       try { payload = JSON.parse(rawBody.toString('utf8')); }
       catch { return response.status(400).json({ error: 'Invalid JSON' }); }
+      if (Array.isArray(payload?.entry)) for (const entry of payload.entry) {
+        if (!Array.isArray(entry?.changes)) continue;
+        for (const change of entry.changes) {
+          if (change?.field !== 'messages') continue;
+          const callbackMessages = Array.isArray(change?.value?.messages) ? change.value.messages : [];
+          const callbackStatuses = Array.isArray(change?.value?.statuses) ? change.value.statuses : [];
+          for (const item of callbackStatuses) {
+            try {
+              const errors = Array.isArray(item?.errors) ? item.errors : [];
+              logger.log('whatsapp-status ' + JSON.stringify({
+                id: item?.id,
+                status: item?.status,
+                recipient_id: item?.recipient_id,
+                timestamp: item?.timestamp,
+                errors: errors.map(error => ({
+                  code: error?.code,
+                  title: error?.title,
+                  message: error?.message,
+                  details: error?.error_data?.details,
+                })),
+              }));
+            } catch {}
+          }
+          try {
+            logger.log('whatsapp-callback ' + JSON.stringify({
+              messages: callbackMessages.length,
+              statuses: callbackStatuses.length,
+            }));
+          } catch {}
+        }
+      }
       const messages = parseMetaMessages(payload, env.WHATSAPP_PHONE_NUMBER_ID, env.WHATSAPP_WABA_ID);
       const inbound = run();
       const inserted = await inbound.enqueue(messages);
