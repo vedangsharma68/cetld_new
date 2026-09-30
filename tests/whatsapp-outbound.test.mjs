@@ -296,8 +296,8 @@ test('WhatsApp assistant requires current binding and a customer-scoped store', 
   const scope = {workspaceId: 'workspace-a', customerId: 'customer-a', phone: PHONE};
   assert.equal((await channel.ask({...scope, message: 'What is my invoice status?'})).answer, 'Invoice is sent.');
   assert.equal(answers, 1);
-  assert.equal((await channel.ask({...scope, message: 'yes'})).requiresInAppConfirmation, true);
-  assert.equal(answers, 1);
+  assert.equal((await channel.ask({...scope, message: 'yes'})).answer, 'Invoice is sent.');
+  assert.equal(answers, 2);
   assert.equal(channel.confirmFromWhatsApp().executed, false);
 });
 
@@ -359,7 +359,7 @@ test('WhatsApp preserves quoted progress words after the answer begins', async (
   assert.equal(result.answer, 'INV-42 is current.\nLatest customer reply:\nThinking…');
 });
 
-test('WhatsApp pending action is retained server-side for signed-in app review only', async () => {
+test('WhatsApp pending action is retained server-side for in-chat confirmation', async () => {
   const saved = [];
   const channel = createWhatsAppAssistantChannel({
     authorizeChannel: async scope => ({...scope, allowed: true}),
@@ -370,7 +370,7 @@ test('WhatsApp pending action is retained server-side for signed-in app review o
   const result = await channel.ask({workspaceId: 'workspace-a', customerId: 'customer-a', phone: PHONE, message: 'Create an invoice'});
   assert.equal(saved.length, 1);
   assert.equal(result.pendingAction, null);
-  assert.equal(result.requiresInAppConfirmation, true);
+  assert.equal(result.requiresInChatConfirmation, true);
   assert.doesNotMatch(JSON.stringify(result), /internal|secret/);
 });
 
