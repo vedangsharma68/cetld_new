@@ -115,6 +115,12 @@ function isPaidInvoiceListQuestion(message) {
     || /^(?:are there|do (?:i|we) have) any (?:fully )?(?:paid|settled) invoices?$/.test(prompt);
 }
 
+export function isGeneralInvoiceListQuestion(message) {
+  if (asksForZoho(message) || isWriteIntent(message)) return false;
+  const prompt = message.trim().toLowerCase().replace(/[!?.,]+$/g, '').replace(/\s+/g, ' ');
+  return /^(?:(?:which|what) invoices? (?:do (?:i|we) have(?: logged)?|(?:are|is) logged)|list(?: me)? (?:all )?(?:my )?invoices?|show(?: me)? (?:all )?(?:my )?invoices?|my invoices?)$/.test(prompt);
+}
+
 function paidInvoiceListAnswer(data) {
   if (!data.count) return 'There are no fully paid invoices in this workspace right now.';
   const rows = data.invoices.map(row => `- ${redactInternalIds(row.invoiceNumber || 'Invoice')} — ${redactInternalIds(row.customerName || 'customer not recorded')} — 💰 ${row.currency} ${row.totalAmount}`);
@@ -655,6 +661,10 @@ export async function answerWorkspaceQuestion({provider, store, message, history
   if (!asksForZoho(message) && !writeIntent && isPaidInvoiceListQuestion(message)) {
     const source = {tool:'getInvoices', label:'Fully paid invoices', data:await tools.execute('getFullyPaidInvoices',{})};
     return withEvidence({answer:paidInvoiceListAnswer(source.data),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
+  }
+  if (!asksForZoho(message) && !writeIntent && isGeneralInvoiceListQuestion(message)) {
+    const source = {tool:'getInvoices',label:LABELS.getInvoices,data:await tools.execute('getInvoices',{})};
+    return withEvidence({answer:emptyAnswer(source) || factualFallback([source],message),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
   }
   if (!asksForZoho(message) && !writeIntent && isDueWithinNextWeekQuestion(message)) {
     const dueDateFrom = utcDayPlus(clock, 0);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {answerWorkspaceQuestion} from '../ai/assistant.mjs';
+import {answerWorkspaceQuestion,isGeneralInvoiceListQuestion} from '../ai/assistant.mjs';
 
 const invoiceId = '22222222-2222-4222-8222-222222222222';
 const customerId = '11111111-1111-4111-8111-111111111111';
@@ -120,6 +120,51 @@ test('simple ledger reads return checked facts without calling the provider', as
     assert.match(result.answer,expected);
     assert.equal(result.usedFallback,false);
     assert.doesNotMatch(result.answer,/couldn.t safely check/i);
+  }
+});
+
+test('general invoice-list matcher accepts common phrasings but excludes specialized and unsafe requests', () => {
+  for (const message of [
+    'which invoices do i have', 'Which invoices do I have logged?', 'what invoices do i have',
+    'what invoices are logged', 'list invoices', 'List all invoices.', 'list my invoices',
+    'show me invoices', 'show all invoices', 'my invoices!',
+  ]) assert.equal(isGeneralInvoiceListQuestion(message), true, message);
+
+  for (const message of [
+    'which invoices are overdue', 'list paid invoices', 'show me invoices in Zoho Books',
+    'create an invoice', 'list invoices and delete one',
+  ]) assert.equal(isGeneralInvoiceListQuestion(message), false, message);
+});
+
+test('general invoice-list questions deterministically return unfiltered invoices with evidence', async () => {
+  for (const message of ['which invoices do i have logged?', 'list all invoices', 'show me invoices', 'my invoices']) {
+    let providerCalls = 0;
+    const result = await answerWorkspaceQuestion({
+      provider:{generate:async()=>{providerCalls++;throw Error('planner must not run');}},
+      store,
+      message,
+    });
+    assert.equal(providerCalls, 0, message);
+    assert.match(result.answer, /Here are the matching invoices:[\s\S]*INV-1048/);
+    assert.equal(result.readOnly, true);
+    assert.equal(result.usedFallback, false);
+    assert.deepEqual(result.evidence.records, [{type:'invoice',label:'INV-1048',reference:'invoice:INV-1048'}]);
+  }
+});
+
+test('overdue and paid invoice lists retain their specialized deterministic routes', async () => {
+  const overdueInvoice = {...invoice,due_date:'2026-09-01'};
+  const paidInvoice = {...invoice,amount_paid:invoice.total_amount,status:'paid'};
+  const fixedClock = () => new Date('2026-09-30T12:00:00.000Z');
+  for (const [message,row,expected] of [
+    ['which invoices are overdue',overdueInvoice,/1 overdue invoice/],
+    ['list paid invoices',paidInvoice,/1 fully paid invoice/],
+  ]) {
+    let providerCalls = 0;
+    const specializedStore = {query:async table => table === 'invoices' ? [row] : [{id:customerId,name:'Arbor & Finch',company_name:'Arbor & Finch'}]};
+    const result = await answerWorkspaceQuestion({provider:{generate:async()=>{providerCalls++;throw Error('planner must not run');}},store:specializedStore,message,clock:fixedClock});
+    assert.equal(providerCalls, 0, message);
+    assert.match(result.answer, expected);
   }
 });
 
