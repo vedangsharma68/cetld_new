@@ -208,12 +208,14 @@ test('unbound sender is routed to generic verification with no account data', as
       is() { return Promise.resolve({ data: [], error: null }); } };
   } };
   const inbox = { async claim() { return [event]; }, async complete() { calls.push('complete'); } };
-  const outbound = { async sendServiceReply(input) { calls.push(input); return { status: 'blocked', reason: 'disabled' }; } };
+  const outbound = { async sendTypingIndicator() { calls.push('typing'); },
+    async sendServiceReply(input) { calls.push(input); return { status: 'blocked', reason: 'disabled' }; } };
   const runtime = createInboundRuntime({ supabase, inbox, outbound, env });
   const result = await runtime.processPending();
   assert.deepEqual(result, { claimed: 1, completed: 1 });
   assert.equal(calls[0].workspaceId, null);
   assert.equal(calls[0].kind, 'verification');
+  assert.equal(calls.includes('typing'), false);
   assert.doesNotMatch(calls[0].body, /Alice|invoice amount|account balance/);
 });
 
@@ -246,7 +248,7 @@ test('bound customer hi webhook completes and attempts a guarded greeting servic
     async claim() { return queued.length ? [event] : []; },
     async complete(item, errorCode) { completed.push({item, errorCode}); },
   };
-  const outbound = {async sendServiceReply(input) {
+  const outbound = {async sendTypingIndicator(input) { sends.push({kind: 'typing', ...input}); }, async sendServiceReply(input) {
     neutralText(input.body);
     sends.push(input);
     return {status: 'accepted'};
@@ -265,9 +267,40 @@ test('bound customer hi webhook completes and attempts a guarded greeting servic
   assert.deepEqual(res.body, {received: true});
   assert.equal(completed.length, 1);
   assert.equal(completed[0].errorCode, undefined);
-  assert.equal(sends.length, 1);
-  assert.equal(sends[0].kind, 'normal');
-  assert.match(sends[0].body, /^Hi! I'm here for your Cetld workspace/);
+  assert.equal(sends.length, 2);
+  assert.deepEqual(sends[0], {kind: 'typing', messageId: 'wamid.bound-hi'});
+  assert.equal(sends[1].kind, 'normal');
+  assert.match(sends[1].body, /^Hi! I'm here for your Cetld workspace/);
+});
+
+test('typing indicator is skipped for STOP and a thrown indicator cannot fail a bound event', async () => {
+  const stop = {id: 30, claim_token: 'stop-claim', attempts: 1, provider_message_id: 'wamid.stop-skip',
+    sender_phone: '+919871367051', message_text: 'STOP', stop_processed_at: new Date().toISOString(),
+    stop_confirmation_due: false};
+  let typing = 0;
+  const stopInbox = {async claim() { return [stop]; }, async complete() {}};
+  const stopRuntime = createInboundRuntime({supabase: {}, inbox: stopInbox, outbound: {
+    async sendTypingIndicator() { typing++; }, async sendServiceReply() {}}, env});
+  assert.deepEqual(await stopRuntime.processPending(), {claimed: 1, completed: 1});
+  assert.equal(typing, 0);
+
+  // Reuse the bound-path test's binding shape while making the UX-only call fail.
+  const event = {...stop, id: 31, provider_message_id: 'wamid.typing-fails', message_text: 'hello', stop_processed_at: null};
+  const consent = {workspace_id: 'workspace-a', customer_id: 'customer-a', source: 'inbound_message',
+    categories: ['invoice_updates'], revoked_at: null};
+  const rows = {whatsapp_global_suppressions: null, whatsapp_consents: [consent], whatsapp_suppressions: [],
+    workspace_settings: {whatsapp_owner_attested_at: new Date().toISOString(), business_name: 'Acme Studio'},
+    customers: {id: 'customer-a', workspace_id: 'workspace-a', phone: '+919871367051'}};
+  const supabase = {rpc() {}, from(table) { const query = {select() { return query; }, eq() { return query; },
+    is: async () => ({data: rows[table], error: null}), maybeSingle: async () => ({data: rows[table], error: null}),
+    then(resolve) { return Promise.resolve({data: rows[table], error: null}).then(resolve); }}; return query; }};
+  let completed = false;
+  const runtime = createInboundRuntime({supabase, inbox: {async claim() { return [event]; }, async complete() { completed = true; }},
+    outbound: {async sendTypingIndicator() { typing++; throw new Error('Graph down'); }, async sendServiceReply() {}},
+    logger: {error() {}}, onBoundMessage: async () => null, env});
+  assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 1});
+  assert.equal(typing, 1);
+  assert.equal(completed, true);
 });
 
 test('planner fallback is sent and completed as done with bounded diagnostics and no queue retry', async () => {

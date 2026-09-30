@@ -133,6 +133,29 @@ export function createWhatsAppOutbound({
       : {status: 'unknown', reason: 'missing_graph_message_id'};
   }
 
+  /** Best-effort read receipt that also displays WhatsApp's typing indicator. */
+  async function sendTypingIndicator({messageId} = {}) {
+    try {
+      const inboundId = nonempty(messageId, 'messageId');
+      if (!env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) throw new Error('WhatsApp credentials missing');
+      if (!/^\d{5,30}$/.test(String(env.WHATSAPP_PHONE_NUMBER_ID))) throw new Error('Invalid WhatsApp phone number ID');
+      if (!/^v\d+\.\d+$/.test(String(env.WHATSAPP_GRAPH_API_VERSION || ''))) throw new Error('WhatsApp Graph API version missing');
+      const response = await fetchImpl(`https://graph.facebook.com/${env.WHATSAPP_GRAPH_API_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+        method: 'POST',
+        headers: {Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json'},
+        body: JSON.stringify({messaging_product: 'whatsapp', status: 'read', message_id: inboundId,
+          typing_indicator: {type: 'text'}}),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) throw Object.assign(new Error('WhatsApp Graph API rejected typing indicator'), {httpStatus: response.status});
+      return {status: 'accepted'};
+    } catch (error) {
+      logger?.error?.({event: 'whatsapp_typing_indicator_failed', messageId: typeof messageId === 'string' ? messageId : null,
+        httpStatus: error?.httpStatus, message: error?.message});
+      return {status: 'failed'};
+    }
+  }
+
   async function sendInvoiceUpdateTemplate({workspaceId, to, invoiceId, customerId, businessName, expectedUpdatedAt, idempotencyKey} = {}) {
     const blocked = preflight({workspaceId, to, kind: 'invoice_update'});
     if (blocked) return blocked;
@@ -223,5 +246,5 @@ export function createWhatsAppOutbound({
   }
 
   // Intentionally no sendReminder method. Collection content remains on hold.
-  return Object.freeze({sendInvoiceUpdateTemplate, sendServiceReply});
+  return Object.freeze({sendInvoiceUpdateTemplate, sendServiceReply, sendTypingIndicator});
 }

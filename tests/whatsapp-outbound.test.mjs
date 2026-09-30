@@ -113,6 +113,29 @@ test('Graph version must be explicitly configured before network access', async 
   assert.equal(calls.length, 0);
 });
 
+test('typing indicator marks the inbound message read with the exact Graph payload', async () => {
+  const {outbound, calls} = harness();
+  assert.deepEqual(await outbound.sendTypingIndicator({messageId: 'wamid.inbound-1'}), {status: 'accepted'});
+  assert.equal(calls[0].url, 'https://graph.facebook.com/v24.0/1234567890/messages');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer test-token');
+  assert.deepEqual(JSON.parse(calls[0].options.body), {messaging_product: 'whatsapp', status: 'read',
+    message_id: 'wamid.inbound-1', typing_indicator: {type: 'text'}});
+});
+
+test('typing indicator failures are logged and swallowed', async () => {
+  for (const [env, fetchImpl] of [
+    [{...baseEnv, WHATSAPP_ACCESS_TOKEN: ''}, async () => ({ok: true})],
+    [baseEnv, async () => { throw new Error('network unavailable'); }],
+    [baseEnv, async () => ({ok: false, status: 500})],
+  ]) {
+    const logs = [];
+    const outbound = createWhatsAppOutbound({env, logger: {error(row) { logs.push(row); }}, fetchImpl});
+    assert.deepEqual(await outbound.sendTypingIndicator({messageId: 'wamid.best-effort'}), {status: 'failed'});
+    assert.equal(logs[0].event, 'whatsapp_typing_indicator_failed');
+  }
+});
+
 test('suppression and missing consent each block a template before Graph', async () => {
   for (const setting of [{globallySuppressed: true}, {suppressed: true}, {consented: false}, {attested: false}]) {
     const {outbound, calls, supabase} = harness({supabase: fakeSupabase(setting)});
