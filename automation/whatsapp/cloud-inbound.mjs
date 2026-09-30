@@ -185,7 +185,8 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       for (const event of claimed) {
         try { await processEvent(event); await inbox.complete(event); completed++; }
         catch (error) {
-          logger.error('WhatsApp inbound event failed', { messageId: event.provider_message_id, name: error?.name || 'Error' });
+          logger.error('WhatsApp inbound event failed', { messageId: event.provider_message_id, name: error?.name || 'Error',
+            message: String(error?.message || '').slice(0, 200) });
           await inbox.complete(event, 'PROCESSING_FAILED');
         }
       }

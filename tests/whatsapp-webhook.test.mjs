@@ -6,6 +6,8 @@ import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { createWhatsAppWebhookHandler, readRawBody, verifyMetaSignature } from '../automation/whatsapp/webhook.mjs';
 import { createInboundRuntime, SupabaseInboundInbox, isOptOut, parseMetaMessages } from '../automation/whatsapp/cloud-inbound.mjs';
+import { neutralText } from '../automation/whatsapp/cloud-outbound.mjs';
+import { answerWorkspaceQuestion } from '../ai/assistant.mjs';
 
 const env = { WHATSAPP_VERIFY_TOKEN: 'verify-secret', WHATSAPP_APP_SECRET: 'app-secret',
   WHATSAPP_PHONE_NUMBER_ID: '123456789', WHATSAPP_WABA_ID: '987654321', CRON_SECRET: 'cron-secret' };
@@ -213,6 +215,74 @@ test('unbound sender is routed to generic verification with no account data', as
   assert.equal(calls[0].workspaceId, null);
   assert.equal(calls[0].kind, 'verification');
   assert.doesNotMatch(calls[0].body, /Alice|invoice amount|account balance/);
+});
+
+test('bound customer hi webhook completes and attempts a guarded greeting service reply', async () => {
+  const pending = [];
+  const queued = [];
+  const completed = [];
+  const sends = [];
+  const event = { id: 21, claim_token: 'claim', attempts: 1, provider_message_id: 'wamid.bound-hi',
+    sender_phone: '+919871367051', message_text: 'hi', provider_timestamp: new Date().toISOString() };
+  const consent = {workspace_id: 'workspace-a', customer_id: 'customer-a', source: 'inbound_message',
+    categories: ['invoice_updates'], revoked_at: null};
+  const rows = {
+    whatsapp_global_suppressions: null,
+    whatsapp_consents: [consent],
+    whatsapp_suppressions: [],
+    workspace_settings: {whatsapp_owner_attested_at: new Date().toISOString(), business_name: 'Acme Studio'},
+    customers: {id: 'customer-a', workspace_id: 'workspace-a', phone: '+919871367051'},
+  };
+  const supabase = {rpc() {}, from(table) {
+    const query = {
+      select() { return query; }, eq() { return query; }, is() { return Promise.resolve({data: rows[table], error: null}); },
+      maybeSingle() { return Promise.resolve({data: rows[table], error: null}); },
+      then(resolve) { return Promise.resolve({data: rows[table], error: null}).then(resolve); },
+    };
+    return query;
+  }};
+  const inbox = {
+    async enqueue(events) { queued.push(...events); return events; },
+    async claim() { return queued.length ? [event] : []; },
+    async complete(item, errorCode) { completed.push({item, errorCode}); },
+  };
+  const outbound = {async sendServiceReply(input) {
+    neutralText(input.body);
+    sends.push(input);
+    return {status: 'accepted'};
+  }};
+  const runtime = createInboundRuntime({supabase, inbox, outbound, env,
+    onBoundMessage: async ({message: text}) => (await answerWorkspaceQuestion({
+      message: text, store: {query() { return []; }}, provider: null,
+    })).answer});
+  const handler = createWhatsAppWebhookHandler({env, runtime, waitUntil: task => pending.push(task)});
+  const res = response();
+
+  await handler(signedRequest(JSON.stringify(meta([message('wamid.bound-hi', 'hi')]))), res);
+  await Promise.all(pending);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, {received: true});
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0].errorCode, undefined);
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].kind, 'normal');
+  assert.match(sends[0].body, /^Hi! I'm here for your Cetld workspace/);
+});
+
+test('inbound processing failure log includes the truncated error message', async () => {
+  const logs = [];
+  const event = {id: 22, claim_token: 'claim', attempts: 1, provider_message_id: 'wamid.failure',
+    sender_phone: '+919871367051', message_text: 'hello'};
+  const inbox = {async claim() { return [event]; }, async complete(_item, errorCode) { assert.equal(errorCode, 'PROCESSING_FAILED'); }};
+  const supabase = {rpc() {}, from() { throw new Error('database lookup failed: ' + 'x'.repeat(250)); }};
+  const runtime = createInboundRuntime({supabase, inbox, env,
+    logger: {error(label, fields) { logs.push({label, fields}); }}});
+
+  assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 0});
+  assert.equal(logs[0].label, 'WhatsApp inbound event failed');
+  assert.equal(logs[0].fields.name, 'Error');
+  assert.equal(logs[0].fields.message, ('database lookup failed: ' + 'x'.repeat(250)).slice(0, 200));
 });
 
 test('unknown STOP gets a global suppression claim before acknowledgement', async () => {

@@ -41,7 +41,7 @@ function withinServiceWindow(lastInboundAt, clock) {
   return Number.isFinite(received) && Number.isFinite(now) && now >= received && now - received < 24 * 60 * 60 * 1000;
 }
 
-function neutralText(value) {
+export function neutralText(value) {
   const body = nonempty(value, 'body', 1000);
   // The reply path is restricted to operational responses. Collection language
   // remains disabled even when test sending is enabled.

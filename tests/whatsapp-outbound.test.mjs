@@ -1,13 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
+import {createWhatsAppOutbound, neutralText} from '../automation/whatsapp/cloud-outbound.mjs';
 import {createWhatsAppAssistantChannel, createCustomerScopedStore} from '../ai/whatsapp-channel.mjs';
+import {IDENTITY_ANSWER, SCOPE_ANSWER} from '../ai/assistant.mjs';
 
 const PHONE = '+919871367051';
 const OTHER = '+15551234567';
 const NOW = '2026-09-27T12:00:00.000Z';
 const baseEnv = {WHATSAPP_OUTBOUND_ENABLED: 'true', WHATSAPP_TEST_ALLOWLIST: PHONE, WHATSAPP_ACCESS_TOKEN: 'test-token', WHATSAPP_PHONE_NUMBER_ID: '1234567890', WHATSAPP_GRAPH_API_VERSION: 'v24.0'};
 const invoice = {workspaceId: 'workspace-a', customerId: 'customer-a', invoiceNumber: 'INV-1', status: 'sent', updatedAt: NOW};
+
+test('assistant canned scope and identity replies pass the collection-language guard', () => {
+  assert.equal(neutralText(SCOPE_ANSWER), SCOPE_ANSWER);
+  assert.equal(neutralText(IDENTITY_ANSWER), IDENTITY_ANSWER);
+});
 
 function fakeSupabase({suppressed = false, globallySuppressed = false, consented = true, customer = true, attested = true} = {}) {
   const reads = [];
