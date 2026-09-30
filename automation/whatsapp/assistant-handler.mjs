@@ -14,7 +14,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
     const models = sanitizeModelSettings({primaryModel: settings?.primary_model,
       fallbackModel: settings?.fallback_model});
     const provider = providerFactory({...models, geminiApiKey: env.GEMINI_API_KEY,
-      openRouterApiKey: env.OPENROUTER_API_KEY, fetchImpl, timeoutMs: 16000});
+      openRouterApiKey: env.OPENROUTER_API_KEY, fetchImpl, timeoutMs: 8000, maxAttempts: 1});
     const channel = channelFactory({supabase, provider,
       authorizeChannel: async scope => {
         const eligibility = await getSendEligibility({supabase, workspaceId: scope.workspaceId,
