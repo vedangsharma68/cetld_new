@@ -2,6 +2,11 @@ import { resolveActiveBindings, revokeConsentForPhone, suppressUnknownPhone } fr
 import {createWhatsAppInvoiceUpdateStore} from './invoice-update-store.mjs';
 
 const MAX_MESSAGES = 100;
+const DEFAULT_PROCESS_BUDGET_MS = 40_000;
+// Leave enough runway for a database lookup and a deterministic reply. Slow
+// planner work may use the first slot, but is never started near the deadline.
+const MIN_EVENT_BUDGET_MS = 5_000;
+const SAFE_FALLBACK_REPLY = "I couldn't safely check that just now. Please try again.";
 const E164 = /^\+[1-9]\d{6,14}$/;
 const refusal = /^(?:stop|unsubscribe|opt[ -]?out|cancel(?: whatsapp)?|remove me|no more (?:messages|texts|whatsapp(?: updates)?)|(?:do not|don't) (?:message|text|contact) me|(?:do not|don't) send me (?:messages|texts|whatsapp updates)|please (?:stop(?: sending me (?:messages|texts|whatsapp updates))?|remove me|(?:do not|don't) (?:message|text|contact) me)|i (?:do not|don't|no longer) (?:consent|agree|want (?:these |whatsapp )?(?:messages|updates)))\b[.!\s]*$/i;
 
@@ -97,7 +102,7 @@ const stopReply = 'Your request has been recorded. You will no longer receive Wh
 
 /** Route only through service-role consent/customer binding; never use a claimed name. */
 export function createInboundRuntime({ env = process.env, fetchImpl = globalThis.fetch, supabase, inbox = new SupabaseInboundInbox(supabase), outbound,
-  onBoundMessage, logger = console } = {}) {
+  onBoundMessage, logger = console, clock = () => Date.now() } = {}) {
   if (!supabase) throw new Error('Supabase service client required');
   let outboundPromise;
   const getOutbound = async () => {
@@ -187,13 +192,41 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     }
     return 'bound';
   }
+  async function failFinalAttempt(event) {
+    try {
+      const sender = await getOutbound();
+      await sender.sendServiceReply({ workspaceId: null, to: event.sender_phone, body: SAFE_FALLBACK_REPLY,
+        lastInboundAt: event.provider_timestamp || event.received_at, kind: 'verification',
+        messageId: event.provider_message_id, businessName: 'CETLD' });
+    } catch (error) {
+      logger.error('WhatsApp final-attempt fallback failed', { messageId: event.provider_message_id,
+        message: String(error?.message || '').slice(0, 200) });
+    }
+    await inbox.complete(event, 'PROCESSING_FAILED', null, false);
+  }
   return {
     enqueue: messages => inbox.enqueue(messages),
     revokeOptOut,
     async processPending() {
-      const claimed = await inbox.claim(10);
+      const configuredBudget = Number(env.WHATSAPP_PROCESS_BUDGET_MS);
+      const budgetMs = Number.isFinite(configuredBudget) && configuredBudget > 0
+        ? configuredBudget : DEFAULT_PROCESS_BUDGET_MS;
+      const startedAt = clock();
+      const seen = new Set();
+      let claimed = 0;
       let completed = 0;
-      for (const event of claimed) {
+      while (claimed < 10 && budgetMs - (clock() - startedAt) >= MIN_EVENT_BUDGET_MS) {
+        // Claim individually so a deadline never leaves an unstarted batch
+        // leased for five minutes.
+        const [event] = await inbox.claim(1);
+        if (!event || seen.has(event.id)) break;
+        seen.add(event.id);
+        claimed++;
+        if (event.attempts >= 5) {
+          await failFinalAttempt(event);
+          completed++;
+          continue;
+        }
         try {
           const result = await processEvent(event);
           if (result?.plannerFailure) {
@@ -208,7 +241,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           await inbox.complete(event, 'PROCESSING_FAILED');
         }
       }
-      return { claimed: claimed.length, completed };
+      return { claimed, completed };
     },
   };
 }

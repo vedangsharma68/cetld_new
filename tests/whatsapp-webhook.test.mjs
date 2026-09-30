@@ -370,6 +370,57 @@ test('inbound processing failure log includes the truncated error message', asyn
   assert.equal(logs[0].fields.message, ('database lookup failed: ' + 'x'.repeat(250)).slice(0, 200));
 });
 
+test('processing stops before the deadline and leaves the next event pending', async () => {
+  const pending = [
+    {id: 2, attempts: 1, provider_message_id: 'wamid.new', sender_phone: '+919871367051',
+      message_text: 'STOP', stop_processed_at: new Date().toISOString(), stop_confirmation_due: false},
+    {id: 1, attempts: 1, provider_message_id: 'wamid.old', sender_phone: '+919871367051',
+      message_text: 'STOP', stop_processed_at: new Date().toISOString(), stop_confirmation_due: false},
+  ];
+  const completed = [];
+  const times = [0, 0, 36_000];
+  const inbox = {async claim(limit) { assert.equal(limit, 1); return pending.splice(0, 1); },
+    async complete(event) { completed.push(event.id); }};
+  const runtime = createInboundRuntime({supabase: {}, inbox, env: {...env, WHATSAPP_PROCESS_BUDGET_MS: '40000'},
+    clock: () => times.shift() ?? 36_000});
+
+  assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 1});
+  assert.deepEqual(completed, [2]);
+  assert.deepEqual(pending.map(event => event.id), [1]);
+});
+
+test('a final-attempt event receives exactly one fallback and is never retried', async () => {
+  const event = {id: 5, attempts: 5, provider_message_id: 'wamid.final', sender_phone: '+919871367051',
+    message_text: 'slow question', received_at: new Date().toISOString()};
+  const sends = [];
+  const completions = [];
+  let claims = 0;
+  const inbox = {async claim() { claims++; return claims === 1 ? [event] : []; },
+    async complete(...args) { completions.push(args); }};
+  const runtime = createInboundRuntime({supabase: {}, inbox, env, logger: {error() {}},
+    outbound: {async sendServiceReply(input) { sends.push(input); }}});
+
+  assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 1});
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].body, "I couldn't safely check that just now. Please try again.");
+  assert.equal(completions.length, 1);
+  assert.deepEqual(completions[0].slice(1), ['PROCESSING_FAILED', null, false]);
+});
+
+test('a transient failure before the final attempt remains retryable', async () => {
+  const event = {id: 4, attempts: 4, provider_message_id: 'wamid.transient', sender_phone: '+919871367051',
+    message_text: 'question'};
+  const completions = [];
+  let claimed = false;
+  const inbox = {async claim() { if (claimed) return []; claimed = true; return [event]; },
+    async complete(...args) { completions.push(args); }};
+  const runtime = createInboundRuntime({supabase: {from() { throw new Error('temporary database failure'); }},
+    inbox, env, logger: {error() {}}});
+
+  assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 0});
+  assert.deepEqual(completions[0].slice(1), ['PROCESSING_FAILED']);
+});
+
 test('unknown STOP gets a global suppression claim before acknowledgement', async () => {
   const event = {id: 12, sender_phone: '+919871367051', message_text: 'STOP',
     provider_message_id: 'wamid.unknown-stop'};
@@ -463,5 +514,24 @@ test('Postgres inbox claims are atomic and verification replies are one-time', a
     assert.equal((await db.query(`select public.whatsapp_claim_inbound_reply('wamid.sql','+919871367051','verification',null) as allowed`)).rows[0].allowed, false);
     await db.exec('reset role; set role anon');
     await assert.rejects(db.query('select * from public.whatsapp_inbound_events'), /permission denied/);
+  } finally { await db.close(); }
+});
+
+test('Postgres inbox claims newest events first', async () => {
+  const db = new PGlite();
+  try {
+    await db.exec(`create role anon; create role authenticated; create role service_role bypassrls;
+      create table public.workspaces(id uuid primary key);
+      create table public.whatsapp_suppressions(workspace_id uuid, phone text, primary key(workspace_id,phone));
+      create table public.whatsapp_global_suppressions(phone text primary key, source_message_id text);`);
+    for (const migration of ['20260927110000_whatsapp_inbound_events.sql', '20260930110000_whatsapp_inbound_newest_first.sql']) {
+      await db.exec(await readFile(new URL(`../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
+    }
+    await db.query(`insert into public.whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text)
+      values ('wamid.old','123456789','+919871367051','text','Old'),
+             ('wamid.new','123456789','+919871367051','text','New')`);
+    await db.exec('set role service_role');
+    const claimed = (await db.query('select * from public.whatsapp_claim_inbound_events(1)')).rows;
+    assert.equal(claimed[0].provider_message_id, 'wamid.new');
   } finally { await db.close(); }
 });
