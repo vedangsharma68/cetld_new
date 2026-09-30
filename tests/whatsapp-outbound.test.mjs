@@ -189,7 +189,7 @@ test('service replies require an open 24-hour window and atomic inbound authoriz
   assert.equal(denied.calls.length, 0);
   const accepted = harness();
   assert.equal((await accepted.outbound.sendServiceReply({...args, lastInboundAt: NOW})).status, 'accepted');
-  assert.match(JSON.parse(accepted.calls[0].options.body).text.body, /^Hi, this is Acme Studio\./);
+  assert.equal(JSON.parse(accepted.calls[0].options.body).text.body, args.body);
   const unix = harness();
   assert.equal((await unix.outbound.sendServiceReply({...args, lastInboundAt: String(Date.parse(NOW) / 1000)})).status, 'accepted');
 });
@@ -213,7 +213,7 @@ test('unknown STOP gets one platform-branded confirmation after verified claim',
   assert.equal((await outbound.sendServiceReply(args)).status, 'accepted');
   assert.equal((await outbound.sendServiceReply(args)).status, 'blocked');
   assert.equal(calls.length, 1);
-  assert.match(JSON.parse(calls[0].options.body).text.body, /^Hi, this is CETLD\./);
+  assert.equal(JSON.parse(calls[0].options.body).text.body, "You've been opted out of WhatsApp updates. We won't message you again.");
 });
 
 test('unknown sender gets only fixed verification text after inbound authorization', async () => {
