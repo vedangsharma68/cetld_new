@@ -244,7 +244,9 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       const answer = typeof response === 'string' ? response : response?.answer;
       if (typeof answer === 'string' && answer.trim()) {
         const sender = await getOutbound();
-        const sent = await sender.sendServiceReply({ workspaceId: binding.workspaceId, to: event.sender_phone, body: answer,
+        const send = response?.media && typeof sender.sendServiceMedia === 'function' ? sender.sendServiceMedia.bind(sender) : sender.sendServiceReply.bind(sender);
+        const sent = await send({ workspaceId: binding.workspaceId, to: event.sender_phone, body: answer, caption: answer,
+          ...(response?.media ? {media: response.media} : {}),
           lastInboundAt: event.provider_timestamp || event.received_at, kind: 'normal', messageId: event.provider_message_id,
           businessName: await businessName(binding.workspaceId) });
         if (sent?.status === 'accepted') {

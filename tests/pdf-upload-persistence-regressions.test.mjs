@@ -72,9 +72,10 @@ function makeExtractionProvider({bytes=SAMPLE_PDF,primaryContent,primaryFinishRe
     fetchImpl:async(url,init)=>{
       const payload=JSON.parse(init.body);
       requests.push({url:String(url),payload});
-      if(String(url).includes('generativelanguage.googleapis.com')){
+      if(String(url).includes(DEFAULT_EXTRACTION_MODEL)){
         return jsonResponse({candidates:[{content:{parts:[{text:primaryContent}]},finishReason:primaryFinishReason}]});
       }
+      if(String(url).includes('generativelanguage.googleapis.com')) return jsonResponse({candidates:[{content:{parts:[{text:fallbackContent}]},finishReason:fallbackFinishReason}]});
       return jsonResponse({choices:[{message:{content:fallbackContent},finish_reason:fallbackFinishReason}]});
     },
   });
@@ -85,8 +86,8 @@ function assertPdfBytesReachedBothProviders(requests,bytes){
   const encoded=bytes.toString('base64');
   const geminiPart=requests[0]?.payload.contents?.[0]?.parts?.find(part=>part.inlineData);
   assert.deepEqual(geminiPart?.inlineData,{mimeType:'application/pdf',data:encoded});
-  const zenPart=requests[1]?.payload.messages?.[0]?.content?.find(part=>part.type==='file');
-  assert.equal(zenPart?.file?.file_data,`data:application/pdf;base64,${encoded}`);
+  const fallbackPart=requests[1]?.payload.contents?.[0]?.parts?.find(part=>part.inlineData);
+  assert.deepEqual(fallbackPart?.inlineData,{mimeType:'application/pdf',data:encoded});
 }
 
 function assertPdfTextReachedBothProviders(requests){
@@ -112,7 +113,7 @@ test('malformed or truncated PDF JSON falls back once to the configured free mod
 
   assert.equal(requests.length,2);
   assert.match(requests[0].url,/gemini-3\.5-flash-lite:generateContent/);
-  assert.match(requests[1].url,/opencode\.ai\/zen\/v1\/chat\/completions/);
+  assert.match(requests[1].url,/gemini-3\.5-flash:generateContent/);
   assert.equal(requests[0].payload.generationConfig.maxOutputTokens,8192);
   assert.equal(result.model,DEFAULT_EXTRACTION_FALLBACK_MODEL);
   assert.equal(result.usedFallback,true);
@@ -141,10 +142,10 @@ test('a malformed fallback remains a bounded, sanitized INVALID_OUTPUT failure',
     extractInvoice({provider:scenario.provider,bytes:SAMPLE_PDF,mimeType:'application/pdf',fileName:'invoice.pdf'}),
     error=>error.code==='INVALID_OUTPUT',
   );
-  assert.equal(scenario.requests.length,2,'structured extraction must stop after one configured fallback');
+  assert.equal(scenario.requests.length,2,'structured extraction stops after the configured Gemini Flash structured fallback is malformed');
 });
 
-test('Gemini image capability errors fail over once to OpenCode Zen with the exact original image',async()=>{
+test('Gemini Lite image capability errors fail over to Gemini Flash with the exact original image',async()=>{
   const bytes=Buffer.from([137,80,78,71,13,10,26,10,0,1,2,3,4]);
   for(const status of [415,422]){
     const requests=[];
@@ -157,22 +158,21 @@ test('Gemini image capability errors fail over once to OpenCode Zen with the exa
       fetchImpl:async(url,init)=>{
         const payload=JSON.parse(init.body);
         requests.push({url:String(url),payload});
-        if(String(url).includes('generativelanguage.googleapis.com')){
-          return jsonResponse({error:{message:'private image capability detail'}},status);
-        }
-          return jsonResponse({choices:[{message:{content:JSON.stringify(invoiceWire(SAMPLE_INVOICE))},finish_reason:'stop'}]});
+        if(String(url).includes(DEFAULT_EXTRACTION_MODEL)) return jsonResponse({error:{message:'private image capability detail'}},status);
+        if(String(url).includes('generativelanguage.googleapis.com')) return jsonResponse({candidates:[{content:{parts:[{text:JSON.stringify(invoiceWire(SAMPLE_INVOICE))}]},finishReason:'STOP'}]});
+        return jsonResponse({choices:[{message:{content:JSON.stringify(invoiceWire(SAMPLE_INVOICE))},finish_reason:'stop'}]});
       },
     });
     const result=await extractInvoice({provider,bytes,mimeType:'image/png',fileName:'invoice.png'});
 
-    assert.equal(requests.length,2,`Gemini ${status} must go directly to the one configured fallback`);
+    assert.equal(requests.length,2,`Gemini ${status} must use Gemini Flash next`);
     assert.match(requests[0].url,/gemini-3\.5-flash-lite:generateContent/);
-    assert.match(requests[1].url,/opencode\.ai\/zen\/v1\/chat\/completions/);
+    assert.match(requests[1].url,/gemini-3\.5-flash:generateContent/);
     assert.deepEqual(requests[0].payload.contents[0].parts.find(part=>part.inlineData)?.inlineData,{
       mimeType:'image/png',data:bytes.toString('base64'),
     });
-    const imagePart=requests[1].payload.messages[0].content.find(part=>part.type==='image_url');
-    assert.equal(imagePart?.image_url?.url,`data:image/png;base64,${bytes.toString('base64')}`);
+    const imagePart=requests[1].payload.contents[0].parts.find(part=>part.inlineData);
+    assert.deepEqual(imagePart?.inlineData,{mimeType:'image/png',data:bytes.toString('base64')});
     assert.equal(result.model,DEFAULT_EXTRACTION_FALLBACK_MODEL);
     assert.equal(result.usedFallback,true);
   }
@@ -192,7 +192,8 @@ function createExtractionHandler(){
   const fetchImpl=async(url,init)=>{
     const payload=JSON.parse(init.body);
     requests.push({url:String(url),payload});
-    if(String(url).includes('generativelanguage.googleapis.com'))return jsonResponse({candidates:[{content:{parts:[{text:'{"truncated":'}]},finishReason:'MAX_TOKENS'}]});
+    if(String(url).includes(DEFAULT_EXTRACTION_MODEL))return jsonResponse({candidates:[{content:{parts:[{text:'{"truncated":'}]},finishReason:'MAX_TOKENS'}]});
+    if(String(url).includes('generativelanguage.googleapis.com'))return jsonResponse({candidates:[{content:{parts:[{text:JSON.stringify(invoiceWire(SAMPLE_INVOICE))}]},finishReason:'STOP'}]});
     return jsonResponse({choices:[{message:{content:JSON.stringify(invoiceWire(SAMPLE_INVOICE))},finish_reason:'stop'}]});
   };
   const providerFactory=options=>new AIProvider({...options,...env,fetchImpl,maxAttempts:1});
