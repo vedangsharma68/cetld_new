@@ -47,3 +47,17 @@ test('store failure during correction returns a safe reply instead of throwing',
   const handler=handlerWith({findInvoices:async()=>[invoice],applyCorrection:async()=>{throw Error('boom')}},{current:{action:{stage:'saved',invoice}}});
   assert.match(await handler({...scope,message:'change its amount to 50USD',messageId:'m-throw'}),/couldn’t safely apply/);
 });
+
+test('typo-tolerant correction names a customer and survives an AI outage',async()=>{
+  const {matchInvoicesByHint}=await import('../automation/whatsapp/assistant-handler.mjs');
+  const parsed=parseInvoiceCorrection('ok so what i want you to do is change the global dynamcs inovoice amt to 6767 USD');
+  assert.deepEqual(parsed,{changes:{total:6767,currency:'USD'},hint:'global dynamcs'});
+  assert.deepEqual(parseInvoiceCorrection('set amount to $6,969.50'),{changes:{total:6969.5,currency:'USD'}});
+  const list=[{id:'a',clientName:'Vedang Sharma (WhatsApp test)'},{id:'b',clientName:'Global Dynamics Inc.'}];
+  assert.deepEqual(matchInvoicesByHint(list,parsed.hint).map(i=>i.id),['b']);
+  let applied;
+  const store={findInvoices:async()=>list.map(i=>({...invoice,...i})),applyCorrection:async input=>{applied=input;return {invoice:{...invoice,total:6767},changes:{total:{old:100,new:6767}}}}};
+  const handler=handlerWith(store);
+  assert.equal(await handler({...scope,message:'ok so what i want you to do is change the global dynamcs inovoice amt to 6767 USD',messageId:'m-typo'}),'Amount: 100 -> 6767');
+  assert.equal(applied.invoiceId,'b');
+});
