@@ -61,3 +61,18 @@ test('typo-tolerant correction names a customer and survives an AI outage',async
   assert.equal(await handler({...scope,message:'ok so what i want you to do is change the global dynamcs inovoice amt to 6767 USD',messageId:'m-typo'}),'Amount: 100 -> 6767');
   assert.equal(applied.invoiceId,'b');
 });
+
+test('misspelled field word parses and a bare invoice number resumes the pending correction',async()=>{
+  assert.deepEqual(parseInvoiceCorrection('change the amont to 6767 usd'),{changes:{total:6767,currency:'USD'}});
+  const turns=[];
+  const mem={from(table){const q={select(){return q},eq(){return q},order(){return q},limit(){return q},range(){return q},in(){return q},delete(){return q},
+    async maybeSingle(){return {data:{primary_model:'space-bunny-free',fallback_model:null}}},insert(row){turns.push(row);return Promise.resolve({data:null})},then(res){return res({data:[...turns].reverse().map((t,i)=>({...t,id:i,created_at:'x'}))})}};return q}};
+  let applied;
+  const store={findInvoices:async arg=>arg?.invoiceNumber?[{...invoice,invoiceNumber:'INV-2026-0003',id:'inv-3'}]:[{...invoice,clientName:null}],
+    applyCorrection:async input=>{applied=input;return {invoice,changes:{total:{old:6190,new:6767}}}}};
+  const h=createWhatsAppBoundMessageHandler({supabase:mem,providerFactory:()=>({}),channelFactory:()=>({ask(){throw Error('no ai')}}),
+    pendingActionStoreFactory:()=>({loadInvoiceReview:async()=>null}),invoiceStoreFactory:()=>store,clock:()=>new Date('2026-10-01T12:00:00Z')});
+  assert.match(await h({...scope,message:'change the global dynamics invoice amt to 6767 USD',messageId:'m1'}),/Which invoice number/);
+  assert.equal(await h({...scope,message:'INV-2026-0003',messageId:'m2'}),'Amount: 6190 -> 6767');
+  assert.equal(applied.invoiceId,'inv-3');assert.equal(applied.changes.total,6767);
+});
