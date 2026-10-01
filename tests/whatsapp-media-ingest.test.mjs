@@ -53,7 +53,16 @@ function authorizedChannel(options = {}) {
 
 function mediaReviewStore(saved = []) {
   return {async beginInvoiceReview() { return {id: 1, version: 1, generation: 1}; },
-    async transitionInvoiceReview(input) { saved.push(input); return {...input, version: input.version + 1}; },
+    async transitionInvoiceReview(input) {
+      // Mirrors public.whatsapp_transition_invoice_review so tests cannot pass on transitions the database rejects.
+      const allowed = {extracting: ['incomplete', 'proposal', 'canceled'], incomplete: ['proposal', 'canceled'],
+        proposal: ['saving', 'canceled'], saving: ['saved', 'proposal', 'failed'], failed: ['canceled']};
+      const to = input.action?.stage;
+      if (!allowed[input.fromStage]?.includes(to)) throw new Error('invalid invoice review transition');
+      if (['proposal', 'saving', 'saved'].includes(to) && (!input.action.invoice || input.action.missingFields?.length
+        || !['photo', 'user'].includes(input.action.currencySource))) throw new Error('incomplete invoice review proposal');
+      saved.push(input); return {...input, version: input.version + 1};
+    },
     async loadInvoiceReview() { return null; }};
 }
 
@@ -106,7 +115,7 @@ test('bound media extracts and immediately saves with a logged reply', async () 
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/jpeg', fileName: 'invoice.jpg'}});
   assert.match(answer, /^Logged invoice INV-7[\s\S]*INR/);
   assert.doesNotMatch(answer, /reply yes/i);
-  assert.deepEqual(saved.map(item => item.action.stage), ['saving', 'saved']);
+  assert.deepEqual(saved.map(item => item.action.stage), ['proposal', 'saving', 'saved']);
   assert.equal(providerOptions[0].primaryModel, 'space-bunny-free', 'chat keeps the configured/default conversational model');
   assert.equal(providerOptions[1].primaryModel, 'gemini-3.5-flash-lite', 'media uses the vision extraction model');
 });
@@ -130,7 +139,7 @@ test('production extraction advances an incomplete OCR draft to vision and propo
       parseOfflineInvoiceText('Subtotal 100.00\nTax 18.00\nTotal 118.00', {ocrConfidence: 95})})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([137,80,78,71,13,10,26,10,0]), mimeType: 'image/png'}});
   assert.equal(visionCalls, 1);
-  assert.equal(stored, 2);
+  assert.equal(stored, 3);
   assert.match(answer, /^Logged invoice INV-10/);
 });
 
