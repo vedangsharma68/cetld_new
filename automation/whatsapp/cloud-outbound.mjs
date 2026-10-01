@@ -258,6 +258,34 @@ export function createWhatsAppOutbound({
     return postMessage({workspaceId, to, kind, payload: {type: 'text', text: {preview_url: false, body: text}}});
   }
 
+  async function sendServiceMedia({workspaceId, to, media, caption, lastInboundAt, messageId, businessName} = {}) {
+    const kind = 'normal';
+    const blocked = preflight({workspaceId, to, kind});
+    if (blocked) return blocked;
+    recipient(to); nonempty(workspaceId, 'workspaceId'); nonempty(messageId, 'messageId');
+    if (!withinServiceWindow(lastInboundAt, clock)) return block(logger, 'service_window_closed', {workspaceId, to, kind});
+    if (!await verifiedBusinessName(supabase, workspaceId, nonempty(businessName, 'businessName', 100))) return block(logger, 'business_name_mismatch', {workspaceId, to, kind});
+    const eligibility = await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
+    if (!eligibility.allowed) return block(logger, eligibility.reason, {workspaceId, to, kind});
+    const authorization = await authorizeInboundReply({workspaceId, phone: to, kind, messageId});
+    if (authorization?.allowed !== true) return block(logger, authorization?.reason || 'inbound_reply_denied', {workspaceId, to, kind});
+    const bytes = media?.bytes;
+    if (!bytes?.length || bytes.length > 10 * 1024 * 1024) throw new TypeError('invalid invoice media');
+    const form = new FormData();
+    form.set('messaging_product', 'whatsapp');
+    form.set('type', media.mime_type || media.mimeType || 'application/octet-stream');
+    form.set('file', new Blob([bytes], {type: media.mime_type || media.mimeType}), media.file_name || media.fileName || 'invoice');
+    const upload = await fetchImpl(`https://graph.facebook.com/${env.WHATSAPP_GRAPH_API_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/media`, {
+      method: 'POST', headers: {Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`}, body: form, signal: AbortSignal.timeout(15000)});
+    if (!upload.ok) return {status: 'failed', reason: 'media_upload_rejected', httpStatus: upload.status};
+    const uploaded = await upload.json();
+    if (!uploaded?.id) return {status: 'unknown', reason: 'missing_media_id'};
+    const image = String(media.mime_type || media.mimeType).startsWith('image/');
+    return postMessage({workspaceId, to, kind, payload: image
+      ? {type: 'image', image: {id: uploaded.id, caption: String(caption || '').slice(0, 1000)}}
+      : {type: 'document', document: {id: uploaded.id, filename: media.file_name || media.fileName || 'invoice.pdf', caption: String(caption || '').slice(0, 1000)}}});
+  }
+
   // Intentionally no sendReminder method. Collection content remains on hold.
-  return Object.freeze({sendInvoiceUpdateTemplate, sendServiceReply, sendTypingIndicator});
+  return Object.freeze({sendInvoiceUpdateTemplate, sendServiceReply, sendServiceMedia, sendTypingIndicator});
 }

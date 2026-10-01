@@ -178,3 +178,19 @@ test('Vercel traces OCR assets into both WhatsApp functions', async () => {
     assert.equal(config.functions[route].maxDuration, 60);
   }
 });
+
+test('photo save preserves printed identity and links the original file without making save depend on storage', async () => {
+  const transitions=[]; const files=[];
+  const values=Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
+    .map(name=>[name,{value:({invoiceNumber:'INV-2026-0720',customerName:'Global Dynamics Inc.',invoiceDate:'2026-09-30',dueDate:'2026-10-30',subtotal:100,tax:0,total:100,outstandingAmount:100,currency:'USD',direction:'receivable'})[name]??null,confidence:.99}]));
+  const db={from(table){return {select(){return this},eq(){return this},async maybeSingle(){return {data:table==='workspace_ai_settings'?{primary_model:'space-bunny-free',fallback_model:null}:{business_name:'Seller'}}}}}};
+  const make=keepInvoiceFile=>createWhatsAppBoundMessageHandler({supabase:db,providerFactory:()=>({}),channelFactory:()=>({ask(){throw Error('unused')}}),
+    pendingActionStoreFactory:()=>mediaReviewStore(transitions),invoiceStoreFactory:()=>({keepInvoiceFile}),extract:async()=>({...values,lineItems:{value:[],confidence:.99}}),
+    saveInvoice:async({invoice})=>({saved:true,invoice:{...invoice,id:'saved-invoice',invoiceNumber:'INV-2026-0001'}}),logger:{error(){}}});
+  const media={bytes:Buffer.from([1,2,3]),mimeType:'image/jpeg',fileName:'real.jpg'};
+  const kept=await make(async input=>files.push(input))({...scope,message:'',messageId:'wamid-photo',media});
+  assert.match(kept,/Printed invoice number: INV-2026-0720/); assert.match(kept,/Customer: Global Dynamics Inc\./);
+  assert.equal(files[0].invoiceId,'saved-invoice'); assert.deepEqual(files[0].bytes,media.bytes);
+  const notKept=await make(async()=>{throw Error('storage unavailable')})({...scope,message:'',messageId:'wamid-photo-2',media});
+  assert.match(notKept,/invoice was saved, but the original file was not kept/i);
+});

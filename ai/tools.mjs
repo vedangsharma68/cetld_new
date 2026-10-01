@@ -172,7 +172,7 @@ function safeInvoice(invoice) {
   const metadata = invoice.metadata;
   const taxMinor = integerMetadata(metadata, ["tax_minor"]);
   return {
-    id: invoice.id, invoiceNumber: invoice.invoice_number, customerId: invoice.customer_id,
+    id: invoice.id, invoiceNumber: stringMetadata(metadata, ['printed_invoice_number'], 100) || invoice.invoice_number, systemInvoiceNumber: invoice.invoice_number, customerId: invoice.customer_id,
     issueDate: invoice.issue_date, dueDate: invoice.due_date, currency: invoice.currency,
     subtotal: decimalMetadata(metadata?.subtotal), tax: taxMinor === null ? decimalMetadata(metadata?.tax) : money(BigInt(taxMinor)),
     invoiceDirection: safeInvoiceDirection(metadata),
@@ -342,7 +342,7 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
     const context = cleanObject({
       ...normalized,
       ...normalizedInvoiceMetadata(invoice.metadata),
-      customerName: customer?.company_name || customer?.name || null,
+      customerName: stringMetadata(invoice.metadata, ['client_name'], 255) || customer?.company_name || customer?.name || null,
       customer: customer ? {
         name: customer.name, companyName: customer.company_name, email: customer.email, phone: customer.phone,
         createdAt: customer.created_at, updatedAt: customer.updated_at,
@@ -383,7 +383,7 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
         const customers = await customersForInvoices(visible);
         return {
           count: settled.length,
-          invoices: visible.map(row => ({...safeInvoice(row), customerName: customers.get(row.customer_id)?.company_name || customers.get(row.customer_id)?.name || null})),
+          invoices: visible.map(row => ({...safeInvoice(row), customerName: stringMetadata(row.metadata, ['client_name'], 255) || customers.get(row.customer_id)?.company_name || customers.get(row.customer_id)?.name || null})),
           complete: settled.length <= 10,
           truncated: settled.length > 10,
         };
@@ -404,7 +404,7 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
         const filtered = bounds.lower || bounds.upper ? rows.filter((row) => withinDateBounds(row.issue_date, bounds)) : rows;
         const selected = (bounds.lower || bounds.upper ? filtered.slice(offset, offset + limit) : filtered.slice(0,limit));
         const customers = await customersForInvoices(selected);
-        const result = selected.map(row => ({...safeInvoice(row), customerName: customers.get(row.customer_id)?.company_name || customers.get(row.customer_id)?.name || null}));
+        const result = selected.map(row => ({...safeInvoice(row), customerName: stringMetadata(row.metadata, ['client_name'], 255) || customers.get(row.customer_id)?.company_name || customers.get(row.customer_id)?.name || null}));
         Object.defineProperty(result,'truncated',{value:bounds.lower||bounds.upper?filtered.length>offset+limit:rows.length>limit,enumerable:false});
         return result;
       }
@@ -585,7 +585,7 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
     }
     const result = {
       ambiguousCustomer: customerRows.length > 1,
-      invoices: invoiceRows.slice(0, 25).map(row => ({...safeInvoice(row), customerName: customerMap.get(row.customer_id)?.company_name || customerMap.get(row.customer_id)?.name || null})),
+      invoices: invoiceRows.slice(0, 25).map(row => ({...safeInvoice(row), customerName: stringMetadata(row.metadata, ['client_name'], 255) || customerMap.get(row.customer_id)?.company_name || customerMap.get(row.customer_id)?.name || null})),
       truncated: invoiceRows.length > 25,
     };
     if (!result.ambiguousCustomer && result.invoices.length === 1 && !result.truncated) {

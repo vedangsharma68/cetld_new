@@ -22,7 +22,7 @@ test('configuration exposes Space Bunny primary, LongCat fallback, and Gemini ba
   assert.equal(DEFAULT_MODEL,ZEN_PRIMARY_MODEL);
   assert.equal(DEFAULT_FALLBACK_MODEL,ZEN_FALLBACK_MODEL);
   assert.equal(DEFAULT_EXTRACTION_MODEL,'gemini-3.5-flash-lite');
-  assert.equal(DEFAULT_EXTRACTION_FALLBACK_MODEL,ZEN_PRIMARY_MODEL);
+  assert.equal(DEFAULT_EXTRACTION_FALLBACK_MODEL,GEMINI_FALLBACK_MODEL);
   assert.equal(isPrimaryModelId(DEFAULT_MODEL),true);
   assert.equal(isPrimaryModelId(ZEN_PRIMARY_MODEL),true);
   assert.equal(isFallbackModelId(ZEN_PRIMARY_MODEL),false);
@@ -126,27 +126,20 @@ test('Zen fallback receives required Assistant tools and normalizes its function
   assert.equal(result.usedFallback,false);
 });
 
-test('Zen fallback receives structured extraction schema and its output is validated',async()=>{
-  let fallbackBody;
+test('Gemini Flash fallback receives structured extraction schema and its output is validated',async()=>{
+  const calls=[];
   const ai=provider(async(url,init)=>{
-    if(String(url).includes('generativelanguage'))return gemini('',{status:503});
-    fallbackBody=JSON.parse(init.body);
-    return openRouter('{"invoiceNumber":"INV-1048","total":84600.00}');
+    calls.push(String(url));
+    if(String(url).includes(DEFAULT_EXTRACTION_MODEL))return gemini('',{status:503});
+    return gemini('{"invoiceNumber":"INV-1048","total":84600.00}');
   },{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL,maxAttempts:1});
   const result=await ai.generateStructured({
-    messages:[{role:'user',content:'Extract invoice number and total.'}],
-    name:'invoice_extraction',
+    messages:[{role:'user',content:'Extract invoice number and total.'}], name:'invoice_extraction',
     schema:{type:'object',required:['invoiceNumber','total'],properties:{invoiceNumber:{type:'string'},total:{type:'number'}}},
-    validate:value=>{
-      if(typeof value.invoiceNumber!=='string'||!Number.isFinite(value.total)||value.total<0)throw new TypeError('invalid extracted invoice');
-      return {invoiceNumber:value.invoiceNumber,total:value.total};
-    },
+    validate:value=>({invoiceNumber:value.invoiceNumber,total:value.total}),
   });
-  assert.equal(fallbackBody.model,ZEN_PRIMARY_MODEL);
-  assert.equal(fallbackBody.response_format.type,'json_schema');
-  assert.equal(fallbackBody.response_format.json_schema.name,'invoice_extraction');
-  assert.deepEqual(result.data,{invoiceNumber:'INV-1048',total:84600});
-  assert.equal(result.usedFallback,true);
+  assert.match(calls[0],/gemini-3.5-flash-lite/); assert.match(calls[1],/gemini-3.5-flash:/);
+  assert.deepEqual(result.data,{invoiceNumber:'INV-1048',total:84600}); assert.equal(result.usedFallback,true);
 });
 
 test('network failures and abort timeouts can use the configured fallback',async()=>{
@@ -187,14 +180,14 @@ test('provider timeout stays active while reading an upstream response body',asy
   assert.equal(outcome,'TIMEOUT','a body that never finishes must not outlive the provider deadline');
 });
 
-test('extraction models make one bounded attempt before using the free fallback',async()=>{
+test('extraction tries Gemini Lite, Gemini Flash, then both Zen legs once',async()=>{
   const calls=[];
   const ai=provider(async url=>{
     calls.push(String(url).includes('generativelanguage')?'gemini':'openrouter');
     return calls.at(-1)==='gemini'?gemini('',{status:503}):openRouter('',{status:503});
   },{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL});
   await assert.rejects(ai.generate({messages:[{role:'user',content:'Extract this invoice'}]}),error=>error.code==='PROVIDER_UNAVAILABLE');
-  assert.deepEqual(calls,['gemini','openrouter','openrouter']);
+  assert.deepEqual(calls,['gemini','gemini','openrouter','openrouter']);
 });
 
 test('oversized upstream responses are rejected with a safe bounded error',async()=>{

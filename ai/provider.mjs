@@ -16,7 +16,7 @@ export const DEFAULT_MODEL = ZEN_PRIMARY_MODEL;
 export const DEFAULT_FALLBACK_MODEL = ZEN_FALLBACK_MODEL;
 export const DEFAULT_EXTRACTION_MODEL = 'gemini-3.5-flash-lite';
 export const OPENROUTER_FREE_MODEL = 'openrouter/free';
-export const DEFAULT_EXTRACTION_FALLBACK_MODEL = ZEN_PRIMARY_MODEL;
+export const DEFAULT_EXTRACTION_FALLBACK_MODEL = GEMINI_FALLBACK_MODEL;
 export const VERIFIED_MODELS = Object.freeze([
   DEFAULT_MODEL,
   DEFAULT_FALLBACK_MODEL,
@@ -233,7 +233,7 @@ export class AIProvider {
   } = {}) {
     assertServerRuntime();
     const extractionPrimary = primaryModel === DEFAULT_EXTRACTION_MODEL;
-    const extractionFallback = extractionPrimary && fallbackModel === ZEN_PRIMARY_MODEL;
+    const extractionFallback = extractionPrimary && fallbackModel === GEMINI_FALLBACK_MODEL;
     if ((!isPrimaryModelId(primaryModel) && !extractionPrimary) || (fallbackModel !== null && !isFallbackModelId(fallbackModel) && !extractionFallback)) throw new AIError('INVALID_MODEL', 400);
     this.primaryModel = primaryModel;
     this.fallbackModel = fallbackModel;
@@ -270,8 +270,10 @@ export class AIProvider {
 
   #candidates() {
     if (!this.fallbackModel) return [this.primaryModel];
-    const finalModel = this.primaryModel === DEFAULT_EXTRACTION_MODEL ? ZEN_FALLBACK_MODEL : GEMINI_FALLBACK_MODEL;
-    return [...new Set([this.primaryModel, this.fallbackModel, finalModel])];
+    if (this.primaryModel === DEFAULT_EXTRACTION_MODEL) {
+      return [...new Set([this.primaryModel, GEMINI_FALLBACK_MODEL, ZEN_PRIMARY_MODEL, ZEN_FALLBACK_MODEL])];
+    }
+    return [...new Set([this.primaryModel, this.fallbackModel, GEMINI_FALLBACK_MODEL])];
   }
 
   async generateStructured({messages, schema, name, validate, maxTokens, ...options} = {}) {

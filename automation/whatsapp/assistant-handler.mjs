@@ -60,6 +60,39 @@ const CURRENCY_REPLY = /^\s*([A-Za-z]{3})[.!]?\s*$/;
 const CANCEL_REPLY = /^\s*(?:cancel|never mind|nevermind|discard|stop)\s*[.!]?\s*$/i;
 const CONFIRMATION_REPLY = /^\s*(?:yes|y|ok|okay|confirm|confirmed|do it|go ahead|proceed|approve|send it|create it)\s*[.!]?\s*$/i;
 const OWNER_CLAIM = /\b(?:i\s*(?:am|'m)\s+(?:the\s+)?owner|my\s+(?:business|account)|owner\s+access)\b/i;
+const FILE_REQUEST = /\b(?:send|show|give)\s+(?:me\s+)?(?:the\s+)?invoice\s+(?:file|photo|pdf)\b/i;
+
+function parseDate(value, clock) {
+  const text = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const parsed = new Date(`${text} ${new Date(clock()).getUTCFullYear()} 00:00:00 UTC`);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString().slice(0, 10) : null;
+}
+
+/** Closed, deterministic correction grammar: no model-generated writes. */
+export function parseInvoiceCorrection(message, clock = () => new Date()) {
+  const text = String(message || '').trim();
+  let match;
+  if ((match = text.match(/\b(?:change|make|set)\s+(?:its\s+|the\s+)?amount\s+(?:to\s+)?([0-9]+(?:\.[0-9]{1,2})?)\s*([a-z]{3})?\b/i)))
+    return {changes: {total: Number(match[1]), ...(match[2] ? {currency: match[2].toUpperCase()} : {})}};
+  if ((match = text.match(/\b(?:change|make|set)\s+(?:the\s+)?due\s+date\s+(?:to\s+)?(.+)$/i))) return {changes: {dueDate: parseDate(match[1], clock)}};
+  if ((match = text.match(/\b(?:change|make|set)\s+(?:the\s+)?(?:invoice|issue)\s+date\s+(?:to\s+)?(.+)$/i))) return {changes: {invoiceDate: parseDate(match[1], clock)}};
+  if ((match = text.match(/\b(?:change|set)\s+(?:the\s+)?customer\s+(?:to\s+)?(.+)$/i))) return {changes: {clientName: match[1].trim()}};
+  if ((match = text.match(/\bcurrency\s+(?:should\s+be|to|is)\s+([a-z]{3})\b/i))) return {changes: {currency: match[1].toUpperCase()}};
+  if ((match = text.match(/\b(?:change|set)\s+(?:the\s+)?notes?\s+(?:to\s+)?(.+)$/i))) return {changes: {notes: match[1].trim()}};
+  if (/\bmark\s+(?:it|the invoice)\s+paid\b/i.test(text)) return {changes: {status: 'paid'}};
+  return null;
+}
+
+function requestedInvoiceNumber(message) {
+  return String(message || '').match(/\bINV-[A-Z0-9-]+\b/i)?.[0]?.toUpperCase() || null;
+}
+
+function correctionReply(audit) {
+  const labels = {total: 'Amount', dueDate: 'Due date', invoiceDate: 'Invoice date', currency: 'Currency',
+    notes: 'Notes', clientName: 'Customer', status: 'Status'};
+  return Object.entries(audit).map(([field, value]) => `${labels[field]}: ${value.old ?? 'not set'} -> ${value.new ?? 'not set'}`).join('\n');
+}
 
 // validateAssistantInvoice intentionally returns derived state for its callers.
 // Durable review payloads must remain valid *inputs* to that strict validator.
@@ -77,12 +110,13 @@ function money(currency, amount) {
     maximumFractionDigits: 2}).format(amount);
 }
 
-function loggedSummary(invoice, {currencySource, dueDateSource, assumptions}) {
+function loggedSummary(invoice, {currencySource, dueDateSource, assumptions, fileKept = true}) {
   return [`Logged invoice ${invoice.invoiceNumber}.`, `Invoice number: ${invoice.invoiceNumber}`,
+    invoice.printedInvoiceNumber ? `Printed invoice number: ${invoice.printedInvoiceNumber}` : null,
     `Customer: ${invoice.clientName}`, `Total: ${money(invoice.currency, invoice.total)} ${invoice.currency}`,
     `Invoice date: ${invoice.invoiceDate}`, `Due date: ${invoice.dueDate || 'not shown on the invoice'}`,
     `Currency source: ${invoice.currency}, ${currencySource}`,
-    assumptions.length ? `Assumptions: ${assumptions.join('; ')}` : null,
+    assumptions.length ? `Assumptions: ${assumptions.join('; ')}` : null, fileKept ? null : 'The invoice was saved, but the original file was not kept.',
     "Reply with any corrections, like 'change the due date to 2026-08-19'."].filter(Boolean).join('\n');
 }
 
@@ -94,7 +128,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
   clock = () => new Date(), logger = console} = {}) {
   if (!supabase?.from) throw new TypeError('A server-side Supabase client is required');
 
-  return async ({workspaceId, customerId, phone, message, media, mediaError, signal, deadlineAt}) => {
+  return async ({workspaceId, customerId, phone, message, messageId, media, mediaError, signal, deadlineAt}) => {
     const active = () => {
       if (signal?.aborted || (Number.isFinite(deadlineAt) && Date.now() >= deadlineAt)) throw Object.assign(new Error('Inbound processing deadline expired'), {name: 'AbortError'});
     };
@@ -198,11 +232,23 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           const saved = await saveInvoice({store: await invoiceStoreFactory({supabase, workspaceId, customerId}),
             invoice: validatedInvoice, confirmed: true, idempotencyKey: key, accounting: null, allowMissingDueDate: true});
           if (saved?.needsInput || !saved?.invoice) throw new TypeError('invoice save returned no invoice');
-          const savedInvoice = {...saved.invoice, clientName: saved.invoice.clientName || validatedInvoice.clientName};
+          const savedInvoice = {...saved.invoice, clientName: saved.invoice.clientName || validatedInvoice.clientName,
+            printedInvoiceNumber: validatedInvoice.invoiceNumber === 'AUTO' ? null : validatedInvoice.invoiceNumber};
+          let fileKept = true;
+          try {
+            const invoiceStore = await invoiceStoreFactory({supabase, workspaceId, customerId});
+            await invoiceStore.keepInvoiceFile({invoiceId: savedInvoice.id, bytes: media.bytes,
+              fileName: media.fileName || (media.mimeType === 'application/pdf' ? 'invoice.pdf' : 'invoice-image'),
+              mimeType: media.mimeType, idempotencyKey: `${messageId || token.id}-${media.fileName || 'invoice'}`.replace(/[^a-zA-Z0-9._-]/g, '-')});
+          } catch (fileError) {
+            fileKept = false;
+            logger?.error?.('WhatsApp invoice file persistence failed', {workspaceId, invoiceId: savedInvoice.id,
+              message: String(fileError?.message || '').slice(0, 200)});
+          }
           const completed = await pending.transitionInvoiceReview({...claimed, workspaceId, customerId, phone,
             fromStage: 'saving', action: {...action, stage: 'saved', invoice: savedInvoice}});
           if (!completed) return 'The invoice was saved, but I could not finish its WhatsApp status update. Please check cetld before retrying.';
-          return loggedSummary(savedInvoice, {currencySource: currencyResult.source, dueDateSource: due.source, assumptions});
+          return loggedSummary(savedInvoice, {currencySource: currencyResult.source, dueDateSource: due.source, assumptions, fileKept});
         } catch (saveError) {
           await pending.transitionInvoiceReview({...claimed, workspaceId, customerId, phone,
             fromStage: 'saving', action: {...action, stage: 'failed'}}).catch(() => null);
@@ -218,6 +264,33 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       }
     }
     const current = await pending.loadInvoiceReview({workspaceId, customerId, phone});
+    const correction = parseInvoiceCorrection(message, clock);
+    if (correction || FILE_REQUEST.test(message)) {
+      const store = await invoiceStoreFactory({supabase, workspaceId, customerId});
+      const explicitNumber = requestedInvoiceNumber(message);
+      let candidates;
+      if (explicitNumber) candidates = await store.findInvoices({invoiceNumber: explicitNumber});
+      else if (current?.action?.stage === 'saved' && current.action.invoice?.id) candidates = [current.action.invoice];
+      else candidates = await store.findInvoices();
+      if (!candidates.length) return explicitNumber ? `I couldn't find invoice ${explicitNumber}.` : "I couldn't find a recent invoice to change.";
+      if (candidates.length > 1) return 'Which invoice number should I use?';
+      const target = candidates[0];
+      if (FILE_REQUEST.test(message)) {
+        const file = await store.latestInvoiceFile(target.id);
+        return file ? {answer: `Here is invoice ${target.printedInvoiceNumber || target.invoiceNumber}.`, media: file}
+          : `I don't have a stored file for invoice ${target.printedInvoiceNumber || target.invoiceNumber}.`;
+      }
+      if (correction.changes.total != null && !(correction.changes.total > 0)) return 'I can’t change the amount because an invoice total must be positive.';
+      if (correction.changes.currency && !isSupportedCurrency(correction.changes.currency)) return `I can’t change the currency to ${correction.changes.currency}. ${CURRENCY_SUPPORT_MESSAGE}`;
+      if (Object.values(correction.changes).some(value => value === null || value === '')) return 'I can’t apply that change because the new value is invalid.';
+      const result = await store.applyCorrection({invoiceId: target.id, changes: correction.changes,
+        idempotencyKey: `wa_correction_${messageId || createHash('sha256').update(`${phone}:${message}`).digest('hex')}`,
+        changedAt: clock().toISOString()});
+      if (result.reason === 'settled') return 'I can’t edit this invoice because it is already paid or settled.';
+      if (result.reason === 'payments_exceed_total') return 'I can’t lower the total below payments already recorded on this invoice.';
+      if (result.reason) return 'I couldn’t safely apply that invoice change.';
+      return result.duplicate && !Object.keys(result.changes).length ? 'That change was already applied.' : correctionReply(result.changes);
+    }
     if (current?.action?.type === 'invoice_review_draft') {
       const eligibility = await getSendEligibility({supabase, workspaceId, phone, category: 'invoice_updates'});
       if (!eligibility.allowed || eligibility.customer?.id !== customerId) {
