@@ -6,10 +6,12 @@ import {readConversationHistory, writeConversationTurn} from './conversation-mem
 import {extractInvoice} from '../../ai/extraction.mjs';
 import {createWhatsAppPendingActionStore} from './pending-actions.mjs';
 import {createWhatsAppInvoiceStore} from './invoice-store.mjs';
+import {validateAssistantInvoice} from '../../ai/invoice-ops.mjs';
+import {isSupportedCurrency} from '../../currency-contract.mjs';
 
-const requiredInvoiceFields = ['invoiceNumber','customerName','invoiceDate','total','currency','direction'];
+const requiredInvoiceFields = ['invoiceNumber','customerName','invoiceDate','dueDate','total','currency','direction'];
 const fieldLabels = {invoiceNumber: 'invoice number', customerName: 'customer name', invoiceDate: 'invoice date',
-  total: 'total', currency: 'explicit currency code (for example INR or USD)',
+  dueDate: 'due date', total: 'total', currency: 'explicit currency code (for example INR or USD)',
   direction: 'confirmation that your business issued the invoice'};
 
 function clarification(extracted) {
@@ -29,6 +31,30 @@ function invoiceProposal(extracted) {
     outstanding: extracted.outstandingAmount.value ?? extracted.total.value, currency: extracted.currency.value,
     notes: extracted.notes.value, alreadyPaid: false, direction: 'receivable', lineItems: extracted.lineItems.value};
 }
+
+function missingFields(extracted) {
+  return requiredInvoiceFields.filter(name => extracted?.[name]?.value == null
+    || extracted[name].confidence < 0.75 || (name === 'direction' && extracted[name].value !== 'receivable'));
+}
+
+function reviewDraft(extracted) {
+  const invoice = invoiceProposal(extracted) || {
+    invoiceNumber: extracted?.invoiceNumber?.value ?? null, clientName: extracted?.customerName?.value ?? null,
+    clientEmail: extracted?.clientEmail?.value ?? null, clientPhone: extracted?.clientPhone?.value ?? null,
+    invoiceDate: extracted?.invoiceDate?.value ?? null, dueDate: extracted?.dueDate?.value ?? null,
+    subtotal: extracted?.subtotal?.value ?? null, tax: extracted?.tax?.value ?? null,
+    total: extracted?.total?.value ?? null,
+    outstanding: extracted?.outstandingAmount?.value ?? extracted?.total?.value ?? null,
+    currency: extracted?.currency?.value ?? null, notes: extracted?.notes?.value ?? null,
+    alreadyPaid: false, direction: extracted?.direction?.value ?? null,
+    lineItems: Array.isArray(extracted?.lineItems?.value) ? extracted.lineItems.value : [],
+  };
+  return {type: 'invoice_review_draft', stage: 'incomplete', invoice,
+    missingFields: missingFields(extracted), currencySource: null};
+}
+
+const CURRENCY_REPLY = /^\s*([A-Za-z]{3})[.!]?\s*$/;
+const CANCEL_REPLY = /^\s*(?:cancel|never mind|nevermind|discard|stop)\s*[.!]?\s*$/i;
 
 function proposalSummary(invoice) {
   return `🧾 *Invoice ready to save*\n• ${invoice.invoiceNumber} — ${invoice.clientName}\n• ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}\n${invoice.dueDate ? `• Due: ${invoice.dueDate}\n` : ''}\nSave it? Reply yes to confirm.`;
@@ -65,8 +91,12 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           workspaceId: scope.workspaceId, customerId: scope.customerId, phone: scope.phone};
       },
     });
-    if (mediaError) return "I couldn't fetch that photo. Please resend it and I'll try again.";
-    if (media) {
+    if (media || mediaError) {
+      // This durable tombstone is written before extraction. Its row/version
+      // token prevents an older extraction or currency reply from reviving a
+      // review replaced by this photo.
+      const token = await pending.beginInvoiceReview({workspaceId, customerId, phone});
+      if (mediaError) return "I couldn't fetch that photo. The earlier invoice review was discarded; please resend the photo.";
       try {
         const {data: workspace, error: workspaceError} = await supabase.from('workspace_settings').select('business_name')
           .eq('workspace_id', workspaceId).maybeSingle();
@@ -84,17 +114,64 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         const extracted = await extract({provider: extractionProvider, ...media,
           businessName: workspace?.business_name || '', signal, deadlineAt: extractionDeadlineAt, logger});
         active();
+        const draft = reviewDraft(extracted);
         const invoice = invoiceProposal(extracted);
-        if (!invoice) return clarification(extracted);
+        if (!invoice) {
+          const stored = await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone,
+            fromStage: 'extracting', action: draft});
+          if (!stored) return 'A newer photo replaced this review. Please continue with the newer photo.';
+          if (draft.missingFields.length === 1 && draft.missingFields[0] === 'currency') {
+            return 'I found the invoice details, but the currency is not shown clearly. Reply with the 3-letter currency code (for example USD or INR). I won’t save anything until I show the complete proposal and you reply yes.';
+          }
+          return `${clarification(extracted)} I can only continue from a photo reply when currency is the sole missing field; otherwise send one complete explicit invoice request or a clearer photo.`;
+        }
+        // Apply the same strict local validation used by Assistant saves before
+        // making any proposal confirmable.
+        validateAssistantInvoice(invoice);
         active();
-        await pending.storePendingAction({workspaceId, customerId, phone,
-          action: {type: 'create_invoice', payload: {invoice}}, source: 'whatsapp'});
+        const stored = await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone,
+          fromStage: 'extracting', action: {type: 'invoice_review_draft', stage: 'proposal', invoice,
+            missingFields: [], currencySource: 'photo'}});
+        if (!stored) return 'A newer photo replaced this review. Please continue with the newer photo.';
         return proposalSummary(invoice);
       } catch (error) {
         logger?.error?.('WhatsApp invoice extraction failed', {workspaceId,
           message: String(error?.message || '').slice(0, 200)});
-        return "I couldn't extract a review from that image. Please send the invoice number, customer name, invoice date, total, explicit currency code, and confirm whether your business issued it. Nothing was saved.";
+        return "I couldn't extract a review from that image. The earlier review remains discarded. Please send a clearer photo or one complete explicit request with all invoice fields. Nothing was saved.";
       }
+    }
+    const current = await pending.loadInvoiceReview({workspaceId, customerId, phone});
+    if (current?.action?.type === 'invoice_review_draft') {
+      const eligibility = await getSendEligibility({supabase, workspaceId, phone, category: 'invoice_updates'});
+      if (!eligibility.allowed || eligibility.customer?.id !== customerId) {
+        return 'Please verify your number in cetld before continuing this invoice review.';
+      }
+      const action = current.action;
+      if (CANCEL_REPLY.test(message)) {
+        const canceled = await pending.transitionInvoiceReview({...current, workspaceId, customerId, phone,
+          fromStage: action.stage, action: {...action, stage: 'canceled'}});
+        return canceled ? 'Invoice review canceled. Nothing was saved.' : 'That review was already replaced or completed.';
+      }
+      const currency = CURRENCY_REPLY.exec(message)?.[1]?.toUpperCase();
+      if (action.stage === 'incomplete' && action.missingFields?.length === 1 && action.missingFields[0] === 'currency') {
+        if (!currency || !isSupportedCurrency(currency)) return 'Please reply with a supported 3-letter currency code, such as USD or INR.';
+        const invoice = validateAssistantInvoice({...action.invoice, currency});
+        const next = {...action, stage: 'proposal', invoice, missingFields: [], currencySource: 'user'};
+        const stored = await pending.transitionInvoiceReview({...current, workspaceId, customerId, phone,
+          fromStage: 'incomplete', action: next});
+        if (stored) return proposalSummary(invoice);
+        const latest = await pending.loadInvoiceReview({workspaceId, customerId, phone});
+        if (latest?.action?.stage === 'proposal') return proposalSummary(latest.action.invoice);
+        return 'That review was replaced by a newer photo. Please continue with the newer review.';
+      }
+      if (currency && action.stage === 'proposal') return proposalSummary(action.invoice);
+      if (/^\s*(?:yes|y|ok|okay|confirm|confirmed|do it|go ahead|proceed|approve|send it|create it)\s*[.!]?\s*$/i.test(message)
+        && action.stage === 'incomplete') {
+        return 'I can’t confirm an incomplete invoice review. Please send a complete explicit request or a clearer photo.';
+      }
+    }
+    if (CURRENCY_REPLY.test(message)) {
+      return 'There is no active currency-only invoice review. Please resend the invoice photo or send one complete explicit invoice request.';
     }
     let history = [];
     try { history = await readConversationHistory({supabase, workspaceId, phone}); }
