@@ -226,7 +226,8 @@ export function createWhatsAppAssistantChannel({
           return {answer: 'That invoice proposal expired. Please resend the photo and I’ll read it again.', pendingAction: null, expired: true};
         }
         if (pending.action?.type !== 'create_invoice' || typeof createInvoiceStore !== 'function') {
-          return {answer: 'I can only confirm a proposed invoice from this chat.', pendingAction: null};
+          if (typeof consumePendingAction === 'function') await consumePendingAction({...scope, id: pending.id});
+          return {answer: 'Nothing is waiting for a yes right now 🙂 Tell me what you want to change, for example “change the Acme invoice amount to 500 USD”.', pendingAction: null};
         }
         const key = `wa_invoice_${createHash('sha256').update(`${scope.workspaceId}:${scope.customerId}:${scope.phone}:${pending.id}`).digest('hex').slice(0, 32)}`;
         const saved = await saveInvoice({store: await createInvoiceStore(scope), invoice: pending.action.payload?.invoice,
