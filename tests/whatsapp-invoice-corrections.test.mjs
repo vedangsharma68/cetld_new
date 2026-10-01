@@ -42,3 +42,8 @@ test('send invoice file returns the stored media descriptor',async()=>{
   const handler=handlerWith({findInvoices:async()=>[invoice],latestInvoiceFile:async id=>{assert.equal(id,invoice.id);return media}},{current:{action:{stage:'saved',invoice}}});
   assert.deepEqual(await handler({...scope,message:'send me the invoice file',messageId:'m-file'}),{answer:'Here is invoice INV-2026-0720.',media});
 });
+
+test('store failure during correction returns a safe reply instead of throwing',async()=>{
+  const handler=handlerWith({findInvoices:async()=>[invoice],applyCorrection:async()=>{throw Error('boom')}},{current:{action:{stage:'saved',invoice}}});
+  assert.match(await handler({...scope,message:'change its amount to 50USD',messageId:'m-throw'}),/couldn’t safely apply/);
+});
