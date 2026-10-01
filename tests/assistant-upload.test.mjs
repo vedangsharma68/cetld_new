@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {extractInvoice} from '../ai/extraction.mjs';
+import {invoiceWire} from './invoice-wire-fixture.mjs';
 
 const extracted={
   direction:{value:'receivable',confidence:.98},
@@ -12,7 +13,7 @@ const extracted={
   lineItems:{value:[],confidence:0},
 };
 
-async function inspectUpload(bytes,mimeType,fileName){let request;const provider={async generateStructured(options){request=options;return{data:options.validate(extracted),model:'test-model',usedFallback:false}}};const result=await extractInvoice({provider,bytes,mimeType,fileName});return{request,result}}
+async function inspectUpload(bytes,mimeType,fileName){let request;const provider={async generateStructured(options){request=options;return{data:options.validate(invoiceWire(extracted)),model:'test-model',usedFallback:false}}};const result=await extractInvoice({provider,bytes,mimeType,fileName});return{request,result}}
 
 test('Assistant image upload reaches one structured multimodal extraction pass',async()=>{
   const png=Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0]);
@@ -27,4 +28,3 @@ test('Assistant PDF upload uses Gemini native document content and preserves mis
   assert.match(request.messages[0].content[1].file.file_data,/^data:application\/pdf;base64,/);
   assert.equal(result.dueDate.value,null);assert.ok(result.uncertainFields.includes('dueDate'));
 });
-

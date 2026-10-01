@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { extractInvoice } from '../ai/extraction.mjs';
+import {invoiceWire} from './invoice-wire-fixture.mjs';
 
 const fixture = (name) => readFile(fileURLToPath(new URL(`./fixtures/${name}.pdf`, import.meta.url)));
 const field = (value, confidence = 0.99) => ({ value, confidence });
@@ -22,7 +23,7 @@ async function extractFixture(name, overrides = {}) {
   let delivered;
   const provider = { async generateStructured(options) {
     delivered = options;
-    return { data: options.validate({ ...base, ...overrides }), model: 'fixture-provider' };
+    return { data: options.validate(invoiceWire({ ...base, ...overrides })), model: 'fixture-provider' };
   } };
   const result = await extractInvoice({ provider, bytes, mimeType: 'application/pdf', fileName: `${name}.pdf` });
   const content = delivered.messages[0].content;

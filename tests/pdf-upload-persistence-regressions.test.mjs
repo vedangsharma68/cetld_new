@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import {AIProvider,DEFAULT_EXTRACTION_FALLBACK_MODEL,DEFAULT_EXTRACTION_MODEL,DEFAULT_FALLBACK_MODEL,DEFAULT_MODEL} from '../ai/provider.mjs';
 import {extractInvoice} from '../ai/extraction.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
+import {invoiceWire} from './invoice-wire-fixture.mjs';
 
 const WORKSPACE_ID='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const SAMPLE_PDF=Buffer.from('%PDF-1.7\n1 0 obj <<>> endobj\n%%EOF\n');
@@ -60,7 +61,7 @@ function jsonResponse(value,status=200){
   return new Response(JSON.stringify(value),{status,headers:{'content-type':'application/json'}});
 }
 
-function makeExtractionProvider({bytes=SAMPLE_PDF,primaryContent,primaryFinishReason='STOP',fallbackContent=JSON.stringify(SAMPLE_INVOICE),fallbackFinishReason='stop'}={}){
+function makeExtractionProvider({bytes=SAMPLE_PDF,primaryContent,primaryFinishReason='STOP',fallbackContent=JSON.stringify(invoiceWire(SAMPLE_INVOICE)),fallbackFinishReason='stop'}={}){
   const requests=[];
   const provider=new AIProvider({
     primaryModel:DEFAULT_EXTRACTION_MODEL,
@@ -100,7 +101,7 @@ function assertPdfTextReachedBothProviders(requests){
   }
 }
 
-async function extractWithPrimaryOutput(primaryContent,primaryFinishReason='STOP',fallbackContent=JSON.stringify(SAMPLE_INVOICE),bytes=SAMPLE_PDF){
+async function extractWithPrimaryOutput(primaryContent,primaryFinishReason='STOP',fallbackContent=JSON.stringify(invoiceWire(SAMPLE_INVOICE)),bytes=SAMPLE_PDF){
   const scenario=makeExtractionProvider({bytes,primaryContent,primaryFinishReason,fallbackContent});
   const result=await extractInvoice({provider:scenario.provider,bytes,mimeType:'application/pdf',fileName:'invoice-0-4.pdf',businessName:'Cetld'});
   return {...scenario,result};
@@ -123,7 +124,7 @@ test('malformed or truncated PDF JSON falls back once to the configured free mod
 });
 
 test('schema-invalid PDF extraction output falls back once and returns validated invoice fields',async()=>{
-  const invalid={...SAMPLE_INVOICE};
+  const invalid=invoiceWire(SAMPLE_INVOICE);
   delete invalid.lineItems;
   const {requests,result,bytes}=await extractWithPrimaryOutput(JSON.stringify(invalid));
 
@@ -159,7 +160,7 @@ test('Gemini image capability errors fail over once to OpenCode Zen with the exa
         if(String(url).includes('generativelanguage.googleapis.com')){
           return jsonResponse({error:{message:'private image capability detail'}},status);
         }
-        return jsonResponse({choices:[{message:{content:JSON.stringify(SAMPLE_INVOICE)},finish_reason:'stop'}]});
+          return jsonResponse({choices:[{message:{content:JSON.stringify(invoiceWire(SAMPLE_INVOICE))},finish_reason:'stop'}]});
       },
     });
     const result=await extractInvoice({provider,bytes,mimeType:'image/png',fileName:'invoice.png'});
@@ -192,7 +193,7 @@ function createExtractionHandler(){
     const payload=JSON.parse(init.body);
     requests.push({url:String(url),payload});
     if(String(url).includes('generativelanguage.googleapis.com'))return jsonResponse({candidates:[{content:{parts:[{text:'{"truncated":'}]},finishReason:'MAX_TOKENS'}]});
-    return jsonResponse({choices:[{message:{content:JSON.stringify(SAMPLE_INVOICE)},finish_reason:'stop'}]});
+    return jsonResponse({choices:[{message:{content:JSON.stringify(invoiceWire(SAMPLE_INVOICE))},finish_reason:'stop'}]});
   };
   const providerFactory=options=>new AIProvider({...options,...env,fetchImpl,maxAttempts:1});
   return {requests,handler:createAIHandler({env,fetchImpl,authorize:async()=>store,providerFactory})};

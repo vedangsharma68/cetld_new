@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractInvoice } from '../ai/extraction.mjs';
+import { adaptInvoiceExtractionWireResponse, extractInvoice, invoiceExtractionResponseSchema, validateInvoiceExtractionResponse, validateInvoiceExtractionWireResponse } from '../ai/extraction.mjs';
 
 const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
 const pdf = Buffer.from('%PDF-1.7\ninvoice');
@@ -28,12 +28,26 @@ function response(overrides = {}) {
   return { ...base, ...overrides };
 }
 
+function wireResponse(normalized) {
+  const wire = {};
+  for (const [name, field] of Object.entries(normalized)) {
+    if (name === 'lineItems') {
+      wire.lineItems = field.value;
+      wire.lineItemsConfidence = field.confidence;
+    } else if (field && typeof field === 'object' && Object.hasOwn(field, 'value')) {
+      wire[name] = field.value;
+      wire[`${name}Confidence`] = field.confidence;
+    } else wire[name] = field;
+  }
+  return wire;
+}
+
 function fakeProvider(data, inspect = () => {}) {
   return {
     async generateStructured(options) {
       inspect(options);
       // Emulate a provider that runs the supplied validator.
-      const sanitized = options.validate(data);
+      const sanitized = options.validate(wireResponse(data));
       return { data: sanitized, model: 'test/model', usedFallback: false };
     },
   };
@@ -51,6 +65,34 @@ test('extracts an invoice with per-field confidence and preserves INR values', a
   assert.equal(result.lineItems.value[0].description,'Consulting');
   assert.equal(result.reviewRequired, true);
   assert.deepEqual(result.uncertainFields, []);
+});
+
+test('uses a shallow provider wire contract and deterministically restores every strict field', () => {
+  const normalized = response();
+  const wire = wireResponse(normalized);
+  assert.equal(invoiceExtractionResponseSchema.properties.invoiceNumber.type, undefined);
+  assert.equal(invoiceExtractionResponseSchema.properties.invoiceNumber.anyOf.length, 2);
+  assert.equal(invoiceExtractionResponseSchema.properties.invoiceNumber.properties, undefined);
+  assert.deepEqual(adaptInvoiceExtractionWireResponse(wire), normalized);
+  assert.deepEqual(validateInvoiceExtractionWireResponse(wire), validateInvoiceExtractionResponse(normalized));
+  assert.throws(() => validateInvoiceExtractionWireResponse({...wire, injected: 'malicious'}), /unknown fields/);
+  assert.throws(() => validateInvoiceExtractionWireResponse({...wire, direction: 'incoming'}), /direction must be/);
+  assert.throws(() => validateInvoiceExtractionWireResponse({...wire, currency: 'USD', currencyConfidence: 2}), /confidence/);
+  assert.throws(() => validateInvoiceExtractionWireResponse({...wire, outstandingAmount: -1}), /non-negative/);
+});
+
+test('wire output preserves absent evidence as null and uncertain without dropping normalized fields', () => {
+  const absent = wireResponse(response({
+    invoiceNumber: {value: null, confidence: 0}, currency: {value: null, confidence: 0},
+    direction: {value: 'uncertain', confidence: 0}, outstandingAmount: {value: null, confidence: 0},
+  }));
+  const result = validateInvoiceExtractionWireResponse(absent);
+  assert.equal(result.invoiceNumber.value, null);
+  assert.equal(result.currency.value, null);
+  assert.equal(result.direction.value, 'uncertain');
+  assert.equal(result.outstandingAmount.value, null);
+  assert.equal(result.reviewRequired, true);
+  assert.deepEqual(Object.keys(result).sort(), [...Object.keys(response()), 'reviewRequired', 'uncertainFields', 'warnings'].sort());
 });
 
 test('accepts explicit USD and EUR currency codes', async () => {

@@ -2,14 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import sharp from 'sharp';
 import {classifyDiagnosticError,createGeminiDiagnostic,diagnosticFixture,diagnosticRequests,validDiagnosticFixture,validateDiagnosticPng} from '../ai/diagnostic.mjs';
-import {invoiceExtractionResponseSchema} from '../ai/extraction.mjs';
+import {INVOICE_EXTRACTION_MAX_TOKENS, invoiceExtractionPrompt, invoiceExtractionResponseSchema} from '../ai/extraction.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
 
 const USER='10000000-0000-4000-8000-000000000001', WORKSPACE='20000000-0000-4000-8000-000000000002';
 const response=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}});
 const generated=text=>response({candidates:[{content:{parts:[{text}]},finishReason:'STOP'}]});
-const nullable=(value=null)=>({value,confidence:value===null?0:1});
-function invoiceOutput(){return JSON.stringify({invoiceNumber:nullable(),customerName:nullable(),invoiceDate:nullable(),dueDate:nullable(),subtotal:nullable(),tax:nullable(),total:nullable(),outstandingAmount:nullable(),currency:nullable(),clientPhone:nullable(),clientEmail:nullable(),notes:nullable(),direction:nullable('uncertain'),lineItems:{value:[],confidence:0}})}
+function invoiceOutput(){return JSON.stringify({invoiceNumber:null,invoiceNumberConfidence:0,customerName:null,customerNameConfidence:0,invoiceDate:null,invoiceDateConfidence:0,dueDate:null,dueDateConfidence:0,subtotal:null,subtotalConfidence:0,tax:null,taxConfidence:0,total:null,totalConfidence:0,outstandingAmount:null,outstandingAmountConfidence:0,currency:null,currencyConfidence:0,clientPhone:null,clientPhoneConfidence:0,clientEmail:null,clientEmailConfidence:0,notes:null,notesConfidence:0,direction:'uncertain',directionConfidence:0,lineItems:[],lineItemsConfidence:0})}
 function crc32(bytes){let crc=0xffffffff;for(const byte of bytes){crc^=byte;for(let bit=0;bit<8;bit++)crc=(crc>>>1)^((crc&1)?0xedb88320:0)}return(crc^0xffffffff)>>>0}
 
 test('fixed PNG passes CRC/inflate validation and independently decodes as 192x96 RGB',async()=>{
@@ -43,7 +42,9 @@ test('every native Gemini request is bounded, ordered, and immutable in purpose'
   assert.deepEqual(requests.map(x=>x.name),['text','structured','image','invoice_schema']);
   assert.deepEqual(requests[2].payload.contents[0].parts[1],{inlineData:diagnosticFixture()});
   assert.equal(requests[3].payload.generationConfig.responseJsonSchema,invoiceExtractionResponseSchema);
-  assert.ok(requests.every(x=>x.payload.generationConfig.maxOutputTokens<=2048));
+  assert.equal(requests[3].payload.contents[0].parts[0].text,invoiceExtractionPrompt(''));
+  assert.equal(requests[3].payload.generationConfig.maxOutputTokens,INVOICE_EXTRACTION_MAX_TOKENS);
+  assert.ok(requests.every(x=>x.payload.generationConfig.maxOutputTokens<=INVOICE_EXTRACTION_MAX_TOKENS));
 });
 
 test('sequential probe succeeds without fallback and distinguishes local contract validation',async()=>{

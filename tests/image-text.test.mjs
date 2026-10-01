@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {invoiceWire} from './invoice-wire-fixture.mjs';
 import {readFile} from 'node:fs/promises';
 import {extractInvoiceFromImage, parseOfflineInvoiceText} from '../ai/image-text.mjs';
 import {extractInvoice} from '../ai/extraction.mjs';
@@ -141,7 +142,7 @@ test('OCR failure reaches vision extraction with all required invoice fields', a
   raw.lineItems = {value: [], confidence: .99};
   const result = await extractInvoice({bytes: tinyPng, mimeType: 'image/png', fileName: 'invoice.png', businessName: 'Seller',
     imageExtractor: async () => { throw Object.assign(new Error('wasm unavailable'), {code: 'ENOENT'}); },
-    provider: {generateStructured: async ({validate}) => { visionCalls++; return {data: validate(raw), model: 'vision', usedFallback: false}; }}});
+    provider: {generateStructured: async ({validate}) => { visionCalls++; return {data: validate(invoiceWire(raw)), model: 'vision', usedFallback: false}; }}});
   assert.equal(visionCalls, 1);
   assert.equal(result.invoiceNumber.value, 'INV-8');
   assert.equal(result.direction.value, 'receivable');
@@ -158,7 +159,7 @@ test('subtotal and total from real offline parsing do not short-circuit vision e
     provider: {generateStructured: async ({messages, validate}) => {
       visionCalls++;
       assert.equal(messages[0].content[1].type, 'image_url');
-      return {data: validate(raw), model: 'vision', usedFallback: false};
+      return {data: validate(invoiceWire(raw)), model: 'vision', usedFallback: false};
     }}});
   assert.equal(visionCalls, 1);
   assert.equal(result.invoiceNumber.value, 'INV-9');
