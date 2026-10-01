@@ -2,8 +2,8 @@
   "framework": null,
   "functions": {
     "api/ai.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 60},
-    "api/whatsapp.js": {"maxDuration": 60},
-    "api/whatsapp-process.js": {"maxDuration": 60}
+    "api/whatsapp.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 60},
+    "api/whatsapp-process.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 60}
   },
   "crons": [
     {"path": "/api/whatsapp-process", "schedule": "0 0 * * *"}

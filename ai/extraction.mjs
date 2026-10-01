@@ -289,7 +289,8 @@ function validateAndSanitize(raw, {verifiedPrintedAdjustments = false} = {}) {
 }
 
 /** Extract an invoice from trusted, already-downloaded bytes; this function never stores it. */
-export async function extractInvoice({ provider, bytes, mimeType, fileName, businessName }) {
+export async function extractInvoice({ provider, bytes, mimeType, fileName, businessName,
+  imageExtractor = extractInvoiceFromImage }) {
   if (!provider || typeof provider.generateStructured !== 'function') fail('provider.generateStructured is required');
   const source = detectFormat(bytes, mimeType);
   const pdfText = source.detected === 'application/pdf' ? await extractPdfText(source.bytes) : null;
@@ -300,7 +301,7 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
   }
   if (source.detected.startsWith('image/')) {
     try {
-      const review = await extractInvoiceFromImage({bytes: source.bytes, mimeType: source.detected});
+      const review = await imageExtractor({bytes: source.bytes, mimeType: source.detected});
       if (review.subtotal.value !== null && review.total.value !== null) {
         // The OCR draft contains only evidence for review. No raw OCR text needs
         // to leave the server; a user must confirm every uncertain field.

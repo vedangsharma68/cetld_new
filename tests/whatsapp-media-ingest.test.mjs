@@ -82,6 +82,7 @@ test('expired proposal is refused and consumed', async () => {
 
 test('bound media extracts and stores a proposal reply', async () => {
   const saved = [];
+  const providerOptions = [];
   const values = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-7',customerName:'Buyer Co',invoiceDate:'2026-09-30',dueDate:'2026-10-30',subtotal:100,tax:0,total:100,outstandingAmount:100,currency:'INR',direction:'receivable'})[name] ?? null, confidence: .99}]));
   const supabase = {from(table) { return {select() { return this; }, eq() { return this; }, async maybeSingle() {
@@ -89,10 +90,41 @@ test('bound media extracts and stores a proposal reply', async () => {
     if (table === 'workspace_settings') return {data: {business_name: 'Seller'}};
     throw new Error(table);
   }}; }};
-  const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory: () => ({}),
+  const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory: options => { providerOptions.push(options); return {}; },
     channelFactory: () => ({ask() { throw new Error('not used'); }}), pendingActionStoreFactory: () => ({storePendingAction: async row => saved.push(row)}),
     extract: async () => ({...values, lineItems: {value: [], confidence: .99}})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/jpeg', fileName: 'invoice.jpg'}});
   assert.match(answer, /INV-7.*Save it\? Reply yes/s);
   assert.equal(saved[0].source, 'whatsapp');
+  assert.equal(providerOptions[0].primaryModel, 'space-bunny-free', 'chat keeps the configured/default conversational model');
+  assert.equal(providerOptions[1].primaryModel, 'gemini-3.5-flash-lite', 'media uses the vision extraction model');
+});
+
+test('incomplete media returns bounded review guidance and stores no proposal', async () => {
+  let stored = 0;
+  const supabase = {from(table) { return {select() { return this; }, eq() { return this; }, async maybeSingle() {
+    if (table === 'workspace_ai_settings') return {data: {primary_model: 'space-bunny-free', fallback_model: null}};
+    if (table === 'workspace_settings') return {data: {business_name: 'Seller'}};
+    throw new Error(table);
+  }}; }};
+  const incomplete = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
+    .map(name => [name, {value: null, confidence: 0}]));
+  incomplete.direction = {value: 'uncertain', confidence: 0};
+  incomplete.lineItems = {value: [], confidence: 0};
+  const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory: () => ({}),
+    channelFactory: () => ({ask: async () => ({answer: 'text reply'})}),
+    pendingActionStoreFactory: () => ({storePendingAction: async () => { stored++; }}), extract: async () => incomplete});
+  const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([137,80,78,71,13,10,26,10,0]),
+    mimeType: 'image/png', fileName: 'unclear.png'}});
+  assert.match(answer, /clearer photo.*nothing was saved/i);
+  assert.equal(stored, 0);
+});
+
+test('Vercel traces OCR assets into both WhatsApp functions', async () => {
+  const config = JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../vercel.json', import.meta.url), 'utf8'));
+  for (const route of ['api/whatsapp.js', 'api/whatsapp-process.js']) {
+    assert.match(config.functions[route].includeFiles, /traineddata/);
+    assert.match(config.functions[route].includeFiles, /wasm/);
+    assert.equal(config.functions[route].maxDuration, 60);
+  }
 });
