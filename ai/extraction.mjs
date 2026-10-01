@@ -14,6 +14,7 @@ const FIELD_NAMES = [
 const SCALAR_FIELDS = FIELD_NAMES;
 const LINE_ITEM_FIELDS = ['description', 'quantity', 'unitPrice', 'amount', 'confidence'];
 const WIRE_SCALAR_FIELDS = FIELD_NAMES.flatMap(name => [name, `${name}Confidence`]);
+const OPTIONAL_WIRE_FIELDS = new Set(['currencySource', 'addressHint', 'paymentTerms'].flatMap(name => [name, `${name}Confidence`]));
 
 export const INVOICE_EXTRACTION_MAX_TOKENS = 8192;
 
@@ -27,7 +28,7 @@ const nullable = (type) => ({ anyOf: [{ type }, { type: 'null' }] });
 export const invoiceExtractionResponseSchema = {
   type: 'object',
   additionalProperties: false,
-  required: [...WIRE_SCALAR_FIELDS, 'lineItems', 'lineItemsConfidence'],
+  required: [...WIRE_SCALAR_FIELDS.filter(name => !OPTIONAL_WIRE_FIELDS.has(name)), 'lineItems', 'lineItemsConfidence'],
   properties: {
     invoiceNumber: nullable('string'), invoiceNumberConfidence: {type: 'number'},
     customerName: nullable('string'), customerNameConfidence: {type: 'number'},
@@ -42,6 +43,9 @@ export const invoiceExtractionResponseSchema = {
     clientEmail: nullable('string'), clientEmailConfidence: {type: 'number'},
     notes: nullable('string'), notesConfidence: {type: 'number'},
     direction: {type: 'string'}, directionConfidence: {type: 'number'},
+    currencySource: nullable('string'), currencySourceConfidence: {type: 'number'},
+    addressHint: nullable('string'), addressHintConfidence: {type: 'number'},
+    paymentTerms: nullable('string'), paymentTermsConfidence: {type: 'number'},
     lineItems: {type: 'array', items: {type: 'object', additionalProperties: false, required: LINE_ITEM_FIELDS, properties: {
       description: {type: 'string'}, quantity: nullable('number'), unitPrice: nullable('number'),
       amount: nullable('number'), confidence: {type: 'number'},
