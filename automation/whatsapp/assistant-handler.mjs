@@ -74,14 +74,13 @@ export function parseInvoiceCorrection(message, clock = () => new Date()) {
   const text = String(message || '').trim();
   let match;
   if (/\b(?:sql|run|execute|select|delete|drop|table|script)\b/i.test(text)) return null;
-  match = text.match(/\b(?:change|make|set|update|edit|modify|fix)\b(.*?)\b(?:amount|amt|amnt|total|price|value)\b\s*(?:to|=|as|is|:)?\s*([$₹€£])?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*([a-z]{3})?\b/i);
-  if (match) {
+  match = text.match(/\b(?:change|make|set|update|edit|modify|fix)\b(.*)\b([a-z]{3,8})\b\s*(?:to|=|as|is|:)?\s*([$₹€£])?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*([a-z]{3})?\b/i);
+  if (match && AMOUNT_WORDS.some(word => editDistance(match[2].toLowerCase(), word) <= (word.length >= 5 ? 2 : 0))) {
     const symbols = {'$': 'USD', '₹': 'INR', '€': 'EUR', '£': 'GBP'};
-    const code = match[4] ? match[4].toUpperCase() : (match[2] ? symbols[match[2]] : null);
+    const code = match[5] ? match[5].toUpperCase() : (match[3] ? symbols[match[3]] : null);
     const hint = invoiceHint(match[1]);
     if (hint && hint.split(' ').length > 5) return null;
-    const total = Number(match[3].replace(/,/g, ''));
-    return {changes: {total, ...(code ? {currency: code} : {})}, ...(hint ? {hint} : {})};
+    return {changes: {total: Number(match[4].replace(/,/g, '')), ...(code ? {currency: code} : {})}, ...(hint ? {hint} : {})};
   }
   if ((match = text.match(/\b(?:change|make|set)\s+(?:the\s+)?due\s+date\s+(?:to\s+)?(.+)$/i))) return {changes: {dueDate: parseDate(match[1], clock)}};
   if ((match = text.match(/\b(?:change|make|set)\s+(?:the\s+)?(?:invoice|issue)\s+date\s+(?:to\s+)?(.+)$/i))) return {changes: {invoiceDate: parseDate(match[1], clock)}};
@@ -92,6 +91,8 @@ export function parseInvoiceCorrection(message, clock = () => new Date()) {
   return null;
 }
 
+const ASK_NUMBER = /Which invoice number should I use\?$/;
+const AMOUNT_WORDS = ['amount', 'amt', 'total', 'price', 'value', 'amnt'];
 const HINT_STOP = new Set(['the','its','it','my','a','an','of','for','to','invoice','invoices','inovoice','invoce','invoic','bill','that','this','last','latest','recent','please','pls','one','from']);
 function hintTokens(text) {
   return String(text || '').toLowerCase().replace(/['’]s\b/g, '').split(/[^a-z0-9]+/).filter(t => t && !HINT_STOP.has(t));
@@ -114,7 +115,7 @@ export function matchInvoicesByHint(invoices, hint) {
   const wanted = hintTokens(hint);
   if (!wanted.length) return [];
   return invoices.filter(invoice => {
-    const name = hintTokens(`${invoice.clientName || ''} ${invoice.printedInvoiceNumber || ''}`);
+    const name = hintTokens(`${invoice.clientName || ''} ${invoice.printedInvoiceNumber || ''} ${invoice.metadata?.buyer_name || ''} ${invoice.metadata?.seller_name || ''}`);
     return wanted.every(token => name.some(part => part.startsWith(token) || token.startsWith(part) && part.length >= 4
       || editDistance(token, part) <= (token.length >= 6 ? 2 : token.length >= 4 ? 1 : 0)));
   });
@@ -300,20 +301,37 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       }
     }
     const current = await pending.loadInvoiceReview({workspaceId, customerId, phone});
-    const correction = parseInvoiceCorrection(message, clock);
+    let effective = message;
+    if (/^\s*INV-[A-Z0-9-]+\s*[.!]?\s*$/i.test(message)) {
+      try {
+        const turns = await readConversationHistory({supabase, workspaceId, phone});
+        const last = turns.at(-1);
+        if (last?.role === 'assistant' && ASK_NUMBER.test(last.content || '')) {
+          const original = [...turns].reverse().find(turn => turn.role === 'user' && parseInvoiceCorrection(turn.content, clock));
+          if (original) effective = `${original.content} ${message.trim().replace(/[.!]$/, '')}`;
+        }
+      } catch { /* fall through to normal routing */ }
+    }
+    const correction = parseInvoiceCorrection(effective, clock);
+    const askNumber = async reply => {
+      for (const [role, content] of [['user', message], ['assistant', reply]]) {
+        try { await writeConversationTurn({supabase, workspaceId, customerId, phone, role, content}); } catch { /* best effort */ }
+      }
+      return reply;
+    };
     if (correction || FILE_REQUEST.test(message)) {
       const store = await invoiceStoreFactory({supabase, workspaceId, customerId});
-      const explicitNumber = requestedInvoiceNumber(message);
+      const explicitNumber = requestedInvoiceNumber(effective);
       let candidates;
       if (explicitNumber) candidates = await store.findInvoices({invoiceNumber: explicitNumber});
       else if (correction?.hint) {
         candidates = matchInvoicesByHint(await store.findInvoices({limit: 50}), correction.hint);
-        if (!candidates.length) return `I couldn’t find an invoice for “${correction.hint}”. Which invoice number should I use?`;
+        if (!candidates.length) return askNumber(`I couldn’t find an invoice for “${correction.hint}”. Which invoice number should I use?`);
       }
       else if (current?.action?.stage === 'saved' && current.action.invoice?.id) candidates = [current.action.invoice];
       else candidates = await store.findInvoices();
       if (!candidates.length) return explicitNumber ? `I couldn't find invoice ${explicitNumber}.` : "I couldn't find a recent invoice to change.";
-      if (candidates.length > 1) return 'Which invoice number should I use?';
+      if (candidates.length > 1) return askNumber('Which invoice number should I use?');
       const target = candidates[0];
       if (FILE_REQUEST.test(message)) {
         const file = await store.latestInvoiceFile(target.id);
