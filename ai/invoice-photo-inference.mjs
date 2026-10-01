@@ -3,7 +3,7 @@ import {SUPPORTED_TWO_DECIMAL_CURRENCIES} from '../currency-contract.mjs';
 const supported = new Set(SUPPORTED_TWO_DECIMAL_CURRENCIES);
 const DOLLAR_CURRENCIES = new Set(['USD', 'CAD', 'AUD', 'SGD']);
 const COUNTRY_RULES = [
-  ['INR', /\b(?:india|indian|gstin?|pan)\b|\+91\b|\b[1-9]\d{5}\b/i, 'Indian details'],
+  ['INR', /\b(?:india|indian|gstin?)\b|\+91\b|\bPAN\s*[:#]?\s*[A-Z]{5}\d{4}[A-Z]\b|\bPIN(?:\s*code)?\s*[:#-]?\s*[1-9]\d{5}\b/i, 'Indian details'],
   ['USD', /\b(?:united states|usa|u\.s\.a\.?|u\.s\.)\b|\+1\b|\b(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\s+\d{5}(?:-\d{4})?\b/i, 'US address or phone details'],
   ['GBP', /\b(?:united kingdom|great britain|england|scotland|wales)\b|\+44\b/i, 'UK details'],
   ['AED', /\b(?:united arab emirates|uae|dubai|abu dhabi)\b|\+971\b/i, 'UAE details'],
