@@ -107,9 +107,9 @@ async function syncSavedInvoice({store, invoice, row, accounting}) {
   }
 }
 
-export async function saveAssistantInvoice({store, invoice: input, confirmed, idempotencyKey, accounting} = {}) {
+export async function saveAssistantInvoice({store, invoice: input, confirmed, idempotencyKey, accounting, allowMissingDueDate = false} = {}) {
   const invoice = validateAssistantInvoice(input);
-  if (invoice.missingDueDate) return {needsInput: true, question: 'What is the due date for this invoice?'};
+  if (invoice.missingDueDate && !allowMissingDueDate) return {needsInput: true, question: 'What is the due date for this invoice?'};
   if (confirmed !== true) throw new APIError(409, 'CONFIRMATION_REQUIRED');
   if (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{12,100}$/.test(idempotencyKey)) throw new APIError(400, 'INVALID_IDEMPOTENCY_KEY');
   invoice.idempotencyKey = idempotencyKey;

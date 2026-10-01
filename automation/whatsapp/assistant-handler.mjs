@@ -7,7 +7,10 @@ import {extractInvoice} from '../../ai/extraction.mjs';
 import {createWhatsAppPendingActionStore} from './pending-actions.mjs';
 import {createWhatsAppInvoiceStore} from './invoice-store.mjs';
 import {validateAssistantInvoice} from '../../ai/invoice-ops.mjs';
-import {isSupportedCurrency} from '../../currency-contract.mjs';
+import {saveAssistantInvoice} from '../../ai/invoice-ops.mjs';
+import {createHash} from 'node:crypto';
+import {CURRENCY_SUPPORT_MESSAGE, isSupportedCurrency} from '../../currency-contract.mjs';
+import {deriveInvoiceDueDate, inferInvoiceCurrency, todayInKolkata} from '../../ai/invoice-photo-inference.mjs';
 
 const requiredInvoiceFields = ['invoiceNumber','customerName','invoiceDate','dueDate','total','currency','direction'];
 const fieldLabels = {invoiceNumber: 'invoice number', customerName: 'customer name', invoiceDate: 'invoice date',
@@ -69,11 +72,26 @@ function proposalSummary(invoice) {
   return `🧾 *Invoice ready to save*\n• ${invoice.invoiceNumber} — ${invoice.clientName}\n• ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}\n${invoice.dueDate ? `• Due: ${invoice.dueDate}\n` : ''}\nSave it? Reply yes to confirm.`;
 }
 
+function money(currency, amount) {
+  return new Intl.NumberFormat('en-US', {style: 'currency', currency, minimumFractionDigits: 2,
+    maximumFractionDigits: 2}).format(amount);
+}
+
+function loggedSummary(invoice, {currencySource, dueDateSource, assumptions}) {
+  return [`Logged invoice ${invoice.invoiceNumber}.`, `Invoice number: ${invoice.invoiceNumber}`,
+    `Customer: ${invoice.clientName}`, `Total: ${money(invoice.currency, invoice.total)} ${invoice.currency}`,
+    `Invoice date: ${invoice.invoiceDate}`, `Due date: ${invoice.dueDate || 'not shown on the invoice'}`,
+    `Currency source: ${invoice.currency}, ${currencySource}`,
+    assumptions.length ? `Assumptions: ${assumptions.join('; ')}` : null,
+    "Reply with any corrections, like 'change the due date to 2026-08-19'."].filter(Boolean).join('\n');
+}
+
 /** Create an inbound assistant handler only after the webhook has verified Meta. */
 export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl = fetch, supabase,
   providerFactory = options => new AIProvider(options), channelFactory = createWhatsAppAssistantChannel,
   extract = extractInvoice, pendingActionStoreFactory = createWhatsAppPendingActionStore,
-  invoiceStoreFactory = createWhatsAppInvoiceStore, logger = console} = {}) {
+  invoiceStoreFactory = createWhatsAppInvoiceStore, saveInvoice = saveAssistantInvoice,
+  clock = () => new Date(), logger = console} = {}) {
   if (!supabase?.from) throw new TypeError('A server-side Supabase client is required');
 
   return async ({workspaceId, customerId, phone, message, media, mediaError, signal, deadlineAt}) => {
@@ -108,7 +126,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       if (token?.action?.stage === 'saving') return 'That invoice is already being saved. Please wait for it to finish before sending a replacement photo.';
       if (mediaError) return "I couldn't fetch that photo. The earlier invoice review was discarded; please resend the photo.";
       try {
-        const {data: workspace, error: workspaceError} = await supabase.from('workspace_settings').select('business_name')
+        const {data: workspace, error: workspaceError} = await supabase.from('workspace_settings').select('business_name,default_currency')
           .eq('workspace_id', workspaceId).maybeSingle();
         if (workspaceError) throw workspaceError;
         // Media extraction is deliberately independent of the workspace's chat
@@ -124,30 +142,71 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         const extracted = await extract({provider: extractionProvider, ...media,
           businessName: workspace?.business_name || '', signal, deadlineAt: extractionDeadlineAt, logger});
         active();
-        const draft = reviewDraft(extracted);
-        const invoice = invoiceProposal(extracted);
-        if (!invoice) {
-          const stored = await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone,
-            fromStage: 'extracting', action: draft});
-          if (!stored) return 'A newer photo replaced this review. Please continue with the newer photo.';
-          if (draft.missingFields.length === 1 && draft.missingFields[0] === 'currency') {
-            return 'I found the invoice details, but the currency is not shown clearly. Reply with the 3-letter currency code (for example USD or INR). I won’t save anything until I show the complete proposal and you reply yes.';
-          }
-          return `${clarification(extracted)} I can only continue from a photo reply when currency is the sole missing field; otherwise send one complete explicit invoice request or a clearer photo.`;
+        if (extracted?.direction?.value === 'payable' && extracted.direction.confidence >= 0.75) {
+          await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
+            action: {...reviewDraft(extracted), stage: 'canceled'}});
+          return 'This looks like a bill your business owes, so nothing was saved.';
         }
-        // Apply the same strict local validation used by Assistant saves before
-        // making any proposal confirmable.
+        if (!extracted?.customerName?.value || extracted.customerName.confidence < 0.75
+          || extracted?.total?.value == null || extracted.total.confidence < 0.75 || extracted.total.value <= 0) {
+          await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
+            action: {...reviewDraft(extracted), stage: 'failed'}});
+          return "I couldn't reliably read the customer name and total. Please send a clearer photo. Nothing was saved.";
+        }
+        const currencyResult = inferInvoiceCurrency(extracted, extracted?.rawText || '', workspace?.default_currency || 'INR');
+        if (currencyResult.unsupportedCurrency) {
+          await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
+            action: {...reviewDraft(extracted), stage: 'failed'}});
+          return `The invoice uses ${currencyResult.unsupportedCurrency}, which cannot be saved. ${CURRENCY_SUPPORT_MESSAGE} Nothing was saved.`;
+        }
+        const assumptions = [];
+        const invoiceDate = extracted?.invoiceDate?.value && extracted.invoiceDate.confidence >= 0.75
+          ? extracted.invoiceDate.value : todayInKolkata(clock());
+        if (invoiceDate !== extracted?.invoiceDate?.value) assumptions.push('invoice date was not shown, so today in Asia/Kolkata was used');
+        const due = deriveInvoiceDueDate(invoiceDate,
+          extracted?.dueDate?.confidence >= 0.75 ? extracted.dueDate.value : null,
+          extracted?.paymentTerms?.value || extracted?.notes?.value || '');
+        if (due.source.startsWith('derived')) assumptions.push(`due date ${due.source}`);
+        if (currencyResult.assumed) assumptions.push(currencyResult.source);
+        if (extracted?.direction?.value !== 'receivable' || extracted.direction.confidence < 0.75) {
+          assumptions.push('direction assumed to be an invoice you issued');
+        }
+        const invoice = {invoiceNumber: extracted?.invoiceNumber?.value || 'AUTO', clientName: extracted.customerName.value,
+          clientEmail: extracted?.clientEmail?.value ?? null, clientPhone: extracted?.clientPhone?.value ?? null,
+          invoiceDate, dueDate: due.dueDate, subtotal: extracted?.subtotal?.value ?? null,
+          tax: extracted?.tax?.value ?? null, total: extracted.total.value,
+          outstanding: extracted?.outstandingAmount?.value ?? extracted.total.value,
+          currency: currencyResult.currency, notes: extracted?.notes?.value ?? null, alreadyPaid: false,
+          direction: 'receivable', lineItems: extracted?.lineItems?.value || []};
         const validatedInvoice = approvedInvoice(invoice);
         active();
-        const stored = await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone,
-          fromStage: 'extracting', action: {type: 'invoice_review_draft', stage: 'proposal', invoice: validatedInvoice,
-            missingFields: [], currencySource: 'photo'}});
-        if (!stored) return 'A newer photo replaced this review. Please continue with the newer photo.';
-        return proposalSummary(validatedInvoice);
+        const action = {type: 'invoice_review_draft', stage: 'saving', invoice: validatedInvoice,
+          missingFields: [], currencySource: currencyResult.source, dueDateSource: due.source, assumptions};
+        const claimed = await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone,
+          fromStage: 'extracting', action});
+        if (!claimed) return 'A newer photo replaced this review. Nothing from this photo was saved.';
+        const key = `wa_invoice_${createHash('sha256').update(`${workspaceId}:${customerId}:${phone}:${token.id}`).digest('hex').slice(0, 32)}`;
+        try {
+          const saved = await saveInvoice({store: await invoiceStoreFactory({supabase, workspaceId, customerId}),
+            invoice: validatedInvoice, confirmed: true, idempotencyKey: key, accounting: null, allowMissingDueDate: true});
+          if (saved?.needsInput || !saved?.invoice) throw new TypeError('invoice save returned no invoice');
+          const savedInvoice = {...saved.invoice, clientName: saved.invoice.clientName || validatedInvoice.clientName};
+          const completed = await pending.transitionInvoiceReview({...claimed, workspaceId, customerId, phone,
+            fromStage: 'saving', action: {...action, stage: 'saved', invoice: savedInvoice}});
+          if (!completed) return 'The invoice was saved, but I could not finish its WhatsApp status update. Please check cetld before retrying.';
+          return loggedSummary(savedInvoice, {currencySource: currencyResult.source, dueDateSource: due.source, assumptions});
+        } catch (saveError) {
+          await pending.transitionInvoiceReview({...claimed, workspaceId, customerId, phone,
+            fromStage: 'saving', action: {...action, stage: 'failed'}}).catch(() => null);
+          logger?.error?.('WhatsApp invoice save failed', {workspaceId, code: String(saveError?.code || saveError?.name || 'SAVE_FAILED').slice(0, 80)});
+          return `The invoice was NOT saved because ${saveError?.code === 'UNSUPPORTED_CURRENCY' ? 'its currency is not supported' : 'cetld could not save it right now'}. Please send the photo again to retry.`;
+        }
       } catch (error) {
         logger?.error?.('WhatsApp invoice extraction failed', {workspaceId,
           message: String(error?.message || '').slice(0, 200)});
-        return "I couldn't extract a review from that image. The earlier review remains discarded. Please send a clearer photo or one complete explicit request with all invoice fields. Nothing was saved.";
+        await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
+          action: {type: 'invoice_review_draft', stage: 'failed'}}).catch(() => null);
+        return "I couldn't reliably read that invoice. Please send a clearer photo. Nothing was saved.";
       }
     }
     const current = await pending.loadInvoiceReview({workspaceId, customerId, phone});
