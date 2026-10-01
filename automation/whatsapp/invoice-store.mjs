@@ -41,10 +41,10 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId} =
           line_items: invoice.lineItems || []}}, {onConflict: 'workspace_id,invoice_number', ignoreDuplicates: true}).select('*');
       return rows(result)[0] || null;
     },
-    async findInvoices({invoiceNumber} = {}) {
+    async findInvoices({invoiceNumber, limit} = {}) {
       let query = scoped('invoices').select('*').eq('workspace_id', workspaceId);
       if (invoiceNumber) query = query.or(`invoice_number.eq.${invoiceNumber},metadata->>printed_invoice_number.eq.${invoiceNumber}`);
-      const result = await query.order('created_at', {ascending: false}).limit(invoiceNumber ? 10 : 2);
+      const result = await query.order('created_at', {ascending: false}).limit(invoiceNumber ? 10 : Math.min(Number(limit) || 2, 50));
       return rows(result).map(mappedInvoice);
     },
     async applyCorrection({invoiceId, changes, idempotencyKey, changedAt}) {
