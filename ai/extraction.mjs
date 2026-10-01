@@ -26,7 +26,7 @@ const FIELD_SCHEMA = {
 };
 const nullable = (type) => ({ anyOf: [{ type }, { type: 'null' }] });
 const nullableNonNegativeNumber = () => ({anyOf: [{type: 'number', minimum: 0}, {type: 'null'}]});
-const responseSchema = {
+export const invoiceExtractionResponseSchema = {
   type: 'object',
   additionalProperties: false,
   required: [...FIELD_NAMES, 'lineItems'],
@@ -161,7 +161,7 @@ function makeMessages({ bytes, mimeType, fileName, businessName, pdfText }) {
   };
 }
 
-function validateAndSanitize(raw, {verifiedPrintedAdjustments = false} = {}) {
+export function validateInvoiceExtractionResponse(raw, {verifiedPrintedAdjustments = false} = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('response must be an object');
   exactKeys(raw, [...FIELD_NAMES, 'lineItems'], 'response');
   const warnings = [];
@@ -302,7 +302,7 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
   if (pdfText) {
     const printed = parsePdfInvoiceText(pdfText, {businessName});
     console.info('Invoice PDF text parsed:', {characters: pdfText.length, deterministic: Boolean(printed)});
-    if (printed) return {...validateAndSanitize(printed, {verifiedPrintedAdjustments: true}), model: 'verified-pdf-text', usedFallback: false};
+    if (printed) return {...validateInvoiceExtractionResponse(printed, {verifiedPrintedAdjustments: true}), model: 'verified-pdf-text', usedFallback: false};
   }
   if (source.detected.startsWith('image/')) {
     try {
@@ -319,12 +319,12 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
   active();
   const payload = makeMessages({ bytes, mimeType, fileName, businessName, pdfText });
   let sanitized;
-  const validate = (data) => (sanitized = validateAndSanitize(data));
+  const validate = (data) => (sanitized = validateInvoiceExtractionResponse(data));
   let response;
   try {
     response = await provider.generateStructured({
       messages: payload.messages,
-      schema: responseSchema,
+      schema: invoiceExtractionResponseSchema,
       name: 'invoice_extraction',
       validate,
       maxTokens: 8192,
@@ -345,4 +345,4 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
   return result;
 }
 
-export const invoiceExtractionSchema = responseSchema;
+export const invoiceExtractionSchema = invoiceExtractionResponseSchema;

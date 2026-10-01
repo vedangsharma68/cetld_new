@@ -33,7 +33,7 @@ const brand=()=>'<div class="brand"><img src="/favicon.svg" alt="" width="38" he
 const button=(action,label,cls='',id='')=>`<button type="button" class="btn ${cls}" data-action="${action}" aria-label="${escape(action==='detail'?'View invoice':label.replace(/<[^>]*>/g,'').trim()||action)}" ${id?`data-id="${escape(id)}"`:''}>${label}</button>`;
 const tag=s=>`<span class="tag ${escape(s.toLowerCase().replaceAll(' ','-'))}">${escape(s)}</span>`;
 let oauthReturnPage=new URLSearchParams(location.search).get('page')?.toLowerCase()==='connections'?'Connections':null;
-const state={user:null,profile:profileFromUser(null),workspace:null,settings:null,customers:[],demo:false,invoices:[],payments:[],page:'Overview',search:'',filter:'All',loading:false,error:'',authMode:'login',recovery:false,conversationId:null,pendingFile:null,invoiceExtractionController:null,assistantInvoiceExtractionController:null,sidebarCollapsed:false,assistantMessages:[],assistantDraft:'',assistantStatus:'idle',assistantStatusLabel:'Preparing reply',assistantError:'',assistantInvoiceFile:null,assistantAttachment:null,assistantAttachmentUrl:'',assistantSyncInvoice:null,aiSettings:{primary_model:AI_MODELS[0][0],fallback_model:null},aiSettingsError:'',availableExtractionModels:[],accountingStatus:null,quickbooksStatus:null};
+const state={user:null,profile:profileFromUser(null),workspace:null,settings:null,customers:[],demo:false,invoices:[],payments:[],page:'Overview',search:'',filter:'All',loading:false,error:'',authMode:'login',recovery:false,conversationId:null,pendingFile:null,invoiceExtractionController:null,assistantInvoiceExtractionController:null,sidebarCollapsed:false,assistantMessages:[],assistantDraft:'',assistantStatus:'idle',assistantStatusLabel:'Preparing reply',assistantError:'',assistantInvoiceFile:null,assistantAttachment:null,assistantAttachmentUrl:'',assistantSyncInvoice:null,aiSettings:{primary_model:AI_MODELS[0][0],fallback_model:null},aiSettingsError:'',aiDiagnostic:null,availableExtractionModels:[],accountingStatus:null,quickbooksStatus:null};
 let db=null,authError='',toastTimer,loadEpoch=0;
 state.lastSuccessfulLoadAt=null;state.ledgerStaleMessage='';
 async function accessToken(){if(state.demo||!db)return null;const {data,error}=await db.auth.getSession();if(error)throw error;return data.session?.access_token||null}
@@ -312,10 +312,20 @@ settings=()=>{
   const content=originalSettings();
   const attested=state.settings?.whatsapp_owner_attested_at;
   const owner=state.demo||state.workspace?.owner_id===state.user?.id;
+  const aiAdministrator=owner||['owner','admin'].includes(state.aiSettings?.role);
+  const report=state.aiDiagnostic;
+  const diagnostic=aiAdministrator&&!state.demo?`<section class="panel" id="ai-diagnostic" aria-labelledby="ai-diagnostic-title"><div class="panel-head"><div><h2 id="ai-diagnostic-title">Gemini connection diagnostic</h2><p>Runs four fixed synthetic checks. It does not use or save invoices.</p></div></div><div class="panel-body"><button class="btn" type="button" data-action="ai-diagnostic">Run diagnostic</button><small class="settings-hint">Uses the server credential and fixed model only. No prompts, files, provider messages, or secrets are displayed.</small>${report?`<div class="diagnostic-report" role="status"><strong>${escape(report.model)}</strong><ul>${report.stages.map(item=>`<li>${escape(item.stage)} · ${escape(item.status)} · ${escape(item.category)}${Number.isInteger(item.httpStatus)?` · HTTP ${item.httpStatus}`:''}</li>`).join('')}</ul></div>`:''}</div></section>`:'';
   const attestation=`<section class="panel whatsapp-attestation" id="whatsapp" aria-labelledby="whatsapp-attestation-title"><div class="panel-head"><div><h2 id="whatsapp-attestation-title">WhatsApp client agreement</h2><p>Required before adding any client phone number.</p></div></div><div class="panel-body">${attested?`<p class="whatsapp-attestation-status">Confirmed on ${escape(new Date(attested).toLocaleString('en-IN'))} by the workspace owner.</p>`:owner?`<form id="whatsapp-attestation-form"><label class="whatsapp-attestation-check"><input type="checkbox" name="attest" required><span>I confirm my clients have agreed to receive invoice updates from my business on WhatsApp, and I will only add numbers where that is true.</span></label><p class="settings-hint">Each client's agreement must also be confirmed when you add their number. This owner confirmation alone does not make a number messageable.</p><div class="error hidden" data-error role="alert"></div><button class="btn primary" type="submit">Confirm agreement</button></form>`:'<p class="settings-hint">Ask the workspace owner to confirm this before adding client numbers.</p>'}</div></section>`;
-  return content.replace('<a href="#account">Account</a>', '<a href="#account">Account</a><a href="#whatsapp">WhatsApp</a>')
-    .replace(/<\/div><\/div>$/, `${attestation}</div></div>`);
+  return content.replace('<a href="#account">Account</a>', `<a href="#account">Account</a>${aiAdministrator&&!state.demo?'<a href="#ai-diagnostic">AI diagnostic</a>':''}<a href="#whatsapp">WhatsApp</a>`)
+    .replace(/<\/div><\/div>$/, `${diagnostic}${attestation}</div></div>`);
 };
+
+document.addEventListener('click',async event=>{
+  const buttonEl=event.target.closest('button[data-action="ai-diagnostic"]');if(!buttonEl)return;
+  buttonEl.disabled=true;buttonEl.textContent='Running fixed checks…';
+  try{state.aiDiagnostic=await aiRequest('diagnostic',{timeoutMs:47000,body:{workspaceId:state.workspace.id}});render();toast('Gemini diagnostic finished. No production root cause is claimed until this report is reviewed.');}
+  catch(error){toast(error?.message||'Diagnostic unavailable.');buttonEl.disabled=false;buttonEl.textContent='Run diagnostic';}
+});
 
 document.addEventListener('submit',async event=>{
   if(event.target.id!=='whatsapp-attestation-form')return;

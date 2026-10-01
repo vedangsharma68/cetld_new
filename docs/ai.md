@@ -1,6 +1,6 @@
 # AI backend contract
 
-Server-only entry point: `/api/ai?action=settings|extract|assistant`. All calls
+Server-only entry point: `/api/ai?action=settings|diagnostic|extract|assistant`. All calls
 require `Authorization: Bearer <Supabase access token>`. Server validates the
 user through Supabase Auth and checks `workspace_members`; every data query uses
 the user's token, RLS, and an explicit workspace filter. No service-role key.
@@ -11,6 +11,28 @@ Server environment: `GEMINI_API_KEY`, `OPENCODE_ZEN_API_KEY`, `SUPABASE_URL`,
 `SUPABASE_PUBLISHABLE_KEY`. Never prefix the AI key with a public/client variable
 prefix or put it in a database, URL, request from a browser, or source file.
 Rotate any key previously shared in chat before configuring hosting secrets.
+
+## Fixed Gemini diagnostic
+
+Workspace owners and admins may explicitly run the Settings diagnostic. The
+server sends four sequential, fixed requests to `gemini-3.5-flash-lite`: tiny
+text, a bundled readable PNG, a small structured response, and the current
+exported invoice extraction schema with that PNG. It never uses workspace
+invoices, accepts no prompt/file/model/URL input, invokes no fallback provider,
+and performs no writes or outbound messaging. Reports contain only the model,
+stage/status, HTTP status, finite categories, recognized Google ErrorInfo
+metadata, and allowlisted field paths; provider messages and bodies are
+discarded.
+
+The probe has a 45-second total budget, bounded response reads, cancellation,
+and a per-user server cooldown. A successful HTTP response with an invoice
+payload that fails local validation is reported separately as
+`contract_invalid`; it is not treated as an HTTP rejection.
+
+Unit tests use mocked provider contracts and the bundled fixture. They do not
+contact Google, so this change does **not** identify the production HTTP 400
+root cause. An authorized owner/admin must run the deployed probe and review
+its finite report before drawing that conclusion.
 
 Apply the AI settings migrations, including
 `supabase/migrations/20260928110000_zen_primary_gemini_fallback.sql`, to
