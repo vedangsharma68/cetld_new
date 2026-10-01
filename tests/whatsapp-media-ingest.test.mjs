@@ -125,7 +125,7 @@ test('production extraction advances an incomplete OCR draft to vision and propo
   assert.match(answer, /INV-10.*Save it\? Reply yes/s);
 });
 
-test('incomplete media returns bounded review guidance and stores no proposal', async () => {
+test('incomplete media returns bounded review guidance and stores a continuation draft', async () => {
   let stored = 0, visionCalls = 0;
   const supabase = {from(table) { return {select() { return this; }, eq() { return this; }, async maybeSingle() {
     if (table === 'workspace_ai_settings') return {data: {primary_model: 'space-bunny-free', fallback_model: null}};
@@ -149,7 +149,83 @@ test('incomplete media returns bounded review guidance and stores no proposal', 
     mimeType: 'image/png', fileName: 'unclear.png'}});
   assert.match(answer, /invoice number.*explicit currency code.*business issued.*explicitly confirm/i);
   assert.equal(visionCalls, 1);
-  assert.equal(stored, 0);
+  assert.equal(stored, 1);
+});
+
+test('real bound handler continues a currency-only photo draft before planner and requires a later yes', async () => {
+  let row = null, nextId = 1, asks = 0, saves = 0;
+  const pending = {
+    async storePendingAction(input) { row = {id: nextId++, ...input, created_at: new Date().toISOString()}; },
+    async loadPendingAction(input) {
+      return row && row.workspaceId === input.workspaceId && row.customerId === input.customerId && row.phone === input.phone ? row : null;
+    },
+    async consumePendingAction(input) { if (row?.id === input.id) row = null; },
+  };
+  const supabase = {rpc() {}, from(table) {
+    const query = {select() { return query; }, eq() { return query; },
+      async maybeSingle() {
+        if (table === 'workspace_ai_settings') return {data: {primary_model: 'space-bunny-free', fallback_model: null}};
+        if (table === 'workspace_settings') return {data: {business_name: 'Seller', whatsapp_owner_attested_at: '2026-09-30T00:00:00Z'}};
+        if (table === 'whatsapp_global_suppressions' || table === 'whatsapp_suppressions') return {data: null};
+        if (table === 'whatsapp_consents') return {data: {source: 'verbal', revoked_at: null, categories: ['invoice_updates'], customer_id: scope.customerId}};
+        if (table === 'customers') return {data: {id: scope.customerId}};
+        throw new Error(table);
+      }};
+    return query;
+  }};
+  const values = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
+    .map(name => [name, {value: ({invoiceNumber:'INV-15',customerName:'Buyer Co',invoiceDate:'2026-09-30',dueDate:'2026-10-30',subtotal:100,tax:0,total:100,outstandingAmount:100,direction:'receivable'})[name] ?? null, confidence: name === 'currency' ? 0 : .99}]));
+  const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory: () => ({}),
+    pendingActionStoreFactory: () => pending,
+    extract: async () => ({...values, lineItems: {value: [{description:'Service',quantity:1,unitPrice:100,amount:100,confidence:.99}], confidence:.99}}),
+    channelFactory: ({loadPendingAction, consumePendingAction}) => ({async ask(input) {
+      asks++;
+      const proposal = await loadPendingAction(input);
+      assert.equal(proposal.action.type, 'create_invoice');
+      if (/^yes$/i.test(input.message)) { saves++; await consumePendingAction({...input, id: proposal.id}); return {answer: 'saved once'}; }
+      return {answer: 'planner'};
+    }}), logger: {info() {}, error() {}}});
+
+  const first = await handler({...scope, message: '', messageId: 'wamid.photo', media: {bytes: Buffer.from([1]), mimeType: 'image/jpeg'}});
+  assert.match(first, /explicit currency code/i);
+  assert.equal(row.action.type, 'invoice_review_draft');
+  assert.equal(row.action.fields.invoiceNumber.value, 'INV-15');
+  assert.equal(row.action.origin.messageId, 'wamid.photo');
+
+  const proposal = await handler({...scope, message: 'usd', messageId: 'wamid.usd'});
+  assert.match(proposal, /INV-15.*USD \(provided by you\) 100.*Reply yes/s);
+  assert.equal(row.action.type, 'create_invoice');
+  assert.equal(asks, 0, 'currency clarification must not reach the planner or save');
+  assert.equal(saves, 0);
+
+  assert.equal(await handler({...scope, message: 'yes', messageId: 'wamid.yes'}), 'saved once');
+  assert.equal(saves, 1);
+  assert.equal(row, null);
+});
+
+test('incomplete draft rejects bare yes and owner claims without a planner or save', async () => {
+  let asks = 0, row;
+  const pending = {async storePendingAction(input) { row = {id: 1, ...input, created_at: new Date().toISOString()}; },
+    async loadPendingAction() { return row; }, async consumePendingAction() { row = null; }};
+  const supabase = {rpc() {}, from(table) { const query = {select() { return query; }, eq() { return query; }, async maybeSingle() {
+    if (table === 'workspace_ai_settings') return {data: {primary_model: 'space-bunny-free'}};
+    if (table === 'workspace_settings') return {data: {business_name: 'Seller', whatsapp_owner_attested_at: '2026-09-30T00:00:00Z'}};
+    if (table === 'whatsapp_global_suppressions' || table === 'whatsapp_suppressions') return {data: null};
+    if (table === 'whatsapp_consents') return {data: {source:'verbal', revoked_at:null, categories:['invoice_updates'], customer_id:scope.customerId}};
+    if (table === 'customers') return {data:{id:scope.customerId}};
+    throw new Error(table);
+  }}; return query; }};
+  const incomplete = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
+    .map(name => [name, {value: null, confidence: 0}]));
+  incomplete.direction = {value:'uncertain',confidence:0};
+  const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory:()=>({}), pendingActionStoreFactory:()=>pending,
+    extract:async()=>({...incomplete,lineItems:{value:[],confidence:0}}),
+    channelFactory:()=>({async ask(){asks++;return{answer:'balances'};}}), logger:{info(){},error(){}}});
+  await handler({...scope,message:'',media:{bytes:Buffer.from([1]),mimeType:'image/jpeg'}});
+  assert.match(await handler({...scope,message:'yes'}), /cannot save an incomplete review/i);
+  assert.match(await handler({...scope,message:"I'm the business owner"}), /does not grant owner access/i);
+  assert.equal(asks, 0);
+  assert.equal(row.action.type, 'invoice_review_draft');
 });
 
 test('Vercel traces OCR assets into both WhatsApp functions', async () => {

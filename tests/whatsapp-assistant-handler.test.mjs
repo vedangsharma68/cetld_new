@@ -16,7 +16,8 @@ function fakeSupabase({customerId = 'customer-a', turns = [], memoryError = null
         delete() { return query; }, in() { return Promise.resolve({error: null}); }};
       return query;
     }
-    const query = {select() { return query; }, eq() { return query; },
+    const query = {select() { return query; }, eq() { return query; }, is() { return query; },
+      order() { return query; }, limit() { return query; },
       async maybeSingle() {
         if (table === 'workspace_ai_settings') return {data: {primary_model: 'gemini-3.5-flash', fallback_model: null}};
         if (table === 'whatsapp_global_suppressions') return {data: null};
@@ -24,6 +25,7 @@ function fakeSupabase({customerId = 'customer-a', turns = [], memoryError = null
         if (table === 'whatsapp_suppressions') return {data: null};
         if (table === 'whatsapp_consents') return {data: {source: 'verbal', revoked_at: null, categories: ['invoice_updates'], customer_id: customerId}};
         if (table === 'customers') return {data: {id: customerId}};
+        if (table === 'whatsapp_pending_actions') return {data: null};
         throw new Error(`Unexpected table ${table}`);
       }};
     return query;

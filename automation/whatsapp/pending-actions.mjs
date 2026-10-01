@@ -9,8 +9,16 @@ export function createWhatsAppPendingActionStore({supabase, clock = () => new Da
     async storePendingAction({workspaceId, customerId, phone, action, source}) {
       data(await supabase.from('whatsapp_pending_actions').update({consumed_at: clock().toISOString()})
         .eq('workspace_id', workspaceId).eq('customer_id', customerId).eq('phone', phone).is('consumed_at', null), 'replace');
-      data(await supabase.from('whatsapp_pending_actions').insert({workspace_id: workspaceId,
-        customer_id: customerId, phone, action, source}), 'store');
+      const row = {workspace_id: workspaceId, customer_id: customerId, phone, action, source};
+      const inserted = await supabase.from('whatsapp_pending_actions').insert(row);
+      if (inserted?.error?.code === '23505') {
+        // A concurrent replacement may have filled the partial unique slot
+        // after our consume. Update that one active row rather than creating a
+        // duplicate or failing a replayed continuation.
+        data(await supabase.from('whatsapp_pending_actions').update({action, source})
+          .eq('workspace_id', workspaceId).eq('customer_id', customerId).eq('phone', phone)
+          .is('consumed_at', null), 'concurrent replace');
+      } else data(inserted, 'store');
     },
     async loadPendingAction({workspaceId, customerId, phone}) {
       return data(await supabase.from('whatsapp_pending_actions').select('id,workspace_id,customer_id,phone,action,created_at')
