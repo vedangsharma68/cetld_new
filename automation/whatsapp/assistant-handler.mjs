@@ -283,9 +283,16 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       if (correction.changes.total != null && !(correction.changes.total > 0)) return 'I can’t change the amount because an invoice total must be positive.';
       if (correction.changes.currency && !isSupportedCurrency(correction.changes.currency)) return `I can’t change the currency to ${correction.changes.currency}. ${CURRENCY_SUPPORT_MESSAGE}`;
       if (Object.values(correction.changes).some(value => value === null || value === '')) return 'I can’t apply that change because the new value is invalid.';
-      const result = await store.applyCorrection({invoiceId: target.id, changes: correction.changes,
-        idempotencyKey: `wa_correction_${messageId || createHash('sha256').update(`${phone}:${message}`).digest('hex')}`,
-        changedAt: clock().toISOString()});
+      let result;
+      try {
+        result = await store.applyCorrection({invoiceId: target.id, changes: correction.changes,
+          idempotencyKey: `wa_correction_${messageId || createHash('sha256').update(`${phone}:${message}`).digest('hex')}`,
+          changedAt: clock().toISOString()});
+      } catch (error) {
+        console.error('WhatsApp invoice correction failed', error?.message || error);
+        return 'I couldn’t safely apply that invoice change. Nothing was changed, please try again.';
+      }
+      if (result.reason === 'use_dashboard_for_payment') return 'Payments are recorded in the cetld dashboard, so I can’t mark this paid from WhatsApp.';
       if (result.reason === 'settled') return 'I can’t edit this invoice because it is already paid or settled.';
       if (result.reason === 'payments_exceed_total') return 'I can’t lower the total below payments already recorded on this invoice.';
       if (result.reason) return 'I couldn’t safely apply that invoice change.';
