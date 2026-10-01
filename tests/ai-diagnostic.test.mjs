@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {classifyDiagnosticError,createGeminiDiagnostic,diagnosticFixture,diagnosticRequests,validDiagnosticFixture} from '../ai/diagnostic.mjs';
+import sharp from 'sharp';
+import {classifyDiagnosticError,createGeminiDiagnostic,diagnosticFixture,diagnosticRequests,validDiagnosticFixture,validateDiagnosticPng} from '../ai/diagnostic.mjs';
 import {invoiceExtractionResponseSchema} from '../ai/extraction.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
 
@@ -9,27 +10,66 @@ const response=(body,status=200)=>new Response(JSON.stringify(body),{status,head
 const generated=text=>response({candidates:[{content:{parts:[{text}]},finishReason:'STOP'}]});
 const nullable=(value=null)=>({value,confidence:value===null?0:1});
 function invoiceOutput(){return JSON.stringify({invoiceNumber:nullable(),customerName:nullable(),invoiceDate:nullable(),dueDate:nullable(),subtotal:nullable(),tax:nullable(),total:nullable(),outstandingAmount:nullable(),currency:nullable(),clientPhone:nullable(),clientEmail:nullable(),notes:nullable(),direction:nullable('uncertain'),lineItems:{value:[],confidence:0}})}
+function crc32(bytes){let crc=0xffffffff;for(const byte of bytes){crc^=byte;for(let bit=0;bit<8;bit++)crc=(crc>>>1)^((crc&1)?0xedb88320:0)}return(crc^0xffffffff)>>>0}
 
-test('fixed PNG is valid and every native Gemini request is bounded and immutable in purpose',()=>{
+test('fixed PNG passes CRC/inflate validation and independently decodes as 192x96 RGB',async()=>{
   assert.equal(validDiagnosticFixture(),true);
   assert.deepEqual(Object.keys(diagnosticFixture()).sort(),['data','mimeType']);
   assert.equal(diagnosticFixture().mimeType,'image/png');
+  const bytes=Buffer.from(diagnosticFixture().data,'base64');
+  const {data,info}=await sharp(bytes).raw().toBuffer({resolveWithObject:true});
+  assert.deepEqual({width:info.width,height:info.height,channels:info.channels},{width:192,height:96,channels:3});
+  assert.equal(data.length,192*96*3);
+});
+
+test('PNG validation rejects a corrupt IDAT despite a valid signature and IEND',()=>{
+  const corrupt=Buffer.from(diagnosticFixture().data,'base64');
+  let offset=8;
+  while (corrupt.subarray(offset+4,offset+8).toString('ascii')!=='IDAT') offset+=12+corrupt.readUInt32BE(offset);
+  corrupt[offset+8]^=1;
+  assert.equal(corrupt.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])),true);
+  assert.equal(corrupt.subarray(-8,-4).toString('ascii'),'IEND');
+  assert.equal(validateDiagnosticPng(corrupt),false);
+
+  const badStream=Buffer.from(diagnosticFixture().data,'base64');
+  const length=badStream.readUInt32BE(offset);
+  badStream[offset+8+length-1]^=1;
+  badStream.writeUInt32BE(crc32(badStream.subarray(offset+4,offset+8+length)),offset+8+length);
+  assert.equal(validateDiagnosticPng(badStream),false);
+});
+
+test('every native Gemini request is bounded, ordered, and immutable in purpose',()=>{
   const requests=diagnosticRequests();
-  assert.deepEqual(requests.map(x=>x.name),['text','image','structured','invoice_schema']);
-  assert.deepEqual(requests[1].payload.contents[0].parts[1],{inlineData:diagnosticFixture()});
+  assert.deepEqual(requests.map(x=>x.name),['text','structured','image','invoice_schema']);
+  assert.deepEqual(requests[2].payload.contents[0].parts[1],{inlineData:diagnosticFixture()});
   assert.equal(requests[3].payload.generationConfig.responseJsonSchema,invoiceExtractionResponseSchema);
   assert.ok(requests.every(x=>x.payload.generationConfig.maxOutputTokens<=2048));
 });
 
 test('sequential probe succeeds without fallback and distinguishes local contract validation',async()=>{
   let active=0,maxActive=0,calls=0;
-  const run=createGeminiDiagnostic({fetchImpl:async(url,init)=>{active++;maxActive=Math.max(maxActive,active);calls++;assert.match(url,/gemini-3\.5-flash-lite:generateContent$/);assert.ok(init.headers['x-goog-api-key']);assert.doesNotMatch(url,/key=/);assert.equal(init.redirect,'error');active--;return generated(calls===4?invoiceOutput():'OK')}});
+  const run=createGeminiDiagnostic({fetchImpl:async(url,init)=>{active++;maxActive=Math.max(maxActive,active);calls++;assert.match(url,/gemini-3\.5-flash-lite:generateContent$/);assert.ok(init.headers['x-goog-api-key']);assert.doesNotMatch(url,/key=/);assert.equal(init.redirect,'error');active--;return generated(calls===2?'{"answer":"OK"}':calls===4?invoiceOutput():'OK')}});
   const result=await run({userId:USER,role:'owner',apiKey:'server-secret'});
   assert.equal(maxActive,1);assert.deepEqual(result.stages.map(x=>x.status),['success','success','success','success']);
   const invalid=createGeminiDiagnostic({fetchImpl:async()=>generated('{}')});
   const invalidResult=await invalid({userId:USER,role:'admin',apiKey:'key'});
   assert.equal(invalidResult.stages.at(-1).status,'contract_invalid');
   assert.equal(invalidResult.stages.at(-1).httpStatus,200);
+});
+
+test('an image 400 cannot hide a successful simple schema result or prevent the invoice probe',async()=>{
+  let calls=0;
+  const run=createGeminiDiagnostic({fetchImpl:async()=>{
+    calls++;
+    if (calls===2) return generated('{"answer":"OK"}');
+    if (calls===3) return response({error:{status:'INVALID_ARGUMENT',message:'unclassified image rejection'}},400);
+    return generated(calls===4?invoiceOutput():'OK');
+  }});
+  const result=await run({userId:USER,role:'owner',apiKey:'key'});
+  assert.equal(calls,4);
+  assert.deepEqual(result.stages.map(x=>[x.stage,x.status,x.httpStatus]),[
+    ['text','success',200],['structured','success',200],['image','http_rejected',400],['invoice_schema','success',200],
+  ]);
 });
 
 test('HTTP failure report is finite-only despite adversarial provider text',async()=>{
