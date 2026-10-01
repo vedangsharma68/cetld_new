@@ -169,6 +169,8 @@ test('pre-save PDF upload flows through centralized structured provider and vali
   raw.direction={value:'uncertain',confidence:0};
   raw.lineItems={value:[],confidence:0};
   raw.currency={value:'USD',confidence:0.9};raw.total={value:0.29,confidence:0.9};
+  const wire={lineItems:raw.lineItems.value,lineItemsConfidence:raw.lineItems.confidence};
+  for(const [name,field] of Object.entries(raw)) if(name!=='lineItems'){wire[name]=field.value;wire[`${name}Confidence`]=field.confidence}
   let completions=0;
   const fetchImpl=async(url,init)=>{
     const payload=JSON.parse(init.body);completions++;
@@ -176,7 +178,7 @@ test('pre-save PDF upload flows through centralized structured provider and vali
     assert.equal(payload.generationConfig.responseMimeType,'application/json');
     assert.equal(payload.plugins,undefined);
     assert.equal(payload.contents[0].parts[1].inlineData.mimeType,'application/pdf');
-    return json({candidates:[{content:{parts:[{text:JSON.stringify(raw)}]},finishReason:'STOP'}]});
+    return json({candidates:[{content:{parts:[{text:JSON.stringify(wire)}]},finishReason:'STOP'}]});
   };
   const handler=createAIHandler({authorize:async()=>({getSettings:async()=>({primary_model:DEFAULT_MODEL,fallback_model:null})}),env:{GEMINI_API_KEY:'gemini-test-key',OPENROUTER_API_KEY:'router-test-key'},providerFactory:o=>new AIProvider({...o,geminiApiKey:'gemini-test-key',openRouterApiKey:'router-test-key',fetchImpl})});
   const req={method:'POST',query:{action:'extract'},body:{workspaceId:A,file:{base64:Buffer.from('%PDF-1.7\n').toString('base64'),mimeType:'application/pdf',fileName:'invoice.pdf'}}};

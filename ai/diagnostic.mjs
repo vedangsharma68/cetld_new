@@ -1,4 +1,4 @@
-import {invoiceExtractionResponseSchema, validateInvoiceExtractionResponse} from './extraction.mjs';
+import {INVOICE_EXTRACTION_MAX_TOKENS, invoiceExtractionPrompt, invoiceExtractionResponseSchema, validateInvoiceExtractionWireResponse} from './extraction.mjs';
 import {inflateSync} from 'node:zlib';
 
 export const DIAGNOSTIC_MODEL = 'gemini-3.5-flash-lite';
@@ -65,7 +65,7 @@ export function diagnosticRequests() {
     {name:'text', payload:request([{text:'Reply with exactly OK.'}],null,8)},
     {name:'structured', payload:request([{text:'Return the fixed answer OK.'}],SIMPLE_SCHEMA,32)},
     {name:'image', payload:request([{text:'Read the image and reply with exactly OK.'},image],null,16)},
-    {name:'invoice_schema', payload:request([{text:'Extract only facts visibly printed in this synthetic image. Return null for absent invoice fields.'},image],invoiceExtractionResponseSchema,2048)},
+    {name:'invoice_schema', payload:request([{text:invoiceExtractionPrompt('')},image],invoiceExtractionResponseSchema,INVOICE_EXTRACTION_MAX_TOKENS)},
   ];
 }
 
@@ -141,7 +141,7 @@ export function createGeminiDiagnostic({fetchImpl=globalThis.fetch, now=Date.now
           } catch { stages.push({stage:spec.name,status:'contract_invalid',category:'response_contract_invalid',httpStatus:response.status}); continue; }
         }
         if (spec.name==='invoice_schema') {
-          try { validateInvoiceExtractionResponse(JSON.parse(text)); }
+          try { validateInvoiceExtractionWireResponse(JSON.parse(text)); }
           catch { stages.push({stage:spec.name,status:'contract_invalid',category:'response_contract_invalid',httpStatus:response.status}); continue; }
         }
         stages.push({stage:spec.name,status:'success',category:'none',httpStatus:response.status});
