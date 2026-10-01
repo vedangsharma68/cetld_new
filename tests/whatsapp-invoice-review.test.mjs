@@ -48,6 +48,55 @@ function invoiceSupabase() {
   return {from: query, rows};
 }
 
+function combinedSupabase() {
+  let review = null;
+  const invoices = [];
+  const customer = {id: scope.customerId, workspace_id: scope.workspaceId, phone: scope.phone, name: 'Buyer'};
+  const clone = value => value == null ? value : structuredClone(value);
+  const rpc = async (name, args) => {
+    if (name === 'whatsapp_begin_invoice_review') {
+      review = {id: (review?.id || 40) + 1, version: 1, generation: (review?.generation || 0) + 1,
+        action: {type: 'invoice_review_draft', stage: 'extracting'}, created_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 900_000).toISOString()};
+      return {data: [clone(review)], error: null};
+    }
+    if (name === 'whatsapp_load_invoice_review') return {data: review ? [clone(review)] : [], error: null};
+    if (name === 'whatsapp_transition_invoice_review') {
+      if (!review || review.id !== args.p_id || review.version !== args.p_version
+        || review.action.stage !== args.p_from_stage || args.p_workspace_id !== scope.workspaceId
+        || args.p_customer_id !== scope.customerId || args.p_phone !== scope.phone) return {data: [], error: null};
+      review = {...review, version: review.version + 1, action: clone(args.p_action)};
+      return {data: [clone(review)], error: null};
+    }
+    throw new Error(`unexpected RPC ${name}`);
+  };
+  function from(table) {
+    let operation = 'select', payload;
+    const q = {select() { return q; }, eq() { return q; }, is() { return q; }, order() { return q; }, range() { return q; },
+      in() { return q; }, delete() { operation = 'delete'; return q; }, insert(value) { operation = 'insert'; payload = value; return q; },
+      update(value) { operation = 'update'; payload = value; return q; }, upsert(value) { operation = 'upsert'; payload = value; return q; },
+      limit() { return q; }, async maybeSingle() {
+        if (table === 'workspace_ai_settings') return {data: {primary_model: 'provider-neutral-chat', fallback_model: null}, error: null};
+        if (table === 'workspace_settings') return {data: {business_name: 'Seller', whatsapp_owner_attested_at: '2026-10-01T00:00:00Z'}, error: null};
+        if (table === 'whatsapp_global_suppressions' || table === 'whatsapp_suppressions') return {data: null, error: null};
+        if (table === 'whatsapp_consents') return {data: {source: 'verbal', revoked_at: null, categories: ['invoice_updates'], customer_id: scope.customerId}, error: null};
+        if (table === 'customers') return {data: customer, error: null};
+        return {data: null, error: null};
+      }, async single() { Object.assign(invoices[0], payload); return {data: clone(invoices[0]), error: null}; },
+      then(resolve) {
+        if (table === 'invoices' && operation === 'upsert') {
+          if (!invoices.length) invoices.push({id: '33333333-3333-4333-8333-333333333333', ...clone(payload), amount_paid: '0', status: 'draft'});
+          return resolve({data: [clone(invoices[0])], error: null});
+        }
+        if (table === 'invoices') return resolve({data: clone(invoices), error: null});
+        if (table === 'customers') return resolve({data: [clone(customer)], error: null});
+        return resolve({data: [], error: null});
+      }};
+    return q;
+  }
+  return {rpc, from, invoices, get review() { return review; }};
+}
+
 test('real WhatsApp channel and invoice save path claim concurrent YES once and make replay idempotent', async () => {
   const state = durableReview({type: 'invoice_review_draft', stage: 'proposal', invoice,
     missingFields: [], currencySource: 'user'});
@@ -125,6 +174,41 @@ test('currency-only photo continuation proposes before the planner and repeated 
   assert.equal(planner, 0); assert.equal(saves, 0);
 });
 
+test('default handler, real channel and real invoice store complete photo currency confirmation exactly once', async () => {
+  const db = combinedSupabase();
+  const fields = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
+    .map(name => [name, {value: ({invoiceNumber:'INV-50',customerName:'Buyer',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:0,total:100,outstandingAmount:100,direction:'receivable'})[name] ?? null,
+      confidence: name === 'currency' ? 0 : .99}]));
+  const handler = createWhatsAppBoundMessageHandler({supabase: db, providerFactory: () => ({}),
+    extract: async () => ({...fields, lineItems: {value: [], confidence: .99}})});
+  assert.match(await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/png'}}), /currency.*USD/i);
+  const proposal = await handler({...scope, message: 'USD'});
+  assert.match(proposal, /INV-50.*USD 100/s);
+  assert.deepEqual(Object.keys(db.review.action.invoice).sort(), Object.keys(invoice).sort());
+  assert.equal(Object.hasOwn(db.review.action.invoice, 'missingDueDate'), false);
+  assert.equal(await handler({...scope, message: 'USD'}), proposal);
+  const [a, b] = await Promise.all([
+    handler({...scope, message: 'yes'}), handler({...scope, message: 'confirm'}),
+  ]);
+  assert.equal(db.invoices.length, 1);
+  assert.ok([a, b].some(answer => /Invoice saved/.test(answer)));
+  assert.ok([a, b].some(answer => /already being saved|already saved/.test(answer)));
+  assert.match(await handler({...scope, message: 'yes'}), /already saved/i);
+  assert.equal(db.invoices.length, 1);
+  assert.equal(Object.hasOwn(db.review.action.invoice, 'missingDueDate'), false);
+
+  const completeDb = combinedSupabase();
+  const complete = structuredClone(fields);
+  complete.invoiceNumber.value = 'INV-51';
+  complete.currency = {value: 'USD', confidence: .99};
+  const completeHandler = createWhatsAppBoundMessageHandler({supabase: completeDb, providerFactory: () => ({}),
+    extract: async () => ({...complete, lineItems: {value: [], confidence: .99}})});
+  assert.match(await completeHandler({...scope, message: '', media: {bytes: Buffer.from([2]), mimeType: 'image/png'}}), /INV-51.*USD 100/s);
+  assert.match(await completeHandler({...scope, message: 'go ahead'}), /Invoice saved/);
+  assert.equal(completeDb.invoices.length, 1);
+  assert.equal(Object.hasOwn(completeDb.review.action.invoice, 'missingDueDate'), false);
+});
+
 test('atomic review migration is one paste-ready statement with service-only ACLs and executable CAS', async () => {
   const sql = await readFile(new URL('../supabase/migrations/20261001100000_atomic_whatsapp_invoice_reviews.sql', import.meta.url), 'utf8');
   assert.match(sql.trim(), /^do \$migration\$/i);
@@ -150,5 +234,9 @@ test('atomic review migration is one paste-ready statement with service-only ACL
     assert.equal(changed[0].version, 2);
     assert.equal((await db.query('select * from public.whatsapp_transition_invoice_review($1,$2,$3,$4,$5,$6,$7)',
       [begun.id, begun.version, scope.workspaceId, scope.customerId, scope.phone, 'extracting', next])).rows.length, 0);
+    await assert.rejects(db.query('select * from public.whatsapp_begin_invoice_review($1,$2,$3)',
+      [null, scope.customerId, scope.phone]), /invalid review scope/i);
+    await assert.rejects(db.query('select * from public.whatsapp_transition_invoice_review($1,$2,$3,$4,$5,$6,$7)',
+      [begun.id, 2, scope.workspaceId, scope.customerId, scope.phone, null, {}]), /invalid invoice review transition/i);
   } finally { await db.close(); }
 });

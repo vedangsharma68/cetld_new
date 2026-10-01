@@ -55,6 +55,15 @@ function reviewDraft(extracted) {
 
 const CURRENCY_REPLY = /^\s*([A-Za-z]{3})[.!]?\s*$/;
 const CANCEL_REPLY = /^\s*(?:cancel|never mind|nevermind|discard|stop)\s*[.!]?\s*$/i;
+const CONFIRMATION_REPLY = /^\s*(?:yes|y|ok|okay|confirm|confirmed|do it|go ahead|proceed|approve|send it|create it)\s*[.!]?\s*$/i;
+const OWNER_CLAIM = /\b(?:i\s*(?:am|'m)\s+(?:the\s+)?owner|my\s+(?:business|account)|owner\s+access)\b/i;
+
+// validateAssistantInvoice intentionally returns derived state for its callers.
+// Durable review payloads must remain valid *inputs* to that strict validator.
+function approvedInvoice(value) {
+  const {missingDueDate: _derived, ...invoice} = validateAssistantInvoice(value);
+  return invoice;
+}
 
 function proposalSummary(invoice) {
   return `🧾 *Invoice ready to save*\n• ${invoice.invoiceNumber} — ${invoice.clientName}\n• ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}\n${invoice.dueDate ? `• Due: ${invoice.dueDate}\n` : ''}\nSave it? Reply yes to confirm.`;
@@ -96,6 +105,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       // token prevents an older extraction or currency reply from reviving a
       // review replaced by this photo.
       const token = await pending.beginInvoiceReview({workspaceId, customerId, phone});
+      if (token?.action?.stage === 'saving') return 'That invoice is already being saved. Please wait for it to finish before sending a replacement photo.';
       if (mediaError) return "I couldn't fetch that photo. The earlier invoice review was discarded; please resend the photo.";
       try {
         const {data: workspace, error: workspaceError} = await supabase.from('workspace_settings').select('business_name')
@@ -127,13 +137,13 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         }
         // Apply the same strict local validation used by Assistant saves before
         // making any proposal confirmable.
-        validateAssistantInvoice(invoice);
+        const validatedInvoice = approvedInvoice(invoice);
         active();
         const stored = await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone,
-          fromStage: 'extracting', action: {type: 'invoice_review_draft', stage: 'proposal', invoice,
+          fromStage: 'extracting', action: {type: 'invoice_review_draft', stage: 'proposal', invoice: validatedInvoice,
             missingFields: [], currencySource: 'photo'}});
         if (!stored) return 'A newer photo replaced this review. Please continue with the newer photo.';
-        return proposalSummary(invoice);
+        return proposalSummary(validatedInvoice);
       } catch (error) {
         logger?.error?.('WhatsApp invoice extraction failed', {workspaceId,
           message: String(error?.message || '').slice(0, 200)});
@@ -148,14 +158,32 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       }
       const action = current.action;
       if (CANCEL_REPLY.test(message)) {
+        if (action.stage === 'saved') return 'That invoice was already saved, so cancel can’t undo it.';
+        if (action.stage === 'saving') return 'That invoice is already being saved and can’t be canceled now.';
+        if (action.stage === 'canceled') return 'Invoice review is already canceled. Nothing new was saved.';
+        if (!['extracting', 'incomplete', 'proposal', 'failed'].includes(action.stage)) return 'That invoice review can’t be canceled in its current state.';
         const canceled = await pending.transitionInvoiceReview({...current, workspaceId, customerId, phone,
           fromStage: action.stage, action: {...action, stage: 'canceled'}});
-        return canceled ? 'Invoice review canceled. Nothing was saved.' : 'That review was already replaced or completed.';
+        if (canceled) return 'Invoice review canceled. Nothing was saved.';
+        const latest = await pending.loadInvoiceReview({workspaceId, customerId, phone});
+        if (latest?.action?.stage === 'saved') return 'That invoice was already saved, so cancel can’t undo it.';
+        if (latest?.action?.stage === 'saving') return 'That invoice is already being saved and can’t be canceled now.';
+        if (latest?.action?.stage === 'canceled') return 'Invoice review is already canceled. Nothing new was saved.';
+        return 'That review was replaced by a newer request; its current status was not changed.';
       }
-      const currency = CURRENCY_REPLY.exec(message)?.[1]?.toUpperCase();
+      if (CONFIRMATION_REPLY.test(message) && ['incomplete', 'extracting', 'failed', 'canceled'].includes(action.stage)) {
+        return action.stage === 'canceled'
+          ? 'That invoice review was canceled. Please send a new photo to start again.'
+          : 'I can’t confirm an incomplete invoice review. Please send the requested details or a clearer photo.';
+      }
+      if (OWNER_CLAIM.test(message) && ['incomplete', 'extracting', 'failed', 'canceled'].includes(action.stage)) {
+        return 'Saying you are the owner does not grant account access. Verify ownership separately in the cetld dashboard; this invoice review still can’t be confirmed.';
+      }
+      const candidate = CURRENCY_REPLY.exec(message)?.[1]?.toUpperCase();
+      const currency = candidate && isSupportedCurrency(candidate) ? candidate : null;
       if (action.stage === 'incomplete' && action.missingFields?.length === 1 && action.missingFields[0] === 'currency') {
-        if (!currency || !isSupportedCurrency(currency)) return 'Please reply with a supported 3-letter currency code, such as USD or INR.';
-        const invoice = validateAssistantInvoice({...action.invoice, currency});
+        if (!currency) return 'Please reply with a supported 3-letter currency code, such as USD or INR.';
+        const invoice = approvedInvoice({...action.invoice, currency});
         const next = {...action, stage: 'proposal', invoice, missingFields: [], currencySource: 'user'};
         const stored = await pending.transitionInvoiceReview({...current, workspaceId, customerId, phone,
           fromStage: 'incomplete', action: next});
@@ -165,13 +193,6 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         return 'That review was replaced by a newer photo. Please continue with the newer review.';
       }
       if (currency && action.stage === 'proposal') return proposalSummary(action.invoice);
-      if (/^\s*(?:yes|y|ok|okay|confirm|confirmed|do it|go ahead|proceed|approve|send it|create it)\s*[.!]?\s*$/i.test(message)
-        && action.stage === 'incomplete') {
-        return 'I can’t confirm an incomplete invoice review. Please send a complete explicit request or a clearer photo.';
-      }
-    }
-    if (CURRENCY_REPLY.test(message)) {
-      return 'There is no active currency-only invoice review. Please resend the invoice photo or send one complete explicit invoice request.';
     }
     let history = [];
     try { history = await readConversationHistory({supabase, workspaceId, phone}); }

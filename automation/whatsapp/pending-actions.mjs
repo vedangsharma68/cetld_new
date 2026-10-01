@@ -26,6 +26,8 @@ export function createWhatsAppPendingActionStore({supabase, clock = () => new Da
       return (Array.isArray(row) ? row[0] : row) || null;
     },
     async storePendingAction({workspaceId, customerId, phone, action, source}) {
+      const review = await this.loadInvoiceReview({workspaceId, customerId, phone});
+      if (review) throw new Error('An active invoice review must be completed or canceled before another action is stored');
       data(await supabase.from('whatsapp_pending_actions').update({consumed_at: clock().toISOString()})
         .eq('workspace_id', workspaceId).eq('customer_id', customerId).eq('phone', phone).is('consumed_at', null), 'replace');
       data(await supabase.from('whatsapp_pending_actions').insert({workspace_id: workspaceId,
