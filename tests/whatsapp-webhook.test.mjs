@@ -215,11 +215,30 @@ test('unbound sender media is routed to verification without extraction', async 
     onBoundMessage: async () => { extracted++; } });
   const result = await runtime.processPending();
   assert.deepEqual(result, { claimed: 1, completed: 1 });
-  assert.equal(calls[0].workspaceId, null);
-  assert.equal(calls[0].kind, 'verification');
+  assert.deepEqual(calls, ['complete']);
   assert.equal(calls.includes('typing'), false);
   assert.equal(extracted, 0);
-  assert.doesNotMatch(calls[0].body, /Alice|invoice amount|account balance/);
+});
+
+test('one queued image is claimed per invocation and the second processes subsequently', async () => {
+  const events = [1,2].map(id => ({id,claim_token:`claim-${id}`,attempts:1,provider_message_id:`wamid.image-${id}`,
+    sender_phone:'+919871367051',message_text:'',message_type:'image',media_ref:`wamid.image-${id}`,provider_timestamp:new Date().toISOString()}));
+  const consent={workspace_id:'workspace-a',customer_id:'customer-a',source:'inbound_message',categories:['invoice_updates'],revoked_at:null};
+  const rows={whatsapp_global_suppressions:null,whatsapp_consents:[consent],whatsapp_suppressions:[],
+    workspace_settings:{whatsapp_owner_attested_at:new Date().toISOString()},
+    customers:{id:'customer-a',workspace_id:'workspace-a',phone:'+919871367051'}};
+  const supabase={rpc(){},from(table){const query={select(){return query;},eq(){return query;},is(){return Promise.resolve({data:rows[table],error:null});},
+    maybeSingle(){return Promise.resolve({data:rows[table],error:null});},then(resolve){return Promise.resolve({data:rows[table],error:null}).then(resolve);}};return query;}};
+  const completed=[],extracted=[];
+  const inbox={async claim(){return events.length?[events.shift()]:[];},async getMedia(event){return {bytes:Buffer.from([event.id]),mimeType:'image/png'};},
+    async complete(event){completed.push(event.id);}};
+  const runtime=createInboundRuntime({supabase,inbox,env,outbound:{async sendTypingIndicator(){}},
+    onBoundMessage:async input=>{extracted.push(input.messageId);return ''}});
+  assert.deepEqual(await runtime.processPending(),{claimed:1,completed:1});
+  assert.deepEqual(events.map(event=>event.id),[2]);
+  assert.deepEqual(await runtime.processPending(),{claimed:1,completed:1});
+  assert.deepEqual(extracted,['wamid.image-1','wamid.image-2']);
+  assert.deepEqual(completed,[1,2]);
 });
 
 test('bound customer hi webhook completes and attempts a guarded greeting service reply', async () => {
@@ -383,16 +402,18 @@ test('processing stops before the deadline and leaves the next event pending', a
     {id: 1, attempts: 1, provider_message_id: 'wamid.old', sender_phone: '+919871367051',
       message_text: 'STOP', stop_processed_at: new Date().toISOString(), stop_confirmation_due: false},
   ];
-  const completed = [];
+  const completed = [], deferred = [];
   const times = [0, 0, 36_000];
   const inbox = {async claim(limit) { assert.equal(limit, 1); return pending.splice(0, 1); },
-    async complete(event) { completed.push(event.id); }};
+    async complete(event) { completed.push(event.id); },
+    async defer(event) { deferred.push(event.id); pending.unshift(event); }};
   const runtime = createInboundRuntime({supabase: {}, inbox, env: {...env, WHATSAPP_PROCESS_BUDGET_MS: '40000'},
     clock: () => times.shift() ?? 36_000});
 
-  assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 1});
-  assert.deepEqual(completed, [2]);
-  assert.deepEqual(pending.map(event => event.id), [1]);
+  assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 0});
+  assert.deepEqual(completed, []);
+  assert.deepEqual(deferred, [2]);
+  assert.deepEqual(pending.map(event => event.id), [2, 1]);
 });
 
 test('a final-attempt event receives exactly one fallback and is never retried', async () => {

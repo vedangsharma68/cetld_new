@@ -102,6 +102,38 @@ test('hung OCR worker is terminated and cannot poison later queued jobs', async 
   assert.equal(result.total.value, 9);
 });
 
+test('OCR queue wait and preprocessing share the deadline and clean up on cancellation', async () => {
+  let releaseRecognition;
+  const first = extractInvoiceFromImage({bytes: tinyPng, mimeType: 'image/png', preprocessor: async bytes => bytes,
+    workerFactory: async () => ({recognize: async () => new Promise(resolve => { releaseRecognition = resolve; }), terminate: async () => {}}),
+    timeoutMs: 50});
+  await new Promise(resolve => setTimeout(resolve, 2));
+  let secondStarted = false;
+  await assert.rejects(extractInvoiceFromImage({bytes: tinyPng, mimeType: 'image/png', preprocessor: async bytes => bytes,
+    workerFactory: async () => { secondStarted = true; return {}; }, timeoutMs: 5}), /execution limit|deadline/);
+  assert.equal(secondStarted, false);
+  releaseRecognition?.({data:{text:'Total 1.00',confidence:80}});
+  await first;
+
+  const controller = new AbortController();
+  let cleaned = false, workerStarted = false;
+  const preprocessing = extractInvoiceFromImage({bytes: tinyPng, mimeType: 'image/png', signal: controller.signal, timeoutMs: 30,
+    preprocessor: (_bytes,{signal}) => new Promise((_resolve,reject) => signal.addEventListener('abort',()=>{cleaned=true;reject(new Error('cleaned'));},{once:true})),
+    workerFactory: async () => { workerStarted=true; return {}; }});
+  await new Promise(resolve => setImmediate(resolve));
+  controller.abort();
+  await assert.rejects(preprocessing, /aborted|cleaned/);
+  assert.equal(cleaned, true);
+  assert.equal(workerStarted, false);
+});
+
+test('an expired image deadline starts neither preprocessing nor OCR', async () => {
+  let starts=0;
+  await assert.rejects(extractInvoiceFromImage({bytes: tinyPng,mimeType:'image/png',deadlineAt:Date.now()-1,
+    preprocessor:async bytes=>{starts++;return bytes;},workerFactory:async()=>{starts++;return {};}}),/deadline/);
+  assert.equal(starts,0);
+});
+
 test('OCR failure reaches vision extraction with all required invoice fields', async () => {
   let visionCalls = 0;
   const raw = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']

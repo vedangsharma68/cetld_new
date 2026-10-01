@@ -76,6 +76,9 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
       const settings = await store.getSettings();
       const provider = providerFactory({primaryModel: settings.primary_model, fallbackModel: settings.fallback_model, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY, fetchImpl, timeoutMs: 16000});
       if (action === 'extract') {
+        const extractionBudgetMs = 42_000;
+        const deadlineAt = Date.now() + extractionBudgetMs;
+        const signal = AbortSignal.timeout(extractionBudgetMs);
         if (Boolean(body.fileId) === Boolean(body.file)) throw new APIError(400, 'ONE_FILE_SOURCE_REQUIRED');
         let file;
         if (body.file) {
@@ -85,7 +88,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         } else file = await store.downloadInvoiceFile(uuid(body.fileId));
         const extractionProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL, fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY, fetchImpl, timeoutMs: 23000});
         const businessName = typeof store.getBusinessName === 'function' ? await store.getBusinessName() : null;
-        return res.status(200).json(await extractInvoice({provider: extractionProvider, businessName, ...file}));
+        return res.status(200).json(await extractInvoice({provider: extractionProvider, businessName, signal, deadlineAt, ...file}));
       }
       let accounting = null;
       if (shouldLoadAccountingConnection(body.message) && env.SUPABASE_SERVICE_ROLE_KEY && env.ACCOUNTING_TOKEN_ENCRYPTION_KEY) {

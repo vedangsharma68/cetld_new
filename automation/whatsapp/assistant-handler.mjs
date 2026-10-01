@@ -41,7 +41,11 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
   invoiceStoreFactory = createWhatsAppInvoiceStore, logger = console} = {}) {
   if (!supabase?.from) throw new TypeError('A server-side Supabase client is required');
 
-  return async ({workspaceId, customerId, phone, message, media, mediaError}) => {
+  return async ({workspaceId, customerId, phone, message, media, mediaError, signal, deadlineAt}) => {
+    const active = () => {
+      if (signal?.aborted || (Number.isFinite(deadlineAt) && Date.now() >= deadlineAt)) throw Object.assign(new Error('Inbound processing deadline expired'), {name: 'AbortError'});
+    };
+    active();
     const {data: settings, error} = await supabase.from('workspace_ai_settings')
       .select('primary_model,fallback_model').eq('workspace_id', workspaceId).maybeSingle();
     if (error) throw error;
@@ -74,10 +78,15 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, geminiApiKey: env.GEMINI_API_KEY,
           openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
           fetchImpl, timeoutMs: 12_000, maxAttempts: 1});
+        // Reserve invocation time for validation, pending-action persistence,
+        // the scoped reply claim/send, and durable completion.
+        const extractionDeadlineAt = Math.min(Number.isFinite(deadlineAt) ? deadlineAt : Infinity, Date.now() + 28_000);
         const extracted = await extract({provider: extractionProvider, ...media,
-          businessName: workspace?.business_name || ''});
+          businessName: workspace?.business_name || '', signal, deadlineAt: extractionDeadlineAt, logger});
+        active();
         const invoice = invoiceProposal(extracted);
         if (!invoice) return clarification(extracted);
+        active();
         await pending.storePendingAction({workspaceId, customerId, phone,
           action: {type: 'create_invoice', payload: {invoice}}, source: 'whatsapp'});
         return proposalSummary(invoice);

@@ -251,10 +251,39 @@ test('authentication failures advance once per leg from Space Bunny to LongCat t
   assert.equal(result.model,GEMINI_FALLBACK_MODEL);
   assert.equal(result.content,'Gemini recovered');
   assert.deepEqual(logs,[
-    {message:'AI provider leg failed:',details:{provider:'opencode-zen',model:ZEN_PRIMARY_MODEL,status:401}},
-    {message:'AI provider leg failed:',details:{provider:'opencode-zen',model:ZEN_FALLBACK_MODEL,status:403}},
+    {message:'AI provider leg failed:',details:{provider:'opencode-zen',model:ZEN_PRIMARY_MODEL,status:401,reason:'permission_denied'}},
+    {message:'AI provider leg failed:',details:{provider:'opencode-zen',model:ZEN_FALLBACK_MODEL,status:403,reason:'permission_denied'}},
     {message:'AI provider request served:',details:{provider:'google',model:GEMINI_FALLBACK_MODEL}},
   ]);
+});
+
+test('provider diagnostics classify schema complexity without retaining adversarial error text',async()=>{
+  const secret='Acme Customer owes INR 98,765; prompt=password hunter2';
+  const logs=[];
+  const ai=provider(async()=>jsonResponse({error:{code:400,message:`Response schema exceeds complexity limit. ${secret}`}},400),
+    {primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null,maxAttempts:1,
+      logger:{warn:(message,details)=>logs.push({message,details})}});
+  await assert.rejects(ai.generate({messages:[{role:'user',content:'private invoice'}]}),error=>{
+    assert.equal(error.code,'PROVIDER_ERROR');
+    assert.equal(error.providerReason,'schema_complexity');
+    assert.doesNotMatch(JSON.stringify(error),/Acme|98,765|hunter2|private invoice/);
+    return true;
+  });
+  assert.deepEqual(logs,[{message:'AI provider leg failed:',details:{provider:'google',model:DEFAULT_EXTRACTION_MODEL,status:400,reason:'schema_complexity'}}]);
+  assert.doesNotMatch(JSON.stringify(logs),/Acme|98,765|hunter2|private invoice/);
+});
+
+test('one deadline bounds multiple failing provider legs and expired work starts no fetch',async()=>{
+  let now=0,calls=0;
+  const originalNow=Date.now;
+  Date.now=()=>now;
+  try {
+    const ai=provider(async()=>{calls++;now+=6;return openRouter('',{status:503});},{maxAttempts:1});
+    await assert.rejects(ai.generate({messages:[{role:'user',content:'Hi'}],deadlineAt:10}),error=>error.code==='TIMEOUT');
+    assert.equal(calls,2);
+    await assert.rejects(ai.generate({messages:[{role:'user',content:'Hi'}],deadlineAt:now}),error=>error.code==='TIMEOUT');
+    assert.equal(calls,2);
+  } finally { Date.now=originalNow; }
 });
 
 test('all-leg authentication failure surfaces a safe AUTH_FAILED error without same-leg retries',async()=>{

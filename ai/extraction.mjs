@@ -290,28 +290,33 @@ function validateAndSanitize(raw, {verifiedPrintedAdjustments = false} = {}) {
 
 /** Extract an invoice from trusted, already-downloaded bytes; this function never stores it. */
 export async function extractInvoice({ provider, bytes, mimeType, fileName, businessName,
-  imageExtractor = extractInvoiceFromImage }) {
+  imageExtractor = extractInvoiceFromImage, signal, deadlineAt, logger = console }) {
   if (!provider || typeof provider.generateStructured !== 'function') fail('provider.generateStructured is required');
+  const active = () => {
+    if (signal?.aborted || (Number.isFinite(deadlineAt) && Date.now() >= deadlineAt)) throw Object.assign(new Error('Invoice extraction deadline expired'), {name: 'AbortError'});
+  };
+  active();
   const source = detectFormat(bytes, mimeType);
-  const pdfText = source.detected === 'application/pdf' ? await extractPdfText(source.bytes) : null;
+  const pdfText = source.detected === 'application/pdf' ? await extractPdfText(source.bytes, {signal, deadlineAt}) : null;
+  active();
   if (pdfText) {
     const printed = parsePdfInvoiceText(pdfText, {businessName});
     console.info('Invoice PDF text parsed:', {characters: pdfText.length, deterministic: Boolean(printed)});
     if (printed) return {...validateAndSanitize(printed, {verifiedPrintedAdjustments: true}), model: 'verified-pdf-text', usedFallback: false};
   }
-  let offlineReview = null;
   if (source.detected.startsWith('image/')) {
     try {
-      const review = await imageExtractor({bytes: source.bytes, mimeType: source.detected});
+      const review = await imageExtractor({bytes: source.bytes, mimeType: source.detected, signal, deadlineAt});
       // Local OCR is deliberately confidence-capped and is useful as review
       // evidence only. In particular, finding totals must not prevent the
       // vision extractor from reading identity, dates, currency, and direction.
-      const {ocr, ...safeReview} = review;
-      offlineReview = safeReview;
+      // Do not promote this draft to a successful extraction or save path.
+      void review;
     } catch (error) {
-      console.warn('Invoice image OCR unavailable:', error instanceof Error ? error.message : 'unknown error');
+      logger?.warn?.('Invoice image OCR unavailable', {source: source.detected});
     }
   }
+  active();
   const payload = makeMessages({ bytes, mimeType, fileName, businessName, pdfText });
   let sanitized;
   const validate = (data) => (sanitized = validateAndSanitize(data));
@@ -323,18 +328,21 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
       name: 'invoice_extraction',
       validate,
       maxTokens: 8192,
+      signal,
+      deadlineAt,
     });
   } catch (error) {
-    // A local draft remains safe for dashboard review when vision is
-    // unavailable, but its capped confidence prevents it becoming a save
-    // proposal on channels such as WhatsApp.
-    if (offlineReview) return offlineReview;
+    // Local OCR is never promoted when vision is unavailable.
     throw error;
   }
   if (!response || typeof response !== 'object' || !Object.hasOwn(response, 'data')) fail('provider returned a malformed response');
   // AIProvider already returns the validator's sanitized shape (with warnings).
   // Injected adapters that did not invoke validate still undergo local validation.
-  return {...(sanitized ?? validate(response.data)), model: response.model, usedFallback: response.usedFallback};
+  const result = {...(sanitized ?? validate(response.data)), model: response.model, usedFallback: response.usedFallback};
+  const missingFields = [...result.uncertainFields];
+  logger?.info?.('Invoice extraction completed', {source: source.detected, model: result.model,
+    missingFields, missingFieldCount: missingFields.length});
+  return result;
 }
 
 export const invoiceExtractionSchema = responseSchema;
