@@ -228,14 +228,11 @@ export function createWhatsAppAssistantChannel({
         if (pending.action?.type !== 'create_invoice' || typeof createInvoiceStore !== 'function') {
           return {answer: 'I can only confirm a proposed invoice from this chat.', pendingAction: null};
         }
-        if (typeof consumePendingAction === 'function') {
-          const claimed = await consumePendingAction({...scope, id: pending.id});
-          if (!claimed) return {answer: 'That proposal was replaced by a newer request. Nothing was saved.', pendingAction: null, stale: true};
-        }
         const key = `wa_invoice_${createHash('sha256').update(`${scope.workspaceId}:${scope.customerId}:${scope.phone}:${pending.id}`).digest('hex').slice(0, 32)}`;
         const saved = await saveInvoice({store: await createInvoiceStore(scope), invoice: pending.action.payload?.invoice,
           confirmed: true, idempotencyKey: key, accounting: null});
         if (saved?.needsInput) return {answer: saved.question, pendingAction: null};
+        if (typeof consumePendingAction === 'function') await consumePendingAction({...scope, id: pending.id});
         const invoice = {...saved.invoice, clientName: saved.invoice?.clientName || pending.action.payload?.invoice?.clientName};
         return {answer: `✅ *Invoice saved*\n• ${invoice.invoiceNumber} — ${invoice.clientName || 'Customer'}\n• ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}\n• Due: ${invoice.dueDate || 'not set'}`,
           pendingAction: null, saved: true};
