@@ -11,6 +11,7 @@ import {saveAssistantInvoice} from '../../ai/invoice-ops.mjs';
 import {createHash} from 'node:crypto';
 import {CURRENCY_SUPPORT_MESSAGE, isSupportedCurrency} from '../../currency-contract.mjs';
 import {deriveInvoiceDueDate, inferInvoiceCurrency, todayInKolkata} from '../../ai/invoice-photo-inference.mjs';
+import {classifyIntent} from './intent.mjs';
 
 const requiredInvoiceFields = ['invoiceNumber','customerName','invoiceDate','dueDate','total','currency','direction'];
 const fieldLabels = {invoiceNumber: 'invoice number', customerName: 'customer name', invoiceDate: 'invoice date',
@@ -61,6 +62,7 @@ const CANCEL_REPLY = /^\s*(?:cancel|never mind|nevermind|discard|stop)\s*[.!]?\s
 const CONFIRMATION_REPLY = /^\s*(?:yes|y|ok|okay|confirm|confirmed|do it|go ahead|proceed|approve|send it|create it)\s*[.!]?\s*$/i;
 const OWNER_CLAIM = /\b(?:i\s*(?:am|'m)\s+(?:the\s+)?owner|my\s+(?:business|account)|owner\s+access)\b/i;
 const FILE_REQUEST = /\b(?:send|show|give)\s+(?:me\s+)?(?:the\s+)?invoice\s+(?:file|photo|pdf)\b/i;
+const INTENT_REQUEST = /\b(?:change|chnge|make|set|update|edit|modify|fix|paid)\b|\b(?:send|show|give|download)\b.{0,30}\b(?:invoice|invoce|bill|pdf|file)\b|\b(?:list|show)\b.{0,20}\b(?:invoices|invoce|bills)\b/i;
 
 function parseDate(value, clock) {
   const text = value.trim();
@@ -307,33 +309,70 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         const turns = await readConversationHistory({supabase, workspaceId, phone});
         const last = turns.at(-1);
         if (last?.role === 'assistant' && ASK_NUMBER.test(last.content || '')) {
-          const original = [...turns].reverse().find(turn => turn.role === 'user' && parseInvoiceCorrection(turn.content, clock));
+          const original = [...turns].reverse().find(turn => turn.role === 'user');
           if (original) effective = `${original.content} ${message.trim().replace(/[.!]$/, '')}`;
         }
       } catch { /* fall through to normal routing */ }
     }
-    const correction = parseInvoiceCorrection(effective, clock);
+    let correction = parseInvoiceCorrection(effective, clock);
+    let modelIntent = null;
     const askNumber = async reply => {
       for (const [role, content] of [['user', message], ['assistant', reply]]) {
         try { await writeConversationTurn({supabase, workspaceId, customerId, phone, role, content}); } catch { /* best effort */ }
       }
       return reply;
     };
-    if (correction || FILE_REQUEST.test(message)) {
+    const editLike = INTENT_REQUEST.test(effective);
+    if (!correction && /\b(?:mark|make|set|change)\b.{0,30}\bpaid\b/i.test(effective)) {
+      return 'Payments are recorded in the cetld dashboard, so I can’t mark this paid from WhatsApp.';
+    }
+    if (!correction && editLike && !FILE_REQUEST.test(message)) {
+      try {
+        const intentStore = await invoiceStoreFactory({supabase, workspaceId, customerId});
+        const known = await intentStore.findInvoices({limit: 50});
+        let history = [];
+        try { history = await readConversationHistory({supabase, workspaceId, phone}); } catch { /* optional context */ }
+        const intentProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
+          fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, geminiApiKey: env.GEMINI_API_KEY,
+          openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
+          fetchImpl, timeoutMs: 8000, maxAttempts: 1});
+        modelIntent = await classifyIntent({provider: intentProvider, message: effective, history, invoices: known, signal, deadlineAt});
+        if (modelIntent.action === 'correct_invoice' && modelIntent.confidence >= 0.75) {
+          correction = {changes: {[modelIntent.field]: modelIntent.value,
+            ...(modelIntent.currency && modelIntent.field === 'total' ? {currency: modelIntent.currency} : {})},
+            ...(modelIntent.customerHint ? {hint: modelIntent.customerHint} : {})};
+        }
+      } catch (intentError) {
+        logger?.error?.('WhatsApp intent classification failed', {workspaceId,
+          message: String(intentError?.message || '').slice(0, 200)});
+        correction = parseInvoiceCorrection(effective, clock);
+      }
+      const strongEdit = /\b(?:change|chnge|chng|set|edit|modify|fix|update)\b/i.test(effective);
+      if (!correction && (!modelIntent ? strongEdit : (modelIntent.action === 'unknown' || modelIntent.confidence < 0.75) && strongEdit)) {
+        return askNumber('What would you like to change, and what should the new value be? 🙂');
+      }
+    }
+    const fileRequest = FILE_REQUEST.test(message) || modelIntent?.action === 'send_invoice_file' && modelIntent.confidence >= 0.75;
+    const listRequest = modelIntent?.action === 'list_invoices' && modelIntent.confidence >= 0.75;
+    if (correction || fileRequest || listRequest) {
       const store = await invoiceStoreFactory({supabase, workspaceId, customerId});
-      const explicitNumber = requestedInvoiceNumber(effective);
+      const explicitNumber = requestedInvoiceNumber(effective) || modelIntent?.invoiceRef;
       let candidates;
-      if (explicitNumber) candidates = await store.findInvoices({invoiceNumber: explicitNumber});
-      else if (correction?.hint) {
-        candidates = matchInvoicesByHint(await store.findInvoices({limit: 50}), correction.hint);
-        if (!candidates.length) return askNumber(`I couldn’t find an invoice for “${correction.hint}”. Which invoice number should I use?`);
+      if (listRequest) candidates = await store.findInvoices({limit: 10});
+      else if (explicitNumber) candidates = await store.findInvoices({invoiceNumber: explicitNumber});
+      else if (correction?.hint || modelIntent?.customerHint) {
+        const hint = correction?.hint || modelIntent.customerHint;
+        candidates = matchInvoicesByHint(await store.findInvoices({limit: 50}), hint);
+        if (!candidates.length) return askNumber(`I couldn’t find an invoice for “${hint}”. Which invoice number should I use?`);
       }
       else if (current?.action?.stage === 'saved' && current.action.invoice?.id) candidates = [current.action.invoice];
       else candidates = await store.findInvoices();
-      if (!candidates.length) return explicitNumber ? `I couldn't find invoice ${explicitNumber}.` : "I couldn't find a recent invoice to change.";
+      if (!candidates.length) return explicitNumber ? `I couldn't find invoice ${explicitNumber}.`
+        : listRequest ? "I couldn't find any invoices." : "I couldn't find a recent invoice to change.";
+      if (listRequest) return candidates.slice(0, 10).map(item => `• ${item.printedInvoiceNumber || item.invoiceNumber} — ${item.clientName || 'Unknown customer'}`).join('\n') || 'I couldn’t find any invoices.';
       if (candidates.length > 1) return askNumber('Which invoice number should I use?');
       const target = candidates[0];
-      if (FILE_REQUEST.test(message)) {
+      if (fileRequest) {
         const file = await store.latestInvoiceFile(target.id);
         return file ? {answer: `Here is invoice ${target.printedInvoiceNumber || target.invoiceNumber}.`, media: file}
           : `I don't have a stored file for invoice ${target.printedInvoiceNumber || target.invoiceNumber}.`;
