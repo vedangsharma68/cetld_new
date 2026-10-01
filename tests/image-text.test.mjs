@@ -115,6 +115,24 @@ test('OCR failure reaches vision extraction with all required invoice fields', a
   assert.equal(result.direction.value, 'receivable');
 });
 
+test('subtotal and total from real offline parsing do not short-circuit vision extraction', async () => {
+  let visionCalls = 0;
+  const offline = parseOfflineInvoiceText('Subtotal 100.00\nTax 18.00\nTotal 118.00', {ocrConfidence: 96});
+  const raw = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
+    .map(name => [name, {value: ({invoiceNumber:'INV-9',customerName:'Buyer Co',invoiceDate:'2026-10-01',subtotal:100,tax:18,total:118,currency:'INR',direction:'receivable'})[name] ?? null, confidence: .98}]));
+  raw.lineItems = {value: [], confidence: .8};
+  const result = await extractInvoice({bytes: tinyPng, mimeType: 'image/png', fileName: 'invoice.png', businessName: 'Seller',
+    imageExtractor: async () => offline,
+    provider: {generateStructured: async ({messages, validate}) => {
+      visionCalls++;
+      assert.equal(messages[0].content[1].type, 'image_url');
+      return {data: validate(raw), model: 'vision', usedFallback: false};
+    }}});
+  assert.equal(visionCalls, 1);
+  assert.equal(result.invoiceNumber.value, 'INV-9');
+  assert.equal(result.currency.value, 'INR');
+});
+
 test('the supplied image reaches review with printed totals before provider timeout', {skip: !process.env.CETLD_TEST_IMAGE_PATH}, async () => {
   const bytes = await readFile(process.env.CETLD_TEST_IMAGE_PATH);
   let providerCalls = 0;
@@ -122,7 +140,7 @@ test('the supplied image reaches review with printed totals before provider time
     bytes, mimeType: 'image/png', fileName: 'workshop-invoice.png', businessName: 'CETLD QA',
     provider: {generateStructured: async () => {providerCalls += 1; throw new Error('provider should not be called');}},
   });
-  assert.equal(providerCalls, 0);
+  assert.equal(providerCalls, 1);
   assert.equal(result.subtotal.value, 430.61);
   assert.equal(result.tax.value, 42.1);
   assert.equal(result.total.value, 472.7);

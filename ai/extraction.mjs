@@ -299,15 +299,15 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
     console.info('Invoice PDF text parsed:', {characters: pdfText.length, deterministic: Boolean(printed)});
     if (printed) return {...validateAndSanitize(printed, {verifiedPrintedAdjustments: true}), model: 'verified-pdf-text', usedFallback: false};
   }
+  let offlineReview = null;
   if (source.detected.startsWith('image/')) {
     try {
       const review = await imageExtractor({bytes: source.bytes, mimeType: source.detected});
-      if (review.subtotal.value !== null && review.total.value !== null) {
-        // The OCR draft contains only evidence for review. No raw OCR text needs
-        // to leave the server; a user must confirm every uncertain field.
-        const {ocr, ...safeReview} = review;
-        return safeReview;
-      }
+      // Local OCR is deliberately confidence-capped and is useful as review
+      // evidence only. In particular, finding totals must not prevent the
+      // vision extractor from reading identity, dates, currency, and direction.
+      const {ocr, ...safeReview} = review;
+      offlineReview = safeReview;
     } catch (error) {
       console.warn('Invoice image OCR unavailable:', error instanceof Error ? error.message : 'unknown error');
     }
@@ -315,14 +315,22 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
   const payload = makeMessages({ bytes, mimeType, fileName, businessName, pdfText });
   let sanitized;
   const validate = (data) => (sanitized = validateAndSanitize(data));
-  const response = await provider.generateStructured({
-    messages: payload.messages,
-    schema: responseSchema,
-    name: 'invoice_extraction',
-    validate,
-    maxTokens: 8192,
-
-  });
+  let response;
+  try {
+    response = await provider.generateStructured({
+      messages: payload.messages,
+      schema: responseSchema,
+      name: 'invoice_extraction',
+      validate,
+      maxTokens: 8192,
+    });
+  } catch (error) {
+    // A local draft remains safe for dashboard review when vision is
+    // unavailable, but its capped confidence prevents it becoming a save
+    // proposal on channels such as WhatsApp.
+    if (offlineReview) return offlineReview;
+    throw error;
+  }
   if (!response || typeof response !== 'object' || !Object.hasOwn(response, 'data')) fail('provider returned a malformed response');
   // AIProvider already returns the validator's sanitized shape (with warnings).
   // Injected adapters that did not invoke validate still undergo local validation.

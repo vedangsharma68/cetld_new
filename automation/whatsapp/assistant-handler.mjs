@@ -7,11 +7,20 @@ import {extractInvoice} from '../../ai/extraction.mjs';
 import {createWhatsAppPendingActionStore} from './pending-actions.mjs';
 import {createWhatsAppInvoiceStore} from './invoice-store.mjs';
 
-const unreadable = "I couldn't confidently read the invoice number, customer, date, total, explicit currency code, and whether you issued it. Please resend a clearer photo so I can prepare a review; nothing was saved.";
+const requiredInvoiceFields = ['invoiceNumber','customerName','invoiceDate','total','currency','direction'];
+const fieldLabels = {invoiceNumber: 'invoice number', customerName: 'customer name', invoiceDate: 'invoice date',
+  total: 'total', currency: 'explicit currency code (for example INR or USD)',
+  direction: 'confirmation that your business issued the invoice'};
+
+function clarification(extracted) {
+  const missing = requiredInvoiceFields.filter(name => extracted?.[name]?.value == null
+    || extracted[name].confidence < 0.75 || (name === 'direction' && extracted[name].value !== 'receivable'));
+  const details = missing.map(name => fieldLabels[name]);
+  return `I could only prepare a partial review. Please reply with ${details.join(', ')}. I won't save anything until I can show you a complete proposal and you explicitly confirm it.`;
+}
 
 function invoiceProposal(extracted) {
-  const required = ['invoiceNumber','customerName','invoiceDate','total','currency','direction'];
-  if (required.some(name => extracted?.[name]?.value == null || extracted[name].confidence < 0.75)
+  if (requiredInvoiceFields.some(name => extracted?.[name]?.value == null || extracted[name].confidence < 0.75)
     || extracted.direction.value !== 'receivable') return null;
   return {invoiceNumber: extracted.invoiceNumber.value, clientName: extracted.customerName.value,
     clientEmail: extracted.clientEmail.value, clientPhone: extracted.clientPhone.value,
@@ -68,14 +77,14 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         const extracted = await extract({provider: extractionProvider, ...media,
           businessName: workspace?.business_name || ''});
         const invoice = invoiceProposal(extracted);
-        if (!invoice) return unreadable;
+        if (!invoice) return clarification(extracted);
         await pending.storePendingAction({workspaceId, customerId, phone,
           action: {type: 'create_invoice', payload: {invoice}}, source: 'whatsapp'});
         return proposalSummary(invoice);
       } catch (error) {
         logger?.error?.('WhatsApp invoice extraction failed', {workspaceId,
           message: String(error?.message || '').slice(0, 200)});
-        return unreadable;
+        return "I couldn't extract a review from that image. Please send the invoice number, customer name, invoice date, total, explicit currency code, and confirm whether your business issued it. Nothing was saved.";
       }
     }
     let history = [];
