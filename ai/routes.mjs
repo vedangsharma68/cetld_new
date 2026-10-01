@@ -6,14 +6,15 @@ import {answerWorkspaceQuestion, shouldLoadAccountingConnection} from './assista
 import {saveAssistantInvoice, updateAssistantInvoice, retryAssistantInvoiceSync} from './invoice-ops.mjs';
 import {createAccountingTools} from './accounting-tools.mjs';
 import {createAccountingActionToken, verifyAccountingActionToken} from './accounting-actions.mjs';
+import {createGeminiDiagnostic} from './diagnostic.mjs';
 
-export function createAIHandler({env = process.env, fetchImpl = fetch, authorize = authorizeAIWorkspace, providerFactory = options => new AIProvider(options), verify = verifyModel, clock = () => new Date(), accountingFactory, logger = console} = {}) {
+export function createAIHandler({env = process.env, fetchImpl = fetch, authorize = authorizeAIWorkspace, providerFactory = options => new AIProvider(options), verify = verifyModel, clock = () => new Date(), accountingFactory, logger = console, diagnosticRunner = createGeminiDiagnostic({fetchImpl})} = {}) {
   return async function handler(req, res) {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     try {
       const action = req.query?.action;
-      if (!['models', 'settings', 'extract', 'assistant', 'save-invoice', 'retry-invoice-sync', 'confirm-accounting-action'].includes(action)) throw new APIError(404, 'NOT_FOUND');
+      if (!['models', 'settings', 'diagnostic', 'extract', 'assistant', 'save-invoice', 'retry-invoice-sync', 'confirm-accounting-action'].includes(action)) throw new APIError(404, 'NOT_FOUND');
       const methods = action === 'models' ? ['GET'] : action === 'settings' ? ['GET', 'PUT'] : ['POST'];
       if (!methods.includes(req.method)) { res.setHeader('Allow', methods.join(', ')); throw new APIError(405, 'METHOD_NOT_ALLOWED'); }
       if (action === 'models') {
@@ -25,6 +26,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         return res.status(200).json({models: available.filter(isPrimaryModelId), fallbackModels: available.filter(isFallbackModelId), extractionModels: available.filter(id => id === DEFAULT_EXTRACTION_MODEL), openRouterFallback: available.includes(OPENROUTER_FREE_MODEL)});
       }
       const allowed = action === 'settings' ? ['workspaceId', 'primary_model', 'fallback_model']
+        : action === 'diagnostic' ? ['workspaceId']
         : action === 'extract' ? ['workspaceId', 'fileId', 'file']
         : action === 'assistant' ? ['workspaceId', 'message', 'history']
         : action === 'save-invoice' ? ['workspaceId', 'confirmed', 'idempotencyKey', 'invoice']
@@ -33,6 +35,12 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
       const body = req.method === 'GET' ? {} : requestBody(req, allowed, action === 'extract' ? 4400000 : 32768);
       const workspaceId = uuid(req.method === 'GET' ? req.query.workspaceId : body.workspaceId);
       const store = await authorize(req, workspaceId, {env, fetchImpl});
+      if (action === 'diagnostic') {
+        if (!['owner','admin'].includes(store.role)) throw new APIError(403, 'DIAGNOSTIC_ADMIN_REQUIRED');
+        const result = await diagnosticRunner({userId:store.userId, role:store.role, apiKey:env.GEMINI_API_KEY});
+        if (result?.error) throw new APIError(result.status, result.error);
+        return res.status(200).json(result);
+      }
       if (action === 'save-invoice' || action === 'retry-invoice-sync' || action === 'confirm-accounting-action') {
         let accounting = null;
         try {
@@ -65,13 +73,13 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         return res.status(200).json(await retryAssistantInvoiceSync({store, invoiceId: body.invoiceId, accounting}));
       }
       if (action === 'settings') {
-        if (req.method === 'GET') return res.status(200).json(await store.getSettings());
+        if (req.method === 'GET') return res.status(200).json({...await store.getSettings(), role:store.role});
         if (!['owner', 'admin'].includes(store.role)) throw new APIError(403, 'SETTINGS_ADMIN_REQUIRED');
         const {primary_model, fallback_model = null} = body;
         if (!isPrimaryModelId(primary_model) || (fallback_model !== null && !isFallbackModelId(fallback_model)) || primary_model === fallback_model) throw new APIError(400, 'INVALID_MODEL_CONFIGURATION');
         await verify(primary_model, {fetchImpl, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY});
         if (fallback_model) await verify(fallback_model, {fetchImpl, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY});
-        return res.status(200).json(await store.saveSettings({primary_model, fallback_model}));
+        return res.status(200).json({...await store.saveSettings({primary_model, fallback_model}), role:store.role});
       }
       const settings = await store.getSettings();
       const provider = providerFactory({primaryModel: settings.primary_model, fallbackModel: settings.fallback_model, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY, fetchImpl, timeoutMs: 16000});
