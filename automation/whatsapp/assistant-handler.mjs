@@ -332,7 +332,11 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         const known = await intentStore.findInvoices({limit: 50});
         let history = [];
         try { history = await readConversationHistory({supabase, workspaceId, phone}); } catch { /* optional context */ }
-        modelIntent = await classifyIntent({provider, message: effective, history, invoices: known, signal, deadlineAt});
+        const intentProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
+          fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, geminiApiKey: env.GEMINI_API_KEY,
+          openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
+          fetchImpl, timeoutMs: 8000, maxAttempts: 1});
+        modelIntent = await classifyIntent({provider: intentProvider, message: effective, history, invoices: known, signal, deadlineAt});
         if (modelIntent.action === 'correct_invoice' && modelIntent.confidence >= 0.75) {
           correction = {changes: {[modelIntent.field]: modelIntent.value,
             ...(modelIntent.currency && modelIntent.field === 'total' ? {currency: modelIntent.currency} : {})},
@@ -343,7 +347,8 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           message: String(intentError?.message || '').slice(0, 200)});
         correction = parseInvoiceCorrection(effective, clock);
       }
-      if (!correction && (!modelIntent || modelIntent.action === 'unknown' || modelIntent.confidence < 0.75)) {
+      const strongEdit = /\b(?:change|chnge|chng|set|edit|modify|fix|update)\b/i.test(effective);
+      if (!correction && (!modelIntent ? strongEdit : (modelIntent.action === 'unknown' || modelIntent.confidence < 0.75) && strongEdit)) {
         return askNumber('What would you like to change, and what should the new value be? 🙂');
       }
     }
@@ -353,7 +358,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       const store = await invoiceStoreFactory({supabase, workspaceId, customerId});
       const explicitNumber = requestedInvoiceNumber(effective) || modelIntent?.invoiceRef;
       let candidates;
-      if (listRequest) candidates = await store.findInvoices();
+      if (listRequest) candidates = await store.findInvoices({limit: 10});
       else if (explicitNumber) candidates = await store.findInvoices({invoiceNumber: explicitNumber});
       else if (correction?.hint || modelIntent?.customerHint) {
         const hint = correction?.hint || modelIntent.customerHint;
@@ -445,7 +450,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         message: String(memoryError?.message || '').slice(0, 200)});
     }
     const input = {workspaceId, customerId, phone, message, history};
-    if (!String(message || '').trim()) return 'What can I help with? 🙂';
+    if (!String(message || '').trim()) return '';
     let response;
     try { response = await channel.ask(input); }
     catch (error) {
