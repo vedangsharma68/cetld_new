@@ -57,23 +57,7 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId} =
       if (prior) return {invoice: mappedInvoice(row), changes: prior.changes, duplicate: true};
       const paid = Number(row.amount_paid || 0);
       if (['paid','void','cancelled'].includes(row.status) || paid >= Number(row.total_amount)) return {reason: 'settled'};
-      if (changes.status === 'paid') {
-        if (Object.keys(changes).length !== 1) throw new TypeError('paid status must be corrected separately');
-        const settled = await supabase.rpc('record_invoice_payment', {p_workspace_id: workspaceId,
-          p_invoice_id: invoiceId, p_amount: null, p_idempotency_key: idempotencyKey,
-          p_reference: 'Marked paid from verified WhatsApp owner conversation', p_settle_remaining: true});
-        if (settled.error) throw settled.error;
-        const refreshed = await scoped('invoices').select('*').eq('workspace_id', workspaceId).eq('id', invoiceId).limit(1);
-        const paidRow = rows(refreshed)[0];
-        const audit = {status: {old: row.status, new: 'paid'}};
-        const paidMetadata = {...(paidRow.metadata || {}), outstanding_amount: 0,
-          whatsapp_corrections: [...(Array.isArray(paidRow.metadata?.whatsapp_corrections) ? paidRow.metadata.whatsapp_corrections : []),
-            {idempotency_key: idempotencyKey, changed_at: changedAt, changes: audit, source: 'whatsapp'}].slice(-50)};
-        const recorded = await scoped('invoices').update({metadata: paidMetadata}).eq('workspace_id', workspaceId)
-          .eq('id', invoiceId).select('*').single();
-        if (recorded.error) throw recorded.error;
-        return {invoice: mappedInvoice(recorded.data), changes: audit, duplicate: false};
-      }
+      if (changes.status === 'paid') return {reason: 'use_dashboard_for_payment'};
       if (changes.total != null && paid > Number(changes.total)) return {reason: 'payments_exceed_total'};
       const nextMetadata = {...metadata};
       const patch = {};
