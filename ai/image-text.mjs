@@ -1,11 +1,15 @@
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {access} from 'node:fs/promises';
+import {createRequire} from 'node:module';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_PIXELS = 12_000_000;
 const MAX_TEXT_CHARS = 100_000;
 const FIELD_CONFIDENCE_CAP = 0.69;
 const MODEL_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../vendor/tessdata');
+const require = createRequire(import.meta.url);
+const DEFAULT_OCR_TIMEOUT_MS = 8_000;
 const UNCERTAIN_FIELDS = [
   'invoiceNumber', 'customerName', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total',
   'outstandingAmount', 'currency', 'clientPhone', 'clientEmail', 'notes', 'direction', 'lineItems',
@@ -14,6 +18,27 @@ const CURRENCIES = new Set(['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CA
 
 let workerPromise;
 let ocrQueue = Promise.resolve();
+
+async function assertOcrAssets() {
+  const coreDirectory = path.dirname(require.resolve('tesseract.js-core/package.json'));
+  await Promise.all([
+    access(path.join(coreDirectory, 'tesseract-core-relaxedsimd.wasm')),
+    access(path.join(MODEL_PATH, 'eng.traineddata')),
+  ]);
+}
+
+function boundedOcr(operation, timeoutMs, onTimeout) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(operation),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        try { onTimeout?.(); } catch { /* best-effort worker disposal */ }
+        reject(new Error(`OCR exceeded its ${timeoutMs}ms execution limit`));
+      }, timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 function fail(message) {
   throw new TypeError(`Invoice image OCR: ${message}`);
@@ -128,15 +153,26 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   };
 }
 
-async function getWorker(workerFactory) {
-  if (workerFactory) return workerFactory();
+async function getWorker(workerFactory, timeoutMs) {
+  if (workerFactory) {
+    const startingWorker = Promise.resolve().then(workerFactory);
+    return boundedOcr(startingWorker, timeoutMs, () => {
+      startingWorker.then(worker => worker?.terminate?.()).catch(() => {});
+    });
+  }
   if (!workerPromise) {
-    workerPromise = import('tesseract.js').then(({createWorker}) => createWorker('eng', 1, {
-      langPath: MODEL_PATH,
-      gzip: false,
-      cacheMethod: 'none',
-    })).catch(error => {
+    workerPromise = assertOcrAssets().then(() => import('tesseract.js')).then(({createWorker}) => createWorker('eng', 1, {
+        langPath: MODEL_PATH,
+        gzip: false,
+        cacheMethod: 'none',
+      }));
+    const startingWorker = workerPromise;
+    workerPromise = boundedOcr(startingWorker, timeoutMs, () => {
       workerPromise = null;
+      // A worker that finishes starting after the deadline must not remain alive.
+      startingWorker.then(worker => worker?.terminate?.()).catch(() => {});
+    }).catch(error => {
+      if (workerPromise) workerPromise = null;
       throw error;
     });
   }
@@ -158,18 +194,23 @@ async function preprocessImage(bytes, preprocessor) {
 }
 
 /** Run fully local English OCR and return conservative, always-reviewable invoice fields. */
-export async function extractInvoiceFromImage({bytes, mimeType, workerFactory, preprocessor} = {}) {
+export async function extractInvoiceFromImage({bytes, mimeType, workerFactory, preprocessor,
+  timeoutMs = DEFAULT_OCR_TIMEOUT_MS} = {}) {
   const {data, detected} = checkedImage(bytes, mimeType);
   const processed = await preprocessImage(data, preprocessor);
   const run = async () => {
-    const worker = await getWorker(workerFactory);
+    let worker;
     try {
-      const result = await worker.recognize(processed);
+      worker = await getWorker(workerFactory, timeoutMs);
+      const result = await boundedOcr(worker.recognize(processed), timeoutMs, () => {
+        workerPromise = null;
+        Promise.resolve(worker.terminate?.()).catch(() => {});
+      });
       return parseOfflineInvoiceText(result?.data?.text || '', {ocrConfidence: result?.data?.confidence});
     } finally {
-      if (!workerFactory) {
+      if (worker) {
         workerPromise = null;
-        await worker.terminate();
+        await boundedOcr(Promise.resolve(worker.terminate?.()), Math.min(timeoutMs, 1_000)).catch(() => {});
       }
     }
   };

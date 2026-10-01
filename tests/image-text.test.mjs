@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFile} from 'node:fs/promises';
-import {parseOfflineInvoiceText} from '../ai/image-text.mjs';
+import {extractInvoiceFromImage, parseOfflineInvoiceText} from '../ai/image-text.mjs';
 import {extractInvoice} from '../ai/extraction.mjs';
 
 const workshopInvoiceText = `Tax Invoice
@@ -78,6 +78,41 @@ test('offline OCR leaves absent tax blank on a tax-free document', () => {
   assert.equal(result.tax.value, null);
   assert.equal(result.total.value, 100);
   assert.equal(result.reviewRequired, true);
+});
+
+const tinyPng = Buffer.from([137,80,78,71,13,10,26,10,0]);
+
+test('OCR startup rejection releases the queue for the next image', async () => {
+  await assert.rejects(extractInvoiceFromImage({bytes: tinyPng, mimeType: 'image/png',
+    preprocessor: async bytes => bytes, workerFactory: async () => { throw Object.assign(new Error('missing wasm'), {code: 'ENOENT'}); },
+    timeoutMs: 30}), /missing wasm/);
+  const result = await extractInvoiceFromImage({bytes: tinyPng, mimeType: 'image/png', preprocessor: async bytes => bytes,
+    workerFactory: async () => ({recognize: async () => ({data: {text: 'Total 10.00', confidence: 80}}), terminate: async () => {}}), timeoutMs: 30});
+  assert.equal(result.total.value, 10);
+});
+
+test('hung OCR worker is terminated and cannot poison later queued jobs', async () => {
+  let terminated = 0;
+  await assert.rejects(extractInvoiceFromImage({bytes: tinyPng, mimeType: 'image/png', preprocessor: async bytes => bytes,
+    workerFactory: async () => ({recognize: async () => new Promise(() => {}), terminate: async () => { terminated++; }}),
+    timeoutMs: 20}), /execution limit/);
+  assert.ok(terminated >= 1);
+  const result = await extractInvoiceFromImage({bytes: tinyPng, mimeType: 'image/png', preprocessor: async bytes => bytes,
+    workerFactory: async () => ({recognize: async () => ({data: {text: 'Subtotal 9.00\nTotal 9.00', confidence: 90}}), terminate: async () => {}}), timeoutMs: 30});
+  assert.equal(result.total.value, 9);
+});
+
+test('OCR failure reaches vision extraction with all required invoice fields', async () => {
+  let visionCalls = 0;
+  const raw = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
+    .map(name => [name, {value: ({invoiceNumber:'INV-8',customerName:'Buyer',invoiceDate:'2026-10-01',total:25,currency:'INR',direction:'receivable'})[name] ?? null, confidence: .99}]));
+  raw.lineItems = {value: [], confidence: .99};
+  const result = await extractInvoice({bytes: tinyPng, mimeType: 'image/png', fileName: 'invoice.png', businessName: 'Seller',
+    imageExtractor: async () => { throw Object.assign(new Error('wasm unavailable'), {code: 'ENOENT'}); },
+    provider: {generateStructured: async ({validate}) => { visionCalls++; return {data: validate(raw), model: 'vision', usedFallback: false}; }}});
+  assert.equal(visionCalls, 1);
+  assert.equal(result.invoiceNumber.value, 'INV-8');
+  assert.equal(result.direction.value, 'receivable');
 });
 
 test('the supplied image reaches review with printed totals before provider timeout', {skip: !process.env.CETLD_TEST_IMAGE_PATH}, async () => {
