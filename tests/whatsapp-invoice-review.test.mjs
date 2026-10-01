@@ -5,6 +5,7 @@ import {PGlite} from '@electric-sql/pglite';
 import {createWhatsAppAssistantChannel} from '../ai/whatsapp-channel.mjs';
 import {createWhatsAppInvoiceStore} from '../automation/whatsapp/invoice-store.mjs';
 import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistant-handler.mjs';
+import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 
 const scope = {workspaceId: '11111111-1111-4111-8111-111111111111',
   customerId: '22222222-2222-4222-8222-222222222222', phone: '+14155550123'};
@@ -238,5 +239,109 @@ test('atomic review migration is one paste-ready statement with service-only ACL
       [null, scope.customerId, scope.phone]), /invalid review scope/i);
     await assert.rejects(db.query('select * from public.whatsapp_transition_invoice_review($1,$2,$3,$4,$5,$6,$7)',
       [begun.id, 2, scope.workspaceId, scope.customerId, scope.phone, null, {}]), /invalid invoice review transition/i);
+
+    const state = async phone => (await db.query('select * from public.whatsapp_load_pending_action_state($1,$2,$3)',
+      [scope.workspaceId, scope.customerId, phone])).rows[0];
+    const store = async (phone, expected, number) => (await db.query(
+      'select * from public.whatsapp_store_pending_action($1,$2,$3,$4,$5,$6,$7,$8)',
+      [scope.workspaceId, scope.customerId, phone,
+        {type: 'create_invoice', payload: {invoice: {...invoice, invoiceNumber: number}}}, 'whatsapp',
+        expected.generation, expected.id, expected.version])).rows;
+
+    // An expected-empty planner cannot overwrite a photo that arrived while it worked.
+    const emptyPhone = '+14155550124';
+    const expectedEmpty = await state(emptyPhone);
+    const photo = (await db.query('select * from public.whatsapp_begin_invoice_review($1,$2,$3)',
+      [scope.workspaceId, scope.customerId, emptyPhone])).rows[0];
+    assert.equal((await store(emptyPhone, expectedEmpty, 'STALE-EMPTY')).length, 0);
+    assert.equal((await state(emptyPhone)).id, photo.id);
+
+    // A planner tied to an existing row/version also loses after that row changes.
+    const rowPhone = '+14155550125';
+    const firstState = await state(rowPhone);
+    assert.equal((await store(rowPhone, firstState, 'FIRST')).length, 1);
+    const expectedRow = await state(rowPhone);
+    await db.query('update public.whatsapp_pending_actions set version=version+1 where id=$1', [expectedRow.id]);
+    assert.equal((await store(rowPhone, expectedRow, 'STALE-ROW')).length, 0);
+
+    // Two generic proposals from the same generation have exactly one winner.
+    const racePhone = '+14155550126';
+    const raceState = await state(racePhone);
+    const results = await Promise.all([store(racePhone, raceState, 'RACE-A'), store(racePhone, raceState, 'RACE-B')]);
+    assert.deepEqual(results.map(rows => rows.length).sort(), [0, 1]);
+    const raceWinner = results.find(rows => rows.length)?.[0];
+    assert.equal((await db.query('select * from public.whatsapp_claim_pending_action($1,$2,$3,$4)',
+      [raceWinner.id, scope.workspaceId, scope.customerId, racePhone])).rows.length, 1);
+    assert.equal((await db.query('select * from public.whatsapp_claim_pending_action($1,$2,$3,$4)',
+      [raceWinner.id, scope.workspaceId, scope.customerId, racePhone])).rows.length, 0);
+
+    // A photo/generic race cannot revive the generic proposal after the photo tombstone.
+    const photoRacePhone = '+14155550127';
+    const photoRaceState = await state(photoRacePhone);
+    const [, staleGeneric] = await Promise.all([
+      db.query('select * from public.whatsapp_begin_invoice_review($1,$2,$3)',
+        [scope.workspaceId, scope.customerId, photoRacePhone]),
+      store(photoRacePhone, photoRaceState, 'PHOTO-RACE'),
+    ]);
+    const photoRaceActive = await state(photoRacePhone);
+    if (staleGeneric.length === 1) {
+      // If generic acquired the lock first, begin must replace it.
+      assert.equal(photoRaceActive.action.stage, 'extracting');
+      assert.notEqual(photoRaceActive.id, staleGeneric[0].id);
+    } else assert.equal(photoRaceActive.action.stage, 'extracting');
+
+    // Terminal reviews are replaceable, while saving survives ordinary expiry,
+    // blocks replacement photos, and may complete after expiry.
+    for (const [offset, terminal] of [[28, 'canceled'], [29, 'saved']]) {
+      const phone = `+141555501${offset}`;
+      await db.query(`insert into public.whatsapp_pending_actions(workspace_id,customer_id,phone,action,source,generation,expires_at)
+        values($1,$2,$3,$4,'whatsapp',1,now()+interval '1 minute')`,
+      [scope.workspaceId, scope.customerId, phone, {type:'invoice_review_draft', stage:terminal}]);
+      assert.equal((await store(phone, await state(phone), `AFTER-${terminal}`)).length, 1);
+    }
+    const savingPhone = '+14155550130';
+    const savingAction = {type:'invoice_review_draft', stage:'saving', invoice, missingFields:[], currencySource:'photo'};
+    const savedAction = {...savingAction, stage:'saved'};
+    const saving = (await db.query(`insert into public.whatsapp_pending_actions(workspace_id,customer_id,phone,action,source,generation,expires_at)
+      values($1,$2,$3,$4,'whatsapp',1,now()-interval '1 minute') returning *`,
+    [scope.workspaceId, scope.customerId, savingPhone, savingAction])).rows[0];
+    assert.equal((await db.query('select * from public.whatsapp_load_invoice_review($1,$2,$3)',
+      [scope.workspaceId, scope.customerId, savingPhone])).rows[0].action.stage, 'saving');
+    assert.equal((await db.query('select * from public.whatsapp_begin_invoice_review($1,$2,$3)',
+      [scope.workspaceId, scope.customerId, savingPhone])).rows[0].id, saving.id);
+    assert.equal((await db.query('select * from public.whatsapp_transition_invoice_review($1,$2,$3,$4,$5,$6,$7)',
+      [saving.id, saving.version, scope.workspaceId, scope.customerId, savingPhone, 'saving', savedAction])).rows[0].action.stage, 'saved');
+
+    // SQL NULL/three-valued logic and malformed invoice JSON fail closed.
+    const validationPhone = '+14155550131';
+    const validating = (await db.query('select * from public.whatsapp_begin_invoice_review($1,$2,$3)',
+      [scope.workspaceId, scope.customerId, validationPhone])).rows[0];
+    for (const bad of [
+      {type:'invoice_review_draft', stage:null},
+      {type:'invoice_review_draft', stage:'proposal', invoice:null, missingFields:[], currencySource:'photo'},
+      {type:'invoice_review_draft', stage:'proposal', invoice:'scalar', missingFields:[], currencySource:'photo'},
+    ]) await assert.rejects(db.query('select * from public.whatsapp_transition_invoice_review($1,$2,$3,$4,$5,$6,$7)',
+      [validating.id, validating.version, scope.workspaceId, scope.customerId, validationPhone, 'extracting', bad]),
+    /invalid invoice review transition|incomplete invoice review proposal/i);
+
+    await db.exec('set role anon');
+    await assert.rejects(db.query('select * from public.whatsapp_load_pending_action_state($1,$2,$3)',
+      [scope.workspaceId, scope.customerId, racePhone]), /permission denied/i);
   } finally { await db.close(); }
+});
+
+test('pending store generic persistence works when passed as an unbound channel function', async () => {
+  const calls = [];
+  const supabase = {from() { throw new Error('table write bypassed atomic RPC'); }, async rpc(name, args) {
+    calls.push({name, args});
+    if (name === 'whatsapp_load_pending_action_state') return {data: [{id:null, version:null, generation:0, action:null}]};
+    if (name === 'whatsapp_store_pending_action') return {data: [{id:1, version:1, generation:1, action:args.p_action}]};
+    throw new Error(name);
+  }};
+  const {loadPendingActionState, storePendingAction} = createWhatsAppPendingActionStore({supabase});
+  const channel = createWhatsAppAssistantChannel({authorizeChannel: async input => ({...input, allowed:true}),
+    createCustomerScopedStore: async () => ({query: async () => []}), loadPendingActionState, storePendingAction,
+    answer: async () => ({answer:'Invoice ready', pendingAction:{type:'create_invoice', payload:{invoice}}})});
+  assert.equal((await channel.ask({...scope, message:'create invoice'})).requiresInChatConfirmation, true);
+  assert.deepEqual(calls.map(call => call.name), ['whatsapp_load_pending_action_state', 'whatsapp_store_pending_action']);
 });

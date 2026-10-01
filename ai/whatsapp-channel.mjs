@@ -151,6 +151,7 @@ export function createWhatsAppAssistantChannel({
   provider,
   answer = answerWorkspaceQuestion,
   storePendingAction,
+  loadPendingActionState,
   loadPendingAction,
   consumePendingAction,
   loadInvoiceReview,
@@ -227,16 +228,23 @@ export function createWhatsAppAssistantChannel({
         if (pending.action?.type !== 'create_invoice' || typeof createInvoiceStore !== 'function') {
           return {answer: 'I can only confirm a proposed invoice from this chat.', pendingAction: null};
         }
+        if (typeof consumePendingAction === 'function') {
+          const claimed = await consumePendingAction({...scope, id: pending.id});
+          if (!claimed) return {answer: 'That proposal was replaced by a newer request. Nothing was saved.', pendingAction: null, stale: true};
+        }
         const key = `wa_invoice_${createHash('sha256').update(`${scope.workspaceId}:${scope.customerId}:${scope.phone}:${pending.id}`).digest('hex').slice(0, 32)}`;
         const saved = await saveInvoice({store: await createInvoiceStore(scope), invoice: pending.action.payload?.invoice,
           confirmed: true, idempotencyKey: key, accounting: null});
         if (saved?.needsInput) return {answer: saved.question, pendingAction: null};
-        if (typeof consumePendingAction === 'function') await consumePendingAction({...scope, id: pending.id});
         const invoice = {...saved.invoice, clientName: saved.invoice?.clientName || pending.action.payload?.invoice?.clientName};
         return {answer: `✅ *Invoice saved*\n• ${invoice.invoiceNumber} — ${invoice.clientName || 'Customer'}\n• ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}\n• Due: ${invoice.dueDate || 'not set'}`,
           pendingAction: null, saved: true};
       }
     }
+    // Snapshot before planner work. Persistence later compares this exact
+    // durable scope generation under the same database lock used by photos.
+    const expectedState = typeof loadPendingActionState === 'function'
+      ? await loadPendingActionState(scope) : null;
     const scopedStore = await makeStore(scope);
     if (!scopedStore || typeof scopedStore.query !== 'function') throw new TypeError('customer-scoped store is unavailable');
     // A workspace-wide accounting connector would bypass the customer store.
@@ -249,7 +257,13 @@ export function createWhatsAppAssistantChannel({
       pendingAction: null,
       requiresInAppConfirmation: true,
     };
-    await storePendingAction({workspaceId: scope.workspaceId, customerId: scope.customerId, phone: scope.phone, action: response.pendingAction, source: 'whatsapp'});
+    const stored = await storePendingAction({workspaceId: scope.workspaceId, customerId: scope.customerId,
+      phone: scope.phone, action: response.pendingAction, source: 'whatsapp', expectedState});
+    if (!stored) return {
+      answer: 'That request became stale because a newer invoice review or request arrived. Nothing was replaced; please review the newer request.',
+      pendingAction: null,
+      stale: true,
+    };
     return {
       answer: `${response.answer}\n\nSave it? Reply yes to confirm.`,
       pendingAction: null,

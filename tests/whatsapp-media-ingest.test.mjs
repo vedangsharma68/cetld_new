@@ -60,7 +60,7 @@ function mediaReviewStore(saved = []) {
 test('fresh yes saves only its scoped proposal and returns a saved summary', async () => {
   let saveInput, consumed;
   const channel = authorizedChannel({loadPendingAction: async input => ({id: 9, ...input, action, created_at: '2026-09-30T11:30:00Z'}),
-    consumePendingAction: async input => { consumed = input; }, createInvoiceStore: async () => ({}),
+    consumePendingAction: async input => { consumed = input; return {id: input.id, action}; }, createInvoiceStore: async () => ({}),
     saveInvoice: async input => { saveInput = input; return {saved: true, invoice: {invoiceNumber: 'INV-7', clientName: 'Buyer Co', currency: 'INR', total: 100, dueDate: '2026-10-30'}}; },
     clock: () => new Date('2026-09-30T12:00:00Z')});
   const result = await channel.ask({...scope, message: 'yes'});
