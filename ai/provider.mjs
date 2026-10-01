@@ -41,12 +41,13 @@ const SAFE_MESSAGES = Object.freeze({
 });
 
 export class AIError extends Error {
-  constructor(code, status = 502) {
+  constructor(code, status = 502, diagnostic = undefined) {
     const safeCode = Object.hasOwn(SAFE_MESSAGES, code) ? code : 'PROVIDER_ERROR';
     super(SAFE_MESSAGES[safeCode]);
     this.name = 'AIError';
     this.code = safeCode;
     this.status = Number.isInteger(status) && status >= 400 && status <= 599 ? status : 502;
+    if (diagnostic) this.diagnostic = diagnostic;
   }
 }
 
@@ -73,13 +74,28 @@ export function sanitizeModelSettings({primaryModel, fallbackModel} = {}) {
 }
 
 function invalidArgument() { return new AIError('INVALID_ARGUMENT', 400); }
-function statusError(status) {
-  if (status === 400 || status === 404) return new AIError('INVALID_MODEL', status);
-  if (status === 401 || status === 403) return new AIError('AUTH_FAILED', status);
-  if (status === 429) return new AIError('RATE_LIMITED', status);
-  if (status === 408) return new AIError('TIMEOUT', status);
-  if (status >= 500) return new AIError('PROVIDER_UNAVAILABLE', status);
-  return new AIError('PROVIDER_ERROR', status);
+function statusError(status, diagnostic) {
+  if (status === 400 || status === 404) return new AIError('INVALID_MODEL', status, diagnostic);
+  if (status === 401 || status === 403) return new AIError('AUTH_FAILED', status, diagnostic);
+  if (status === 429) return new AIError('RATE_LIMITED', status, diagnostic);
+  if (status === 408) return new AIError('TIMEOUT', status, diagnostic);
+  if (status >= 500) return new AIError('PROVIDER_UNAVAILABLE', status, diagnostic);
+  return new AIError('PROVIDER_ERROR', status, diagnostic);
+}
+
+const SAFE_ERROR_CODES = /^[A-Z][A-Z0-9_.-]{0,79}$/i;
+const SECRET_OR_PAYLOAD = /(?:https?:\/\/|(?:api[_-]?key|authorization|bearer|token|secret|password)\s*[:=]|[A-Za-z0-9+/_=-]{80,})/i;
+function providerDiagnostic(body) {
+  const error = body?.error && typeof body.error === 'object' ? body.error : body;
+  if (!error || typeof error !== 'object' || Array.isArray(error)) return undefined;
+  const rawCode = typeof error.code === 'string' ? error.code : typeof error.status === 'string' ? error.status : '';
+  const rawReason = typeof error.message === 'string' ? error.message
+    : typeof error.reason === 'string' ? error.reason
+    : typeof error.detail === 'string' ? error.detail : '';
+  const code = SAFE_ERROR_CODES.test(rawCode) ? rawCode.slice(0, 80) : undefined;
+  const reason = rawReason.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return {...(code ? {providerCode: code} : {}),
+    ...(reason && reason.length <= 300 && !SECRET_OR_PAYLOAD.test(reason) ? {reason} : {})};
 }
 function retryable(error) {
   return error instanceof AIError && ['TIMEOUT','NETWORK_ERROR','RATE_LIMITED','PROVIDER_UNAVAILABLE'].includes(error.code);
@@ -315,7 +331,8 @@ export class AIProvider {
 
   #logLegFailure(model, error) {
     const provider = this.#providerName(model);
-    this.logger?.warn?.('AI provider leg failed:', {provider, model, status: error instanceof AIError ? error.status : 502});
+    this.logger?.warn?.('AI provider leg failed:', {provider, model, status: error instanceof AIError ? error.status : 502,
+      ...(error instanceof AIError && error.diagnostic ? error.diagnostic : {})});
   }
 
   #logLegServed(model) {
@@ -327,15 +344,16 @@ export class AIProvider {
   }
 
   async #request(model, messages, options, usedFallback) {
+    const {signal, deadlineAt, ...wireOptions} = options;
     if (isZenModelId(model)) {
       if (!this.#zenApiKey) throw new AIError('API_KEY_MISSING', 503);
       return this.#fetch(ZEN_CHAT_COMPLETIONS_URL, {
         method: 'POST',
         headers: {'Content-Type': 'application/json', Authorization: `Bearer ${this.#zenApiKey}`},
-        body: safeJsonStringify({...options, model, messages, stream: false}),
+        body: safeJsonStringify({...wireOptions, model, messages, stream: false}), signal, deadlineAt,
       }, async response => {
         const body = await readBoundedJson(response);
-        if (!response.ok || body?.error) throw statusError(response.status || body?.error?.code || 502);
+        if (!response.ok || body?.error) throw statusError(response.status || Number(body?.error?.code) || 502, providerDiagnostic(body));
         const choice = body?.choices?.[0];
         const message = choice?.message;
         if (!message) throw new AIError('INVALID_RESPONSE');
@@ -350,10 +368,10 @@ export class AIProvider {
       return this.#fetch(OPENROUTER_BASE_URL + '/chat/completions', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', Authorization: `Bearer ${this.#openRouterApiKey}`},
-        body: safeJsonStringify(openRouterRequest(messages, options)),
+        body: safeJsonStringify(openRouterRequest(messages, wireOptions)), signal, deadlineAt,
       }, async response => {
         const body = await readBoundedJson(response);
-        if (!response.ok || body?.error) throw statusError(response.status || body?.error?.code || 502);
+        if (!response.ok || body?.error) throw statusError(response.status || Number(body?.error?.code) || 502, providerDiagnostic(body));
         const choice = body?.choices?.[0];
         const message = choice?.message;
         if (!message) throw new AIError('INVALID_RESPONSE');
@@ -365,10 +383,10 @@ export class AIProvider {
     return this.#fetch(`${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.#geminiApiKey)}`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: safeJsonStringify(geminiRequest(messages, options)),
+      body: safeJsonStringify(geminiRequest(messages, wireOptions)), signal, deadlineAt,
     }, async response => {
       const body = await readBoundedJson(response);
-      if (!response.ok || body?.error) throw statusError(response.status || body?.error?.code || 502);
+      if (!response.ok || body?.error) throw statusError(response.status || Number(body?.error?.code) || 502, providerDiagnostic(body));
       const parts = body?.candidates?.[0]?.content?.parts;
       if (!Array.isArray(parts)) throw new AIError('INVALID_RESPONSE');
       const content = parts.filter(part => typeof part?.text === 'string').map(part => part.text).join('');
@@ -386,19 +404,31 @@ export class AIProvider {
   async #fetch(url, init, consumeResponse = response => response) {
     if (typeof this.fetchImpl !== 'function') throw new AIError('NETWORK_ERROR', 503);
     const controller = new AbortController();
-    let timer;
-    const request = (async () => consumeResponse(await this.fetchImpl(url, {...init, signal: controller.signal, redirect: 'error'})))();
-    const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => {
-        controller.abort();
-        reject(new AIError('TIMEOUT', 504));
-      }, this.timeoutMs);
-    });
+    const externalSignal = init.signal;
+    const remaining = Number.isFinite(init.deadlineAt) ? init.deadlineAt - Date.now() : this.timeoutMs;
+    const timeoutMs = Math.max(0, Math.min(this.timeoutMs, remaining));
+    let rejectTimeout;
+    const timeout = new Promise((_, reject) => { rejectTimeout = reject; });
+    const abort = () => {
+      controller.abort();
+      rejectTimeout(new AIError('TIMEOUT', 504));
+    };
+    if (externalSignal?.aborted) abort();
+    else externalSignal?.addEventListener?.('abort', abort, {once: true});
+    const timer = setTimeout(() => {
+      abort();
+    }, timeoutMs);
+    const {deadlineAt: _deadlineAt, ...requestInit} = init;
+    const request = Promise.resolve().then(async () => consumeResponse(await this.fetchImpl(url,
+      {...requestInit, signal: controller.signal, redirect: 'error'})));
+    // Aborting fetch/body consumption prevents a real network operation from
+    // surviving this race. The race also protects against non-conforming test
+    // adapters which ignore AbortSignal entirely.
     try { return await Promise.race([request, timeout]); }
     catch (error) {
       if (error instanceof AIError) throw error;
       if (error?.name === 'AbortError') throw new AIError('TIMEOUT', 504);
       throw new AIError('NETWORK_ERROR', 503);
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(timer); externalSignal?.removeEventListener?.('abort', abort); }
   }
 }

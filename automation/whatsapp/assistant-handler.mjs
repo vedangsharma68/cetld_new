@@ -11,6 +11,7 @@ const requiredInvoiceFields = ['invoiceNumber','customerName','invoiceDate','tot
 const fieldLabels = {invoiceNumber: 'invoice number', customerName: 'customer name', invoiceDate: 'invoice date',
   total: 'total', currency: 'explicit currency code (for example INR or USD)',
   direction: 'confirmation that your business issued the invoice'};
+const DEFAULT_MEDIA_DEADLINE_MS = 42_000;
 
 function clarification(extracted) {
   const missing = requiredInvoiceFields.filter(name => extracted?.[name]?.value == null
@@ -41,7 +42,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
   invoiceStoreFactory = createWhatsAppInvoiceStore, logger = console} = {}) {
   if (!supabase?.from) throw new TypeError('A server-side Supabase client is required');
 
-  return async ({workspaceId, customerId, phone, message, media, mediaError}) => {
+  return async ({workspaceId, customerId, phone, message, media, mediaError, deadlineAt}) => {
     const {data: settings, error} = await supabase.from('workspace_ai_settings')
       .select('primary_model,fallback_model').eq('workspace_id', workspaceId).maybeSingle();
     if (error) throw error;
@@ -63,6 +64,10 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
     });
     if (mediaError) return "I couldn't fetch that photo. Please resend it and I'll try again.";
     if (media) {
+      const mediaDeadline = Math.min(Number.isFinite(deadlineAt) ? deadlineAt : Infinity,
+        Date.now() + DEFAULT_MEDIA_DEADLINE_MS);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), Math.max(0, mediaDeadline - Date.now()));
       try {
         const {data: workspace, error: workspaceError} = await supabase.from('workspace_settings').select('business_name')
           .eq('workspace_id', workspaceId).maybeSingle();
@@ -73,9 +78,10 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         const extractionProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
           fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, geminiApiKey: env.GEMINI_API_KEY,
           openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
-          fetchImpl, timeoutMs: 12_000, maxAttempts: 1});
+          fetchImpl, timeoutMs: Math.max(1, Math.min(12_000, mediaDeadline - Date.now())), maxAttempts: 1});
         const extracted = await extract({provider: extractionProvider, ...media,
-          businessName: workspace?.business_name || ''});
+          businessName: workspace?.business_name || '', deadlineAt: mediaDeadline,
+          signal: controller.signal, logger});
         const invoice = invoiceProposal(extracted);
         if (!invoice) return clarification(extracted);
         await pending.storePendingAction({workspaceId, customerId, phone,
@@ -85,7 +91,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         logger?.error?.('WhatsApp invoice extraction failed', {workspaceId,
           message: String(error?.message || '').slice(0, 200)});
         return "I couldn't extract a review from that image. Please send the invoice number, customer name, invoice date, total, explicit currency code, and confirm whether your business issued it. Nothing was saved.";
-      }
+      } finally { clearTimeout(timer); }
     }
     let history = [];
     try { history = await readConversationHistory({supabase, workspaceId, phone}); }

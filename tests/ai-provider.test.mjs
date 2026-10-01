@@ -202,6 +202,29 @@ test('oversized upstream responses are rejected with a safe bounded error',async
   await assert.rejects(ai.generate({messages:[{role:'user',content:'Hi'}]}),error=>error.code==='INVALID_RESPONSE'&&!/xxxx/.test(error.message));
 });
 
+test('non-OK diagnostics expose only bounded known error fields and redact unsafe reasons',async()=>{
+  const logs=[];
+  const safe=provider(async()=>jsonResponse({error:{code:'INVALID_ARGUMENT',message:'responseJsonSchema is not supported for this model',ignored:{prompt:'invoice bytes'}}},400),
+    {primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null,maxAttempts:1,logger:{warn:(message,details)=>logs.push({message,details})}});
+  await assert.rejects(safe.generate({messages:[{role:'user',content:'private source content'}]}),error=>{
+    assert.equal(error.message,'The configured AI model is not available.');
+    assert.equal(error.diagnostic.reason,'responseJsonSchema is not supported for this model');
+    return true;
+  });
+  assert.deepEqual(logs[0].details,{provider:'google',model:DEFAULT_EXTRACTION_MODEL,status:400,
+    providerCode:'INVALID_ARGUMENT',reason:'responseJsonSchema is not supported for this model'});
+  assert.doesNotMatch(JSON.stringify(logs),/private source content|invoice bytes/);
+
+  for(const message of ['https://example.test/?key=gemini-secret','token=abc123', 'A'.repeat(301)]){
+    logs.length=0;
+    const unsafe=provider(async()=>jsonResponse({error:{code:'BAD_REQUEST',message}},400),
+      {primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null,maxAttempts:1,logger:{warn:(text,details)=>logs.push({text,details})}});
+    await assert.rejects(unsafe.generate({messages:[{role:'user',content:'do not log me'}]}));
+    assert.equal(Object.hasOwn(logs[0].details,'reason'),false);
+    assert.equal(logs[0].details.providerCode,'BAD_REQUEST');
+  }
+});
+
 test('bounded retries preserve explicit rate limits and hide upstream response bodies',async()=>{
   const calls=[],waits=[];
   const ai=provider(async url=>{calls.push(String(url).includes('generativelanguage')?'gemini':'openrouter');return gemini('',{status:429});},{sleepImpl:async ms=>waits.push(ms)});
@@ -251,8 +274,8 @@ test('authentication failures advance once per leg from Space Bunny to LongCat t
   assert.equal(result.model,GEMINI_FALLBACK_MODEL);
   assert.equal(result.content,'Gemini recovered');
   assert.deepEqual(logs,[
-    {message:'AI provider leg failed:',details:{provider:'opencode-zen',model:ZEN_PRIMARY_MODEL,status:401}},
-    {message:'AI provider leg failed:',details:{provider:'opencode-zen',model:ZEN_FALLBACK_MODEL,status:403}},
+    {message:'AI provider leg failed:',details:{provider:'opencode-zen',model:ZEN_PRIMARY_MODEL,status:401,reason:'private upstream detail'}},
+    {message:'AI provider leg failed:',details:{provider:'opencode-zen',model:ZEN_FALLBACK_MODEL,status:403,reason:'private upstream detail'}},
     {message:'AI provider request served:',details:{provider:'google',model:GEMINI_FALLBACK_MODEL}},
   ]);
 });

@@ -290,7 +290,7 @@ function validateAndSanitize(raw, {verifiedPrintedAdjustments = false} = {}) {
 
 /** Extract an invoice from trusted, already-downloaded bytes; this function never stores it. */
 export async function extractInvoice({ provider, bytes, mimeType, fileName, businessName,
-  imageExtractor = extractInvoiceFromImage }) {
+  imageExtractor = extractInvoiceFromImage, deadlineAt, signal, logger = console }) {
   if (!provider || typeof provider.generateStructured !== 'function') fail('provider.generateStructured is required');
   const source = detectFormat(bytes, mimeType);
   const pdfText = source.detected === 'application/pdf' ? await extractPdfText(source.bytes) : null;
@@ -302,14 +302,14 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
   let offlineReview = null;
   if (source.detected.startsWith('image/')) {
     try {
-      const review = await imageExtractor({bytes: source.bytes, mimeType: source.detected});
+      const review = await imageExtractor({bytes: source.bytes, mimeType: source.detected, deadlineAt, signal});
       // Local OCR is deliberately confidence-capped and is useful as review
       // evidence only. In particular, finding totals must not prevent the
       // vision extractor from reading identity, dates, currency, and direction.
       const {ocr, ...safeReview} = review;
       offlineReview = safeReview;
     } catch (error) {
-      console.warn('Invoice image OCR unavailable:', error instanceof Error ? error.message : 'unknown error');
+      logger?.warn?.('Invoice image OCR unavailable:', {reason: error instanceof Error ? error.message.slice(0, 200) : 'unknown error'});
     }
   }
   const payload = makeMessages({ bytes, mimeType, fileName, businessName, pdfText });
@@ -323,18 +323,29 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
       name: 'invoice_extraction',
       validate,
       maxTokens: 8192,
+      deadlineAt,
+      signal,
     });
   } catch (error) {
     // A local draft remains safe for dashboard review when vision is
     // unavailable, but its capped confidence prevents it becoming a save
     // proposal on channels such as WhatsApp.
-    if (offlineReview) return offlineReview;
+    if (offlineReview && !(signal?.aborted || Number.isFinite(deadlineAt) && deadlineAt <= Date.now())) {
+      logger?.info?.('Invoice extraction outcome:', {source: 'ocr_fallback', model: offlineReview.model,
+        missingFields: offlineReview.uncertainFields, missingCount: offlineReview.uncertainFields.length});
+      return offlineReview;
+    }
     throw error;
   }
   if (!response || typeof response !== 'object' || !Object.hasOwn(response, 'data')) fail('provider returned a malformed response');
   // AIProvider already returns the validator's sanitized shape (with warnings).
   // Injected adapters that did not invoke validate still undergo local validation.
-  return {...(sanitized ?? validate(response.data)), model: response.model, usedFallback: response.usedFallback};
+  const result = {...(sanitized ?? validate(response.data)), model: response.model, usedFallback: response.usedFallback};
+  const missingFields = FIELD_NAMES.filter(name => result[name]?.value == null).concat(
+    result.lineItems?.value?.length ? [] : ['lineItems']);
+  logger?.info?.('Invoice extraction outcome:', {source: 'vision', model: result.model,
+    missingFields, missingCount: missingFields.length});
+  return result;
 }
 
 export const invoiceExtractionSchema = responseSchema;

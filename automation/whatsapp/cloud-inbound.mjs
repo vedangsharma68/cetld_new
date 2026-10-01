@@ -3,10 +3,11 @@ import {createWhatsAppInvoiceUpdateStore} from './invoice-update-store.mjs';
 import {writeConversationTurn} from './conversation-memory.mjs';
 
 const MAX_MESSAGES = 100;
-const DEFAULT_PROCESS_BUDGET_MS = 40_000;
+const DEFAULT_PROCESS_BUDGET_MS = 50_000;
 // Leave enough runway for a database lookup and a deterministic reply. Slow
 // planner work may use the first slot, but is never started near the deadline.
 const MIN_EVENT_BUDGET_MS = 5_000;
+const MIN_MEDIA_EVENT_BUDGET_MS = 45_000;
 const SAFE_FALLBACK_REPLY = "I couldn't safely check that just now. Please try again.";
 const MEDIA_FETCH_FAILED_REPLY = "I couldn't fetch that photo. Please resend it and I'll try again.";
 const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
@@ -189,7 +190,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     }
     await inbox.markStop(event, { confirmationDue: Boolean(confirmation || global.confirmationDue), workspaceId: confirmation });
   }
-  async function processEvent(event) {
+  async function processEvent(event, deadlineAt) {
     if (isOptOut(event.message_text)) {
       if (!event.stop_processed_at) {
         await revokeOptOut(event);
@@ -230,7 +231,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       const media = event.media_ref && !event.media_error ? await inbox.getMedia(event) : null;
       const response = event.media_error ? MEDIA_FETCH_FAILED_REPLY : await onBoundMessage({ workspaceId: binding.workspaceId, customerId: binding.customerId,
         phone: event.sender_phone, message: event.message_text, messageId: event.provider_message_id, media,
-        mediaError: event.media_ref && !media ? 'Stored media unavailable' : null });
+        mediaError: event.media_ref && !media ? 'Stored media unavailable' : null, deadlineAt });
       const answer = typeof response === 'string' ? response : response?.answer;
       if (typeof answer === 'string' && answer.trim()) {
         const sender = await getOutbound();
@@ -303,7 +304,17 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           continue;
         }
         try {
-          const result = await processEvent(event);
+          const remaining = budgetMs - (clock() - startedAt);
+          if (event.media_ref && remaining < MIN_MEDIA_EVENT_BUDGET_MS) {
+            const sender = await getOutbound();
+            await sender.sendServiceReply({workspaceId: null, to: event.sender_phone, body: SAFE_FALLBACK_REPLY,
+              lastInboundAt: event.provider_timestamp || event.received_at, kind: 'verification',
+              messageId: event.provider_message_id, businessName: 'CETLD'});
+            await inbox.complete(event, 'MEDIA_DEADLINE_REACHED', null, false);
+            completed++;
+            continue;
+          }
+          const result = await processEvent(event, startedAt + budgetMs - 5_000);
           if (result?.plannerFailure) {
             const detail = JSON.stringify(result.plannerFailure).slice(0, 1000);
             await inbox.complete(event, 'ASSISTANT_PLANNER_FAILED', detail, false);

@@ -395,6 +395,24 @@ test('processing stops before the deadline and leaves the next event pending', a
   assert.deepEqual(pending.map(event => event.id), [1]);
 });
 
+test('a claimed media event without extraction runway gets one safe reply and completes', async () => {
+  const event = {id: 3, attempts: 1, provider_message_id: 'wamid.media-deadline', sender_phone: '+919871367051',
+    message_text: '', media_ref: 'wamid.media-deadline', received_at: new Date().toISOString()};
+  const sends = [], completions = [];
+  let claims = 0;
+  const times = [0, 0, 6_000, 50_000];
+  const inbox = {async claim() { return claims++ === 0 ? [event] : []; },
+    async complete(...args) { completions.push(args); }};
+  const runtime = createInboundRuntime({supabase: {}, inbox, env: {...env, WHATSAPP_PROCESS_BUDGET_MS: '50000'},
+    clock: () => times.shift() ?? 50_000,
+    outbound: {async sendServiceReply(input) { sends.push(input); }}});
+
+  assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 1});
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].body, "I couldn't safely check that just now. Please try again.");
+  assert.deepEqual(completions[0].slice(1), ['MEDIA_DEADLINE_REACHED', null, false]);
+});
+
 test('a final-attempt event receives exactly one fallback and is never retried', async () => {
   const event = {id: 5, attempts: 5, provider_message_id: 'wamid.final', sender_phone: '+919871367051',
     message_text: 'slow question', received_at: new Date().toISOString()};

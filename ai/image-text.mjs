@@ -195,14 +195,17 @@ async function preprocessImage(bytes, preprocessor) {
 
 /** Run fully local English OCR and return conservative, always-reviewable invoice fields. */
 export async function extractInvoiceFromImage({bytes, mimeType, workerFactory, preprocessor,
-  timeoutMs = DEFAULT_OCR_TIMEOUT_MS} = {}) {
+  timeoutMs = DEFAULT_OCR_TIMEOUT_MS, deadlineAt} = {}) {
   const {data, detected} = checkedImage(bytes, mimeType);
-  const processed = await preprocessImage(data, preprocessor);
+  const remaining = () => Math.max(1, Math.min(timeoutMs,
+    Number.isFinite(deadlineAt) ? deadlineAt - Date.now() : timeoutMs));
+  if (Number.isFinite(deadlineAt) && deadlineAt <= Date.now()) throw new Error('OCR deadline reached');
+  const processed = await boundedOcr(preprocessImage(data, preprocessor), remaining());
   const run = async () => {
     let worker;
     try {
-      worker = await getWorker(workerFactory, timeoutMs);
-      const result = await boundedOcr(worker.recognize(processed), timeoutMs, () => {
+      worker = await getWorker(workerFactory, remaining());
+      const result = await boundedOcr(worker.recognize(processed), remaining(), () => {
         workerPromise = null;
         Promise.resolve(worker.terminate?.()).catch(() => {});
       });
@@ -210,7 +213,7 @@ export async function extractInvoiceFromImage({bytes, mimeType, workerFactory, p
     } finally {
       if (worker) {
         workerPromise = null;
-        await boundedOcr(Promise.resolve(worker.terminate?.()), Math.min(timeoutMs, 1_000)).catch(() => {});
+        await boundedOcr(Promise.resolve(worker.terminate?.()), Math.min(remaining(), 1_000)).catch(() => {});
       }
     }
   };
