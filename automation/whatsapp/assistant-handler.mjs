@@ -73,8 +73,16 @@ function parseDate(value, clock) {
 export function parseInvoiceCorrection(message, clock = () => new Date()) {
   const text = String(message || '').trim();
   let match;
-  if ((match = text.match(/\b(?:change|make|set)\s+(?:its\s+|the\s+)?amount\s+(?:to\s+)?([0-9]+(?:\.[0-9]{1,2})?)\s*([a-z]{3})?\b/i)))
-    return {changes: {total: Number(match[1]), ...(match[2] ? {currency: match[2].toUpperCase()} : {})}};
+  if (/\b(?:sql|run|execute|select|delete|drop|table|script)\b/i.test(text)) return null;
+  match = text.match(/\b(?:change|make|set|update|edit|modify|fix)\b(.*?)\b(?:amount|amt|amnt|total|price|value)\b\s*(?:to|=|as|is|:)?\s*([$₹€£])?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*([a-z]{3})?\b/i);
+  if (match) {
+    const symbols = {'$': 'USD', '₹': 'INR', '€': 'EUR', '£': 'GBP'};
+    const code = match[4] ? match[4].toUpperCase() : (match[2] ? symbols[match[2]] : null);
+    const hint = invoiceHint(match[1]);
+    if (hint && hint.split(' ').length > 5) return null;
+    const total = Number(match[3].replace(/,/g, ''));
+    return {changes: {total, ...(code ? {currency: code} : {})}, ...(hint ? {hint} : {})};
+  }
   if ((match = text.match(/\b(?:change|make|set)\s+(?:the\s+)?due\s+date\s+(?:to\s+)?(.+)$/i))) return {changes: {dueDate: parseDate(match[1], clock)}};
   if ((match = text.match(/\b(?:change|make|set)\s+(?:the\s+)?(?:invoice|issue)\s+date\s+(?:to\s+)?(.+)$/i))) return {changes: {invoiceDate: parseDate(match[1], clock)}};
   if ((match = text.match(/\b(?:change|set)\s+(?:the\s+)?customer\s+(?:to\s+)?(.+)$/i))) return {changes: {clientName: match[1].trim()}};
@@ -82,6 +90,34 @@ export function parseInvoiceCorrection(message, clock = () => new Date()) {
   if ((match = text.match(/\b(?:change|set)\s+(?:the\s+)?notes?\s+(?:to\s+)?(.+)$/i))) return {changes: {notes: match[1].trim()}};
   if (/\bmark\s+(?:it|the invoice)\s+paid\b/i.test(text)) return {changes: {status: 'paid'}};
   return null;
+}
+
+const HINT_STOP = new Set(['the','its','it','my','a','an','of','for','to','invoice','invoices','inovoice','invoce','invoic','bill','that','this','last','latest','recent','please','pls','one','from']);
+function hintTokens(text) {
+  return String(text || '').toLowerCase().replace(/['’]s\b/g, '').split(/[^a-z0-9]+/).filter(t => t && !HINT_STOP.has(t));
+}
+function invoiceHint(text) { const tokens = hintTokens(text); return tokens.length ? tokens.join(' ') : null; }
+function editDistance(a, b) {
+  const row = Array.from({length: b.length + 1}, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0]; row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = tmp;
+    }
+  }
+  return row[b.length];
+}
+/** Typo-tolerant match of a spoken customer reference against invoice client names. */
+export function matchInvoicesByHint(invoices, hint) {
+  const wanted = hintTokens(hint);
+  if (!wanted.length) return [];
+  return invoices.filter(invoice => {
+    const name = hintTokens(`${invoice.clientName || ''} ${invoice.printedInvoiceNumber || ''}`);
+    return wanted.every(token => name.some(part => part.startsWith(token) || token.startsWith(part) && part.length >= 4
+      || editDistance(token, part) <= (token.length >= 6 ? 2 : token.length >= 4 ? 1 : 0)));
+  });
 }
 
 function requestedInvoiceNumber(message) {
@@ -270,6 +306,10 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       const explicitNumber = requestedInvoiceNumber(message);
       let candidates;
       if (explicitNumber) candidates = await store.findInvoices({invoiceNumber: explicitNumber});
+      else if (correction?.hint) {
+        candidates = matchInvoicesByHint(await store.findInvoices({limit: 50}), correction.hint);
+        if (!candidates.length) return `I couldn’t find an invoice for “${correction.hint}”. Which invoice number should I use?`;
+      }
       else if (current?.action?.stage === 'saved' && current.action.invoice?.id) candidates = [current.action.invoice];
       else candidates = await store.findInvoices();
       if (!candidates.length) return explicitNumber ? `I couldn't find invoice ${explicitNumber}.` : "I couldn't find a recent invoice to change.";
@@ -353,10 +393,18 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         message: String(memoryError?.message || '').slice(0, 200)});
     }
     const input = {workspaceId, customerId, phone, message, history};
-    let response = await channel.ask(input);
+    if (!String(message || '').trim()) return '';
+    let response;
+    try { response = await channel.ask(input); }
+    catch (error) {
+      logger?.error?.('WhatsApp assistant ask failed', {workspaceId, name: error?.name, message: String(error?.message || '').slice(0, 200)});
+      return 'My brain is having a hiccup right now 😅 Please send that again in a minute. Nothing was changed.';
+    }
     // Planner failures are safe, read-only fallbacks. Retry only this narrowly
     // identified class, once, to absorb transient free-tier provider failures.
-    if (response?.model === null && response?.usedFallback === true) response = await channel.ask(input);
+    if (response?.model === null && response?.usedFallback === true) {
+      try { response = await channel.ask(input); } catch { /* keep the first fallback answer */ }
+    }
     const answer = typeof response?.answer === 'string' ? response.answer : '';
     if (response?.model !== null || response?.usedFallback !== true) return answer;
     return {answer, plannerFailure: response?.evidence?.plannerFailure || null};
