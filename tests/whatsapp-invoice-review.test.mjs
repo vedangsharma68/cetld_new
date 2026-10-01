@@ -141,7 +141,7 @@ test('CAS rejects wrong scope and stale photo/currency workers without resurrect
   assert.equal(state.row.action.stage, 'extracting');
 });
 
-test('currency-only photo continuation proposes before the planner and repeated currency is stable', async () => {
+test('currency-missing photo uses a default and auto-saves without confirmation', async () => {
   let row = null, planner = 0, saves = 0;
   const pending = {async beginInvoiceReview() { row = {id: 12, version: 1, generation: 1,
     action: {type: 'invoice_review_draft', stage: 'extracting'}}; return structuredClone(row); },
@@ -163,37 +163,32 @@ test('currency-only photo continuation proposes before the planner and repeated 
     .map(name => [name, {value: ({invoiceNumber:'INV-50',customerName:'Buyer',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:0,total:100,outstandingAmount:100,direction:'receivable'})[name] ?? null,
       confidence: name === 'currency' ? 0 : .99}]));
   const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory: () => ({}),
-    pendingActionStoreFactory: () => pending, invoiceStoreFactory: () => ({save() { saves++; }}),
+    pendingActionStoreFactory: () => pending, invoiceStoreFactory: () => ({}),
+    saveInvoice: async ({invoice}) => { saves++; return {saved: true, invoice}; },
     channelFactory: () => ({async ask() { planner++; return {answer: 'planner'}; }}),
     extract: async () => ({...fields, lineItems: {value: [], confidence: .99}})});
-  assert.match(await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/png'}}), /currency.*USD/i);
-  const proposal = await handler({...scope, message: 'USD'});
-  assert.match(proposal, /INV-50.*USD 100/s);
-  const version = row.version;
-  assert.equal(await handler({...scope, message: 'USD'}), proposal);
-  assert.equal(row.version, version);
-  assert.equal(planner, 0); assert.equal(saves, 0);
+  const reply = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/png'}});
+  assert.match(reply, /^Logged invoice INV-50/);
+  assert.match(reply, /INR, currency not shown; assumed workspace default INR/);
+  assert.doesNotMatch(reply, /reply yes/i);
+  assert.equal(row.action.stage, 'saved');
+  assert.equal(planner, 0); assert.equal(saves, 1);
 });
 
-test('default handler, real channel and real invoice store complete photo currency confirmation exactly once', async () => {
+test('default handler, real invoice store auto-saves a photo exactly once', async () => {
   const db = combinedSupabase();
   const fields = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-50',customerName:'Buyer',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:0,total:100,outstandingAmount:100,direction:'receivable'})[name] ?? null,
       confidence: name === 'currency' ? 0 : .99}]));
   const handler = createWhatsAppBoundMessageHandler({supabase: db, providerFactory: () => ({}),
     extract: async () => ({...fields, lineItems: {value: [], confidence: .99}})});
-  assert.match(await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/png'}}), /currency.*USD/i);
-  const proposal = await handler({...scope, message: 'USD'});
-  assert.match(proposal, /INV-50.*USD 100/s);
-  assert.deepEqual(Object.keys(db.review.action.invoice).sort(), Object.keys(invoice).sort());
+  const logged = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/png'}});
+  assert.match(logged, /^Logged invoice INV-50/);
+  assert.doesNotMatch(logged, /reply yes/i);
+  assert.equal(db.review.action.invoice.invoiceNumber, 'INV-50');
+  assert.equal(db.review.action.invoice.currency, 'INR');
   assert.equal(Object.hasOwn(db.review.action.invoice, 'missingDueDate'), false);
-  assert.equal(await handler({...scope, message: 'USD'}), proposal);
-  const [a, b] = await Promise.all([
-    handler({...scope, message: 'yes'}), handler({...scope, message: 'confirm'}),
-  ]);
   assert.equal(db.invoices.length, 1);
-  assert.ok([a, b].some(answer => /Invoice saved/.test(answer)));
-  assert.ok([a, b].some(answer => /already being saved|already saved/.test(answer)));
   assert.match(await handler({...scope, message: 'yes'}), /already saved/i);
   assert.equal(db.invoices.length, 1);
   assert.equal(Object.hasOwn(db.review.action.invoice, 'missingDueDate'), false);
@@ -204,8 +199,7 @@ test('default handler, real channel and real invoice store complete photo curren
   complete.currency = {value: 'USD', confidence: .99};
   const completeHandler = createWhatsAppBoundMessageHandler({supabase: completeDb, providerFactory: () => ({}),
     extract: async () => ({...complete, lineItems: {value: [], confidence: .99}})});
-  assert.match(await completeHandler({...scope, message: '', media: {bytes: Buffer.from([2]), mimeType: 'image/png'}}), /INV-51.*USD 100/s);
-  assert.match(await completeHandler({...scope, message: 'go ahead'}), /Invoice saved/);
+  assert.match(await completeHandler({...scope, message: '', media: {bytes: Buffer.from([2]), mimeType: 'image/png'}}), /^Logged invoice INV-51/);
   assert.equal(completeDb.invoices.length, 1);
   assert.equal(Object.hasOwn(completeDb.review.action.invoice, 'missingDueDate'), false);
 });

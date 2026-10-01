@@ -89,7 +89,7 @@ test('expired proposal is refused and consumed', async () => {
   assert.equal(consumed, 1);
 });
 
-test('bound media extracts and stores a proposal reply', async () => {
+test('bound media extracts and immediately saves with a logged reply', async () => {
   const saved = [];
   const providerOptions = [];
   const values = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
@@ -101,10 +101,12 @@ test('bound media extracts and stores a proposal reply', async () => {
   }}; }};
   const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory: options => { providerOptions.push(options); return {}; },
     channelFactory: () => ({ask() { throw new Error('not used'); }}), pendingActionStoreFactory: () => mediaReviewStore(saved),
+    saveInvoice: async ({invoice}) => ({saved: true, invoice}), invoiceStoreFactory: () => ({}),
     extract: async () => ({...values, lineItems: {value: [], confidence: .99}})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/jpeg', fileName: 'invoice.jpg'}});
-  assert.match(answer, /INV-7.*Save it\? Reply yes/s);
-  assert.equal(saved[0].action.stage, 'proposal');
+  assert.match(answer, /^Logged invoice INV-7[\s\S]*INR/);
+  assert.doesNotMatch(answer, /reply yes/i);
+  assert.deepEqual(saved.map(item => item.action.stage), ['saving', 'saved']);
   assert.equal(providerOptions[0].primaryModel, 'space-bunny-free', 'chat keeps the configured/default conversational model');
   assert.equal(providerOptions[1].primaryModel, 'gemini-3.5-flash-lite', 'media uses the vision extraction model');
 });
@@ -123,12 +125,13 @@ test('production extraction advances an incomplete OCR draft to vision and propo
   const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory: () => provider,
     channelFactory: () => ({ask() { throw new Error('not used'); }}),
     pendingActionStoreFactory: () => mediaReviewStore({push() { stored++; }}),
+    saveInvoice: async ({invoice}) => ({saved: true, invoice}), invoiceStoreFactory: () => ({}),
     extract: options => extractInvoice({...options, imageExtractor: async () =>
       parseOfflineInvoiceText('Subtotal 100.00\nTax 18.00\nTotal 118.00', {ocrConfidence: 95})})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([137,80,78,71,13,10,26,10,0]), mimeType: 'image/png'}});
   assert.equal(visionCalls, 1);
-  assert.equal(stored, 1);
-  assert.match(answer, /INV-10.*Save it\? Reply yes/s);
+  assert.equal(stored, 2);
+  assert.match(answer, /^Logged invoice INV-10/);
 });
 
 test('incomplete media returns bounded review guidance and stores no proposal', async () => {
@@ -153,7 +156,7 @@ test('incomplete media returns bounded review guidance and stores no proposal', 
       parseOfflineInvoiceText('Subtotal 100.00\nTotal 100.00', {ocrConfidence: 92})})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([137,80,78,71,13,10,26,10,0]),
     mimeType: 'image/png', fileName: 'unclear.png'}});
-  assert.match(answer, /invoice number.*explicit currency code.*business issued.*explicitly confirm/i);
+  assert.match(answer, /clearer photo.*Nothing was saved/i);
   assert.equal(visionCalls, 1);
   assert.equal(stored, 1);
 });

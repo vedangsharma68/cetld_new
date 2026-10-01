@@ -73,7 +73,9 @@ test('uses a shallow provider wire contract and deterministically restores every
   assert.equal(invoiceExtractionResponseSchema.properties.invoiceNumber.type, undefined);
   assert.equal(invoiceExtractionResponseSchema.properties.invoiceNumber.anyOf.length, 2);
   assert.equal(invoiceExtractionResponseSchema.properties.invoiceNumber.properties, undefined);
-  assert.deepEqual(adaptInvoiceExtractionWireResponse(wire), normalized);
+  assert.deepEqual(adaptInvoiceExtractionWireResponse(wire), {...normalized,
+    currencySource: {value: null, confidence: 0}, addressHint: {value: null, confidence: 0},
+    paymentTerms: {value: null, confidence: 0}});
   assert.deepEqual(validateInvoiceExtractionWireResponse(wire), validateInvoiceExtractionResponse(normalized));
   assert.throws(() => validateInvoiceExtractionWireResponse({...wire, injected: 'malicious'}), /unknown fields/);
   assert.throws(() => validateInvoiceExtractionWireResponse({...wire, direction: 'incoming'}), /direction must be/);
@@ -92,7 +94,8 @@ test('wire output preserves absent evidence as null and uncertain without droppi
   assert.equal(result.direction.value, 'uncertain');
   assert.equal(result.outstandingAmount.value, null);
   assert.equal(result.reviewRequired, true);
-  assert.deepEqual(Object.keys(result).sort(), [...Object.keys(response()), 'reviewRequired', 'uncertainFields', 'warnings'].sort());
+  assert.deepEqual(Object.keys(result).sort(), [...Object.keys(response()), 'currencySource', 'addressHint',
+    'paymentTerms', 'reviewRequired', 'uncertainFields', 'warnings'].sort());
 });
 
 test('accepts explicit USD and EUR currency codes', async () => {
