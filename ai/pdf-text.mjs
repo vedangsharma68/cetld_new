@@ -5,7 +5,7 @@ const DEFAULT_TIMEOUT_MS = 8_000;
 // A selectable-text PDF is cheaper and more portable for free text models than
 // forwarding a binary PDF. Return null for scans or unsupported documents so
 // callers can use their existing document-understanding path.
-export async function extractPdfText(bytes, {getDocumentImpl, timeoutMs = DEFAULT_TIMEOUT_MS} = {}) {
+export async function extractPdfText(bytes, {getDocumentImpl, timeoutMs = DEFAULT_TIMEOUT_MS, signal, deadlineAt} = {}) {
   let task;
   let timer;
   try {
@@ -35,8 +35,12 @@ export async function extractPdfText(bytes, {getDocumentImpl, timeoutMs = DEFAUL
       }
       return pages.join('\n\n');
     })();
+    if (signal?.aborted) throw new Error('PDF text parsing aborted');
+    const effectiveTimeout = Number.isFinite(deadlineAt) ? Math.max(0, Math.min(timeoutMs, deadlineAt - Date.now())) : timeoutMs;
     const deadline = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error('PDF text parsing timed out')), timeoutMs);
+      const abort = () => { void task?.destroy?.(); reject(new Error('PDF text parsing aborted')); };
+      signal?.addEventListener('abort', abort, {once: true});
+      timer = setTimeout(() => { signal?.removeEventListener('abort', abort); void task?.destroy?.(); reject(new Error('PDF text parsing timed out')); }, effectiveTimeout);
     });
     const result = await Promise.race([parse, deadline]);
     if (!result) return null;
@@ -47,6 +51,6 @@ export async function extractPdfText(bytes, {getDocumentImpl, timeoutMs = DEFAUL
   } finally {
     clearTimeout(timer);
     // PDF.js may itself be stalled; do not let worker cleanup extend the bound.
-    if (task) void task.destroy().catch(() => {});
+    if (task) await task.destroy().catch(() => {});
   }
 }

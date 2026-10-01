@@ -27,8 +27,10 @@ async function assertOcrAssets() {
   ]);
 }
 
-function boundedOcr(operation, timeoutMs, onTimeout) {
+function boundedOcr(operation, timeoutMs, onTimeout, signal) {
+  if (signal?.aborted || timeoutMs <= 0) return Promise.reject(new Error('OCR execution deadline expired'));
   let timer;
+  let abort;
   return Promise.race([
     Promise.resolve(operation),
     new Promise((_, reject) => {
@@ -37,7 +39,15 @@ function boundedOcr(operation, timeoutMs, onTimeout) {
         reject(new Error(`OCR exceeded its ${timeoutMs}ms execution limit`));
       }, timeoutMs);
     }),
-  ]).finally(() => clearTimeout(timer));
+    new Promise((_, reject) => {
+      abort = () => { try { onTimeout?.(); } catch {} reject(new Error('OCR execution aborted')); };
+      signal?.addEventListener('abort', abort, {once: true});
+    }),
+  ]).finally(() => { clearTimeout(timer); signal?.removeEventListener('abort', abort); });
+}
+
+function timeLeft(deadlineAt, timeoutMs) {
+  return Number.isFinite(deadlineAt) ? Math.max(0, Math.min(timeoutMs, deadlineAt - Date.now())) : timeoutMs;
 }
 
 function fail(message) {
@@ -153,12 +163,12 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   };
 }
 
-async function getWorker(workerFactory, timeoutMs) {
+async function getWorker(workerFactory, timeoutMs, signal) {
   if (workerFactory) {
     const startingWorker = Promise.resolve().then(workerFactory);
     return boundedOcr(startingWorker, timeoutMs, () => {
       startingWorker.then(worker => worker?.terminate?.()).catch(() => {});
-    });
+    }, signal);
   }
   if (!workerPromise) {
     workerPromise = assertOcrAssets().then(() => import('tesseract.js')).then(({createWorker}) => createWorker('eng', 1, {
@@ -171,7 +181,7 @@ async function getWorker(workerFactory, timeoutMs) {
       workerPromise = null;
       // A worker that finishes starting after the deadline must not remain alive.
       startingWorker.then(worker => worker?.terminate?.()).catch(() => {});
-    }).catch(error => {
+    }, signal).catch(error => {
       if (workerPromise) workerPromise = null;
       throw error;
     });
@@ -179,42 +189,51 @@ async function getWorker(workerFactory, timeoutMs) {
   return workerPromise;
 }
 
-async function preprocessImage(bytes, preprocessor) {
-  if (preprocessor) return preprocessor(bytes);
+async function preprocessImage(bytes, preprocessor, {signal, deadlineAt, timeoutMs}) {
+  const remaining = timeLeft(deadlineAt, timeoutMs);
+  if (signal?.aborted || remaining <= 0) throw new Error('Image preprocessing deadline expired');
+  if (preprocessor) return boundedOcr(Promise.resolve().then(() => preprocessor(bytes, {signal, deadlineAt})), remaining, null, signal);
   const sharpModule = await import('sharp');
   const sharp = sharpModule.default;
   const image = sharp(bytes, {failOn: 'error', limitInputPixels: MAX_PIXELS});
-  const metadata = await image.metadata();
+  const destroy = () => image.destroy();
+  const metadata = await boundedOcr(image.metadata(), timeLeft(deadlineAt, timeoutMs), destroy, signal);
   if (!Number.isSafeInteger(metadata.width) || !Number.isSafeInteger(metadata.height) || metadata.width < 1 || metadata.height < 1 || metadata.width * metadata.height > MAX_PIXELS) {
     fail('image dimensions exceed the 12 megapixel OCR limit');
   }
   const scale = Math.min(3, Math.max(1, 2200 / Math.max(metadata.width, metadata.height)));
-  return image.resize(Math.round(metadata.width * scale), Math.round(metadata.height * scale), {kernel: 'lanczos3'})
-    .grayscale().normalize().sharpen().png().toBuffer();
+  try {
+    return await boundedOcr(image.resize(Math.round(metadata.width * scale), Math.round(metadata.height * scale), {kernel: 'lanczos3'})
+      .grayscale().normalize().sharpen().png().toBuffer(), timeLeft(deadlineAt, timeoutMs), destroy, signal);
+  } finally { image.destroy(); }
 }
 
 /** Run fully local English OCR and return conservative, always-reviewable invoice fields. */
 export async function extractInvoiceFromImage({bytes, mimeType, workerFactory, preprocessor,
-  timeoutMs = DEFAULT_OCR_TIMEOUT_MS} = {}) {
+  timeoutMs = DEFAULT_OCR_TIMEOUT_MS, signal, deadlineAt} = {}) {
   const {data, detected} = checkedImage(bytes, mimeType);
-  const processed = await preprocessImage(data, preprocessor);
+  const effectiveDeadline = Number.isFinite(deadlineAt) ? deadlineAt : Date.now() + timeoutMs;
+  const processed = await preprocessImage(data, preprocessor, {signal, deadlineAt: effectiveDeadline, timeoutMs});
   const run = async () => {
     let worker;
     try {
-      worker = await getWorker(workerFactory, timeoutMs);
-      const result = await boundedOcr(worker.recognize(processed), timeoutMs, () => {
+      const remaining = timeLeft(effectiveDeadline, timeoutMs);
+      worker = await getWorker(workerFactory, remaining, signal);
+      if (signal?.aborted || timeLeft(effectiveDeadline, timeoutMs) <= 0) throw new Error('OCR execution deadline expired');
+      const result = await boundedOcr(worker.recognize(processed), timeLeft(effectiveDeadline, timeoutMs), () => {
         workerPromise = null;
         Promise.resolve(worker.terminate?.()).catch(() => {});
-      });
+      }, signal);
       return parseOfflineInvoiceText(result?.data?.text || '', {ocrConfidence: result?.data?.confidence});
     } finally {
       if (worker) {
         workerPromise = null;
-        await boundedOcr(Promise.resolve(worker.terminate?.()), Math.min(timeoutMs, 1_000)).catch(() => {});
+        await boundedOcr(Promise.resolve(worker.terminate?.()), Math.min(timeLeft(effectiveDeadline, timeoutMs), 1_000)).catch(() => {});
       }
     }
   };
-  const task = ocrQueue.then(run);
+  const queueWait = boundedOcr(ocrQueue, timeLeft(effectiveDeadline, timeoutMs), null, signal);
+  const task = queueWait.then(run);
   ocrQueue = task.then(() => undefined, () => undefined);
   const parsed = await task;
   parsed.ocr.mimeType = detected;

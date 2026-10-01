@@ -121,9 +121,15 @@ export class SupabaseInboundInbox {
         error_code: errorCode, error_detail: errorDetail })
       .eq('id', event.id).eq('claim_token', event.claim_token), 'complete');
   }
+
+  async defer(event) {
+    dataOrThrow(await this.supabase.from('whatsapp_inbound_events').update({status: 'pending', processed_at: null,
+      claim_token: null, claimed_at: null, next_attempt_at: new Date().toISOString(),
+      attempts: Math.max(0, Number(event.attempts || 1) - 1)})
+      .eq('id', event.id).eq('claim_token', event.claim_token), 'defer');
+  }
 }
 
-const verifyReply = 'We could not verify this number for invoice updates. Please contact the business that issued your invoice to verify your WhatsApp number.';
 const stopReply = 'Your request has been recorded. You will no longer receive WhatsApp invoice updates from this business.';
 
 /** Route only through service-role consent/customer binding; never use a claimed name. */
@@ -189,7 +195,11 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     }
     await inbox.markStop(event, { confirmationDue: Boolean(confirmation || global.confirmationDue), workspaceId: confirmation });
   }
-  async function processEvent(event) {
+  async function processEvent(event, {signal, deadlineAt} = {}) {
+    const active = () => {
+      if (signal?.aborted || (Number.isFinite(deadlineAt) && clock() >= deadlineAt)) throw Object.assign(new Error('Inbound processing deadline expired'), {name: 'AbortError'});
+    };
+    active();
     if (isOptOut(event.message_text)) {
       if (!event.stop_processed_at) {
         await revokeOptOut(event);
@@ -209,10 +219,9 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     }
     const bindings = await resolveActiveBindings({ supabase, phone: event.sender_phone });
     if (bindings.length !== 1) {
-      const sender = await getOutbound();
-      await sender.sendServiceReply({ workspaceId: null, to: event.sender_phone, body: verifyReply,
-        lastInboundAt: event.provider_timestamp || event.received_at, kind: 'verification', messageId: event.provider_message_id,
-        businessName: 'CETLD' });
+      // An unbound or ambiguous phone has no authorized workspace/recipient
+      // scope. Keep verification inside the established binding flow rather
+      // than emitting a direct workspace-null message.
       return 'verify';
     }
     const binding = bindings[0];
@@ -230,7 +239,8 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       const media = event.media_ref && !event.media_error ? await inbox.getMedia(event) : null;
       const response = event.media_error ? MEDIA_FETCH_FAILED_REPLY : await onBoundMessage({ workspaceId: binding.workspaceId, customerId: binding.customerId,
         phone: event.sender_phone, message: event.message_text, messageId: event.provider_message_id, media,
-        mediaError: event.media_ref && !media ? 'Stored media unavailable' : null });
+        mediaError: event.media_ref && !media ? 'Stored media unavailable' : null, signal, deadlineAt });
+      active();
       const answer = typeof response === 'string' ? response : response?.answer;
       if (typeof answer === 'string' && answer.trim()) {
         const sender = await getOutbound();
@@ -287,23 +297,30 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       const budgetMs = Number.isFinite(configuredBudget) && configuredBudget > 0
         ? configuredBudget : DEFAULT_PROCESS_BUDGET_MS;
       const startedAt = clock();
+      const deadlineAt = startedAt + budgetMs;
+      const controller = new AbortController();
+      const deadlineTimer = setTimeout(() => controller.abort(), budgetMs);
       const seen = new Set();
       let claimed = 0;
       let completed = 0;
-      while (claimed < 10 && budgetMs - (clock() - startedAt) >= MIN_EVENT_BUDGET_MS) {
+      try { while (claimed < 10 && deadlineAt - clock() >= MIN_EVENT_BUDGET_MS) {
         // Claim individually so a deadline never leaves an unstarted batch
         // leased for five minutes.
         const [event] = await inbox.claim(1);
         if (!event || seen.has(event.id)) break;
         seen.add(event.id);
         claimed++;
+        if (deadlineAt - clock() < MIN_EVENT_BUDGET_MS) {
+          if (typeof inbox.defer === 'function') await inbox.defer(event);
+          break;
+        }
         if (event.attempts >= 5) {
           await failFinalAttempt(event);
           completed++;
           continue;
         }
         try {
-          const result = await processEvent(event);
+          const result = await processEvent(event, {signal: controller.signal, deadlineAt});
           if (result?.plannerFailure) {
             const detail = JSON.stringify(result.plannerFailure).slice(0, 1000);
             await inbox.complete(event, 'ASSISTANT_PLANNER_FAILED', detail, false);
@@ -311,11 +328,18 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           completed++;
         }
         catch (error) {
+          if (controller.signal.aborted || clock() >= deadlineAt) {
+            if (typeof inbox.defer === 'function') await inbox.defer(event);
+            break;
+          }
           logger.error('WhatsApp inbound event failed', { messageId: event.provider_message_id, name: error?.name || 'Error',
             message: String(error?.message || '').slice(0, 200) });
           await inbox.complete(event, 'PROCESSING_FAILED', String(error?.message || '').slice(0, 1000));
         }
-      }
+        // Media is the long path. Leave later events unclaimed for the next
+        // webhook continuation or five-minute cron invocation.
+        if (event.media_ref) break;
+      }} finally { clearTimeout(deadlineTimer); }
       return { claimed, completed };
     },
   };

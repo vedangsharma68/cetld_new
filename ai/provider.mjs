@@ -73,13 +73,35 @@ export function sanitizeModelSettings({primaryModel, fallbackModel} = {}) {
 }
 
 function invalidArgument() { return new AIError('INVALID_ARGUMENT', 400); }
-function statusError(status) {
-  if (status === 400 || status === 404) return new AIError('INVALID_MODEL', status);
-  if (status === 401 || status === 403) return new AIError('AUTH_FAILED', status);
-  if (status === 429) return new AIError('RATE_LIMITED', status);
-  if (status === 408) return new AIError('TIMEOUT', status);
-  if (status >= 500) return new AIError('PROVIDER_UNAVAILABLE', status);
-  return new AIError('PROVIDER_ERROR', status);
+function statusError(status, reason = 'unknown') {
+  if (reason === 'model_unavailable' || status === 404) return Object.assign(new AIError('INVALID_MODEL', status), {providerReason: reason});
+  if (status === 401 || status === 403) return Object.assign(new AIError('AUTH_FAILED', status), {providerReason: reason});
+  if (status === 429) return Object.assign(new AIError('RATE_LIMITED', status), {providerReason: reason});
+  if (status === 408) return Object.assign(new AIError('TIMEOUT', status), {providerReason: reason});
+  if (status >= 500) return Object.assign(new AIError('PROVIDER_UNAVAILABLE', status), {providerReason: reason});
+  return Object.assign(new AIError('PROVIDER_ERROR', status), {providerReason: reason});
+}
+const PROVIDER_REASONS = new Set(['schema_complexity','unsupported_schema_keyword','invalid_generation_config','unsupported_modality','model_unavailable','permission_denied','quota_exceeded','unknown']);
+function classifyProviderError(body, status) {
+  const code = typeof body?.error?.code === 'string' ? body.error.code.toLowerCase() : '';
+  const text = [body?.error?.message, body?.error?.status, body?.error?.reason,
+    ...(Array.isArray(body?.error?.details) ? body.error.details.map(item => item?.reason || item?.message) : [])]
+    .filter(value => typeof value === 'string').join(' ').toLowerCase();
+  let reason = 'unknown';
+  if (/schema.{0,40}(too complex|complexity|nesting|depth|size|limit)/.test(text)) reason = 'schema_complexity';
+  else if (/(unsupported|unknown|not supported).{0,40}(schema|keyword)|(schema|keyword).{0,40}(unsupported|not supported)/.test(text)) reason = 'unsupported_schema_keyword';
+  else if (/generation.?config|generation configuration/.test(text)) reason = 'invalid_generation_config';
+  else if (/unsupported.{0,30}(modality|image|document|mime)|modality.{0,30}(unsupported|not supported)/.test(text)) reason = 'unsupported_modality';
+  else if (/model.{0,40}(not found|unavailable|not supported|does not exist)|model_not_found/.test(`${code} ${text}`)) reason = 'model_unavailable';
+  else if (status === 401 || status === 403 || /permission_denied|permission denied/.test(`${code} ${text}`)) reason = 'permission_denied';
+  else if (status === 429 || /quota_exceeded|quota exceeded|resource_exhausted/.test(`${code} ${text}`)) reason = 'quota_exceeded';
+  return PROVIDER_REASONS.has(reason) ? reason : 'unknown';
+}
+function remainingMs(deadlineAt, fallback) {
+  return Number.isFinite(deadlineAt) ? Math.max(0, Math.min(fallback, deadlineAt - Date.now())) : fallback;
+}
+function assertActive(signal, deadlineAt) {
+  if (signal?.aborted || remainingMs(deadlineAt, 1) <= 0) throw new AIError('TIMEOUT', 504);
 }
 function retryable(error) {
   return error instanceof AIError && ['TIMEOUT','NETWORK_ERROR','RATE_LIMITED','PROVIDER_UNAVAILABLE'].includes(error.code);
@@ -235,6 +257,7 @@ export class AIProvider {
     const candidates = this.#candidates();
     let lastError;
     for (const model of candidates) {
+      assertActive(options.signal, options.deadlineAt);
       try { return await this.#generateWithModel(model, messages, requestOptions, model !== this.primaryModel); }
       catch (error) {
         lastError = error;
@@ -259,6 +282,7 @@ export class AIProvider {
       temperature: 0,
     };
     const decode = result => {
+      assertActive(options.signal, options.deadlineAt);
       const finishReason = String(result.finishReason || '').toLowerCase();
       if (['max_tokens','max_output_tokens','length'].includes(finishReason)) throw new AIError('INVALID_OUTPUT', 502);
       let parsed;
@@ -299,6 +323,7 @@ export class AIProvider {
   async #generateWithModel(model, messages, options, usedFallback) {
     let lastError;
     for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
+      assertActive(options.signal, options.deadlineAt);
       try {
         const result = await this.#request(model, messages, options, usedFallback);
         this.#logLegServed(model);
@@ -307,7 +332,9 @@ export class AIProvider {
       catch (error) {
         lastError = error;
         if (!retryable(error) || attempt + 1 >= this.maxAttempts) throw error;
-        await this.sleepImpl(this.retryDelayMs * (2 ** attempt));
+        const delay = Math.min(this.retryDelayMs * (2 ** attempt), remainingMs(options.deadlineAt, Infinity));
+        if (delay <= 0) throw new AIError('TIMEOUT', 504);
+        await this.sleepImpl(delay);
       }
     }
     throw lastError;
@@ -315,7 +342,8 @@ export class AIProvider {
 
   #logLegFailure(model, error) {
     const provider = this.#providerName(model);
-    this.logger?.warn?.('AI provider leg failed:', {provider, model, status: error instanceof AIError ? error.status : 502});
+    this.logger?.warn?.('AI provider leg failed:', {provider, model, status: error instanceof AIError ? error.status : 502,
+      reason: PROVIDER_REASONS.has(error?.providerReason) ? error.providerReason : 'unknown'});
   }
 
   #logLegServed(model) {
@@ -327,15 +355,16 @@ export class AIProvider {
   }
 
   async #request(model, messages, options, usedFallback) {
+    const {signal, deadlineAt, ...wireOptions} = options;
     if (isZenModelId(model)) {
       if (!this.#zenApiKey) throw new AIError('API_KEY_MISSING', 503);
       return this.#fetch(ZEN_CHAT_COMPLETIONS_URL, {
         method: 'POST',
         headers: {'Content-Type': 'application/json', Authorization: `Bearer ${this.#zenApiKey}`},
-        body: safeJsonStringify({...options, model, messages, stream: false}),
+        body: safeJsonStringify({...wireOptions, model, messages, stream: false}),
       }, async response => {
         const body = await readBoundedJson(response);
-        if (!response.ok || body?.error) throw statusError(response.status || body?.error?.code || 502);
+        if (!response.ok || body?.error) throw statusError(response.status || Number(body?.error?.code) || 502, classifyProviderError(body, response.status));
         const choice = body?.choices?.[0];
         const message = choice?.message;
         if (!message) throw new AIError('INVALID_RESPONSE');
@@ -343,32 +372,32 @@ export class AIProvider {
         const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
         if (!content && !toolCalls.length) throw new AIError('INVALID_RESPONSE');
         return {content, finishReason: choice.finish_reason || null, toolCalls, model, usedFallback};
-      });
+      }, {signal, deadlineAt});
     }
     if (model === OPENROUTER_FREE_MODEL) {
       if (!this.#openRouterApiKey) throw new AIError('API_KEY_MISSING', 503);
       return this.#fetch(OPENROUTER_BASE_URL + '/chat/completions', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', Authorization: `Bearer ${this.#openRouterApiKey}`},
-        body: safeJsonStringify(openRouterRequest(messages, options)),
+        body: safeJsonStringify(openRouterRequest(messages, wireOptions)),
       }, async response => {
         const body = await readBoundedJson(response);
-        if (!response.ok || body?.error) throw statusError(response.status || body?.error?.code || 502);
+        if (!response.ok || body?.error) throw statusError(response.status || Number(body?.error?.code) || 502, classifyProviderError(body, response.status));
         const choice = body?.choices?.[0];
         const message = choice?.message;
         if (!message) throw new AIError('INVALID_RESPONSE');
         const content = typeof message.content === 'string' ? message.content : Array.isArray(message.content) ? message.content.map(part => part?.text || '').join('') : '';
         return {content, finishReason: choice.finish_reason || null, toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [], model, usedFallback};
-      });
+      }, {signal, deadlineAt});
     }
     if (!this.#geminiApiKey) throw new AIError('API_KEY_MISSING', 503);
     return this.#fetch(`${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.#geminiApiKey)}`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: safeJsonStringify(geminiRequest(messages, options)),
+      body: safeJsonStringify(geminiRequest(messages, wireOptions)),
     }, async response => {
       const body = await readBoundedJson(response);
-      if (!response.ok || body?.error) throw statusError(response.status || body?.error?.code || 502);
+      if (!response.ok || body?.error) throw statusError(response.status || Number(body?.error?.code) || 502, classifyProviderError(body, response.status));
       const parts = body?.candidates?.[0]?.content?.parts;
       if (!Array.isArray(parts)) throw new AIError('INVALID_RESPONSE');
       const content = parts.filter(part => typeof part?.text === 'string').map(part => part.text).join('');
@@ -380,25 +409,28 @@ export class AIProvider {
       }));
       if (!content && !toolCalls.length) throw new AIError('INVALID_RESPONSE');
       return {content, finishReason, toolCalls, model, usedFallback};
-    });
+    }, {signal, deadlineAt});
   }
 
-  async #fetch(url, init, consumeResponse = response => response) {
+  async #fetch(url, init, consumeResponse = response => response, {signal, deadlineAt} = {}) {
     if (typeof this.fetchImpl !== 'function') throw new AIError('NETWORK_ERROR', 503);
+    assertActive(signal, deadlineAt);
     const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, {once: true});
     let timer;
     const request = (async () => consumeResponse(await this.fetchImpl(url, {...init, signal: controller.signal, redirect: 'error'})))();
     const timeout = new Promise((_, reject) => {
       timer = setTimeout(() => {
         controller.abort();
         reject(new AIError('TIMEOUT', 504));
-      }, this.timeoutMs);
+      }, remainingMs(deadlineAt, this.timeoutMs));
     });
     try { return await Promise.race([request, timeout]); }
     catch (error) {
       if (error instanceof AIError) throw error;
       if (error?.name === 'AbortError') throw new AIError('TIMEOUT', 504);
       throw new AIError('NETWORK_ERROR', 503);
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
   }
 }
