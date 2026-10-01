@@ -151,8 +151,11 @@ export function createWhatsAppAssistantChannel({
   provider,
   answer = answerWorkspaceQuestion,
   storePendingAction,
+  loadPendingActionState,
   loadPendingAction,
   consumePendingAction,
+  loadInvoiceReview,
+  transitionInvoiceReview,
   createInvoiceStore,
   saveInvoice = saveAssistantInvoice,
   clock = () => new Date(),
@@ -173,6 +176,46 @@ export function createWhatsAppAssistantChannel({
     if (authorized?.allowed !== true || authorized.workspaceId !== scope.workspaceId
       || authorized.customerId !== scope.customerId || authorized.phone !== scope.phone) {
       return {answer: 'Please verify your number in cetld before discussing account details.', pendingAction: null, denied: true};
+    }
+    if (CONFIRMATION.test(text) && typeof loadInvoiceReview === 'function'
+      && typeof transitionInvoiceReview === 'function') {
+      const review = await loadInvoiceReview(scope);
+      if (review?.action?.type === 'invoice_review_draft') {
+        if (review.action.stage === 'incomplete' || review.action.stage === 'extracting') {
+          return {answer: 'I can’t confirm an incomplete invoice review. Please provide the requested details or send a clearer photo.', pendingAction: null};
+        }
+        if (review.action.stage === 'saved') {
+          return {answer: `✅ *Invoice already saved*\n• ${review.action.invoice.invoiceNumber} — ${review.action.invoice.clientName}\n• ${review.action.invoice.currency} ${review.action.invoice.total.toLocaleString('en-IN')}`,
+            pendingAction: null, saved: true, idempotent: true};
+        }
+        if (review.action.stage === 'saving') {
+          return {answer: 'That exact invoice proposal is already being saved. Please wait a moment.', pendingAction: null};
+        }
+        if (review.action.stage !== 'proposal') {
+          return {answer: 'There is no complete invoice proposal to confirm. Please resend the photo.', pendingAction: null};
+        }
+        const claimed = await transitionInvoiceReview({...review, ...scope, fromStage: 'proposal',
+          action: {...review.action, stage: 'saving'}});
+        if (!claimed) {
+          const latest = await loadInvoiceReview(scope);
+          if (latest?.action?.stage === 'saved') return {answer: '✅ That invoice was already saved.', pendingAction: null, saved: true, idempotent: true};
+          return {answer: 'That proposal was replaced or is already being saved. Nothing else was saved.', pendingAction: null};
+        }
+        const key = `wa_invoice_${createHash('sha256').update(`${scope.workspaceId}:${scope.customerId}:${scope.phone}:${review.id}`).digest('hex').slice(0, 32)}`;
+        try {
+          const saved = await saveInvoice({store: await createInvoiceStore(scope), invoice: review.action.invoice,
+            confirmed: true, idempotencyKey: key, accounting: null});
+          if (saved?.needsInput) throw new TypeError('review proposal became incomplete');
+          const invoice = {...saved.invoice, clientName: saved.invoice?.clientName || review.action.invoice.clientName};
+          await transitionInvoiceReview({...claimed, ...scope, fromStage: 'saving',
+            action: {...review.action, stage: 'saved'}});
+          return {answer: `✅ *Invoice saved*\n• ${invoice.invoiceNumber} — ${invoice.clientName || 'Customer'}\n• ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}\n• Due: ${invoice.dueDate || 'not set'}`,
+            pendingAction: null, saved: true, idempotent: saved.idempotent === true};
+        } catch (error) {
+          await transitionInvoiceReview({...claimed, ...scope, fromStage: 'saving', action: review.action});
+          throw error;
+        }
+      }
     }
     if (CONFIRMATION.test(text) && typeof loadPendingAction === 'function') {
       const pending = await loadPendingAction(scope);
@@ -195,6 +238,10 @@ export function createWhatsAppAssistantChannel({
           pendingAction: null, saved: true};
       }
     }
+    // Snapshot before planner work. Persistence later compares this exact
+    // durable scope generation under the same database lock used by photos.
+    const expectedState = typeof loadPendingActionState === 'function'
+      ? await loadPendingActionState(scope) : null;
     const scopedStore = await makeStore(scope);
     if (!scopedStore || typeof scopedStore.query !== 'function') throw new TypeError('customer-scoped store is unavailable');
     // A workspace-wide accounting connector would bypass the customer store.
@@ -207,7 +254,13 @@ export function createWhatsAppAssistantChannel({
       pendingAction: null,
       requiresInAppConfirmation: true,
     };
-    await storePendingAction({workspaceId: scope.workspaceId, customerId: scope.customerId, phone: scope.phone, action: response.pendingAction, source: 'whatsapp'});
+    const stored = await storePendingAction({workspaceId: scope.workspaceId, customerId: scope.customerId,
+      phone: scope.phone, action: response.pendingAction, source: 'whatsapp', expectedState});
+    if (!stored) return {
+      answer: 'That request became stale because a newer invoice review or request arrived. Nothing was replaced; please review the newer request.',
+      pendingAction: null,
+      stale: true,
+    };
     return {
       answer: `${response.answer}\n\nSave it? Reply yes to confirm.`,
       pendingAction: null,

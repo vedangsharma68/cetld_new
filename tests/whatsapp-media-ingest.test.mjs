@@ -51,10 +51,16 @@ function authorizedChannel(options = {}) {
     createCustomerScopedStore: async () => ({query() { return []; }}), answer: async () => ({answer: 'Normal reply.', pendingAction: null}), ...options});
 }
 
+function mediaReviewStore(saved = []) {
+  return {async beginInvoiceReview() { return {id: 1, version: 1, generation: 1}; },
+    async transitionInvoiceReview(input) { saved.push(input); return {...input, version: input.version + 1}; },
+    async loadInvoiceReview() { return null; }};
+}
+
 test('fresh yes saves only its scoped proposal and returns a saved summary', async () => {
   let saveInput, consumed;
   const channel = authorizedChannel({loadPendingAction: async input => ({id: 9, ...input, action, created_at: '2026-09-30T11:30:00Z'}),
-    consumePendingAction: async input => { consumed = input; }, createInvoiceStore: async () => ({}),
+    consumePendingAction: async input => { consumed = input; return {id: input.id, action}; }, createInvoiceStore: async () => ({}),
     saveInvoice: async input => { saveInput = input; return {saved: true, invoice: {invoiceNumber: 'INV-7', clientName: 'Buyer Co', currency: 'INR', total: 100, dueDate: '2026-10-30'}}; },
     clock: () => new Date('2026-09-30T12:00:00Z')});
   const result = await channel.ask({...scope, message: 'yes'});
@@ -94,11 +100,11 @@ test('bound media extracts and stores a proposal reply', async () => {
     throw new Error(table);
   }}; }};
   const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory: options => { providerOptions.push(options); return {}; },
-    channelFactory: () => ({ask() { throw new Error('not used'); }}), pendingActionStoreFactory: () => ({storePendingAction: async row => saved.push(row)}),
+    channelFactory: () => ({ask() { throw new Error('not used'); }}), pendingActionStoreFactory: () => mediaReviewStore(saved),
     extract: async () => ({...values, lineItems: {value: [], confidence: .99}})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/jpeg', fileName: 'invoice.jpg'}});
   assert.match(answer, /INV-7.*Save it\? Reply yes/s);
-  assert.equal(saved[0].source, 'whatsapp');
+  assert.equal(saved[0].action.stage, 'proposal');
   assert.equal(providerOptions[0].primaryModel, 'space-bunny-free', 'chat keeps the configured/default conversational model');
   assert.equal(providerOptions[1].primaryModel, 'gemini-3.5-flash-lite', 'media uses the vision extraction model');
 });
@@ -106,7 +112,7 @@ test('bound media extracts and stores a proposal reply', async () => {
 test('production extraction advances an incomplete OCR draft to vision and proposes a confident invoice', async () => {
   let visionCalls = 0, stored = 0;
   const raw = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
-    .map(name => [name, {value: ({invoiceNumber:'INV-10',customerName:'Buyer Co',invoiceDate:'2026-10-01',subtotal:100,tax:18,total:118,currency:'INR',direction:'receivable'})[name] ?? null, confidence: .98}]));
+    .map(name => [name, {value: ({invoiceNumber:'INV-10',customerName:'Buyer Co',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:18,total:118,currency:'INR',direction:'receivable'})[name] ?? null, confidence: .98}]));
   raw.lineItems = {value: [], confidence: .8};
   const provider = {generateStructured: async ({validate}) => { visionCalls++; return {data: validate(invoiceWire(raw)), model: 'vision', usedFallback: false}; }};
   const supabase = {from(table) { return {select() { return this; }, eq() { return this; }, async maybeSingle() {
@@ -116,7 +122,7 @@ test('production extraction advances an incomplete OCR draft to vision and propo
   }}; }};
   const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory: () => provider,
     channelFactory: () => ({ask() { throw new Error('not used'); }}),
-    pendingActionStoreFactory: () => ({storePendingAction: async () => { stored++; }}),
+    pendingActionStoreFactory: () => mediaReviewStore({push() { stored++; }}),
     extract: options => extractInvoice({...options, imageExtractor: async () =>
       parseOfflineInvoiceText('Subtotal 100.00\nTax 18.00\nTotal 118.00', {ocrConfidence: 95})})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([137,80,78,71,13,10,26,10,0]), mimeType: 'image/png'}});
@@ -142,14 +148,14 @@ test('incomplete media returns bounded review guidance and stores no proposal', 
   }};
   const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory: () => provider,
     channelFactory: () => ({ask: async () => ({answer: 'text reply'})}),
-    pendingActionStoreFactory: () => ({storePendingAction: async () => { stored++; }}),
+    pendingActionStoreFactory: () => mediaReviewStore({push() { stored++; }}),
     extract: options => extractInvoice({...options, imageExtractor: async () =>
       parseOfflineInvoiceText('Subtotal 100.00\nTotal 100.00', {ocrConfidence: 92})})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([137,80,78,71,13,10,26,10,0]),
     mimeType: 'image/png', fileName: 'unclear.png'}});
   assert.match(answer, /invoice number.*explicit currency code.*business issued.*explicitly confirm/i);
   assert.equal(visionCalls, 1);
-  assert.equal(stored, 0);
+  assert.equal(stored, 1);
 });
 
 test('Vercel traces OCR assets into both WhatsApp functions', async () => {
