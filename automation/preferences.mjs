@@ -25,16 +25,25 @@ export function normalizeFollowUpPreferences(raw = {}, timezone = 'Asia/Kolkata'
     hoursEnd: end,
     escalation: input.escalation === 'pause' ? 'pause' : 'manual_review',
     pauseOnReply: input.pauseOnReply !== false,
-    stopOnPayment: input.stopOnPayment !== false,
+    stopOnPayment: true,
+    businessName: String(input.businessName || '').trim(),
     dailySummary: input.dailySummary === true,
     timezone: tz,
     version: input.version ?? null,
   };
 }
 
+export function brandedReminder(body, businessName) {
+  const name=String(businessName||'').trim();
+  if(!name)throw new Error('Configure a business name before preparing reminders.');
+  const text=String(body||'').trim();
+  const signature=`— ${name}`;
+  return text.endsWith(signature)?text:`${text}\n\n${signature}`;
+}
+
 export function reminderBody(invoice, settings) {
   const number = String(invoice.invoice_number ?? invoice.number ?? invoice.id ?? 'your invoice').slice(0, 100);
-  if (settings.tone === 'gentle') return `A gentle reminder that invoice ${number} is still outstanding. If you have already paid, please let us know. Thank you.`;
-  if (settings.tone === 'firm') return `Invoice ${number} remains outstanding. Please arrange payment or contact us with an update. If already paid, please share the payment details.`;
-  return `A reminder that invoice ${number} remains outstanding. Please let us know if you have already paid.`;
+  if (settings.tone === 'gentle') return brandedReminder(`A gentle reminder that invoice ${number} is still outstanding. If you have already paid, please let us know. Thank you.`,settings.businessName);
+  if (settings.tone === 'firm') return brandedReminder(`Invoice ${number} remains outstanding. Please arrange payment or contact us with an update. If already paid, please share the payment details.`,settings.businessName);
+  return brandedReminder(`A reminder that invoice ${number} remains outstanding. Please let us know if you have already paid.`,settings.businessName);
 }

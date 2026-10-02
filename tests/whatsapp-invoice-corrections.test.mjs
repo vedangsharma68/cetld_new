@@ -5,7 +5,7 @@ import {createWhatsAppBoundMessageHandler, parseInvoiceCorrection} from '../auto
 const scope={workspaceId:'workspace-a',customerId:'customer-a',phone:'+919871367051'};
 function supabase(){return {from(table){return {select(){return this},eq(){return this},async maybeSingle(){if(table==='workspace_ai_settings')return {data:{primary_model:'space-bunny-free',fallback_model:null}};throw Error(table)}}}}}
 function handlerWith(store,{current=null}={}){
-  return createWhatsAppBoundMessageHandler({supabase:supabase(),providerFactory:()=>({}),channelFactory:()=>({ask(){throw Error('planner must not write')}}),
+  return createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase:supabase(),providerFactory:()=>({}),channelFactory:()=>({ask(){throw Error('planner must not write')}}),
     pendingActionStoreFactory:()=>({loadInvoiceReview:async()=>current}),invoiceStoreFactory:()=>store,clock:()=>new Date('2026-10-01T12:00:00Z')});
 }
 const invoice={id:'invoice-1',invoiceNumber:'INV-2026-0001',printedInvoiceNumber:'INV-2026-0720',clientName:'Global Dynamics Inc.',total:100,currency:'USD',status:'draft'};
@@ -70,7 +70,7 @@ test('misspelled field word parses and a bare invoice number resumes the pending
   let applied;
   const store={findInvoices:async arg=>arg?.invoiceNumber?[{...invoice,invoiceNumber:'INV-2026-0003',id:'inv-3'}]:[{...invoice,clientName:null}],
     applyCorrection:async input=>{applied=input;return {invoice,changes:{total:{old:6190,new:6767}}}}};
-  const h=createWhatsAppBoundMessageHandler({supabase:mem,providerFactory:()=>({}),channelFactory:()=>({ask(){throw Error('no ai')}}),
+  const h=createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase:mem,providerFactory:()=>({}),channelFactory:()=>({ask(){throw Error('no ai')}}),
     pendingActionStoreFactory:()=>({loadInvoiceReview:async()=>null}),invoiceStoreFactory:()=>store,clock:()=>new Date('2026-10-01T12:00:00Z')});
   assert.match(await h({...scope,message:'change the global dynamics invoice amt to 6767 USD',messageId:'m1'}),/Which invoice number/);
   assert.equal(await h({...scope,message:'INV-2026-0003',messageId:'m2'}),'Amount: 6190 -> 6767');

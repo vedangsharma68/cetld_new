@@ -11,7 +11,7 @@ function minor(value) {
 
 export class CoreAutomationStore extends SupabaseAutomationStore {
   async getWorkspacePreferences({ownerId,workspaceId}) {
-    const rows=await this.request('workspace_settings',{query:{select:'default_timezone,follow_up_preferences,updated_at',workspace_id:`eq.${workspaceId}`,limit:1}});
+    const rows=await this.request('workspace_settings',{query:{select:'business_name,default_timezone,follow_up_preferences,updated_at',workspace_id:`eq.${workspaceId}`,limit:1}});
     return rows?.[0] ?? null;
   }
   async getInvoice(input) {

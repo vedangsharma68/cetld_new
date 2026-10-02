@@ -48,12 +48,12 @@ export function createAutomationRuntime({env=process.env,fetchImpl=fetch,store,p
   async function configure(scope,configuration) {
     const row=await read(scope);
     if(!configuration || typeof configuration!=='object')throw new HttpError(400,'Configuration required');
-    const {customerPhone,timezone='UTC',hoursStart='09:00',hoursEnd='18:00',cadenceDays=3,first_reminder_days=3,escalationAfter=3,weekdays=[1,2,3,4,5]}=configuration;
+    const {businessName=(row.followUpSettings || row.follow_up_settings)?.businessName,customerPhone,timezone='UTC',hoursStart='09:00',hoursEnd='18:00',cadenceDays=3,first_reminder_days=3,escalationAfter=3,weekdays=[1,2,3,4,5]}=configuration;
     if(!/^\+[1-9]\d{7,14}$/.test(customerPhone || ''))throw new HttpError(400,'E.164 customer phone required');
     try{new Intl.DateTimeFormat('en',{timeZone:timezone}).format();}catch{throw new HttpError(400,'Invalid timezone');}
     if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(hoursStart)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(hoursEnd)||hoursStart>=hoursEnd)throw new HttpError(400,'Contact hours must form a daytime window');
     if(!Number.isInteger(cadenceDays)||cadenceDays<1||cadenceDays>90||!Number.isInteger(first_reminder_days)||first_reminder_days<0||first_reminder_days>90||!Number.isInteger(escalationAfter)||escalationAfter<1||escalationAfter>20||!Array.isArray(weekdays)||!weekdays.length||weekdays.some(d=>!Number.isInteger(d)||d<0||d>6))throw new HttpError(400,'Invalid cadence');
-    const settings={timezone,hoursStart,hoursEnd,cadenceDays,first_reminder_days,escalationAfter,weekdays};
+    const settings={businessName,timezone,hoursStart,hoursEnd,cadenceDays,first_reminder_days,escalationAfter,weekdays};
     const changed=await store.updateInvoice({...scope,expectedVersion:Number(row.automationVersion ?? row.automation_version),customerPhone,followUpSettings:settings});
     if(!changed)throw new HttpError(409,'Invoice changed; refresh and retry');
     return {configured:true};

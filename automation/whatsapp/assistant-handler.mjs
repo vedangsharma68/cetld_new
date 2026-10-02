@@ -193,7 +193,7 @@ function phoneQuestion(client, raw) {
 async function persistContactQuestion(pending, scope, action) {
   if (typeof pending.loadPendingActionState !== 'function' || typeof pending.storePendingAction !== 'function') return null;
   const expectedState = await pending.loadPendingActionState(scope);
-  return pending.storePendingAction({...scope, action, source: 'whatsapp_invoice_contact', expectedState});
+  return pending.storePendingAction({...scope, action, source: 'whatsapp', expectedState});
 }
 
 /** Create an inbound assistant handler only after the webhook has verified Meta. */
@@ -201,7 +201,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
   providerFactory = options => new AIProvider(options), channelFactory = createWhatsAppAssistantChannel,
   extract = extractInvoice, pendingActionStoreFactory = createWhatsAppPendingActionStore,
   invoiceStoreFactory = createWhatsAppInvoiceStore, saveInvoice = saveAssistantInvoice,
-  clock = () => new Date(), logger = console} = {}) {
+  clock = () => new Date(), logger = console, authorizeScope, audience='customer'} = {}) {
   if (!supabase?.from) throw new TypeError('A server-side Supabase client is required');
 
   return async ({workspaceId, customerId, phone, message, messageId, media, mediaError, signal, deadlineAt}) => {
@@ -209,6 +209,9 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       if (signal?.aborted || (Number.isFinite(deadlineAt) && Date.now() >= deadlineAt)) throw Object.assign(new Error('Inbound processing deadline expired'), {name: 'AbortError'});
     };
     active();
+    if(!authorizeScope&&(media||mediaError||/\b(?:change|chnge|set|edit|modify|fix|update|mark)\b/i.test(message||''))){
+      return 'Only the business owner can create or change invoices. Please contact the business about this invoice.';
+    }
     const {data: settings, error} = await supabase.from('workspace_ai_settings')
       .select('primary_model,fallback_model').eq('workspace_id', workspaceId).maybeSingle();
     if (error) throw error;
@@ -218,12 +221,13 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
       fetchImpl, timeoutMs: 8000, maxAttempts: 1});
     const pending = pendingActionStoreFactory({supabase});
-    const channel = channelFactory({supabase, provider,
+    const eligible=async()=>authorizeScope?{allowed:await authorizeScope({workspaceId,customerId,phone}),customer:{id:customerId}}
+      :getSendEligibility({supabase,workspaceId,phone,category:'invoice_updates'});
+    const channel = channelFactory({supabase, provider,allowInvoiceWrites:Boolean(authorizeScope),
       ...pending,
       createInvoiceStore: scope => invoiceStoreFactory({supabase, workspaceId: scope.workspaceId, customerId: scope.customerId}),
       authorizeChannel: async scope => {
-        const eligibility = await getSendEligibility({supabase, workspaceId: scope.workspaceId,
-          phone: scope.phone, category: 'invoice_updates'});
+        const eligibility = await eligible();
         return {allowed: eligibility.allowed && eligibility.customer?.id === scope.customerId,
           workspaceId: scope.workspaceId, customerId: scope.customerId, phone: scope.phone};
       },
@@ -352,6 +356,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       ? await pending.loadPendingAction({workspaceId, customerId, phone}) : null; }
     catch { /* optional for deployments upgrading the pending-action table */ }
     if (contactPending?.action?.type === 'invoice_debtor_phone') {
+      if(!authorizeScope)return 'Only the business owner can change invoice contacts. Please contact the business about this invoice.';
       const contact = contactPending.action;
       if (contact.stage === 'awaiting_phone') {
         const text = String(message || '').trim();
@@ -366,14 +371,14 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         const store = await invoiceStoreFactory({supabase, workspaceId, customerId});
         await store.saveDebtorPhone({invoiceId: contact.invoiceId, phone: normalized, assumedConsentAt: clock().toISOString()});
         await pending.consumePendingAction({...contactPending, workspaceId, customerId, phone});
-        return `Saved ${normalized} as ${contact.clientName}'s WhatsApp number on this invoice. Consent is logged as yes (your default). Reminders still go out only through the dashboard's follow-up approval, and a STOP from them is always honored.`;
+        return `Saved ${normalized} as ${contact.clientName}'s number on this invoice. Before sending reminders, confirm their agreement and approve the follow-up in your dashboard.`;
       }
     }
     const current = await pending.loadInvoiceReview({workspaceId, customerId, phone});
     let effective = message;
     if (/^\s*INV-[A-Z0-9-]+\s*[.!]?\s*$/i.test(message)) {
       try {
-        const turns = await readConversationHistory({supabase, workspaceId, phone});
+        const turns = await readConversationHistory({supabase, workspaceId, phone,customerId,audience});
         const last = turns.at(-1);
         if (last?.role === 'assistant' && ASK_NUMBER.test(last.content || '')) {
           const original = [...turns].reverse().find(turn => turn.role === 'user');
@@ -394,7 +399,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         if (!candidates.length && !refersToInvoice) break contactLookup;
         if (!candidates.length) {
           let turns = [];
-          try { turns = await readConversationHistory({supabase, workspaceId, phone}); } catch { /* optional */ }
+          try { turns = await readConversationHistory({supabase, workspaceId, phone,customerId,audience}); } catch { /* optional */ }
           for (const turn of [...turns].reverse()) {
             const mentioned = String(turn.content || '').match(/\bINV-[A-Z0-9-]+\b/ig) || [];
             const hit = known.find(item => mentioned.some(m => [item.invoiceNumber, item.printedInvoiceNumber].some(n => String(n || '').toUpperCase() === m.toUpperCase())));
@@ -413,7 +418,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
     let modelIntent = null;
     const askNumber = async reply => {
       for (const [role, content] of [['user', message], ['assistant', reply]]) {
-        try { await writeConversationTurn({supabase, workspaceId, customerId, phone, role, content}); } catch { /* best effort */ }
+        try { await writeConversationTurn({supabase, workspaceId, customerId, phone, role, content,audience}); } catch { /* best effort */ }
       }
       return reply;
     };
@@ -426,7 +431,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         const intentStore = await invoiceStoreFactory({supabase, workspaceId, customerId});
         const known = await intentStore.findInvoices({limit: 50});
         let history = [];
-        try { history = await readConversationHistory({supabase, workspaceId, phone}); } catch { /* optional context */ }
+        try { history = await readConversationHistory({supabase, workspaceId, phone,customerId,audience}); } catch { /* optional context */ }
         const intentProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
           fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, geminiApiKey: env.GEMINI_API_KEY,
           openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
@@ -450,6 +455,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
     const fileRequest = FILE_REQUEST.test(message) || modelIntent?.action === 'send_invoice_file' && modelIntent.confidence >= 0.75;
     const listRequest = modelIntent?.action === 'list_invoices' && modelIntent.confidence >= 0.75;
     if (correction || fileRequest || listRequest) {
+      if(correction&&!authorizeScope)return 'Only the business owner can change invoice details. Please contact the business about this invoice.';
       const store = await invoiceStoreFactory({supabase, workspaceId, customerId});
       const explicitNumber = requestedInvoiceNumber(effective) || modelIntent?.invoiceRef;
       let candidates;
@@ -491,7 +497,8 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       return result.duplicate && !Object.keys(result.changes).length ? 'That change was already applied.' : correctionReply(result.changes);
     }
     if (current?.action?.type === 'invoice_review_draft') {
-      const eligibility = await getSendEligibility({supabase, workspaceId, phone, category: 'invoice_updates'});
+      if(!authorizeScope)return 'Only the business owner can create or change invoices. Please contact the business about this invoice.';
+      const eligibility = await eligible();
       if (!eligibility.allowed || eligibility.customer?.id !== customerId) {
         return 'Please verify your number in cetld before continuing this invoice review.';
       }
@@ -534,12 +541,12 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       if (currency && action.stage === 'proposal') return proposalSummary(action.invoice);
     }
     let history = [];
-    try { history = await readConversationHistory({supabase, workspaceId, phone}); }
+    try { history = await readConversationHistory({supabase, workspaceId, phone,customerId,audience}); }
     catch (memoryError) {
       logger?.error?.('WhatsApp conversation memory read failed', {workspaceId,
         message: String(memoryError?.message || '').slice(0, 200)});
     }
-    try { await writeConversationTurn({supabase, workspaceId, customerId, phone, role: 'user', content: message}); }
+    try { await writeConversationTurn({supabase, workspaceId, customerId, phone, role: 'user', content: message,audience}); }
     catch (memoryError) {
       logger?.error?.('WhatsApp conversation memory write failed', {workspaceId, role: 'user',
         message: String(memoryError?.message || '').slice(0, 200)});

@@ -108,7 +108,7 @@ test('bound media extracts and immediately saves with a logged reply', async () 
     if (table === 'workspace_settings') return {data: {business_name: 'Seller'}};
     throw new Error(table);
   }}; }};
-  const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory: options => { providerOptions.push(options); return {}; },
+  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase, providerFactory: options => { providerOptions.push(options); return {}; },
     channelFactory: () => ({ask() { throw new Error('not used'); }}), pendingActionStoreFactory: () => mediaReviewStore(saved),
     saveInvoice: async ({invoice}) => ({saved: true, invoice}), invoiceStoreFactory: () => ({}),
     extract: async () => ({...values, lineItems: {value: [], confidence: .99}})});
@@ -131,7 +131,7 @@ test('production extraction advances an incomplete OCR draft to vision and propo
     if (table === 'workspace_settings') return {data: {business_name: 'Seller'}};
     throw new Error(table);
   }}; }};
-  const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory: () => provider,
+  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase, providerFactory: () => provider,
     channelFactory: () => ({ask() { throw new Error('not used'); }}),
     pendingActionStoreFactory: () => mediaReviewStore({push() { stored++; }}),
     saveInvoice: async ({invoice}) => ({saved: true, invoice}), invoiceStoreFactory: () => ({}),
@@ -158,7 +158,7 @@ test('incomplete media returns bounded review guidance and stores no proposal', 
     visionCalls++;
     return {data: validate(invoiceWire(incomplete)), model: 'vision', usedFallback: false};
   }};
-  const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory: () => provider,
+  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase, providerFactory: () => provider,
     channelFactory: () => ({ask: async () => ({answer: 'text reply'})}),
     pendingActionStoreFactory: () => mediaReviewStore({push() { stored++; }}),
     extract: options => extractInvoice({...options, imageExtractor: async () =>
@@ -184,7 +184,7 @@ test('photo save preserves printed identity and links the original file without 
   const values=Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name=>[name,{value:({invoiceNumber:'INV-2026-0720',customerName:'Global Dynamics Inc.',invoiceDate:'2026-09-30',dueDate:'2026-10-30',subtotal:100,tax:0,total:100,outstandingAmount:100,currency:'USD',direction:'receivable'})[name]??null,confidence:.99}]));
   const db={from(table){return {select(){return this},eq(){return this},async maybeSingle(){return {data:table==='workspace_ai_settings'?{primary_model:'space-bunny-free',fallback_model:null}:{business_name:'Seller'}}}}}};
-  const make=keepInvoiceFile=>createWhatsAppBoundMessageHandler({supabase:db,providerFactory:()=>({}),channelFactory:()=>({ask(){throw Error('unused')}}),
+  const make=keepInvoiceFile=>createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase:db,providerFactory:()=>({}),channelFactory:()=>({ask(){throw Error('unused')}}),
     pendingActionStoreFactory:()=>mediaReviewStore(transitions),invoiceStoreFactory:()=>({keepInvoiceFile}),extract:async()=>({...values,lineItems:{value:[],confidence:.99}}),
     saveInvoice:async({invoice})=>({saved:true,invoice:{...invoice,id:'saved-invoice',invoiceNumber:'INV-2026-0001'}}),logger:{error(){}}});
   const media={bytes:Buffer.from([1,2,3]),mimeType:'image/jpeg',fileName:'real.jpg'};

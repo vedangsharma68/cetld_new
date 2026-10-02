@@ -1,3 +1,4 @@
+import {parseMetaStatuses} from './conversation-store.mjs';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { createInboundRuntime, isOptOut, parseMetaMessages } from './cloud-inbound.mjs';
@@ -117,6 +118,8 @@ export function createWhatsAppWebhookHandler({ env = process.env, fetchImpl = gl
       }
       const messages = parseMetaMessages(payload, env.WHATSAPP_PHONE_NUMBER_ID, env.WHATSAPP_WABA_ID);
       const inbound = run();
+      const statuses=parseMetaStatuses(payload,env.WHATSAPP_PHONE_NUMBER_ID,env.WHATSAPP_WABA_ID);
+      if(statuses.length&&typeof inbound.recordStatuses==='function')await inbound.recordStatuses(statuses);
       const inserted = await inbound.enqueue(messages);
       // An opt-out is persisted before Meta receives 200. The inbox holds a
       // durable retry if the handler is interrupted after insertion.

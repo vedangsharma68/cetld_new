@@ -1,3 +1,6 @@
+import {resolveOwnerBinding,resolveOwnerIdentity} from './owner-binding.mjs';
+import {createOwnerMessageHandler} from './owner-handler.mjs';
+import {createConversationStore} from './conversation-store.mjs';
 import { resolveActiveBindings, revokeConsentForPhone, suppressUnknownPhone } from './consent.mjs';
 import {createWhatsAppInvoiceUpdateStore} from './invoice-update-store.mjs';
 import {writeConversationTurn} from './conversation-memory.mjs';
@@ -134,15 +137,19 @@ const stopReply = 'Your request has been recorded. You will no longer receive Wh
 
 /** Route only through service-role consent/customer binding; never use a claimed name. */
 export function createInboundRuntime({ env = process.env, fetchImpl = globalThis.fetch, supabase, inbox = new SupabaseInboundInbox(supabase), outbound,
-  onBoundMessage, logger = console, clock = () => Date.now() } = {}) {
+  onBoundMessage, onOwnerMessage, conversationStore = createConversationStore(supabase), logger = console, clock = () => Date.now() } = {}) {
   if (!supabase) throw new Error('Supabase service client required');
+  onOwnerMessage ||= createOwnerMessageHandler({supabase,env,fetchImpl});
+  async function transcript(input){await conversationStore?.record(input);}
   let outboundPromise;
   const getOutbound = async () => {
     if (outbound) return outbound;
     outboundPromise ||= import('./cloud-outbound.mjs').then(({ createWhatsAppOutbound }) => {
       const invoiceUpdates = createWhatsAppInvoiceUpdateStore({supabase});
       return createWhatsAppOutbound({env, fetchImpl, supabase, logger, ...invoiceUpdates,
-        authorizeInboundReply: input => inbox.claimReply(input)});
+        authorizeInboundReply: async input => input.audience==='owner'
+          ? {allowed:dataOrThrow(await supabase.rpc('whatsapp_claim_owner_reply',{p_provider_message_id:input.messageId,p_sender_phone:input.phone,p_workspace_id:input.workspaceId}),'claim owner reply')===true}
+          : inbox.claimReply(input)});
     });
     return outboundPromise;
   };
@@ -195,6 +202,26 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     }
     await inbox.markStop(event, { confirmationDue: Boolean(confirmation || global.confirmationDue), workspaceId: confirmation });
   }
+  async function recordOptOut(event) {
+    if(!conversationStore)return;
+    // Suppression has already committed. Only verified current identities get history.
+    const owner=await resolveOwnerIdentity({supabase,phone:event.sender_phone});
+    const bindings=owner?[owner]:[];
+    if(!owner){
+      const consents=dataOrThrow(await supabase.from('whatsapp_consents').select('workspace_id,customer_id')
+        .eq('phone',event.sender_phone),'STOP history scopes')||[];
+      for(const consent of consents){
+        const customer=dataOrThrow(await supabase.from('customers').select('id')
+          .eq('workspace_id',consent.workspace_id).eq('id',consent.customer_id)
+          .eq('phone',event.sender_phone).maybeSingle(),'STOP history customer');
+        if(customer)bindings.push({workspaceId:consent.workspace_id,customerId:customer.id});
+      }
+    }
+    for(const binding of bindings)await transcript({workspaceId:binding.workspaceId,customerId:binding.customerId,
+      phone:event.sender_phone,audience:owner?'owner':'customer',direction:'inbound',body:event.message_text,
+      kind:event.message_type,status:'received',providerMessageId:event.provider_message_id,
+      key:`inbound:${event.provider_message_id}`,createdAt:event.provider_timestamp||event.received_at});
+  }
   async function processEvent(event, {signal, deadlineAt} = {}) {
     const active = () => {
       if (signal?.aborted || (Number.isFinite(deadlineAt) && clock() >= deadlineAt)) throw Object.assign(new Error('Inbound processing deadline expired'), {name: 'AbortError'});
@@ -209,6 +236,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
         if (error) throw error;
         event = data;
       }
+      await recordOptOut(event);
       if (event.stop_confirmation_due) {
         const sender = await getOutbound();
         await sender.sendServiceReply({ workspaceId: event.stop_workspace_id, to: event.sender_phone,
@@ -217,12 +245,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       }
       return 'opt_out';
     }
-    const bindings = await resolveActiveBindings({ supabase, phone: event.sender_phone });
-    if (bindings.length !== 1) {
-      // An unbound or ambiguous phone has no authorized workspace/recipient
-      // scope. Keep verification inside the established binding flow rather
-      // than emitting a direct workspace-null message.
-      const linkMatch = bindings.length === 0 && /^\s*link[\s:-]*(\d{6})\s*$/i.exec(event.message_text || '');
+      const linkMatch = /^\s*link[\s:-]*(\d{6})\s*$/i.exec(event.message_text || '');
       if (linkMatch) {
         // The sender phone comes from WhatsApp, so a matching dashboard code proves they hold the number.
         try {
@@ -233,15 +256,24 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
             ownerLinkResult: result?.ok === true ? 'linked' : 'failed',
             lastInboundAt: event.provider_timestamp || event.received_at, kind: 'verification',
             messageId: event.provider_message_id, businessName: 'CETLD' });
+          return 'verify';
         } catch (error) {
           logger?.error?.('WhatsApp owner link failed', { message: String(error?.message || '').slice(0, 200) });
         }
       }
-      return 'verify';
-    }
+    const owner=await resolveOwnerBinding({supabase,phone:event.sender_phone});
+    const bindings=owner?[owner]:await resolveActiveBindings({supabase,phone:event.sender_phone});
+    if(bindings.length!==1)return 'verify';
     const binding = bindings[0];
-    if (!binding.customerId || !binding.customer || !binding.workspaceId) throw new Error('Incomplete customer binding');
-    if (onBoundMessage) {
+    if (!binding.workspaceId || (!owner && (!binding.customerId || !binding.customer))) throw new Error('Incomplete sender binding');
+    await transcript({workspaceId:binding.workspaceId,customerId:owner?null:binding.customerId,phone:event.sender_phone,
+      audience:owner?'owner':'customer',direction:'inbound',body:event.message_text||`[${event.message_type} attachment]`,
+      kind:event.message_type,status:'received',providerMessageId:event.provider_message_id,key:`inbound:${event.provider_message_id}`,
+      createdAt:event.provider_timestamp||event.received_at});
+    if(!owner)dataOrThrow(await supabase.rpc('whatsapp_pause_customer_followups',{
+      p_workspace_id:binding.workspaceId,p_customer_id:binding.customerId,p_message_id:event.provider_message_id}),'pause customer follow-ups');
+    const handle=owner?onOwnerMessage:onBoundMessage;
+    if (handle) {
       // This UX signal must never affect durable event processing. In
       // particular, Graph failures must not cause the inbound event to retry.
       try {
@@ -252,7 +284,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           message: String(error?.message || '').slice(0, 200)});
       }
       const media = event.media_ref && !event.media_error ? await inbox.getMedia(event) : null;
-      const response = event.media_error ? MEDIA_FETCH_FAILED_REPLY : await onBoundMessage({ workspaceId: binding.workspaceId, customerId: binding.customerId,
+      const response = event.media_error ? MEDIA_FETCH_FAILED_REPLY : await handle({ workspaceId: binding.workspaceId, customerId: binding.customerId, ownerId:binding.ownerId,
         phone: event.sender_phone, message: event.message_text, messageId: event.provider_message_id, media,
         mediaError: event.media_ref && !media ? 'Stored media unavailable' : null, signal, deadlineAt });
       active();
@@ -262,12 +294,12 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
         const send = response?.media && typeof sender.sendServiceMedia === 'function' ? sender.sendServiceMedia.bind(sender) : sender.sendServiceReply.bind(sender);
         const sent = await send({ workspaceId: binding.workspaceId, to: event.sender_phone, body: answer, caption: answer,
           ...(response?.media ? {media: response.media} : {}),
-          lastInboundAt: event.provider_timestamp || event.received_at, kind: 'normal', messageId: event.provider_message_id,
+          lastInboundAt: event.provider_timestamp || event.received_at, kind: 'normal', audience:owner?'owner':'customer', messageId: event.provider_message_id,
           businessName: await businessName(binding.workspaceId) });
         if (sent?.status === 'accepted') {
           try {
             await writeConversationTurn({supabase, workspaceId: binding.workspaceId,
-              customerId: binding.customerId, phone: event.sender_phone, role: 'assistant', content: answer});
+              customerId: owner?null:binding.customerId, phone: event.sender_phone, role: 'assistant', content: answer,audience:owner?'owner':'customer'});
           } catch (memoryError) {
             logger?.error?.('WhatsApp conversation memory write failed', {workspaceId: binding.workspaceId,
               role: 'assistant', message: String(memoryError?.message || '').slice(0, 200)});
@@ -309,6 +341,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       return inbox.enqueue(messages);
     },
     revokeOptOut,
+    async recordStatuses(items){for(const item of items)await conversationStore?.status(item);},
     async processPending() {
       const configuredBudget = Number(env.WHATSAPP_PROCESS_BUDGET_MS);
       const budgetMs = Number.isFinite(configuredBudget) && configuredBudget > 0

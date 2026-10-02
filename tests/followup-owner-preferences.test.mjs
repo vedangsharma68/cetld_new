@@ -12,12 +12,12 @@ const now = new Date('2026-09-22T10:00:00Z');
 const prefs = {
   tone: 'firm', firstReminderDays: 1, cadenceDays: 2, maxReminders: 2,
   allowedWeekdays: [1, 2, 3, 4, 5], contactStart: '09:00', contactEnd: '17:00',
-  escalation: 'manual_review', pauseOnReply: true, stopOnPayment: true, dailySummary: true,
+  escalation: 'manual_review', pauseOnReply: true, stopOnPayment: true, dailySummary: true,businessName:'Test Business',
 };
 
 function setup(overrides = {}) {
   const store = new MemoryAutomationStore({ now: () => now });
-  const approval = { invoice_direction: 'receivable', approved_reminder_text: 'Invoice INV-1 remains outstanding. Please arrange payment or contact us with an update.', approved_preferences_updated_at: 'v1' };
+  const approval = { invoice_direction: 'receivable', approved_reminder_text: 'Invoice INV-1 remains outstanding. Please arrange payment or contact us with an update.\n\n— Test Business', approved_preferences_updated_at: 'v1' };
   store.seedInvoice({
     id: scope.invoiceId, ...scope, total_amount: '10.00', amountMinor: 1000,
     paidMinor: 0, status: 'open', due_date: '2026-09-21',
@@ -26,7 +26,7 @@ function setup(overrides = {}) {
     customerPhone: '+919876543210', reminderCount: 0, ...overrides.invoice,
     metadata: { ...approval, ...overrides.invoice?.metadata },
   });
-  let owner = { follow_up_preferences: { ...prefs, ...overrides.preferences }, default_timezone: 'UTC', updated_at: 'v1' };
+  let owner = {business_name:'Test Business', follow_up_preferences: { ...prefs, ...overrides.preferences }, default_timezone: 'UTC', updated_at: 'v1' };
   store.getWorkspacePreferences = () => owner;
   const provider = new MockWhatsAppProvider();
   let sends = 0;

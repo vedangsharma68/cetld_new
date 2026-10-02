@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createWhatsAppInvoiceTestHandler} from '../automation/whatsapp/test-send.mjs';
+import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
 
 const workspaceId = '11111111-1111-4111-8111-111111111111';
 const invoiceId = '22222222-2222-4222-8222-222222222222';
@@ -23,7 +24,7 @@ function makeHandler({phone = dad, rows, role = 'owner', operator = userId, outb
   const supabase = database(phone, rows);
   const env = {WHATSAPP_TEST_OPERATOR_USER_ID: operator, WHATSAPP_OUTBOUND_ENABLED: 'true', WHATSAPP_TEST_ALLOWLIST: `${vedang},${dad}`,
     WHATSAPP_ACCESS_TOKEN: 'test-token', WHATSAPP_PHONE_NUMBER_ID: '1234567890', WHATSAPP_GRAPH_API_VERSION: 'v24.0'};
-  return {supabase, handler: createWhatsAppInvoiceTestHandler({env, authorize: async () => ({workspaceId, userId, role}), loadSupabase: () => supabase, outboundFactory, fetchImpl, logger})};
+  return {supabase, handler: createWhatsAppInvoiceTestHandler({env, authorize: async () => ({workspaceId, userId, role}), loadSupabase: () => supabase, outboundFactory:outboundFactory||((options)=>createWhatsAppOutbound({...options,conversationStore:null})), fetchImpl, logger})};
 }
 async function preview(handler) {const res = response(); await handler({method: 'GET', query: {workspaceId, invoiceId}}, res); return res;}
 async function send(handler, token) {const res = response(); await handler({method: 'POST', body: {workspaceId, invoiceId}, headers: {'x-whatsapp-test-preview': token}}, res); return res;}
@@ -53,9 +54,9 @@ test('dad and Vedang are supported, but unrelated numbers stay blocked even when
   assert.equal((await preview(unrelated.handler)).code, 409);
 });
 
-test('missing consent or owner attestation prevents review and send', async () => {
+test('missing consent prevents review and send; no redundant workspace agreement is needed', async () => {
   assert.equal((await preview(makeHandler({rows: {whatsapp_consents: null}}).handler)).code, 409);
-  assert.equal((await preview(makeHandler({rows: {workspace_settings: {workspace_id: workspaceId, business_name: 'QA Workspace', whatsapp_owner_attested_at: null}}}).handler)).code, 409);
+  assert.equal((await preview(makeHandler({rows: {workspace_settings: {workspace_id: workspaceId, business_name: 'QA Workspace', whatsapp_owner_attested_at: null}}}).handler)).code, 200);
 });
 
 test('send uses reviewed current rows once and rejects a stale revision', async () => {

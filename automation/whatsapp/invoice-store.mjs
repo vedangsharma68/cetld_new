@@ -12,25 +12,48 @@ function mappedInvoice(row) {
 }
 
 /** Service-role write adapter used only after a verified WhatsApp confirmation. */
-export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId} = {}) {
+export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, audience='customer', authorize} = {}) {
   if (!supabase?.from || !workspaceId || !customerId) throw new TypeError('verified invoice store scope required');
+  if(audience!=='customer'&&audience!=='owner')throw new TypeError('invalid invoice audience');
+  const owner=audience==='owner';
+  if(owner&&typeof authorize!=='function')throw new TypeError('verified owner authorization required');
   const scoped = table => supabase.from(table);
+  const invoices = query => owner?query:query.eq('customer_id',customerId);
+  async function ownedInvoice(id){
+    const row=rows(await invoices(scoped('invoices').select('*').eq('workspace_id',workspaceId).eq('id',id)).limit(1))[0];
+    if(!row)throw new TypeError('invoice scope violation');
+    return row;
+  }
   const store = {workspaceId, userId: null,
     async findAssistantInvoice({idempotencyKey}) {
-      const result = await scoped('invoices').select('*').eq('workspace_id', workspaceId)
+      const result = await invoices(scoped('invoices').select('*').eq('workspace_id', workspaceId))
         .eq('metadata->>assistant_idempotency_key', idempotencyKey).limit(1);
       return rows(result)[0] || null;
     },
-    async findCustomer() {
+    async findCustomer({email,name}={}) {
+      if(owner){
+        let q=scoped('customers').select('*').eq('workspace_id',workspaceId).eq('name',name);
+        if(email)q=q.eq('email',email);
+        const found=rows(await q.limit(2));
+        if(found.length>1)throw new TypeError('ambiguous customer');
+        return found[0]||null;
+      }
       const result = await scoped('customers').select('*').eq('workspace_id', workspaceId).eq('id', customerId).limit(1);
       return rows(result)[0] || null;
     },
-    async createCustomer() {
+    async createCustomer({name,email,phone}={}) {
+      if(owner){
+        const result=await scoped('customers').insert({workspace_id:workspaceId,name,email:email||null,phone:phone||null}).select('*').single();
+        if(result.error)throw result.error;
+        return result.data;
+      }
       throw new TypeError('verified WhatsApp scope cannot create another customer');
     },
     async createAssistantInvoice({customerId: invoiceCustomerId, invoice}) {
-      if (invoiceCustomerId !== customerId) throw new TypeError('customer scope violation');
-      const result = await scoped('invoices').upsert({workspace_id: workspaceId, customer_id: customerId,
+      if(owner){
+        if(!rows(await scoped('customers').select('id').eq('workspace_id',workspaceId).eq('id',invoiceCustomerId).limit(1))[0])throw new TypeError('customer scope violation');
+      }else if (invoiceCustomerId !== customerId) throw new TypeError('customer scope violation');
+      const result = await scoped('invoices').upsert({workspace_id: workspaceId, customer_id: invoiceCustomerId,
         invoice_number: invoice.invoiceNumber, issue_date: invoice.invoiceDate, due_date: invoice.dueDate,
         currency: invoice.currency, total_amount: invoice.total, notes: invoice.notes || null,
         metadata: {assistant_idempotency_key: invoice.idempotencyKey, invoice_direction: invoice.direction,
@@ -43,27 +66,34 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId} =
       return rows(result)[0] || null;
     },
     async saveDebtorPhone({invoiceId, phone, assumedConsentAt}) {
-      const found = await scoped('invoices').select('*').eq('workspace_id', workspaceId).eq('id', invoiceId).limit(1);
-      const row = rows(found)[0];
-      if (!row || row.customer_id !== customerId) throw new TypeError('invoice customer scope violation');
+      const row = await ownedInvoice(invoiceId);
       // Invoice metadata only: customers.phone is the owner's WhatsApp binding key and must never be overwritten.
-      const metadata = {...(row.metadata || {}), debtor_phone: phone, client_phone: phone,
-        debtor_consent: {status: 'assumed_yes', basis: 'owner_default', recorded_at: assumedConsentAt || new Date().toISOString()}};
-      const updated = await scoped('invoices').update({metadata}).eq('workspace_id', workspaceId).eq('id', invoiceId).select('*').single();
+      const metadata = {...(row.metadata || {}), debtor_phone: phone, client_phone: phone};
+      delete metadata.debtor_consent;
+      const updated = await invoices(scoped('invoices').update({metadata}).eq('workspace_id', workspaceId).eq('id', invoiceId))
+        .eq('updated_at',row.updated_at).select('*').single();
       if (updated.error) throw updated.error;
       return mappedInvoice(updated.data);
     },
     async findInvoices({invoiceNumber, limit} = {}) {
-      let query = scoped('invoices').select('*').eq('workspace_id', workspaceId);
-      if (invoiceNumber) query = query.or(`invoice_number.eq.${invoiceNumber},metadata->>printed_invoice_number.eq.${invoiceNumber},metadata->>source_invoice_number.eq.${invoiceNumber}`);
-      const result = await query.order('created_at', {ascending: false}).limit(invoiceNumber ? 10 : Math.min(Number(limit) || 2, 50));
-      return rows(result).map(mappedInvoice);
+      let query = invoices(scoped('invoices').select('*').eq('workspace_id', workspaceId));
+      if (invoiceNumber) {
+        if(!/^[a-z0-9_-]{1,100}$/i.test(invoiceNumber))throw new TypeError('invalid invoice number');
+        query = query.or(`invoice_number.eq.${invoiceNumber},metadata->>printed_invoice_number.eq.${invoiceNumber},metadata->>source_invoice_number.eq.${invoiceNumber}`);
+      }
+      const result = await query.order('created_at', {ascending: false}).limit(invoiceNumber ? 10 : Math.min(Number(limit) || 2, 1000));
+      const found=rows(result);
+      const ids=[...new Set(found.map(row=>row.customer_id))];
+      const customers=ids.length?rows(await scoped('customers').select('id,name,email,phone').eq('workspace_id',workspaceId).in('id',ids).limit(1000)):[];
+      return found.map(row=>{
+        const client=customers.find(c=>c.id===row.customer_id);
+        return {...mappedInvoice(row),clientName:client?.name||mappedInvoice(row).clientName,
+          metadata:{...(row.metadata||{}),...(client?.phone?{customer_phone:client.phone}:{}),...(client?.email?{customer_email:client.email}:{})}};
+      });
     },
     async applyCorrection({invoiceId, changes, idempotencyKey, changedAt}) {
       if (!changes || Object.keys(changes).some(field => !EDITABLE_FIELDS.has(field))) throw new TypeError('unsupported invoice correction field');
-      const found = await scoped('invoices').select('*').eq('workspace_id', workspaceId).eq('id', invoiceId).limit(1);
-      const row = rows(found)[0];
-      if (!row) return {reason: 'not_found'};
+      const row = await ownedInvoice(invoiceId);
       const metadata = row.metadata || {};
       const prior = (metadata.whatsapp_corrections || []).find(item => item.idempotency_key === idempotencyKey);
       if (prior) return {invoice: mappedInvoice(row), changes: prior.changes, duplicate: true};
@@ -92,12 +122,13 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId} =
       const entry = {idempotency_key: idempotencyKey, changed_at: changedAt, changes: audit, source: 'whatsapp'};
       nextMetadata.whatsapp_corrections = [...(Array.isArray(metadata.whatsapp_corrections) ? metadata.whatsapp_corrections : []), entry].slice(-50);
       patch.metadata = nextMetadata;
-      const result = await scoped('invoices').update(patch).eq('workspace_id', workspaceId).eq('id', invoiceId)
+      const result = await invoices(scoped('invoices').update(patch).eq('workspace_id', workspaceId).eq('id', invoiceId))
         .eq('updated_at', row.updated_at).select('*').single();
       if (result.error) throw result.error;
       return {invoice: mappedInvoice(result.data), changes: audit, duplicate: false};
     },
     async keepInvoiceFile({invoiceId, bytes, fileName, mimeType, idempotencyKey}) {
+      await ownedInvoice(invoiceId);
       const existing = await scoped('invoice_files').select('*').eq('workspace_id', workspaceId).eq('invoice_id', invoiceId)
         .eq('storage_path', `${workspaceId}/${invoiceId}/${idempotencyKey}`).limit(1);
       if (rows(existing)[0]) return rows(existing)[0];
@@ -110,19 +141,31 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId} =
       return inserted.data;
     },
     async latestInvoiceFile(invoiceId) {
+      await ownedInvoice(invoiceId);
       const result = await scoped('invoice_files').select('*').eq('workspace_id', workspaceId).eq('invoice_id', invoiceId)
         .order('created_at', {ascending: false}).limit(1);
       const file = rows(result)[0];
       if (!file) return null;
+      if(!file.storage_path?.startsWith(`${workspaceId}/${invoiceId}/`)||file.storage_path.split('/').some(p=>p==='..'||p==='.')||Number(file.size_bytes)>10*1024*1024)
+        throw new TypeError('invalid invoice file scope or size');
       const download = await supabase.storage.from('invoice-files').download(file.storage_path);
       if (download.error) throw download.error;
-      return {...file, bytes: Buffer.from(await download.data.arrayBuffer())};
+      const bytes=Buffer.from(await download.data.arrayBuffer());
+      if(bytes.length>10*1024*1024)throw new TypeError('invoice file too large');
+      return {...file, bytes};
     },
     async updateAssistantInvoiceMetadata(id, metadata, synchronization = {}) {
-      const result = await scoped('invoices').update({metadata, ...synchronization}).eq('workspace_id', workspaceId).eq('id', id).select('*').single();
+      await ownedInvoice(id);
+      const result = await invoices(scoped('invoices').update({metadata, ...synchronization}).eq('workspace_id', workspaceId).eq('id', id)).select('*').single();
       if (result.error) throw result.error;
       return result.data;
     },
   };
+  if(owner)return Object.freeze(Object.fromEntries(Object.entries(store).map(([key,value])=>[key,typeof value==='function'?async(...args)=>{
+    if(!await authorize())throw new TypeError('owner binding changed');
+    const result=await value(...args);
+    if(!await authorize())throw new TypeError('owner binding changed');
+    return result;
+  }:value])));
   return Object.freeze(store);
 }

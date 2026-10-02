@@ -44,9 +44,6 @@ export async function resolveActiveBindings({ supabase, phone }) {
     && Array.isArray(row.categories) && row.categories.includes('invoice_updates')
     && !suppressedWorkspaces.has(row.workspace_id));
   const bound = await Promise.all(candidates.map(async consent => {
-    const settings = unwrap(await supabase.from('workspace_settings').select('whatsapp_owner_attested_at')
-      .eq('workspace_id', consent.workspace_id).maybeSingle());
-    if (!settings?.whatsapp_owner_attested_at) return null;
     const customer = unwrap(await supabase.from('customers').select('*')
       .eq('workspace_id', consent.workspace_id).eq('id', consent.customer_id)
       .eq('phone', normalized).maybeSingle());
@@ -73,11 +70,6 @@ export async function getSendEligibility({ supabase, workspaceId, phone, categor
   if (!RECIPIENT_OPT_IN_SOURCES.has(consent.source)) return { allowed: false, reason: 'missing_recipient_opt_in', consent, customer: null };
   if (!Array.isArray(consent.categories) || !consent.categories.includes(category)) {
     return { allowed: false, reason: 'category_not_consented', consent, customer: null };
-  }
-  const settings = unwrap(await supabase.from('workspace_settings').select('whatsapp_owner_attested_at')
-    .eq('workspace_id', workspace).maybeSingle());
-  if (!settings?.whatsapp_owner_attested_at) {
-    return { allowed: false, reason: 'owner_attestation_missing', consent, customer: null };
   }
   const customer = unwrap(await supabase.from('customers').select('*')
     .eq('workspace_id', workspace).eq('id', consent.customer_id)

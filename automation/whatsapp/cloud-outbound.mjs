@@ -1,3 +1,5 @@
+import {authorizeOwnerPhone} from './owner-binding.mjs';
+import {createConversationStore,conversationCallbackToken} from './conversation-store.mjs';
 import {getSendEligibility} from './consent.mjs';
 
 const APPROVED_QA_RECIPIENTS = new Set(['+919871367051', '+919818685252']);
@@ -45,7 +47,7 @@ function withinServiceWindow(lastInboundAt, clock) {
 }
 
 export function neutralText(value, kind = 'business_initiated') {
-  const body = nonempty(value, 'body', 1000);
+  const body = nonempty(value, 'body', kind==='normal'?3790:1000);
   // Factual invoice vocabulary is permitted only for user-initiated replies in
   // the service window. Business-initiated surfaces retain the original guard.
   const blockedContent = kind === 'normal' ? SESSION_PRESSURE_CONTENT : NEUTRAL_CONTENT;
@@ -62,11 +64,7 @@ async function verifiedBusinessName(supabase, workspaceId, suppliedName) {
   if (result?.error) throw result.error;
   const actual = result?.data?.business_name?.trim();
   if (actual) return actual === suppliedName ? actual : null;
-  const fallback = await supabase.from('workspaces').select('name')
-    .eq('id', workspaceId).maybeSingle();
-  if (fallback?.error) throw fallback.error;
-  const workspaceName = fallback?.data?.name?.trim();
-  return workspaceName && workspaceName === suppliedName ? workspaceName : null;
+  return null;
 }
 
 async function unboundSuppression(supabase, phone) {
@@ -95,6 +93,7 @@ export function createWhatsAppOutbound({
   clock = () => new Date(),
   authorizeInboundReply,
   claimInvoiceUpdate,
+  conversationStore = createConversationStore(supabase),
 } = {}) {
   const allowlist = allowlistFromEnv(env);
 
@@ -111,7 +110,47 @@ export function createWhatsAppOutbound({
     return null;
   }
 
-  async function postMessage({workspaceId, to, kind, payload}) {
+  async function prepareMessage({workspaceId,to,kind,payload,key,customerId=null,invoiceId=null,audience='customer'}) {
+    const body=payload.type==='template'?`Hi, this is ${payload.template.components[0].parameters[0].text}. Invoice ${payload.template.components[0].parameters[1].text} has an update. Reply STOP anytime.`:payload.text?.body||payload.image?.caption||payload.document?.caption||'[Attachment]';
+    if(workspaceId&&conversationStore){
+      const stored=await conversationStore.record({workspaceId,customerId,invoiceId,phone:to,direction:'outbound',audience,body,kind,status:'pending',key});
+      if(!stored?.body)throw Error('Outbound message intent missing');
+      if(stored.audience!==audience||stored.phone!==to||stored.kind!==kind
+        ||(stored.customer_id??null)!==customerId||(stored.invoice_id??null)!==invoiceId)
+        throw Error('Outbound intent recipient scope changed');
+      if(stored.status==='blocked')throw Error('Outbound message was blocked');
+      // A retry before the atomic claim must send the exact first saved text.
+      if(payload.type==='template'&&stored.body!==body)throw Error('Reviewed template intent changed');
+      if(payload.text)payload.text.body=stored.body;
+      if(payload.image)payload.image.caption=stored.body;
+      if(payload.document)payload.document.caption=stored.body;
+      payload.biz_opaque_callback_data=conversationCallbackToken(workspaceId,key);
+    }
+    return payload;
+  }
+
+  async function denyPrepared({workspaceId,to,kind,key,reason,claimed=false}) {
+    if(workspaceId&&conversationStore){
+      if(claimed)await conversationStore.finish({workspaceId,key,status:'blocked'});
+      else await conversationStore.abandonReply?.({workspaceId,key});
+    }
+    return block(logger,reason,{workspaceId,to,kind});
+  }
+
+  async function postMessage({workspaceId,to,kind,payload,key}) {
+    const finish=async result=>{
+      if(workspaceId&&conversationStore){
+        for(let attempt=0;attempt<3;attempt++){
+          try{await conversationStore.finish({workspaceId,key,...result});return result;}
+          catch(error){if(attempt===2)logger?.error?.('WhatsApp receipt history pending callback recovery',{
+            providerMessageId:result.providerMessageId,message:String(error?.message||'').slice(0,200)});}
+        }
+        // Never resend an accepted or uncertain Graph request. A verified callback
+        // matches the pre-saved token even when the response ID wasn't persisted.
+        return {...result,historySyncPending:true};
+      }
+      return result;
+    };
     const version = env.WHATSAPP_GRAPH_API_VERSION;
     let response;
     try {
@@ -123,18 +162,18 @@ export function createWhatsAppOutbound({
       });
     } catch (error) {
       logger?.error?.({event: 'whatsapp_outbound_unknown', workspaceId, recipient: maskedPhone(to), kind, message: error?.message});
-      return {status: 'unknown', reason: 'network_error'};
+      return finish({status: 'unknown', reason: 'network_error'});
     }
     if (!response.ok) {
       logger?.error?.({event: 'whatsapp_outbound_failed', workspaceId, recipient: maskedPhone(to), kind, httpStatus: response.status});
-      return {status: 'failed', reason: 'graph_rejected', httpStatus: response.status};
+      return finish({status: 'failed', reason: 'graph_rejected', httpStatus: response.status});
     }
     let data;
-    try { data = await response.json(); } catch { return {status: 'unknown', reason: 'invalid_graph_response'}; }
+    try { data = await response.json(); } catch { return finish({status: 'unknown', reason: 'invalid_graph_response'}); }
     const providerMessageId = data?.messages?.[0]?.id;
-    return typeof providerMessageId === 'string' && providerMessageId
+    return finish(typeof providerMessageId === 'string' && providerMessageId
       ? {status: 'accepted', providerMessageId}
-      : {status: 'unknown', reason: 'missing_graph_message_id'};
+      : {status: 'unknown', reason: 'missing_graph_message_id'});
   }
 
   /** Best-effort read receipt that also displays WhatsApp's typing indicator. */
@@ -169,7 +208,7 @@ export function createWhatsAppOutbound({
     nonempty(customerId, 'customerId');
     const revision = nonempty(expectedUpdatedAt, 'expectedUpdatedAt');
     const eventKey = nonempty(idempotencyKey, 'idempotencyKey');
-    const name = nonempty(businessName, 'businessName', 100);
+    const name = nonempty(businessName, 'businessName', 200);
     if (!supabase || !invoiceStore?.getCurrentInvoice) return block(logger, 'missing_store', {workspaceId, to, kind: 'invoice_update'});
     if (typeof claimInvoiceUpdate !== 'function') return block(logger, 'missing_invoice_claim', {workspaceId, to, kind: 'invoice_update'});
     const eligibility = await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
@@ -194,23 +233,27 @@ export function createWhatsAppOutbound({
     // A durable atomic claim must be keyed by workspace, invoice and the
     // originating event. Claim-before-send favors at-most-once delivery when
     // Graph returns an uncertain outcome; callers must not retry blindly.
+    const key=`template:${idempotencyKey}`;
+    const payload=await prepareMessage({workspaceId,to,customerId,invoiceId,key,kind:'invoice_update',payload:{
+      type:'template',template:{name:TEMPLATE_NAME,language:{code:'en_US'},components:[
+        {type:'body',parameters:[{type:'text',text:name},{type:'text',text:number}]},
+      ]},
+    }});
     const claim = await claimInvoiceUpdate({workspaceId, invoiceId, customerId, phone: to, idempotencyKey: eventKey, expectedUpdatedAt: revision});
     if (claim?.claimed !== true) return block(logger, claim?.reason || 'duplicate_invoice_update', {workspaceId, to, kind: 'invoice_update'});
+    if(!await verifiedBusinessName(supabase,workspaceId,name))
+      return denyPrepared({workspaceId,to,key,kind:'invoice_update',reason:'business_name_changed',claimed:true});
     const postClaimEligibility = await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
     if (!postClaimEligibility.allowed || postClaimEligibility.customer?.id !== customerId) {
-      return block(logger, postClaimEligibility.reason || 'customer_mismatch', {workspaceId, to, kind: 'invoice_update'});
+      return denyPrepared({workspaceId,to,key,kind:'invoice_update',reason:postClaimEligibility.reason||'customer_mismatch',claimed:true});
     }
     // This is an explicitly neutral, fixed test template. The approved Meta
     // template must say "Hi, this is {{1}}" and provide an invoice update with
     // {{2}}. No caller-controlled reminder content is accepted.
-    return postMessage({workspaceId, to, kind: 'invoice_update', payload: {
-      type: 'template', template: {name: TEMPLATE_NAME, language: {code: 'en_US'}, components: [
-        {type: 'body', parameters: [{type: 'text', text: name}, {type: 'text', text: number}]},
-      ]},
-    }});
+    return postMessage({workspaceId,to,key,kind:'invoice_update',payload});
   }
 
-  async function sendServiceReply({workspaceId = null, to, body, lastInboundAt, kind = 'normal', messageId, businessName, ownerLinkResult} = {}) {
+  async function sendServiceReply({workspaceId = null, to, body, lastInboundAt, kind = 'normal', messageId, businessName, audience='customer', ownerLinkResult} = {}) {
     const blocked = preflight({workspaceId, to, kind});
     if (blocked) return blocked;
     recipient(to);
@@ -220,7 +263,7 @@ export function createWhatsAppOutbound({
     const inboundId = nonempty(messageId, 'messageId');
     if (kind === 'normal') nonempty(workspaceId, 'workspaceId');
     if (kind === 'verification' && workspaceId !== null) return block(logger, 'verification_must_be_unbound', {workspaceId, to, kind});
-    const owner = nonempty(businessName, 'businessName', 100);
+    const owner = nonempty(businessName, 'businessName', 200);
     if (kind === 'verification' || (kind === 'stop_confirmation' && workspaceId === null)) {
       if (owner !== 'CETLD') return block(logger, 'invalid_platform_identity', {workspaceId, to, kind});
     } else if (!await verifiedBusinessName(supabase, workspaceId, owner)) {
@@ -228,7 +271,7 @@ export function createWhatsAppOutbound({
     }
     // Fixed owner-linking confirmations are the only variants allowed on the unbound verification path.
     const linkText = kind === 'verification' ? {
-      linked: 'Done. This number is linked to your cetld account. You can send me invoices now.',
+      linked: 'Connected. I can access the invoices in your dashboard. Ask me to list your invoices, check a balance, or retrieve a file.',
       failed: 'We could not link this number. Start again from Settings on the dashboard and send the new code.',
     }[ownerLinkResult] : null;
     let text = linkText ? linkText
@@ -239,57 +282,87 @@ export function createWhatsAppOutbound({
         : null;
     if (kind === 'normal') {
       try {
-        text = neutralText(body, kind);
+        const bounded=typeof body==='string'&&body.length>3790
+          ?body.slice(0,3730)+'\n… View the full details in your dashboard.':body;
+        text = neutralText(bounded, kind);
       } catch (error) {
         if (!(error instanceof TypeError) || error.message !== 'collection content is disabled') throw error;
         logger?.warn?.({event: 'whatsapp_outbound_guard_fallback', workspaceId, recipient: maskedPhone(to), kind});
         text = SAFE_GUARD_REPLY;
       }
     }
+    let customerId=null;
     if (kind === 'normal') {
       if (!supabase) return block(logger, 'missing_store', {workspaceId, to, kind});
-      const eligibility = await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
+      const eligibility = audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}:await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
       if (!eligibility.allowed) return block(logger, eligibility.reason, {workspaceId, to, kind});
+      customerId=eligibility.customer?.id||null;
     }
-    const authorization = await authorizeInboundReply({workspaceId, phone: to, kind, messageId: inboundId});
-    if (authorization?.allowed !== true) return block(logger, authorization?.reason || 'inbound_reply_denied', {workspaceId, to, kind});
+    text=`${text}\n\n— ${owner}`;
+    const key=`reply:${inboundId}`;
+    const payload=await prepareMessage({workspaceId,to,kind,audience,customerId,key,payload:{type:'text',text:{preview_url:false,body:text}}});
+    if(!payload.text.body.endsWith(`\n\n— ${owner}`))return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed'});
+    const authorization = await authorizeInboundReply({workspaceId, phone: to, kind, messageId: inboundId,...(audience==='owner'?{audience}: {})});
+    if (authorization?.allowed !== true) return denyPrepared({workspaceId,to,kind,key,reason:authorization?.reason||'inbound_reply_denied'});
+    if(workspaceId&&!await verifiedBusinessName(supabase,workspaceId,owner))
+      return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed',claimed:true});
     if (kind === 'verification') {
       const suppression = await unboundSuppression(supabase, to);
-      if (suppression) return block(logger, suppression, {workspaceId, to, kind});
+      if (suppression) return denyPrepared({workspaceId,to,kind,key,reason:suppression,claimed:true});
     }
     if (kind === 'normal') {
-      const finalEligibility = await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
-      if (!finalEligibility.allowed) return block(logger, finalEligibility.reason, {workspaceId, to, kind});
+      const finalEligibility = audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}:await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
+      if (!finalEligibility.allowed||(audience==='customer'&&finalEligibility.customer?.id!==customerId))
+        return denyPrepared({workspaceId,to,kind,key,reason:finalEligibility.allowed?'customer_binding_changed':finalEligibility.reason||'owner_binding_changed',claimed:true});
     }
-    return postMessage({workspaceId, to, kind, payload: {type: 'text', text: {preview_url: false, body: text}}});
+    return postMessage({workspaceId,to,kind,key,payload});
   }
 
-  async function sendServiceMedia({workspaceId, to, media, caption, lastInboundAt, messageId, businessName} = {}) {
+  async function sendServiceMedia({workspaceId, to, media, caption, lastInboundAt, messageId, businessName,audience='customer'} = {}) {
     const kind = 'normal';
     const blocked = preflight({workspaceId, to, kind});
     if (blocked) return blocked;
     recipient(to); nonempty(workspaceId, 'workspaceId'); nonempty(messageId, 'messageId');
     if (!withinServiceWindow(lastInboundAt, clock)) return block(logger, 'service_window_closed', {workspaceId, to, kind});
-    if (!await verifiedBusinessName(supabase, workspaceId, nonempty(businessName, 'businessName', 100))) return block(logger, 'business_name_mismatch', {workspaceId, to, kind});
-    const eligibility = await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
+    if (!await verifiedBusinessName(supabase, workspaceId, nonempty(businessName, 'businessName', 200))) return block(logger, 'business_name_mismatch', {workspaceId, to, kind});
+    const eligibility = audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}
+      :await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
     if (!eligibility.allowed) return block(logger, eligibility.reason, {workspaceId, to, kind});
-    const authorization = await authorizeInboundReply({workspaceId, phone: to, kind, messageId});
-    if (authorization?.allowed !== true) return block(logger, authorization?.reason || 'inbound_reply_denied', {workspaceId, to, kind});
+    if(typeof authorizeInboundReply!=='function')return block(logger,'missing_inbound_authorizer',{workspaceId,to,kind});
     const bytes = media?.bytes;
     if (!bytes?.length || bytes.length > 10 * 1024 * 1024) throw new TypeError('invalid invoice media');
+    const image = String(media.mime_type || media.mimeType).startsWith('image/');
+    const brandedCaption=`${String(caption||'').slice(0,Math.max(0,1000-businessName.length-4))}\n\n— ${businessName}`;
+    const key=`reply:${messageId}`;
+    const payload=await prepareMessage({workspaceId,to,kind,audience,customerId:eligibility.customer?.id||null,key,payload:image
+      ? {type:'image',image:{id:'',caption:brandedCaption}}
+      : {type:'document',document:{id:'',filename:media.file_name||media.fileName||'invoice.pdf',caption:brandedCaption}}});
+    if(!(payload.image?.caption||payload.document?.caption).endsWith(`\n\n— ${businessName}`))
+      return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed'});
     const form = new FormData();
     form.set('messaging_product', 'whatsapp');
     form.set('type', media.mime_type || media.mimeType || 'application/octet-stream');
     form.set('file', new Blob([bytes], {type: media.mime_type || media.mimeType}), media.file_name || media.fileName || 'invoice');
     const upload = await fetchImpl(`https://graph.facebook.com/${env.WHATSAPP_GRAPH_API_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/media`, {
       method: 'POST', headers: {Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`}, body: form, signal: AbortSignal.timeout(15000)});
-    if (!upload.ok) return {status: 'failed', reason: 'media_upload_rejected', httpStatus: upload.status};
+    if (!upload.ok) {
+      await conversationStore?.abandonReply?.({workspaceId,key});
+      return {status: 'failed', reason: 'media_upload_rejected', httpStatus: upload.status};
+    }
     const uploaded = await upload.json();
-    if (!uploaded?.id) return {status: 'unknown', reason: 'missing_media_id'};
-    const image = String(media.mime_type || media.mimeType).startsWith('image/');
-    return postMessage({workspaceId, to, kind, payload: image
-      ? {type: 'image', image: {id: uploaded.id, caption: String(caption || '').slice(0, 1000)}}
-      : {type: 'document', document: {id: uploaded.id, filename: media.file_name || media.fileName || 'invoice.pdf', caption: String(caption || '').slice(0, 1000)}}});
+    if (!uploaded?.id) {
+      await conversationStore?.abandonReply?.({workspaceId,key});
+      return {status:'failed',reason:'missing_media_id'};
+    }
+    const authorization=await authorizeInboundReply({workspaceId,phone:to,kind,messageId,...(audience==='owner'?{audience}:{})});
+    if(authorization?.allowed!==true)return denyPrepared({workspaceId,to,kind,key,reason:authorization?.reason||'inbound_reply_denied'});
+    const finalEligibility=audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}
+      :await getSendEligibility({supabase,workspaceId,phone:to,category:'invoice_updates'});
+    if(!finalEligibility.allowed||audience==='customer'&&finalEligibility.customer?.id!==eligibility.customer?.id)
+      return denyPrepared({workspaceId,to,kind,key,reason:finalEligibility.allowed?'customer_binding_changed':finalEligibility.reason||'owner_binding_changed',claimed:true});
+    if(!await verifiedBusinessName(supabase,workspaceId,businessName))return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed',claimed:true});
+    if(image)payload.image.id=uploaded.id;else payload.document.id=uploaded.id;
+    return postMessage({workspaceId,to,kind,key,payload});
   }
 
   // Intentionally no sendReminder method. Collection content remains on hold.

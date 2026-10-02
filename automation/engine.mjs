@@ -1,6 +1,6 @@
 import { cadenceSettings, isWithinContactHours, nextContactTime, scheduleNextFollowUp } from './cadence.mjs';
 import { createHash } from 'node:crypto';
-import { normalizeFollowUpPreferences, reminderBody } from './preferences.mjs';
+import { normalizeFollowUpPreferences, reminderBody, brandedReminder } from './preferences.mjs';
 const value = (row, camel, snake) => row[camel] ?? row[snake];
 const version = row => Number(value(row,'automationVersion','automation_version'));
 const state = row => value(row,'followupState','followup_state');
@@ -21,7 +21,7 @@ export class FollowUpEngine {
   }
   async settingsFor(scope, invoice) {
     const owner = typeof this.store.getWorkspacePreferences === 'function' ? await this.store.getWorkspacePreferences(scope) : null;
-    if (owner) return normalizeFollowUpPreferences({...owner.follow_up_preferences, version:owner.updated_at}, owner.default_timezone);
+    if (owner) return normalizeFollowUpPreferences({...owner.follow_up_preferences, businessName:owner.business_name, version:owner.updated_at}, owner.default_timezone);
     return cadenceSettings({...this.settings,...(value(invoice,'followUpSettings','follow_up_settings') || {})});
   }
   async run(scope) {
@@ -41,6 +41,7 @@ export class FollowUpEngine {
     }
     if (!active(invoice)) return {status:'skipped',reason:state(invoice)};
     const now=this.clock(), settings=await this.settingsFor(scope,invoice), timezone=invoice.debtor_timezone || settings.timezone || 'UTC';
+    if(Object.hasOwn(invoice,'total_amount') && (!settings.businessName || brandedReminder(invoice.metadata.approved_reminder_text,settings.businessName)!==invoice.metadata.approved_reminder_text))return {status:'skipped',reason:'business_name_required'};
     const due=value(invoice,'nextFollowUpAt','next_follow_up_at');
     if (!due || new Date(due)>now) return {status:'waiting'};
     if (!isWithinContactHours(now,settings,timezone)) {
@@ -89,7 +90,7 @@ export class FollowUpEngine {
       await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'message_changed'});
       return {status:'skipped',reason:'message_changed'};
     }
-    if (settings.version !== finalSettings.version) {
+    if (settings.version !== finalSettings.version || settings.businessName !== finalSettings.businessName) {
       await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'preferences_changed'});
       return {status:'waiting',reason:'preferences_changed'};
     }
@@ -122,7 +123,7 @@ export class FollowUpEngine {
       await this.event(scope,'needs_attention',{reason:'sent_state_changed',claimId:claim.id});
       return {status:'quarantined',reason:'sent_state_changed'};
     }
-    await this.event(scope,needsAttention?'needs_attention':'followup_sent',{claimId:claim.id,providerMessageId:result.providerMessageId,reason:needsAttention?'cadence_exhausted':undefined});
+    await this.event(scope,needsAttention&&settings.escalation!=='pause'?'needs_attention':'followup_sent',{claimId:claim.id,providerMessageId:result.providerMessageId,reason:needsAttention?'cadence_exhausted':undefined});
     return {status:'sent',providerMessageId:result.providerMessageId};
   }
   runInvoice(input) { return this.run(input); }

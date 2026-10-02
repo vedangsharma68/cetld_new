@@ -43,7 +43,7 @@ export function createWhatsAppPendingActionStore({supabase} = {}) {
       return (Array.isArray(row) ? row[0] : row) || null;
     },
     async loadPendingAction({workspaceId, customerId, phone}) {
-      return data(await supabase.from('whatsapp_pending_actions').select('id,workspace_id,customer_id,phone,action,created_at')
+      return data(await supabase.from('whatsapp_pending_actions').select('id,version,workspace_id,customer_id,phone,action,created_at')
         .eq('workspace_id', workspaceId).eq('customer_id', customerId).eq('phone', phone)
         .is('consumed_at', null).order('created_at', {ascending: false}).limit(1).maybeSingle(), 'load') || null;
     },
