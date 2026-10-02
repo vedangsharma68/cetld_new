@@ -37,9 +37,21 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId} =
           bookkeeping_sync_status: 'pending', followup_state: 'draft', next_follow_up_at: null,
           subtotal: invoice.subtotal, tax: invoice.tax, outstanding_amount: invoice.total,
           client_name: invoice.clientName, printed_invoice_number: invoice.invoiceNumber === 'AUTO' ? null : invoice.invoiceNumber,
-          client_phone: invoice.clientPhone || null, client_email: invoice.clientEmail || null,
+          debtor_phone: invoice.clientPhone || null, client_phone: invoice.clientPhone || null,
+          client_phone_raw: invoice.clientPhoneRaw || null, client_email: invoice.clientEmail || null,
           line_items: invoice.lineItems || []}}, {onConflict: 'workspace_id,invoice_number', ignoreDuplicates: true}).select('*');
       return rows(result)[0] || null;
+    },
+    async saveDebtorPhone({invoiceId, phone, assumedConsentAt}) {
+      const found = await scoped('invoices').select('*').eq('workspace_id', workspaceId).eq('id', invoiceId).limit(1);
+      const row = rows(found)[0];
+      if (!row || row.customer_id !== customerId) throw new TypeError('invoice customer scope violation');
+      // Invoice metadata only: customers.phone is the owner's WhatsApp binding key and must never be overwritten.
+      const metadata = {...(row.metadata || {}), debtor_phone: phone, client_phone: phone,
+        debtor_consent: {status: 'assumed_yes', basis: 'owner_default', recorded_at: assumedConsentAt || new Date().toISOString()}};
+      const updated = await scoped('invoices').update({metadata}).eq('workspace_id', workspaceId).eq('id', invoiceId).select('*').single();
+      if (updated.error) throw updated.error;
+      return mappedInvoice(updated.data);
     },
     async findInvoices({invoiceNumber, limit} = {}) {
       let query = scoped('invoices').select('*').eq('workspace_id', workspaceId);
