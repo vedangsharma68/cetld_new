@@ -15,6 +15,11 @@ export const GEMINI_FALLBACK_MODEL = 'gemini-3.5-flash';
 export const DEFAULT_MODEL = ZEN_PRIMARY_MODEL;
 export const DEFAULT_FALLBACK_MODEL = ZEN_FALLBACK_MODEL;
 export const DEFAULT_EXTRACTION_MODEL = 'gemini-3.5-flash-lite';
+export const CF_PRIMARY_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+export const CF_BACKUP_MODEL = '@cf/meta/llama-4-scout-17b-16e-instruct';
+const isCfModel = value => value === CF_PRIMARY_MODEL || value === CF_BACKUP_MODEL;
+const cfBreaker = {failures: 0, openUntil: 0};
+export function cloudflareBreakerState() { return {...cfBreaker, open: Date.now() < cfBreaker.openUntil}; }
 export const OPENROUTER_FREE_MODEL = 'openrouter/free';
 export const DEFAULT_EXTRACTION_FALLBACK_MODEL = GEMINI_FALLBACK_MODEL;
 export const VERIFIED_MODELS = Object.freeze([
@@ -217,12 +222,16 @@ export class AIProvider {
   #geminiApiKey;
   #openRouterApiKey;
   #zenApiKey;
+  #cfAccountId;
+  #cfApiToken;
   constructor({
     primaryModel = DEFAULT_MODEL,
     fallbackModel = DEFAULT_FALLBACK_MODEL,
     geminiApiKey = globalThis.process?.env?.GEMINI_API_KEY,
     openRouterApiKey = globalThis.process?.env?.OPENROUTER_API_KEY,
     zenApiKey = globalThis.process?.env?.OPENCODE_ZEN_API_KEY,
+    cfAccountId = globalThis.process?.env?.CLOUDFLARE_ACCOUNT_ID,
+    cfApiToken = globalThis.process?.env?.CLOUDFLARE_API_TOKEN,
     apiKey,
     fetchImpl = globalThis.fetch,
     timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -236,12 +245,17 @@ export class AIProvider {
     const extractionFallback = extractionPrimary && fallbackModel === GEMINI_FALLBACK_MODEL;
     const geminiPrimary = primaryModel === GEMINI_FALLBACK_MODEL;
     const geminiFallback = geminiPrimary && fallbackModel === DEFAULT_EXTRACTION_MODEL;
-    if ((!isPrimaryModelId(primaryModel) && !extractionPrimary && !geminiPrimary) || (fallbackModel !== null && !isFallbackModelId(fallbackModel) && !extractionFallback && !geminiFallback)) throw new AIError('INVALID_MODEL', 400);
+    const cfPrimary = primaryModel === CF_PRIMARY_MODEL;
+    const cfFallback = cfPrimary && (fallbackModel === CF_BACKUP_MODEL || fallbackModel === GEMINI_FALLBACK_MODEL || fallbackModel === DEFAULT_EXTRACTION_MODEL);
+    if (cfPrimary && fallbackModel !== null && !cfFallback) throw new AIError('INVALID_MODEL', 400);
+    if (!cfPrimary && (!isPrimaryModelId(primaryModel) && !extractionPrimary && !geminiPrimary) || (fallbackModel !== null && !isFallbackModelId(fallbackModel) && !extractionFallback && !geminiFallback)) throw new AIError('INVALID_MODEL', 400);
     this.primaryModel = primaryModel;
     this.fallbackModel = fallbackModel;
     this.#geminiApiKey = typeof geminiApiKey === 'string' ? geminiApiKey : '';
     this.#openRouterApiKey = typeof openRouterApiKey === 'string' ? openRouterApiKey : (typeof apiKey === 'string' ? apiKey : '');
     this.#zenApiKey = typeof zenApiKey === 'string' ? zenApiKey : '';
+    this.#cfAccountId = typeof cfAccountId === 'string' ? cfAccountId : '';
+    this.#cfApiToken = typeof cfApiToken === 'string' ? cfApiToken : '';
     this.fetchImpl = fetchImpl;
     this.timeoutMs = Math.max(1, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
     this.maxAttempts = extractionPrimary ? 1 : Math.min(2, Math.max(1, Number(maxAttempts) || 2));
@@ -271,6 +285,10 @@ export class AIProvider {
   }
 
   #candidates() {
+    if (this.primaryModel === CF_PRIMARY_MODEL) {
+      const chain = Date.now() < cfBreaker.openUntil ? [] : [CF_PRIMARY_MODEL, CF_BACKUP_MODEL];
+      return [...chain, GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL];
+    }
     if (!this.fallbackModel) return [this.primaryModel];
     if (this.primaryModel === DEFAULT_EXTRACTION_MODEL) {
       return [...new Set([this.primaryModel, GEMINI_FALLBACK_MODEL, ZEN_PRIMARY_MODEL, ZEN_FALLBACK_MODEL])];
@@ -355,11 +373,37 @@ export class AIProvider {
   }
 
   #providerName(model) {
-    return isZenModelId(model) ? 'opencode-zen' : model === OPENROUTER_FREE_MODEL ? 'openrouter' : 'google';
+    return isCfModel(model) ? 'cloudflare' : isZenModelId(model) ? 'opencode-zen' : model === OPENROUTER_FREE_MODEL ? 'openrouter' : 'google';
   }
 
   async #request(model, messages, options, usedFallback) {
     const {signal, deadlineAt, ...wireOptions} = options;
+    if (isCfModel(model)) {
+      if (!this.#cfApiToken || !this.#cfAccountId) throw new AIError('API_KEY_MISSING', 503);
+      try {
+        const result = await this.#fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(this.#cfAccountId)}/ai/v1/chat/completions`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', Authorization: `Bearer ${this.#cfApiToken}`},
+          body: safeJsonStringify({...wireOptions, model, messages, stream: false}),
+        }, async response => {
+          const body = await readBoundedJson(response);
+          if (!response.ok || body?.error || body?.success === false) throw statusError(response.status || 502, classifyProviderError(body, response.status));
+          const choice = body?.choices?.[0];
+          const message = choice?.message;
+          if (!message) throw new AIError('INVALID_RESPONSE');
+          const content = typeof message.content === 'string' ? message.content : '';
+          const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+          if (!content && !toolCalls.length) throw new AIError('INVALID_RESPONSE');
+          return {content, finishReason: choice.finish_reason || null, toolCalls, model, usedFallback};
+        }, {signal, deadlineAt});
+        cfBreaker.failures = 0;
+        return result;
+      } catch (error) {
+        // Bench Cloudflare for 10 minutes after repeated failures (quota cap, outage); Gemini serves meanwhile.
+        if (error instanceof AIError && !['INVALID_ARGUMENT'].includes(error.code) && (cfBreaker.failures += 1) >= 3) { cfBreaker.openUntil = Date.now() + 10 * 60 * 1000; cfBreaker.failures = 0; }
+        throw error;
+      }
+    }
     if (isZenModelId(model)) {
       if (!this.#zenApiKey) throw new AIError('API_KEY_MISSING', 503);
       return this.#fetch(ZEN_CHAT_COMPLETIONS_URL, {
