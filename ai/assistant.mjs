@@ -7,8 +7,8 @@ const createProposalTool = {type:'function',function:{name:'createInvoice',descr
 const updateProposalTool = {type:'function',function:{name:'updateInvoice',description:'Prepare, but do not execute, an update to one exact Cetld invoice.',parameters:{type:'object',properties:{target:{type:'string',minLength:1,maxLength:100},changes:{type:'object',properties:{total:{type:'number',minimum:0.01},dueDate:{type:'string',format:'date'},status:{type:'string',enum:['draft','sent','overdue','paid','void','cancelled']},clientName:{type:'string',maxLength:255},currency:{type:'string',enum:SUPPORTED_TWO_DECIMAL_CURRENCIES}},additionalProperties:false}},required:['target','changes'],additionalProperties:false}}};
 
 const LABELS = {getZohoBooksData: 'Zoho Books records', getInvoices: 'Invoices', getCustomer: 'Customer', getPayments: 'Payments collected', getOutstandingSummary: 'Outstanding balances', getOverdueInvoices: 'Overdue invoices', getDueInvoices: 'Invoices due soon', getActivity: 'Recorded activity', getInvoiceDetails: 'Invoice details'};
-export const SCOPE_ANSWER = "I'm here for your Cetld workspace — invoices, payments, customers, and balances. Try: which invoices are unpaid, who owes the most, or what got paid this week.";
-export const IDENTITY_ANSWER = "I'm the Cetld assistant — I check invoices, payments, customers, and balances in your workspace. Try: which invoices are unpaid, who owes the most, or what got paid this week.";
+export const SCOPE_ANSWER = "I'm here for your Cetld account — invoices, payments, customers, and balances. Try: which invoices are unpaid, who owes the most, or what got paid this week.";
+export const IDENTITY_ANSWER = "I'm the Cetld assistant — I check invoices, payments, customers, and balances in your business. Try: which invoices are unpaid, who owes the most, or what got paid this week.";
 
 function identityAnswer(message) {
   const text = message.trim().toLowerCase().replace(/[!?.,]+$/g, '').replace(/\s+/g, ' ');
@@ -69,10 +69,10 @@ function emptyAnswer(source) {
   switch (source?.tool) {
     case 'getOutstandingSummary': {
       const hasPositiveLedgerBalance = Object.values(data?.currencies || {}).some(row => Number(row?.outstandingAmount) > 0);
-      return !hasPositiveLedgerBalance ? "There aren't any outstanding balances in this workspace right now." : null;
+      return !hasPositiveLedgerBalance ? "There aren't any outstanding balances in this business right now." : null;
     }
     case 'getOverdueInvoices':
-      return !data?.count && !(data?.invoices?.length) ? "There aren't any overdue invoices in this workspace right now." : null;
+      return !data?.count && !(data?.invoices?.length) ? "There aren't any overdue invoices in this business right now." : null;
     case 'getDueInvoices':
       return !data?.count && !(data?.invoices?.length) ? `There aren't any unpaid invoices due from ${data?.dueDateFrom} through ${data?.dueDateTo}.` : null;
     case 'getPayments':
@@ -82,7 +82,7 @@ function emptyAnswer(source) {
     case 'getInvoices':
       return Array.isArray(data) && !data.length ? "I couldn't find invoices matching those filters." : null;
     case 'getCustomer':
-      return !data ? "I couldn't find that customer in this workspace." : null;
+      return !data ? "I couldn't find that customer in this business." : null;
     case 'getInvoiceDetails':
       return !data?.invoices?.length ? "I couldn't find a matching invoice." : null;
     case 'getZohoBooksData':
@@ -148,7 +148,7 @@ function invoicePaymentLabel(row) {
 }
 
 function invoiceListAnswer(rows, {count = rows.length, truncated = false, paidOnly = false} = {}) {
-  if (!count) return paidOnly ? 'There are no fully paid invoices in this workspace right now.' : "I couldn't find invoices matching those filters.";
+  if (!count) return paidOnly ? 'There are no fully paid invoices in this business right now.' : "I couldn't find invoices matching those filters.";
   const visible = rows.slice(0, 10);
   const totals = sumInvoiceAmountsByCurrency(rows, 'totalAmount');
   const totalLabel = totals.length ? ` • ${truncated || count > rows.length ? 'Listed total' : 'Total'}: ${totals.join(' | ')}` : '';
@@ -338,7 +338,7 @@ function factualFallback(sources, message = '') {
     const rows = Array.isArray(data.debtors) ? data.debtors : [];
     const format = groups => Object.entries(groups || {}).filter(([, row]) => Number(row?.outstandingAmount) > 0).map(([currency, row]) => `${currency} ${row.outstandingAmount}`).join(', ');
     const ledger = format(data.currencies);
-    if (!ledger) return "There aren't any outstanding balances in this workspace right now.";
+    if (!ledger) return "There aren't any outstanding balances in this business right now.";
     const parts = [`Unpaid balances total ${ledger.replace(/, ([^,]+)$/, ' and $1')} right now.`];
     const receivables = format(data.confirmedReceivablesByCurrency);
     const drafts = format(data.draftBalancesByCurrency);
@@ -351,7 +351,7 @@ function factualFallback(sources, message = '') {
   }
   if (source?.tool === 'getOverdueInvoices') {
     const rows = Array.isArray(data.invoices) ? data.invoices : [];
-    if (!rows.length) return `There aren't any overdue invoices in this workspace as of ${data.asOfUtcDate || 'the current'} UTC date.`;
+    if (!rows.length) return `There aren't any overdue invoices in this business as of ${data.asOfUtcDate || 'the current'} UTC date.`;
     const count = data.count ?? rows.length;
     const descriptions = rows.slice(0, 5).map(row => {
       const invoiceStatus = String(row.invoiceStatus || row.status || '').toLowerCase();
@@ -408,7 +408,7 @@ function factualFallback(sources, message = '') {
     }
   }
   if (source?.tool === 'getCustomer') {
-    if (!data) return "I couldn't find that customer in this workspace.";
+    if (!data) return "I couldn't find that customer in this business.";
     const name = redactInternalIds(data.companyName || data.name || 'This customer');
     const contact = [data.email ? `email ${redactInternalIds(data.email)}` : '', data.phone ? `phone ${redactInternalIds(data.phone)}` : ''].filter(Boolean).join(', ');
     return contact ? `${name} has ${contact} recorded.` : `No email address or phone number is recorded for ${name}.`;
