@@ -84,7 +84,7 @@ test('migration documents supported families, concurrency lock, and strict-major
   assert.match(sql,/chosen\.score \* 2 <= chosen\.total_weight/);
   assert.doesNotMatch(sql,/update\s+public\.invoices\s+set\s+invoice_number/i);
   const app=await readFile(new URL('../app.js',import.meta.url),'utf8');
-  assert.match(app,/Assigned automatically in your workspace’s usual format/);
+  assert.match(app,/Assigned automatically in your business’s usual format/);
   assert.match(app,/number:row\.invoice_number/);
   assert.match(app,/Existing invoice numbers stay unchanged\./);
 });
