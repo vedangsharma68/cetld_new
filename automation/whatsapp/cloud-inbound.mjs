@@ -6,6 +6,7 @@ import {createWhatsAppInvoiceUpdateStore} from './invoice-update-store.mjs';
 import {writeConversationTurn} from './conversation-memory.mjs';
 
 const MAX_MESSAGES = 100;
+const TIMEOUT_REPLY = 'That took longer than I can handle, so I stopped. Your message was received. Please send it again in a minute.';
 const DEFAULT_PROCESS_BUDGET_MS = 40_000;
 // Leave enough runway for a database lookup and a deterministic reply. Slow
 // planner work may use the first slot, but is never started near the deadline.
@@ -378,13 +379,22 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           completed++;
         }
         catch (error) {
-          if (controller.signal.aborted || clock() >= deadlineAt) {
-            if (typeof inbox.defer === 'function') await inbox.defer(event);
-            break;
-          }
+          const timedOut = controller.signal.aborted || clock() >= deadlineAt;
           logger.error('WhatsApp inbound event failed', { messageId: event.provider_message_id, name: error?.name || 'Error',
-            message: String(error?.message || '').slice(0, 200) });
-          await inbox.complete(event, 'PROCESSING_FAILED', String(error?.message || '').slice(0, 1000));
+            timedOut, message: String(error?.message || '').slice(0, 200) });
+          // Never leave the sender in silence: say what happened, then close the event.
+          try {
+            const sender = await getOutbound();
+            await sender.sendServiceReply({ workspaceId: null, to: event.sender_phone,
+              body: timedOut ? TIMEOUT_REPLY : SAFE_FALLBACK_REPLY,
+              lastInboundAt: event.provider_timestamp || event.received_at, kind: 'verification',
+              messageId: event.provider_message_id, businessName: 'CETLD' });
+          } catch (replyError) {
+            logger.error('WhatsApp failure notice failed', { messageId: event.provider_message_id,
+              message: String(replyError?.message || '').slice(0, 200) });
+          }
+          await inbox.complete(event, timedOut ? 'PROCESSING_TIMEOUT' : 'PROCESSING_FAILED', String(error?.message || '').slice(0, 1000));
+          if (timedOut) break;
         }
         // Media is the long path. Leave later events unclaimed for the next
         // webhook continuation or five-minute cron invocation.
