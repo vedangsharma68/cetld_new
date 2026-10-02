@@ -133,9 +133,9 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
    let list=invoices;
    if(/\b(?:unpaid|outstanding|due|overdue)\b/i.test(message))list=list.filter(i=>!['void','cancelled'].includes(i.status)&&i.total>(i.amountPaid||0));
    else if(/\bpaid\b/i.test(message))list=list.filter(i=>i.status==='paid'||i.total<=(i.amountPaid||0));
-   if(!list.length)return 'There are no invoices matching that request in your workspace.';
+   if(!list.length)return 'There are no invoices matching that request in your business.';
    const shown=list.slice(0,20);
-   return `${list.length} invoice${list.length===1?'':'s'} in your workspace:\n${shown.map(i=>'• '+label(i)+' · '+i.status+' · '+money(i.currency,i.total)).join('\n')}${list.length>20?'\nShowing the first 20. Ask for a specific invoice or use the dashboard for the full list.':''}`;
+   return `${list.length} invoice${list.length===1?'':'s'} in your business:\n${shown.map(i=>'• '+label(i)+' · '+i.status+' · '+money(i.currency,i.total)).join('\n')}${list.length>20?'\nShowing the first 20. Ask for a specific invoice or use the dashboard for the full list.':''}`;
   }
   const fileRequest=/\b(?:send|show|give|download)\b.{0,70}\b(?:file|pdf|photo|document)\b/i.test(message);
   const contactRequest=/\b(?:contact|phone|mobile|email|e-mail|whatsapp number)\b/i.test(message)&&!edit;
