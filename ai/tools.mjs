@@ -172,7 +172,7 @@ function safeInvoice(invoice) {
   const metadata = invoice.metadata;
   const taxMinor = integerMetadata(metadata, ["tax_minor"]);
   return {
-    id: invoice.id, invoiceNumber: stringMetadata(metadata, ['printed_invoice_number'], 100) || invoice.invoice_number, systemInvoiceNumber: invoice.invoice_number, customerId: invoice.customer_id,
+    id: invoice.id, invoiceNumber: stringMetadata(metadata, ['printed_invoice_number'], 100) || stringMetadata(metadata, ['source_invoice_number'], 100) || invoice.invoice_number, systemInvoiceNumber: invoice.invoice_number, customerId: invoice.customer_id,
     issueDate: invoice.issue_date, dueDate: invoice.due_date, currency: invoice.currency,
     subtotal: decimalMetadata(metadata?.subtotal), tax: taxMinor === null ? decimalMetadata(metadata?.tax) : money(BigInt(taxMinor)),
     invoiceDirection: safeInvoiceDirection(metadata),
@@ -556,6 +556,13 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
       ? await query(store, 'invoices', INVOICE_SELECT, {limit: 1, order:'created_at.desc'})
       : await query(store, 'invoices', INVOICE_SELECT, {filters: {invoice_number: exactPattern(target)}, limit: 10});
     let invoiceRows = numberRows;
+    if (!invoiceRows.length && !uuidTarget && !mostRecent && /[A-Za-z]/.test(target) && /\d/.test(target) && /[-#]/.test(target)) {
+      // Also match the number printed on the invoice (printed_invoice_number / source_invoice_number metadata).
+      const wanted = target.toUpperCase();
+      const recent = await query(store, 'invoices', INVOICE_SELECT, {limit: 200, order: 'created_at.desc'});
+      invoiceRows = recent.filter(row => ['printed_invoice_number', 'source_invoice_number']
+        .some(key => String(row.metadata?.[key] || '').trim().toUpperCase() === wanted)).slice(0, 10);
+    }
     if (uuidTarget) invoiceRows = await query(store, 'invoices', INVOICE_SELECT, {filters: {id: `eq.${target}`}, limit: 3});
     let customerRows = [];
     if (!invoiceRows.length && !uuidTarget && !mostRecent) {
