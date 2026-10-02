@@ -245,8 +245,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
   if(YES.test(message))return 'There is no invoice change waiting for confirmation. Tell me which invoice you want to change.';
   const {data:settings,error}=await supabase.from('workspace_ai_settings').select('primary_model,fallback_model').eq('workspace_id',workspaceId).maybeSingle();
   if(error)throw error;
-  // Owner chat runs on the capable Gemini model; the slow free models are not used on this path.
-  const models={primaryModel:'gemini-3.5-flash',fallbackModel:'gemini-3.5-flash-lite'};
+  // Owner chat: Cloudflare Llama 3.3 70B first, then Scout, then Gemini. Never the slow free Zen models.
+  const models={primaryModel:'@cf/meta/llama-3.3-70b-instruct-fp8-fast',fallbackModel:'gemini-3.5-flash'};
   const provider=providerFactory({...models,geminiApiKey:env.GEMINI_API_KEY,openRouterApiKey:env.OPENROUTER_API_KEY,zenApiKey:env.OPENCODE_ZEN_API_KEY,fetchImpl,timeoutMs:15000,maxAttempts:2});
   const ledger=createOwnerScopedStore({supabase,workspaceId,ownerId,phone,authorize:()=>authorize(scope)});
   let timer;
