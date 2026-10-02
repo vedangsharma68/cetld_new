@@ -116,3 +116,16 @@ test('dashboard history uses a stable precise cursor and refresh retains previou
  assert.equal(state.whatsappMessages.length,126);assert.equal(state.whatsappMessages.at(-1).id,'1');
  assert.equal(state.whatsappMessages.find(row=>row.id==='125').status,'read');assert.equal(state.whatsappHasMore,false);
 });
+
+
+test('dashboard older messages accept actual UUID message IDs used by the production schema',async()=>{
+ const source=await readFile(new URL('../app.js',import.meta.url),'utf8');
+ const fn=source.slice(source.indexOf('async function loadWhatsAppMessages('),source.indexOf('function ownerNumberForm()'));
+ const id='bbaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',stamp='2026-10-02T01:00:00.123456+00:00';
+ const state={user:{id:'owner'},workspace:{id:'ws'},settings:{},whatsappHasMore:true,whatsappMessages:[{id,created_at:stamp}]};
+ let filter;
+ const db={from(){const q={select(){return q},eq(){return q},or(value){filter=value;return q},order(){return q},limit:async()=>({data:[]})};return q}};
+ await runInNewContext(fn+';loadWhatsAppMessages(true);',{state,db,Date,mergeWhatsAppMessages});
+ assert.equal(filter,`created_at.lt.${stamp},and(created_at.eq.${stamp},id.lt.${id})`);
+ assert.equal(state.whatsappMessagesError,'');assert.equal(state.whatsappHasMore,false);
+});

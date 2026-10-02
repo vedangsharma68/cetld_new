@@ -84,7 +84,7 @@ async function loadWhatsAppMessages(older=false){
   try{
     let query=db.from('whatsapp_messages').select('*').eq('workspace_id',workspaceId);
     if(cursor){
-      if(!/^\d+$/.test(String(cursor.id))||!Number.isFinite(Date.parse(cursor.created_at)))throw Error('Refresh message history before loading older messages.');
+      if(!/^(?:\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.test(String(cursor.id))||!Number.isFinite(Date.parse(cursor.created_at)))throw Error('Refresh message history before loading older messages.');
       const stamp=String(cursor.created_at);
       if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(stamp))throw Error('Refresh message history before loading older messages.');
       query=query.or(`created_at.lt.${stamp},and(created_at.eq.${stamp},id.lt.${cursor.id})`);

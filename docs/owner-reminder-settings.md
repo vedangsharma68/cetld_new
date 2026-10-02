@@ -31,7 +31,7 @@ Existing collection delivery gates and QA recipient restrictions remain in effec
 
 ## Verification and release smoke checks
 
-Final verification: npm test reported 548 tests, 544 passed, zero failed, and four optional integration checks skipped. Typecheck, JavaScript syntax checks, and git diff --check passed. The independent review found no remaining actionable blockers.
+Final verification: npm test reported 549 tests, 545 passed, zero failed, and four optional integration checks skipped. Typecheck, JavaScript syntax checks, and git diff --check passed. The independent review found no remaining actionable blockers.
 
 Checks include owner/customer scope tests, full ordered migration chain in PGlite, phone possession and direct-setting forgery denial, atomic payments and edits, tax preservation, stale invoice rejection, confirmation replay, revocation, setup component behavior, immediate connected-phone refresh, cursor pagination retaining older messages, and callback history correlation. A legacy-schema upgrade regression preserves the existing verified proof and binding.
 
