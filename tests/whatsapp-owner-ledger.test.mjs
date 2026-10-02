@@ -129,3 +129,11 @@ test('dashboard older messages accept actual UUID message IDs used by the produc
  assert.equal(filter,`created_at.lt.${stamp},and(created_at.eq.${stamp},id.lt.${id})`);
  assert.equal(state.whatsappMessagesError,'');assert.equal(state.whatsappHasMore,false);
 });
+test('settings requests get a blunt capability answer, never the generic AI failure',async()=>{
+ const {h}=setup();
+ for(const message of ['change my workspace name to Vedang T','set tone to firm','update my timezone']){
+  const reply=await h({...scope,message,messageId:'s'+message.length});
+  assert.match(reply,/can't change .* from WhatsApp yet/);
+  assert.doesNotMatch(reply,/safely check/);
+ }
+});
