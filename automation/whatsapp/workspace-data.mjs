@@ -1,0 +1,683 @@
+import {
+  CF_PRIMARY_MODEL,
+  GEMINI_FALLBACK_MODEL,
+  VERIFIED_MODEL_CATALOG,
+} from '../../ai/provider.mjs';
+
+const DATA_ACTION = 'owner_workspace_data_change';
+const MAX_LIMIT = 50;
+const OPERATIONS = Object.freeze([
+  'read','create','update','delete','restore','pending','confirm','cancel','describe',
+  'analyzeAttachment','saveAttachment','reviewAttachment','sendFile',
+]);
+const FILTER_OPERATORS = Object.freeze(['eq','neq','gt','gte','lt','lte','ilike','in','is']);
+const ALLOWED_ARGS = new Set(['request','operation','table','columns','filters','values','limit','offset','order']);
+const FORBIDDEN_KEY = /^(?:workspace|tenant|owner)(?:id|_id)$/i;
+const SECRET_KEY = /(?:token|secret|password|api.?key|credential|authorization|cookie|storage.?path|code.?hash|private.?key)/i;
+const INTERNAL_KEY = /^(?:id|workspace_id|owner_id|tenant_id|user_id|customer_id|invoice_id)$/i;
+const YES = /^\s*(?:yes|y|ok|okay|confirm|confirmed|do it|go ahead|proceed|approve)\s*[.!]?\s*$/i;
+const CANCEL = /^\s*(?:no|cancel|never mind|nevermind|discard)\s*[.!]?\s*$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const TABLES = Object.freeze({
+  workspace_settings: {
+    label:'Business settings', scope:'workspace',
+    columns:['business_name','default_currency','default_timezone','follow_up_preferences','created_at','updated_at'],
+    defaults:['business_name','default_currency','default_timezone','follow_up_preferences'],
+    filters:['business_name','default_currency','default_timezone'],
+    writeColumns:['business_name','default_currency','default_timezone','follow_up_preferences'],
+  },
+  workspace_ai_settings: {
+    label:'AI model settings', scope:'workspace',
+    columns:['primary_model','fallback_model','created_at','updated_at'],
+    defaults:['primary_model','fallback_model'], filters:['primary_model','fallback_model'],
+    writeColumns:['primary_model','fallback_model'],
+  },
+  customers: {
+    label:'Customers', scope:'workspace',
+    columns:['name','company_name','email','phone','created_at','updated_at'],
+    defaults:['name','company_name','email','phone'], filters:['id','name','company_name','email','phone'],
+    writeColumns:['name','company_name','email','phone'],
+  },
+  invoices: {
+    label:'Invoices', scope:'workspace',
+    columns:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status','notes','created_at','updated_at'],
+    defaults:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status'],
+    filters:['id','invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status'],
+    writeColumns:['invoice_number','customer_name','customer_id','customer_email','customer_phone','issue_date','due_date','currency','total_amount','subtotal','tax','notes','status','invoice_direction'],
+  },
+  payments: {
+    label:'Payments', scope:'workspace',
+    columns:['invoice_number','amount','paid_at','method','reference','created_at'],
+    defaults:['invoice_number','amount','paid_at','method','reference'],
+    filters:['invoice_number','amount','paid_at','method','reference'],
+  },
+  invoice_files: {
+    label:'Invoice file metadata', scope:'workspace',
+    columns:['invoice_number','file_name','mime_type','size_bytes','created_at'],
+    defaults:['invoice_number','file_name','mime_type','size_bytes','created_at'],
+    filters:['invoice_number','file_name','mime_type','created_at'],
+  },
+});
+
+const TYPE_BY_COLUMN = Object.freeze({
+  name:'string',company_name:'string',email:'string',phone:'string',business_name:'string',
+  default_currency:'string',default_timezone:'string',primary_model:'string',fallback_model:'string',
+  invoice_number:'string',customer_name:'string',issue_date:'date',due_date:'date',currency:'string',
+  total_amount:'number',amount_paid:'number',status:'string',notes:'string',amount:'number',paid_at:'date',
+  method:'string',reference:'string',file_name:'string',mime_type:'string',size_bytes:'number',created_at:'date',updated_at:'date',
+});
+
+const WRITE_SCHEMA = Object.freeze({
+  customers:{
+    create:['name','company_name','email','phone'],
+    update:['name','company_name','email','phone'],
+    delete:[],
+  },
+  workspace_ai_settings:{update:['primary_model','fallback_model']},
+  invoices:{
+    create:['invoice_number','customer_name','customer_id','customer_email','customer_phone','issue_date','due_date','currency','total_amount','subtotal','tax','notes'],
+    update:['invoice_number','issue_date','due_date','currency','total_amount','notes','status'],
+    reviewAttachment:['invoice_number','customer_name','issue_date','due_date','total_amount','currency','invoice_direction'],
+  },
+  workspace_settings:{update:['business_name','follow_up_preferences','default_currency','default_timezone']},
+});
+
+function definition() {
+  const allColumns=[...new Set(Object.values(TABLES).flatMap(table=>table.columns))].sort();
+  const valueFields=[
+    'name','company_name','email','phone','business_name','default_currency','default_timezone','primary_model','fallback_model',
+    'invoice_number','customer_name','client_name','customer_id','customer_email','customer_phone','issue_date',
+    'due_date','currency','total_amount','subtotal','tax','notes','status','amount','method','reference',
+  ];
+  const valueProperties=Object.fromEntries(valueFields.map(key=>[key,{type:['string','number','boolean','null']} ]));
+  valueProperties.follow_up_preferences={type:'object',additionalProperties:false,properties:{
+    tone:{type:'string',enum:['gentle','professional','firm']},maxReminders:{type:'integer',minimum:1,maximum:20},
+    cadenceDays:{type:'integer',minimum:1,maximum:90},firstReminderDays:{type:'integer',minimum:0,maximum:90},
+    contactStart:{type:'string',pattern:'^([01]\\d|2[0-3]):[0-5]\\d$'},contactEnd:{type:'string',pattern:'^([01]\\d|2[0-3]):[0-5]\\d$'},
+    pauseOnReply:{type:'boolean'},dailySummary:{type:'boolean'},
+  }};
+  valueProperties.invoice_direction={type:'string',enum:['receivable','payable','uncertain']};
+  valueProperties.direction={type:'string',enum:['receivable','payable','uncertain']};
+  return {type:'function',function:{name:'workspaceData',
+    description:'Read or safely change the verified owner workspace business data. Give either a natural-language request or one structured operation. Reads use only the published table and column catalog, are scoped to this workspace, and never join across workspaces. Writes create one stale-protected proposal that needs a later explicit owner confirmation. Use separate calls to compose multiple reads. No raw SQL, schema changes, bulk writes, or bulk invoice deletion.',
+    parameters:{type:'object',additionalProperties:false,
+      properties:{
+        request:{type:'string',minLength:1,maxLength:1200},
+        operation:{type:'string',enum:OPERATIONS},
+        table:{type:'string',enum:Object.keys(TABLES)},
+        columns:{type:'array',maxItems:20,items:{type:'string',enum:allColumns}},
+        filters:{type:'array',maxItems:8,items:{type:'object',additionalProperties:false,
+          properties:{column:{type:'string',enum:[...new Set(Object.values(TABLES).flatMap(table=>table.filters))]},
+            operator:{type:'string',enum:FILTER_OPERATORS},
+            value:{type:['string','number','boolean','null','array'],items:{type:['string','number','boolean','null']}}},
+          required:['column','operator','value']}},
+        values:{type:'object',additionalProperties:false,properties:valueProperties},
+        limit:{type:'integer',minimum:1,maximum:MAX_LIMIT},
+        offset:{type:'integer',minimum:0,maximum:100000},
+        order:{type:'object',additionalProperties:false,
+          properties:{column:{type:'string',enum:allColumns},direction:{type:'string',enum:['asc','desc']}},required:['column','direction']},
+      },
+    }}};
+}
+
+function catalog() {
+  return {
+    operations:OPERATIONS,
+    tables:Object.fromEntries(Object.entries(TABLES).map(([name,spec])=>[name,{
+      label:spec.label,columns:spec.columns,filters:spec.filters,
+      writeFields:WRITE_SCHEMA[name]||{},
+      ...(name==='invoices'?{writeValueConstraints:{update:{status:['paid']}}}:{}),
+      operations:name==='invoices'?['read','create','update','delete','restore','reviewAttachment']
+        :name==='customers'?['read','create','update','delete']
+          :name==='workspace_settings'||name==='workspace_ai_settings'?['read','update']
+            :['read'],
+    }])),
+    filterOperators:FILTER_OPERATORS,
+    limits:{read:MAX_LIMIT,offset:100000,filters:8,oneWriteTargetPerProposal:true},
+  };
+}
+
+function safeFollowupPreferences(value) {
+  if(!ownObject(value))return {};
+  const out={};
+  const tone=value.tone;
+  if(['gentle','professional','firm'].includes(tone))out.tone=tone;
+  const ranges={firstReminderDays:[0,90],cadenceDays:[1,90],maxReminders:[1,20]};
+  for(const [key,[min,max]] of Object.entries(ranges))if(Number.isInteger(value[key])&&value[key]>=min&&value[key]<=max)out[key]=value[key];
+  const start=value.contactStart??value.hoursStart,end=value.contactEnd??value.hoursEnd;
+  const time=/^([01]\d|2[0-3]):[0-5]\d$/;
+  if(typeof start==='string'&&time.test(start))out.contactStart=start;
+  if(typeof end==='string'&&time.test(end))out.contactEnd=end;
+  const weekdays=value.allowedWeekdays??value.weekdays;
+  if(Array.isArray(weekdays)&&weekdays.length>=1&&weekdays.length<=7&&weekdays.every(day=>Number.isInteger(day)&&day>=0&&day<=6))
+    out.allowedWeekdays=[...new Set(weekdays)];
+  if(['pause','manual_review'].includes(value.escalation))out.escalation=value.escalation;
+  for(const key of ['pauseOnReply','dailySummary'])if(typeof value[key]==='boolean')out[key]=value[key];
+  if(value.stopOnPayment===true)out.stopOnPayment=true;
+  if(typeof value.businessName==='string'&&value.businessName.length<=200)out.businessName=value.businessName;
+  if(typeof value.timezone==='string'&&value.timezone.length<=100)try{new Intl.DateTimeFormat('en',{timeZone:value.timezone});out.timezone=value.timezone;}catch{}
+  return out;
+}
+
+function fail(code='INVALID',message='That workspace data request is not supported.') { return {ok:false,code,message}; }
+function safeError(error) {
+  const raw=String(error?.code||'').toUpperCase();
+  const code=({PGRST116:'NOT_FOUND','404':'NOT_FOUND',NOT_FOUND:'NOT_FOUND',AMBIGUOUS:'AMBIGUOUS',
+    ACTION_STALE:'STALE',STALE:'STALE',ACTION_EXPIRED:'EXPIRED',EXPIRED:'EXPIRED',
+    OWNER_REQUIRED:'DENIED',UNBOUND:'DENIED',PERMISSION_DENIED:'DENIED','42501':'DENIED',
+    INVALID_REQUEST:'INVALID',INVALID_ARGUMENT:'INVALID',INVALID:'INVALID',
+    INVALID_CONFIRMATION:'INVALID',STALE_CONFIRMATION:'INVALID',PENDING:'PENDING',ACTION_PENDING:'PENDING',
+    IN_USE:'IN_USE',NO_ACTION:'NO_PENDING_ACTION',NO_PENDING_ACTION:'NO_PENDING_ACTION',DATABASE_UNAVAILABLE:'UNAVAILABLE',
+  })[raw]||'UNAVAILABLE';
+  const messages={NOT_FOUND:'No matching record was found.',AMBIGUOUS:'More than one record matches. Narrow the request to one record.',
+    STALE:'The record changed after it was reviewed. Please review the current value again.',EXPIRED:'That proposal expired. Start a new request.',
+    PENDING:'Another owner change is already waiting for a decision. Confirm or cancel it first.',
+    IN_USE:'This customer still has invoices and cannot be deleted.',
+    DENIED:'This action is not available for the current owner binding.',INVALID:'That workspace data request is not supported.',
+    NO_PENDING_ACTION:'There is no pending workspace data change to apply.',UNAVAILABLE:'The workspace data service is temporarily unavailable.'};
+  return fail(code,messages[code]);
+}
+function sanitise(value,scope,depth=0) {
+  if(depth>8)return undefined;
+  if(value===null||typeof value==='string'||typeof value==='number'||typeof value==='boolean') {
+    if(typeof value==='string'&&[scope?.workspaceId,scope?.ownerId,scope?.customerId].some(id=>id&&value===id))return undefined;
+    return value;
+  }
+  if(Array.isArray(value))return value.map(item=>sanitise(item,scope,depth+1)).filter(item=>item!==undefined);
+  if(!value||typeof value!=='object')return undefined;
+  const out={};
+  for(const [key,item] of Object.entries(value)) {
+    if(SECRET_KEY.test(key)||INTERNAL_KEY.test(key)||FORBIDDEN_KEY.test(key))continue;
+    const safe=sanitise(item,scope,depth+1);if(safe!==undefined)out[key]=safe;
+  }
+  return out;
+}
+function containsForbiddenIdentity(input,scope) {
+  if(typeof input==='string')return [scope?.workspaceId,scope?.ownerId,scope?.customerId].some(id=>id&&input.toLowerCase().includes(String(id).toLowerCase()));
+  if(Array.isArray(input))return input.some(item=>containsForbiddenIdentity(item,scope));
+  if(!input||typeof input!=='object')return false;
+  return Object.entries(input).some(([key,value])=>FORBIDDEN_KEY.test(key.replace(/[-\s]/g,'_'))||containsForbiddenIdentity(value,scope));
+}
+function ownObject(value) { return value&&typeof value==='object'&&!Array.isArray(value); }
+function exactKeys(value,allowed) { return ownObject(value)&&Object.keys(value).every(key=>allowed.includes(key)); }
+function dataOf(result) {
+  if(result?.error)throw Object.assign(new Error('workspace data database call failed'),{code:result.error.code||'UNAVAILABLE'});
+  return Array.isArray(result?.data)&&result.data.length===1?result.data[0]:result?.data;
+}
+function scalarSafe(value) {
+  if(value===null||typeof value==='boolean')return true;
+  if(typeof value==='number')return Number.isFinite(value);
+  if(typeof value==='string')return value.length<=500&&!/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value);
+  return false;
+}
+function validateFilter(filter,table) {
+  const spec=TABLES[table];
+  if(!exactKeys(filter,['column','operator','value'])||!spec.filters.includes(filter.column)
+      ||!FILTER_OPERATORS.includes(filter.operator))throw new TypeError('invalid filter');
+  const {column,operator,value}=filter;
+  if(operator==='in') {
+    if(!Array.isArray(value)||value.length<1||value.length>25||!value.every(scalarSafe))throw new TypeError('invalid list filter');
+  } else if(operator==='is') {
+    if(value!==null&&typeof value!=='boolean')throw new TypeError('invalid is filter');
+  } else if(!scalarSafe(value))throw new TypeError('invalid filter value');
+  const type=TYPE_BY_COLUMN[column]||'string';
+  const values=operator==='in'?value:[value];
+  if(values.some(item=>item!==null&&(type==='number'?typeof item!=='number'||!Number.isFinite(item)
+    :type==='string'?typeof item!=='string':type==='date'?typeof item!=='string':false)))throw new TypeError('filter type mismatch');
+  if(['gt','gte','lt','lte','ilike'].includes(operator)&&value===null)throw new TypeError('invalid comparison');
+  if(operator==='ilike'&&typeof value!=='string')throw new TypeError('invalid pattern');
+  return {column,operator,value};
+}
+function normalizeRequest(raw,scope,planRequest,ctx) {
+  if(!ownObject(raw))throw new TypeError('invalid arguments');
+  if(containsForbiddenIdentity(raw,scope))throw new TypeError('scope identity supplied');
+  if(Object.keys(raw).some(key=>!ALLOWED_ARGS.has(key)))throw new TypeError('unknown arguments');
+  if(typeof raw.request==='string') {
+    if(Object.keys(raw).some(key=>key!=='request')||!raw.request.trim()||raw.request.length>1200)throw new TypeError('invalid request');
+    if(typeof planRequest!=='function')throw new TypeError('natural-language planning unavailable');
+    return Promise.resolve(planRequest(raw.request.trim(),{catalog:catalog(),signal:ctx.signal,deadlineAt:ctx.deadlineAt}))
+      .then(planned=>{ctx.assertLive();return normalizeStructured(planned);});
+  }
+  return Promise.resolve(normalizeStructured(raw));
+  function normalizeStructured(args) {
+    if(!ownObject(args)||containsForbiddenIdentity(args,scope)||Object.keys(args).some(key=>!ALLOWED_ARGS.has(key)))throw new TypeError('invalid planned operation');
+    const operation=args.operation;
+    if(!OPERATIONS.includes(operation))throw new TypeError('unknown operation');
+    const table=args.table||null;
+    if(table!==null&&!Object.hasOwn(TABLES,table))throw new TypeError('unknown table');
+    const noTableOps=['pending','confirm','cancel','describe','analyzeAttachment','saveAttachment'];
+    if(!table&&!noTableOps.includes(operation))throw new TypeError('table required');
+    if(table&&!['read','create','update','delete','restore','reviewAttachment','sendFile'].includes(operation))throw new TypeError('invalid table operation');
+    const filters=args.filters===undefined?[]:args.filters;
+    if(!Array.isArray(filters)||filters.length>8)throw new TypeError('invalid filters');
+    const normalizedFilters=filters.map(filter=>validateFilter(filter,table||'invoices'));
+    const columns=args.columns===undefined?null:args.columns;
+    if(columns!==null&&(!Array.isArray(columns)||columns.length<1||columns.length>20
+      ||columns.some(column=>typeof column!=='string'||!TABLES[table]?.columns.includes(column))))throw new TypeError('invalid columns');
+    const values=args.values===undefined?{}:args.values;
+    if(!ownObject(values))throw new TypeError('invalid values');
+    const limit=args.limit===undefined?20:Number(args.limit);
+    if(!Number.isInteger(limit)||limit<1||limit>MAX_LIMIT)throw new TypeError('invalid limit');
+    const offset=args.offset===undefined?0:Number(args.offset);
+    if(!Number.isInteger(offset)||offset<0||offset>100000)throw new TypeError('invalid offset');
+    let order=null;
+    if(args.order!==undefined) {
+      if(!exactKeys(args.order,['column','direction'])||!TABLES[table]?.columns.includes(args.order.column)
+          ||!['asc','desc'].includes(args.order.direction))throw new TypeError('invalid order');
+      if(args.order.column==='customer_name'||(['payments','invoice_files'].includes(table)&&args.order.column==='invoice_number'))
+        throw new TypeError('related fields cannot control pagination order');
+      order={column:args.order.column,direction:args.order.direction};
+    }
+    if(table==='invoices'&&['update','delete','restore','sendFile'].includes(operation)) {
+      const key=operation==='restore'?['invoice_number']:['invoice_number','id'];
+      if(normalizedFilters.length!==1||!key.includes(normalizedFilters[0].column)||normalizedFilters[0].operator!=='eq')
+        throw new TypeError('invoice action requires exactly one canonical target');
+    }
+    if(operation==='create'&&table==='invoices'&&normalizedFilters.length)throw new TypeError('invoice creation cannot include filters');
+    if(operation==='create'&&table==='customers'&&normalizedFilters.length)throw new TypeError('customer creation cannot include filters');
+    return {operation,table,columns,filters:normalizedFilters,values,limit,offset,order};
+  }
+}
+
+function validateValues(table,operation,values,current={}) {
+  const fields=WRITE_SCHEMA[table]?.[operation];
+  if(!fields||!exactKeys(values,fields))throw new TypeError('invalid write fields');
+  if(!Object.keys(values).length&&!(table==='customers'&&operation==='delete'))throw new TypeError('empty write');
+  const clean={};
+  for(const [key,value] of Object.entries(values)) {
+    if(value===null&&['company_name','email','phone','fallback_model'].includes(key)){clean[key]=null;continue;}
+    if(typeof value==='string') {
+      const text=value.trim();
+      const max={name:200,business_name:200,company_name:255,email:320,phone:40,default_timezone:100,primary_model:160,fallback_model:160}[key]||500;
+      if(!text||text.length>max||/[\r\n\u0000]/.test(text))throw new TypeError('invalid text field');
+      if(['email'].includes(key)&&!/^\S+@\S+\.\S+$/.test(text))throw new TypeError('invalid email');
+      clean[key]=key==='default_currency'?text.toUpperCase():text;
+    } else throw new TypeError('invalid write value');
+  }
+  if(table==='customers'&&operation==='create'&&typeof clean.name!=='string')throw new TypeError('customer name required');
+  if(table==='workspace_settings'&&operation==='update') {
+    if(clean.default_currency!==undefined&&!/^[A-Z]{3}$/.test(clean.default_currency))throw new TypeError('invalid currency');
+    if(clean.default_timezone!==undefined)try{new Intl.DateTimeFormat('en',{timeZone:clean.default_timezone});}catch{throw new TypeError('invalid timezone');}
+  }
+  if(table==='workspace_ai_settings') {
+    const currentPrimary=current.primary_model||CF_PRIMARY_MODEL;
+    const currentFallback=current.fallback_model===undefined?GEMINI_FALLBACK_MODEL:current.fallback_model;
+    const primary=clean.primary_model===undefined?currentPrimary:clean.primary_model;
+    const fallback=clean.fallback_model===undefined?currentFallback:clean.fallback_model;
+    const primaryEntry=VERIFIED_MODEL_CATALOG.find(entry=>entry.id===primary&&entry.roles.includes('primary'));
+    const fallbackEntry=fallback===null?null:VERIFIED_MODEL_CATALOG.find(entry=>entry.id===fallback&&entry.roles.includes('fallback'));
+    if(!primaryEntry||fallback!==null&&!fallbackEntry||primary===fallback)throw new TypeError('model choice unavailable');
+    clean.primary_model=primary;
+    if(fallback!==undefined)clean.fallback_model=fallback;
+  }
+  return clean;
+}
+
+function applyFilter(query,filter) {
+  const {column,operator,value}=filter;
+  const method=operator==='is'?'is':operator;
+  if(typeof query?.[method]!=='function')throw new TypeError('query filter unavailable');
+  return query[method](column,value);
+}
+function asEpoch(value) {
+  if(value instanceof Date)return value.getTime();
+  if(typeof value==='string'){const parsed=Date.parse(value);return Number.isFinite(parsed)?parsed:NaN;}
+  return Number(value);
+}
+function displayField(key) {
+  return ({
+    name:'Name',company_name:'Company name',email:'Email',phone:'Phone',
+    default_currency:'Default currency',default_timezone:'Default timezone',
+    primary_model:'Primary model',fallback_model:'Fallback model',
+  })[key]||key.replaceAll('_',' ');
+}
+
+function validateAdapterSettingsValues(values) {
+  const allowed=['business_name','follow_up_preferences'];
+  if(!exactKeys(values,allowed)||!Object.keys(values).length)throw new TypeError('invalid settings fields');
+  if(values.business_name!==undefined&&(typeof values.business_name!=='string'||!values.business_name.trim()
+      ||values.business_name.trim().length>200||/[\r\n\u0000]/.test(values.business_name)))throw new TypeError('invalid business name');
+  if(values.follow_up_preferences!==undefined) {
+    const patch=values.follow_up_preferences;
+    const keys=['tone','maxReminders','cadenceDays','firstReminderDays','contactStart','contactEnd','pauseOnReply','dailySummary'];
+    if(!exactKeys(patch,keys)||!Object.keys(patch).length)throw new TypeError('invalid follow-up preferences');
+    if(patch.tone!==undefined&&!['gentle','professional','firm'].includes(patch.tone))throw new TypeError('invalid follow-up tone');
+    for(const [key,min,max] of [['maxReminders',1,20],['cadenceDays',1,90],['firstReminderDays',0,90]])
+      if(patch[key]!==undefined&&(!Number.isInteger(patch[key])||patch[key]<min||patch[key]>max))throw new TypeError('invalid follow-up interval');
+    for(const key of ['contactStart','contactEnd'])if(patch[key]!==undefined&&!/^([01]\d|2[0-3]):[0-5]\d$/.test(patch[key]))throw new TypeError('invalid contact time');
+    for(const key of ['pauseOnReply','dailySummary'])if(patch[key]!==undefined&&typeof patch[key]!=='boolean')throw new TypeError('invalid follow-up toggle');
+  }
+}
+
+export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,getRuntimeConfig,planRequest,authorize,
+  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt}={}) {
+  if(!supabase?.from||typeof scope?.workspaceId!=='string')throw new TypeError('Supabase and verified workspace scope required');
+  let replyRequirement=null;
+  let writeAttempted=false;
+  const readScoped=async ({table,columns,filters,limit,offset,order},internalColumns=[],ctx)=>{
+    const spec=TABLES[table];
+    const selected=columns||spec.defaults;
+    const actual=selected.filter(column=>column!=='customer_name'
+      &&!(['payments','invoice_files'].includes(table)&&column==='invoice_number'));
+    const selectedWithInternals=[...new Set([...actual,...internalColumns])];
+    if(!selectedWithInternals.length)throw new TypeError('empty selected fields');
+    await ctx?.assertAuthorized?.();
+    let query=supabase.from(table).select(selectedWithInternals.join(','));
+    query=query.eq('workspace_id',scope.workspaceId);
+    if(table==='invoices')query=query.is('deleted_at',null);
+    for(const filter of filters)query=applyFilter(query,filter);
+    if(order)query=query.order(order.column,{ascending:order.direction==='asc'});
+    else if(['customers','invoices','payments','invoice_files'].includes(table))query=query.order('created_at',{ascending:false});
+    if(['customers','invoices','payments','invoice_files'].includes(table))query=query.order('id',{ascending:false});
+    if(typeof query.range==='function')query=query.range(offset,offset+limit);
+    else query=query.limit(offset+limit+1);
+    const result=await query;
+    await ctx?.assertAuthorized?.();
+    ctx?.assertLive();
+    if(result?.error)throw Object.assign(new Error('workspace data read failed'),{code:result.error.code||'UNAVAILABLE'});
+    const rows=Array.isArray(result?.data)?result.data:[];
+    return typeof query.range==='function'?rows:rows.slice(offset,offset+limit+1);
+  };
+  const findRelatedRows=async(table,column,values,select,ctx)=>{
+    await ctx?.assertAuthorized?.();
+    const query=supabase.from(table).select(select).eq('workspace_id',scope.workspaceId);
+    if(table==='invoices')query.is('deleted_at',null);
+    query.in(column,values);
+    const result=await query.limit(MAX_LIMIT+1);
+    await ctx?.assertAuthorized?.();
+    ctx?.assertLive();
+    if(result?.error)throw Object.assign(new Error('workspace data relation lookup failed'),{code:result.error.code||'UNAVAILABLE'});
+    return Array.isArray(result?.data)?result.data:[];
+  };
+  const read=async (params,ctx)=>{
+    const table=params.table,spec=TABLES[table],requested=params.columns||spec.defaults;
+    const relationFilters=params.filters.filter(filter=>
+      (table==='invoices'&&filter.column==='customer_name')
+      ||(['payments','invoice_files'].includes(table)&&filter.column==='invoice_number'));
+    if(relationFilters.length>1)throw new TypeError('combine one related-record filter at a time');
+    let filters=params.filters.filter(filter=>!relationFilters.includes(filter));
+    let rows;
+    if(relationFilters.length) {
+      const rf=relationFilters[0];
+      if(table==='invoices') {
+        await ctx.assertAuthorized();
+        let q=supabase.from('customers').select('id,name').eq('workspace_id',scope.workspaceId);
+        q=applyFilter(q,{...rf,column:'name'});const rel=await q.limit(MAX_LIMIT+1);await ctx.assertAuthorized();ctx.assertLive();
+        if(rel?.error)throw rel.error;
+        if((rel?.data||[]).length>MAX_LIMIT){await ctx.assertAuthorized();return {ok:true,rows:[],truncated:true,note:'The related customer filter matches too many records. Narrow it before continuing.'};}
+        const ids=(rel?.data||[]).map(row=>row.id).filter(value=>UUID.test(value)).slice(0,MAX_LIMIT);
+        if(!ids.length){await ctx.assertAuthorized();return {ok:true,rows:[],truncated:false};}
+        filters=[...filters,{column:'customer_id',operator:'in',value:ids}];
+      } else {
+        await ctx.assertAuthorized();
+        let q=supabase.from('invoices').select('id').eq('workspace_id',scope.workspaceId).is('deleted_at',null);
+        q=applyFilter(q,{...rf,column:'invoice_number'});const rel=await q.limit(MAX_LIMIT+1);await ctx.assertAuthorized();ctx.assertLive();
+        if(rel?.error)throw rel.error;
+        if((rel?.data||[]).length>MAX_LIMIT){await ctx.assertAuthorized();return {ok:true,rows:[],truncated:true,note:'The related invoice filter matches too many records. Narrow it before continuing.'};}
+        const ids=(rel?.data||[]).map(row=>row.id).filter(value=>UUID.test(value)).slice(0,MAX_LIMIT);
+        if(!ids.length){await ctx.assertAuthorized();return {ok:true,rows:[],truncated:false};}
+        filters=[...filters,{column:'invoice_id',operator:'in',value:ids}];
+      }
+    }
+    const internal=[];
+    if(table==='invoices'&&requested.includes('customer_name'))internal.push('customer_id');
+    if(['payments','invoice_files'].includes(table))internal.push('invoice_id');
+    if(table==='invoices'&&relationFilters.length)internal.push('customer_id');
+    if(['payments','invoice_files'].includes(table)&&relationFilters.length)internal.push('invoice_id');
+    if(table==='customers'&&params.operation!=='read')internal.push('id','updated_at');
+    rows=await readScoped({...params,filters},internal,ctx);
+    const rawPageCount=rows.length;
+    let labels=new Map();
+    if(table==='invoices'&&internal.includes('customer_id')) {
+      const ids=[...new Set(rows.map(row=>row.customer_id).filter(value=>UUID.test(value||'')))];
+      if(ids.length){const customers=await findRelatedRows('customers','id',ids,'id,name',ctx);labels=new Map(customers.map(row=>[row.id,row.name]));}
+    }
+    if(['payments','invoice_files'].includes(table)&&internal.includes('invoice_id')) {
+      const ids=[...new Set(rows.map(row=>row.invoice_id).filter(value=>UUID.test(value||'')))];
+      if(ids.length){const invoices=await findRelatedRows('invoices','id',ids,'id,invoice_number',ctx);labels=new Map(invoices.map(row=>[row.id,row.invoice_number]));}
+    }
+    if(['payments','invoice_files'].includes(table))rows=rows.filter(row=>labels.has(row.invoice_id));
+    const finalColumns=requested.filter(column=>column!=='customer_name'
+      &&!(['payments','invoice_files'].includes(table)&&column==='invoice_number'));
+    const output=rows.map(row=>{
+      const safe=Object.fromEntries(finalColumns.filter(column=>Object.hasOwn(row,column)&&!INTERNAL_KEY.test(column)).map(column=>[column,
+        column==='follow_up_preferences'?safeFollowupPreferences(row[column]):row[column]]));
+      if(requested.includes('customer_name'))safe.customer_name=labels.get(row.customer_id)||null;
+      if(requested.includes('invoice_number')&&['payments','invoice_files'].includes(table))safe.invoice_number=labels.get(row.invoice_id)||null;
+      return safe;
+    });
+    const truncated=rawPageCount>params.limit;
+    await ctx.assertAuthorized();
+    return sanitise({ok:true,rows:output.slice(0,params.limit),truncated,
+      ...(truncated?{nextOffset:params.offset+params.limit}:{})},scope);
+  };
+  const rpc=async(name,args,ctx)=>{
+    await ctx?.assertAuthorized?.();
+    const result=await supabase.rpc(name,args);
+    await ctx?.assertAuthorized?.();
+    ctx?.assertLive();
+    if(result?.error)throw Object.assign(new Error('workspace data operation failed'),{code:result.error.code||'UNAVAILABLE'});
+    const row=Array.isArray(result?.data)?result.data[0]:result?.data;
+    if(!row||typeof row!=='object')throw Object.assign(new Error('workspace data result unavailable'),{code:'UNAVAILABLE'});
+    return row;
+  };
+  const exactScopeKeys={p_workspace_id:scope.workspaceId,p_customer_id:scope.customerId,p_phone:scope.phone};
+  const delegate=async(params,ctx)=>{
+    if(typeof executeSafetyOperation!=='function')return fail();
+    let safeParams=params;
+    if(params.table==='invoices'&&params.operation==='create'&&Object.hasOwn(params.values,'customer_id')) {
+      const customerId=params.values.customer_id;
+      if(typeof customerId!=='string'||!UUID.test(customerId)||Object.hasOwn(params.values,'customer_name')
+          ||Object.hasOwn(params.values,'client_name'))return fail('INVALID','Choose one customer for the invoice.');
+      await ctx.assertAuthorized();
+      let query=supabase.from('customers').select('name').eq('workspace_id',scope.workspaceId).eq('id',customerId);
+      const found=await query.limit(2);await ctx.assertAuthorized();ctx.assertLive();
+      if(found?.error)throw found.error;
+      const matches=found?.data||[];
+      if(matches.length===0)return fail('NOT_FOUND','That customer was not found in this workspace.');
+      if(matches.length!==1)return fail('AMBIGUOUS','Choose one customer for the invoice.');
+      const values={...params.values,customer_name:matches[0].name};delete values.customer_id;
+      safeParams={...params,values};
+    }
+    await ctx.assertAuthorized();
+    if(['create','update','delete','restore','confirm','cancel','saveAttachment','reviewAttachment','sendFile'].includes(params.operation)) {
+      writeAttempted=true;
+    }
+    const result=await executeSafetyOperation({...safeParams,scope,message,messageId,pending,pendingAtStart,
+      authorize,clock,signal:ctx.signal,deadlineAt:ctx.deadlineAt});
+    await ctx.assertAuthorized();
+    return sanitise(result,scope);
+  };
+  const checkWriteTarget=async (params,ctx)=>{
+    const {table,operation,filters,values}=params;
+    let clean=table==='workspace_ai_settings'?null:validateValues(table,operation,values);
+    let row=null,targetId=null,expectedUpdatedAt=null,summary='';
+    if(table==='customers'&&operation==='create') {
+      summary=`Create customer ${clean.name}`;
+    } else if(table==='customers') {
+      if(!filters.length||filters.some(filter=>filter.operator!=='eq'||!['id','name','company_name','email','phone'].includes(filter.column)))
+        throw Object.assign(new Error('a customer write must select one exact record'),{code:'INVALID'});
+      await ctx.assertAuthorized();
+      let query=supabase.from('customers').select('id,name,company_name,email,phone,updated_at,metadata').eq('workspace_id',scope.workspaceId);
+      for(const filter of filters)query=applyFilter(query,filter);
+      const found=await query.limit(2);
+      await ctx.assertAuthorized();
+      ctx.assertLive();
+      if(found?.error)throw found.error;
+      const matches=found?.data||[];
+      if(matches.length===0)throw Object.assign(new Error('customer not found'),{code:'NOT_FOUND'});
+      if(matches.length!==1)throw Object.assign(new Error('customer filter is ambiguous'),{code:'AMBIGUOUS'});
+      row=matches[0];targetId=row.id;expectedUpdatedAt=row.updated_at;
+      if(!UUID.test(targetId||'')||typeof expectedUpdatedAt!=='string')throw Object.assign(new Error('customer changed'),{code:'STALE'});
+      if(row.metadata?.whatsapp_owner===true)return fail('DENIED','The linked owner contact cannot be changed as a customer.');
+      if(operation==='delete')summary=`Delete customer ${row.name}`;
+      else summary=`Update customer ${row.name}: `+Object.entries(clean)
+        .map(([key,value])=>`${displayField(key)}: ${row[key]??'not set'} → ${value??'not set'}`).join('; ');
+    } else if(table==='workspace_settings') {
+      if(filters.length)throw Object.assign(new Error('workspace settings are already scoped'),{code:'INVALID'});
+      await ctx.assertAuthorized();
+      let query=supabase.from(table).select('business_name,default_currency,default_timezone,updated_at').eq('workspace_id',scope.workspaceId);
+      const found=await query.maybeSingle();
+      await ctx.assertAuthorized();
+      ctx.assertLive();
+      if(found?.error)throw found.error;
+      row=found?.data||null;
+      if(!row)throw Object.assign(new Error('workspace settings unavailable'),{code:'NOT_FOUND'});
+      targetId=scope.workspaceId;expectedUpdatedAt=row.updated_at;
+      summary=Object.entries(clean).map(([key,value])=>`${displayField(key)}: ${row[key]??'not set'} → ${value}`).join('; ');
+    } else if(table==='workspace_ai_settings') {
+      if(filters.length)throw Object.assign(new Error('AI settings are already scoped'),{code:'INVALID'});
+      await ctx.assertAuthorized();
+      let query=supabase.from(table).select('primary_model,fallback_model,updated_at').eq('workspace_id',scope.workspaceId);
+      const found=await query.maybeSingle();await ctx.assertAuthorized();ctx.assertLive();
+      if(found?.error)throw found.error;
+      row=found?.data||null;
+      let runtime={};
+      if(typeof getRuntimeConfig==='function')try{await ctx.assertAuthorized();runtime=await getRuntimeConfig()||{};await ctx.assertAuthorized();}catch{runtime={};}
+      ctx.assertLive();
+      const runtimePrimaryRaw=runtime.activePrimaryModel||runtime.primaryModel;
+      const runtimeFallback=runtime.activeFallbackModel===undefined?runtime.fallbackModel:runtime.activeFallbackModel;
+      const primaryChoice=value=>VERIFIED_MODEL_CATALOG.some(entry=>entry.id===value&&entry.roles.includes('primary'));
+      const fallbackChoice=value=>value===null||VERIFIED_MODEL_CATALOG.some(entry=>entry.id===value&&entry.roles.includes('fallback'));
+      const safeRuntimePrimary=primaryChoice(runtimePrimaryRaw)?runtimePrimaryRaw:CF_PRIMARY_MODEL;
+      const safeRuntimeFallback=runtimeFallback===undefined?GEMINI_FALLBACK_MODEL
+        :fallbackChoice(runtimeFallback)?runtimeFallback:GEMINI_FALLBACK_MODEL;
+      const currentPrimary=primaryChoice(row?.primary_model)?row.primary_model:safeRuntimePrimary;
+      const currentFallback=fallbackChoice(row?.fallback_model)?row.fallback_model:safeRuntimeFallback;
+      clean=validateValues(table,operation,values,{primary_model:currentPrimary,fallback_model:currentFallback});
+      targetId=scope.workspaceId;expectedUpdatedAt=row?.updated_at||null;
+      summary=Object.entries(clean).map(([key,value])=>{
+        const before=key==='primary_model'?currentPrimary:currentFallback;
+        const display=id=>VERIFIED_MODEL_CATALOG.find(entry=>entry.id===id)?.label||id||'off';
+        return `${displayField(key)}: ${display(before)} → ${display(value)}`;
+      }).join('; ');
+    }
+    if(operation==='delete'&&table!=='customers')throw Object.assign(new Error('this table cannot be deleted'),{code:'INVALID'});
+    return {clean,row,targetId,expectedUpdatedAt,summary};
+  };
+  const propose=async (params,ctx)=>{
+    if(!['customers','workspace_settings','workspace_ai_settings'].includes(params.table))
+      return typeof executeSafetyOperation==='function'?delegate(params,ctx):fail();
+    if(params.table==='workspace_settings'&&params.operation==='update'
+      &&Object.keys(params.values).some(key=>['business_name','follow_up_preferences'].includes(key))) {
+      validateAdapterSettingsValues(params.values);
+      return delegate(params,ctx);
+    }
+    if(params.operation==='delete'&&params.table!=='customers')return fail();
+    if(params.operation==='create'&&params.table!=='customers')return fail();
+    if(params.operation==='update'&&params.table==='customers'||params.operation==='delete'&&params.table==='customers'
+      ||params.operation==='create'&&params.table==='customers'||params.operation==='update'&&['workspace_settings','workspace_ai_settings'].includes(params.table)) {
+      await ctx.assertAuthorized();
+      const pendingState=await pending?.loadPendingActionState?.({...scope});
+      await ctx.assertAuthorized();
+      ctx.assertLive();
+      if(!pendingState||!Number.isSafeInteger(Number(pendingState.generation)))return fail('UNAVAILABLE','A safe confirmation store is unavailable.');
+      const activeAction=pendingState.action;
+      const terminalReview=activeAction?.type==='invoice_review_draft'&&['saved','canceled'].includes(activeAction.stage);
+      if(pendingState.id!=null&&activeAction?.type!=='owner_invoice_deleted'&&!terminalReview)
+        return fail('PENDING','Another owner change is already waiting for a decision. Confirm or cancel it first.');
+      if(!messageId)return fail('INVALID','This change needs an owner message before it can be proposed.');
+      const target=await checkWriteTarget(params,ctx);ctx.assertLive();
+      await ctx.assertAuthorized();
+      writeAttempted=true;
+      const saved=await rpc('whatsapp_workspace_data_propose',{
+        ...exactScopeKeys,p_request_message_id:messageId,p_operation:params.operation,p_table:params.table,
+        p_target_id:target.targetId,p_expected_updated_at:target.expectedUpdatedAt,p_values:target.clean,
+        p_summary:target.summary,p_expected_generation:Number(pendingState.generation),
+        p_expected_pending_id:pendingState.id??null,p_expected_pending_version:pendingState.version??null,
+      },ctx);
+      if(saved.ok!==true) return safeRpcResult(saved);
+      replyRequirement={confirmationText:'yes',requiresCancel:true,requiresReplyCue:true,
+        requiredFacts:{changeSummary:target.summary},maxLength:3790};
+      return {ok:true,requiresConfirmation:true,table:params.table,operation:params.operation,
+        summary:target.summary,expiresAt:saved.expires_at||saved.expiresAt||null};
+    }
+    return fail();
+  };
+  const safeRpcResult=row=>{
+    if(row.ok===true)return sanitise(row,scope);
+    const code=String(row.code||row.reason||'UNAVAILABLE').toUpperCase();
+    return safeError({code});
+  };
+  const handlePending=async (operation,ctx)=>{
+    const action=pendingAtStart?.action;
+    if(operation==='pending'&&action?.type===DATA_ACTION)return {
+      ok:true,pending:true,kind:'workspace_data_change',table:action.table,operation:action.operation,
+      summary:typeof action.summary==='string'?action.summary:null,expiresAt:action.expiresAt||pendingAtStart.expires_at||null,
+    };
+    const terminalAction=action?.type==='owner_invoice_deleted'
+      ||(action?.type==='invoice_review_draft'&&['saved','canceled'].includes(action.stage));
+    if(['pending','confirm','cancel'].includes(operation)&&(!action||terminalAction)&&messageId
+      &&(YES.test(String(message||''))||CANCEL.test(String(message||'')))) {
+      const confirm=YES.test(String(message||''));
+      try {
+        const replay=await rpc(confirm?'whatsapp_workspace_data_confirm':'whatsapp_workspace_data_cancel',{
+          ...exactScopeKeys,p_pending_id:null,p_pending_version:null,p_proposal_id:null,
+          p_confirmation_message_id:confirm?messageId:null,p_cancel_message_id:confirm?null:messageId,
+          p_user_message:String(message||''),
+        },ctx);
+        if(replay.replayed===true)return safeRpcResult(replay);
+      } catch { /* A receipt lookup is optional; preserve the existing action adapter fallback. */ }
+    }
+    if(['confirm','cancel'].includes(operation)&&action?.type===DATA_ACTION) {
+      const explicit=operation==='confirm'?YES.test(String(message||'')):CANCEL.test(String(message||''));
+      if(!explicit||!messageId||messageId===action.requestMessageId)
+        return fail('INVALID',operation==='confirm'?'Only a later explicit owner confirmation can apply this proposal.':'Only an explicit owner cancellation can cancel this proposal.');
+      ctx.assertLive();
+      await ctx.assertAuthorized();
+      writeAttempted=true;
+      const name=operation==='confirm'?'whatsapp_workspace_data_confirm':'whatsapp_workspace_data_cancel';
+      const result=await rpc(name,{...exactScopeKeys,p_pending_id:pendingAtStart.id,p_pending_version:pendingAtStart.version,
+        p_proposal_id:action.proposalId,p_confirmation_message_id:operation==='confirm'?messageId:null,
+        p_cancel_message_id:operation==='cancel'?messageId:null,p_user_message:String(message||'')},ctx);
+      return safeRpcResult(result);
+    }
+    if(typeof executeSafetyOperation!=='function')return fail('NO_PENDING_ACTION','There is no matching pending owner action.');
+    return delegate({operation},ctx);
+  };
+  const describe=async ctx=>{
+    let runtime=null;
+    if(typeof getRuntimeConfig==='function')try{await ctx.assertAuthorized();runtime=await getRuntimeConfig();await ctx.assertAuthorized();}catch{runtime=null;}
+    ctx.assertLive();
+    const safeRuntime=runtime&&typeof runtime==='object'?Object.fromEntries([
+      'configurationSource','workspaceSettingsAvailable','activePrimaryModel','activePrimaryProvider','activeFallbackModel',
+      'activeFallbackProvider','primaryModel','primaryProvider','fallbackModel','fallbackProvider','planningModel','planningProvider','servedModel','servedProvider',
+    ].filter(key=>runtime[key]!==undefined).map(key=>[key,runtime[key]])):null;
+    await ctx.assertAuthorized();
+    return {ok:true,catalog:catalog(),runtime:safeRuntime,modelChoices:VERIFIED_MODEL_CATALOG.map(({id,label,provider,roles})=>({id,label,provider,roles}))};
+  };
+  const execute=async (raw,executionOptions={})=>{
+    const signals=[signal,executionOptions?.signal].filter(Boolean);
+    const combinedSignal=signals.length>1&&typeof AbortSignal?.any==='function'?AbortSignal.any(signals):signals[0];
+    const deadlines=[deadlineAt,executionOptions?.deadlineAt].map(asEpoch).filter(Number.isFinite);
+    const effectiveDeadline=deadlines.length?Math.min(...deadlines):null;
+    const ctx={signal:combinedSignal,deadlineAt:effectiveDeadline,
+      assertLive(){
+        if(signals.some(item=>item.aborted))throw Object.assign(new Error(),{code:'OWNER_LOOP_TIMEOUT'});
+        if(effectiveDeadline!==null&&Date.now()>=effectiveDeadline)throw Object.assign(new Error(),{code:'OWNER_LOOP_TIMEOUT'});
+      },
+      async assertAuthorized(){
+        this.assertLive();
+        if(typeof authorize!=='function'||!await authorize(scope))throw Object.assign(new Error(),{code:'OWNER_REQUIRED'});
+        this.assertLive();
+      }};
+    try {
+      try { await ctx.assertAuthorized(); }
+      catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
+      const params=await normalizeRequest(raw,scope,planRequest,ctx);
+      ctx.assertLive();
+      if(params.operation==='describe')return await describe(ctx);
+      if(['pending','confirm','cancel'].includes(params.operation))return await handlePending(params.operation,ctx);
+      if(params.operation==='read')return await read(params,ctx);
+      if(params.operation==='create'||params.operation==='update'||params.operation==='delete')return await propose(params,ctx);
+      if(['restore','analyzeAttachment','saveAttachment','reviewAttachment','sendFile'].includes(params.operation)) {
+        if(typeof executeSafetyOperation!=='function')return fail();
+        return delegate(params,ctx);
+      }
+      return fail();
+    } catch(error) { return error instanceof TypeError?fail():safeError(error); }
+  };
+  return Object.freeze({definition:definition(),execute,getReplyRequirement:()=>replyRequirement?{...replyRequirement}:null,
+    getWriteAttempted:()=>writeAttempted});
+}

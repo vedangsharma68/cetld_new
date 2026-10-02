@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerSafetyTools as createOwnerAgentTools} from '../automation/whatsapp/owner-agent.mjs';
 import {createWhatsAppInvoiceStore} from '../automation/whatsapp/invoice-store.mjs';
 import {mergeWhatsAppMessages} from '../conversations-ui.mjs';
 import {ownerWhatsAppSettings} from '../owner-whatsapp-ui.mjs';
@@ -42,7 +43,7 @@ function setup(history=[],{plans={},answers={}}={}){
   consumePendingAction:async()=>{if(!action)return null;const old=id;action=null;generation++;return {id:old}}};
  const supabase={from(table){assert.equal(table,'workspace_ai_settings');const q={select(){return q;},eq(){return q;},async maybeSingle(){return {data:null};}};return q;},
   rpc:async(name,args)=>{if(name==='whatsapp_confirm_owner_invoice_action'){assert.ok(args.p_confirmation_message_id);confirmCalls++;return {data:{ok:true,invoiceNumber:'1223113',actionType:action?.type||'owner_invoice_update',duplicate:confirmCalls>1}};}return {data:{ok:false,code:'FEATURE_UNAVAILABLE'}};}};
- const handler=createOwnerMessageHandler({supabase,authorize:async()=>authorized,invoiceStoreFactory:()=>store,ownerStoreFactory:()=>ownerStore,
+ const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase,authorize:async()=>authorized,invoiceStoreFactory:()=>store,ownerStoreFactory:()=>ownerStore,
   pendingActionStoreFactory:()=>pending,historyReader:async()=>history,logger:{error(){}},providerFactory:options=>({async generate({messages,tools}){
    modelCalls.push(messages);
    assert.ok(tools.length>0,'owner model call must include tools');
@@ -210,7 +211,7 @@ test('customer contact details are read through the model-selected scoped tools'
   return [];
  }};
  let modelCalls=0;
- const handler=createOwnerMessageHandler({supabase:{from(table){if(table==='workspace_ai_settings')return {select(){return this},eq(){return this},maybeSingle:async()=>({data:null})};throw Error('unexpected db read')},rpc:async()=>({data:{ok:false,code:'FEATURE_UNAVAILABLE'}})},authorize:async()=>true,
+ const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase:{from(table){if(table==='workspace_ai_settings')return {select(){return this},eq(){return this},maybeSingle:async()=>({data:null})};throw Error('unexpected db read')},rpc:async()=>({data:{ok:false,code:'FEATURE_UNAVAILABLE'}})},authorize:async()=>true,
   ownerStoreFactory:()=>ownerStore,invoiceStoreFactory:()=>({findInvoices:async()=>list}),pendingActionStoreFactory:()=>pending,historyReader:async()=>[],
   providerFactory:options=>({async generate({messages,tools}){modelCalls++;assert.ok(tools.length);const hadTool=messages.some(m=>m.role==='tool');
    if(!hadTool)return {model:options.primaryModel,content:'',toolCalls:[{id:'contact-read',type:'function',function:{name:'getInvoices',arguments:'{"limit":10}'}}]};

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createOwnerAgentTools} from '../automation/whatsapp/owner-agent.mjs';
+import {createOwnerSafetyTools as createOwnerAgentTools} from '../automation/whatsapp/owner-agent.mjs';
 
 const scope={
   workspaceId:'00000000-0000-4000-8000-000000000002',

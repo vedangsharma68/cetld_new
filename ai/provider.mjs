@@ -302,8 +302,10 @@ export class AIProvider {
     validateMessages(messages);
     const requestOptions = {...options};
     if (maxTokens !== undefined) requestOptions.max_tokens = maxTokens;
-    if (tools !== undefined) requestOptions.tools = tools;
-    if (toolChoice !== undefined) requestOptions.tool_choice = toolChoice;
+    if (Array.isArray(tools) && tools.length) {
+      requestOptions.tools = tools;
+      if (toolChoice !== undefined) requestOptions.tool_choice = toolChoice;
+    } else if (tools !== undefined && !Array.isArray(tools)) throw invalidArgument();
     const candidates = this.#candidates();
     let lastError;
     for (const model of candidates) {
@@ -431,11 +433,16 @@ export class AIProvider {
     const {signal, deadlineAt, ...wireOptions} = options;
     if (isCfModel(model)) {
       if (!this.#cfApiToken || !this.#cfAccountId) throw new AIError('API_KEY_MISSING', 503);
+      const cfWireOptions = {...wireOptions};
+      if (Array.isArray(cfWireOptions.tools) && cfWireOptions.tools.length === 0) {
+        delete cfWireOptions.tools;
+        delete cfWireOptions.tool_choice;
+      }
       try {
         const result = await this.#fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(this.#cfAccountId)}/ai/v1/chat/completions`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json', Authorization: `Bearer ${this.#cfApiToken}`},
-          body: safeJsonStringify({...wireOptions, model, messages, stream: false}),
+          body: safeJsonStringify({...cfWireOptions, model, messages, stream: false}),
         }, async response => {
           const body = await readBoundedJson(response);
           if (!response.ok || body?.error || body?.success === false) throw statusError(response.status || 502, classifyProviderError(body, response.status));
@@ -451,8 +458,8 @@ export class AIProvider {
         cfBreaker.openUntil = 0;
         return result;
       } catch (error) {
-        // Bench Cloudflare for 10 minutes after repeated failures (quota cap, outage); Gemini serves meanwhile.
-        if (error instanceof AIError && !['INVALID_ARGUMENT'].includes(error.code) && (cfBreaker.failures += 1) >= 3) { cfBreaker.openUntil = Date.now() + 10 * 60 * 1000; cfBreaker.failures = 0; }
+        // Only repeated transport, rate-limit, timeout, or 5xx failures bench Cloudflare.
+        if (retryable(error) && (cfBreaker.failures += 1) >= 3) { cfBreaker.openUntil = Date.now() + 10 * 60 * 1000; cfBreaker.failures = 0; }
         throw error;
       }
     }

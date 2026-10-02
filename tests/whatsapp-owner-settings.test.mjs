@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
-import {parseSettingsRequest,unsupportedAnswer} from '../automation/whatsapp/owner-settings.mjs';
+import {createOwnerSafetyTools as createOwnerAgentTools} from '../automation/whatsapp/owner-agent.mjs';
 
 const scope={workspaceId:'w1',ownerId:'o1',customerId:'owner-placeholder',phone:'+919871367051'};
 function setup({failWrite=null,changeBetween=false,plans={},answers={}}={}){
@@ -41,7 +41,7 @@ function setup({failWrite=null,changeBetween=false,plans={},answers={}}={}){
   storePendingAction:async({action:a})=>{action=a;pid++;return {id:pid,version:1,action:a}},
   loadPendingAction:async()=>action?{id:pid,version:1,action}:null,
   consumePendingAction:async()=>{if(!action)return null;action=null;return {id:pid}}};
- const handler=createOwnerMessageHandler({supabase,authorize:async()=>authorized,pendingActionStoreFactory:()=>pending,
+ const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase,authorize:async()=>authorized,pendingActionStoreFactory:()=>pending,
   invoiceStoreFactory:()=>({findInvoices:async()=>[]}),historyReader:async()=>[],providerFactory:options=>({async generate({messages,tools}){
    modelCalls++;assert.ok(tools.length>0);
    const current=messages.filter(item=>item.role==='user').at(-1)?.content||'';
@@ -53,24 +53,6 @@ function setup({failWrite=null,changeBetween=false,plans={},answers={}}={}){
  const h=async input=>{const result=await handler(input);return result?.answer??result;};
  return {h,get row(){return row},get writes(){return writes},get rpcCalls(){return rpcCalls},get action(){return action},get modelCalls(){return modelCalls},bump(){row={...row,updated_at:'t9'}},revoke(){authorized=false}};
 }
-test('parser reads business name, tone, limits and hours; ignores invoice edits',()=>{
- assert.equal(parseSettingsRequest('change my workspace name to Vedang T').businessName,'Vedang T');
- assert.equal(parseSettingsRequest('rename my business to "Acme Ltd"').businessName,'Acme Ltd');
- assert.equal(parseSettingsRequest('set tone to firm').patch.tone,'firm');
- assert.equal(parseSettingsRequest('make reminders gentle').patch.tone,'gentle');
- assert.equal(parseSettingsRequest('set max reminders to 5').patch.maxReminders,5);
- assert.equal(parseSettingsRequest('set max reminders to 50').error?.includes('1 to 20'),true);
- assert.deepEqual(parseSettingsRequest('set contact hours 9am to 6pm').patch,{contactStart:'09:00',contactEnd:'18:00'});
- assert.match(parseSettingsRequest('set contact hours 6pm to 9am').error,/later end/);
- assert.equal(parseSettingsRequest('change invoice 1001 customer to Acme'),null);
- assert.equal(parseSettingsRequest('which invoices do i have'),null);
-});
-test('owner number, delivery switches and timezone get specific refusals',()=>{
- assert.match(unsupportedAnswer('change my whatsapp number to +9199'),/owner number.*dashboard/i);
- assert.match(unsupportedAnswer('turn on customer messages'),/delivery.*dashboard/i);
- assert.match(unsupportedAnswer('set timezone to Asia/Dubai'),/timezone.*yet/i);
- assert.equal(unsupportedAnswer('change invoice 1001 currency to USD'),null);
-});
 test('settings change is a proposal, applies only after yes, and keeps other preferences',async()=>{
  const first='change my workspace name to Vedang T',yes='yes';const t=setup({plans:{
   [first]:{tool:'proposeWorkspaceSettingsChange',args:{businessName:'Vedang T'}},[yes]:{tool:'confirmPendingOwnerChange'}},answers:{

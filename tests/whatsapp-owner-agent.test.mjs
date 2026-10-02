@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 import {reviewDraft} from '../automation/whatsapp/assistant-handler.mjs';
 import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
-import {createOwnerAgentTools, runOwnerAgent, ownerReplySafetyIssue} from '../automation/whatsapp/owner-agent.mjs';
+import {createOwnerSafetyTools as createOwnerAgentTools, runOwnerAgent, ownerReplySafetyIssue} from '../automation/whatsapp/owner-agent.mjs';
 import {CF_QWEN_MODEL} from '../ai/provider.mjs';
 import {createInvoiceLifecycleService} from '../ai/invoice-lifecycle.mjs';
 
@@ -83,16 +83,16 @@ test('each verified owner message, including greeting, meta, thanks, yes and med
     const result=request.messages.find(item=>item.role==='tool'&&item.tool_call_id==='meta-config');
     if(result){metaToolResult=JSON.parse(result.content);return {model:'gemini-3.5-flash-lite',content:'This turn used the configured Cloudflare model and Google fallback.'};}
     if(current==='What does this say?'&&!request.messages.some(item=>item.role==='tool')){
-      assert.match(request.messages.find(item=>item.role==='system').content,/An attachment is available for this turn/);
-      assert.match(request.messages.find(item=>item.role==='system').content,/image\/jpeg/);
+      assert.equal(JSON.parse(request.messages.filter(item=>item.role==='system')[1].content).attachment.available,true);
+      assert.equal(JSON.parse(request.messages.filter(item=>item.role==='system')[1].content).attachment.mimeType,'image/jpeg');
       return {model:CF_QWEN_MODEL,content:'',toolCalls:[{id:'read-attachment',type:'function',function:{name:'readInvoiceAttachment',arguments:'{}'}}]};
     }
     const attachment=request.messages.find(item=>item.role==='tool'&&item.tool_call_id==='read-attachment');
     if(attachment){analysisResult=JSON.parse(attachment.content);return {model:CF_QWEN_MODEL,content:'The attachment shows invoice INV-1 for INR 500.'};}
-    if(!current)assert.match(request.messages.find(item=>item.role==='system').content,/An attachment is available for this turn/);
+    if(!current)assert.equal(JSON.parse(request.messages.filter(item=>item.role==='system')[1].content).attachment.available,true);
     return {model:CF_QWEN_MODEL,content:'I am here.'};
   }});
-  const handler=createOwnerMessageHandler({supabase,authorize:async()=>true,pendingActionStoreFactory:pendingStore,
+  const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase,authorize:async()=>true,pendingActionStoreFactory:pendingStore,
     providerFactory,ownerStoreFactory:()=>({query:async()=>[]}),toolsFactory:input=>createOwnerAgentTools({...input,
       extractAttachment:async()=>({invoiceNumber:{value:'INV-1',confidence:.99},customerName:{value:'John Smith',confidence:.98},
         total:{value:500,confidence:.99},currency:{value:'INR',confidence:.99}})}),logger:{error(){}}});
@@ -193,7 +193,7 @@ test('the lifecycle receives the exact untrimmed owner turn stored by the inboun
   const raw='  DELETE INV-17  ';let toolMessage,agentMessage,seenUserMessage;
   const supabase={from(table){assert.equal(table,'workspace_ai_settings');const q={select(){return q;},eq(){return q;},async maybeSingle(){return {data:null};}};return q;},
     async rpc(){return {data:{ok:false,code:'FEATURE_UNAVAILABLE'}};}};
-  const handler=createOwnerMessageHandler({supabase,authorize:async()=>true,pendingActionStoreFactory:pendingStore,
+  const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase,authorize:async()=>true,pendingActionStoreFactory:pendingStore,
     ownerStoreFactory:()=>({query:async()=>[]}),historyReader:async()=>[],
     toolsFactory(input){toolMessage=input.message;return {definitions:[],async execute(){return {}},setServedModel(){}};},
     agentFactory:async input=>{agentMessage=input.message;seenUserMessage=input.history;return {answer:'Received.'};},logger:{error(){}}});
@@ -204,7 +204,7 @@ test('the lifecycle receives the exact untrimmed owner turn stored by the inboun
 
 test('owner history comes from the worker-recorded permanent conversation through three later turns',async()=>{
   const supabase=memorySupabase();let providerCalls=0,turn=0;
-  const handler=createOwnerMessageHandler({supabase,pendingActionStoreFactory:pendingStore,logger:{error(){}} ,
+  const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase,pendingActionStoreFactory:pendingStore,logger:{error(){}} ,
     toolsFactory(input){
       if(input.message==='What number did I ask about?')assert.ok(input.ownerHistory.some(turn=>
         turn.role==='user'&&turn.content==='John Smith is my customer'&&turn.providerMessageId==='wamid.history-1'));
@@ -405,7 +405,7 @@ function modelPlan(toolPlan,finalText){
 
 function lifecycleHandler(fixture,{plans,answers}={}){
   let turn=0;
-  return createOwnerMessageHandler({supabase:fixture.db,authorize:async()=>true,ownerStoreFactory:()=>ownerReadStore(fixture.rows),
+  return createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase:fixture.db,authorize:async()=>true,ownerStoreFactory:()=>ownerReadStore(fixture.rows),
     pendingActionStoreFactory:()=>fixture.pending,historyReader:async()=>[],logger:{error(){}},
     providerFactory:()=>modelPlan(plans[turn]||[],answers[turn++]||'I could not complete that request.')});
 }
@@ -453,7 +453,7 @@ test('generic delete copy is model-repaired to name the invoice, customer, amoun
     repairInstruction=messages.at(-1).content;
     return {model:CF_QWEN_MODEL,content:'Invoice INV-17 for John Smith totals USD 100.00 and is currently sent. Reply exactly DELETE INV-17 to remove it, or cancel.'};
   }};
-  const handler=createOwnerMessageHandler({supabase:f.db,authorize:async()=>true,ownerStoreFactory:()=>ownerReadStore(f.rows),
+  const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase:f.db,authorize:async()=>true,ownerStoreFactory:()=>ownerReadStore(f.rows),
     pendingActionStoreFactory:()=>f.pending,historyReader:async()=>[],providerFactory:()=>provider,logger:{error(){}}});
   const result=await handler({...scope,message:'Please delete invoice INV-17',messageId:'wamid.prepare'});
   assert.equal(calls,3);assert.match(repairInstruction,/confirmation_customer/);
@@ -503,7 +503,7 @@ test('model compares duplicate age and completeness before choosing one specific
     assert.match(messages.find(item=>item.role==='tool'&&item.tool_call_id==='prepare').content,/"proposal":true/);
     return {model:CF_QWEN_MODEL,content:'The older, complete copy is invoice INV-17 for John Smith. It totals USD 100.00 and is currently sent. Reply exactly DELETE INV-17 to remove that copy, or cancel.'};
   }};
-  const handler=createOwnerMessageHandler({supabase:f.db,authorize:async()=>true,ownerStoreFactory:()=>ownerReadStore([older,newer]),
+  const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase:f.db,authorize:async()=>true,ownerStoreFactory:()=>ownerReadStore([older,newer]),
     pendingActionStoreFactory:()=>f.pending,historyReader:async()=>[],providerFactory:()=>provider,logger:{error(){}}});
   const response=await handler({...scope,message:'Delete the older duplicate copy of invoice INV-17',messageId:'wamid.prepare-duplicate'});
   assert.equal(f.calls.filter(call=>call.action==='prepare').length,1);
@@ -628,7 +628,7 @@ test('invoice review details remain available after cancellation and can seed a 
 
 test('unverified sender cannot start the owner model or invoke workspace tools',async()=>{
   let providerCalls=0,toolFactoryCalls=0;
-  const handler=createOwnerMessageHandler({supabase:memorySupabase(),authorize:async()=>false,
+  const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase:memorySupabase(),authorize:async()=>false,
     providerFactory:()=>({async generate(){providerCalls++;return {model:CF_QWEN_MODEL,content:'no'};}}),
     toolsFactory(){toolFactoryCalls++;throw new Error('must not initialize tools');},logger:{error(){}}});
   assert.equal(await handler({...scope,message:'Delete invoice INV-17'}),'');
@@ -786,17 +786,16 @@ test('a due-date-only review created from extracted invoice facts retains photo 
   }
 });
 
-test('owner error repair is a model-only generation with no tools or raw internal error context',async()=>{
+test('owner interruption status remains available when the model service is down',async()=>{
   let calls=0;
-  const handler=createOwnerMessageHandler({supabase:memorySupabase(),providerFactory:()=>({async generate(request){
-    calls++;assert.deepEqual(request.tools,[]);assert.equal(request.toolChoice,'none');
-    const prompt=request.messages.map(item=>item.content).join('\n');
-    assert.doesNotMatch(prompt,/DATABASE_SECRET|private database text|PGRST/);
-    assert.match(prompt,/processing interruption/);
-    return {model:CF_QWEN_MODEL,content:'I could not complete the reply. Please check the invoice status before retrying.'};
+  const handler=createOwnerMessageHandler({supabase:memorySupabase(),providerFactory:()=>({async generate(){
+    calls++;throw new Error('PRIVATE_DATABASE_SECRET');
   }}),logger:{error(){}}});
-  const reply=await handler.createSafeFailureReply({workspaceId,hasAttachment:true});
-  assert.equal(calls,1);assert.equal(reply,'I could not complete the reply. Please check the invoice status before retrying.');
+  const reply=await handler.createSafeFailureReply({workspaceId,code:'OWNER_LOOP_TIMEOUT',hasAttachment:true});
+  assert.equal(calls,0);assert.ok(reply);
+  assert.match(reply,/too long/i);
+  assert.match(reply,/check your workspace/i);
+  assert.doesNotMatch(reply,/PRIVATE_DATABASE_SECRET|PGRST/);
 });
 
 test('a payable or uncertain attachment draft cannot become a receivable without explicit owner direction',async()=>{

@@ -15,6 +15,17 @@ test('Cloudflare serves the owner model call and returns tool calls',async()=>{
  assert.equal(r.toolCalls[0].function.name,'find_invoices');
 });
 
+test('Cloudflare omits empty tools and tool_choice fields',async()=>{
+ let body;
+ const p=make(async(_url,init)=>{
+  body=JSON.parse(init.body);
+  return ok({choices:[{finish_reason:'stop',message:{content:'served without tools'}}]});
+ });
+ await p.generate({messages:[{role:'user',content:'hello'}],tools:[],toolChoice:'required'});
+ assert.equal(Object.hasOwn(body,'tools'),false);
+ assert.equal(Object.hasOwn(body,'tool_choice'),false);
+});
+
 test('a Cloudflare failure falls through to Gemini within the same call',async()=>{
  const p=make(async url=>String(url).includes('cloudflare')?{ok:false,status:429,headers:{get:()=>null},text:async()=>'{"errors":[{"message":"daily neuron cap"}]}'}:ok({candidates:[{content:{parts:[{text:'from gemini'}]},finishReason:'STOP'}]}));
  const r=await p.generate({messages:[{role:'user',content:'hi'}]});
@@ -50,6 +61,25 @@ test('a selected non-default Cloudflare fallback runs immediately after the prim
  const result=await p.generate({messages:[{role:'user',content:'hello'}]});
  assert.deepEqual(calls,[CF_PRIMARY_MODEL,model]);
  assert.equal(result.model,model);
+});
+
+test('Cloudflare 400 configuration errors fall back without retrying or opening the breaker',async()=>{
+ const reset=make(async()=>ok({choices:[{finish_reason:'stop',message:{content:'reset'}}]}));
+ await reset.generate({messages:[{role:'user',content:'reset breaker'}]});
+ const cloudflareCalls=[];
+ const p=new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:GEMINI_FALLBACK_MODEL,cfAccountId:'acc',cfApiToken:'tok',geminiApiKey:'g',maxAttempts:2,logger:{warn(){},info(){}},fetchImpl:async(url,init)=>{
+  if(String(url).includes('cloudflare')){
+   cloudflareCalls.push(JSON.parse(init.body).model);
+   return failed(400,{error:{message:'unsupported tool schema'}});
+  }
+  return gemini('Gemini recovered');
+ }});
+ const result=await p.generate({messages:[{role:'user',content:'use configured tools'}],tools:[{type:'function',function:{name:'find_overdue',parameters:{type:'object',properties:{}}}}],toolChoice:'required'});
+ assert.deepEqual(cloudflareCalls,[CF_PRIMARY_MODEL,CF_BACKUP_MODEL]);
+ assert.equal(result.model,GEMINI_FALLBACK_MODEL);
+ assert.equal(result.usedFallback,true);
+ assert.equal(cloudflareBreakerState().failures,0);
+ assert.equal(cloudflareBreakerState().open,false);
 });
 
 test('a Cloudflare model tool rejection falls through to Gemini with the request intact',async()=>{
