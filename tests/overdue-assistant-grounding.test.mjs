@@ -47,7 +47,7 @@ function providerWithOverdueToolAndFalseEmptyAnswer(){
   return {requests,async generate(request){
     requests.push(request);
     if(request.tools)return {toolCalls:[{function:{name:'getOverdueInvoices',arguments:'{}'}}],model:'test-model',usedFallback:false};
-    return {content:"There aren't any overdue invoices in this workspace right now.",finishReason:'STOP',model:'test-model',usedFallback:false};
+    return {content:"There aren't any overdue invoices in this business right now.",finishReason:'STOP',model:'test-model',usedFallback:false};
   }};
 }
 
@@ -81,7 +81,7 @@ test('paid-invoice questions read verified settlement records without a model pl
 test('paid-invoice lookup validates the paid amount, does not equate partial payments with full settlement', async () => {
   const records={invoices:invoices.map(row => row.invoice_number === '1001' ? {...row,amount_paid:'500.00'} : row),customers,payments:[],invoice_files:[]};
   const result=await answerWorkspaceQuestion({provider:{generate:async()=>{throw Error('No model call expected');}},store:workspaceStore(records),message:'Are there any paid invoices?',clock:fixedClock});
-  assert.equal(result.answer,'There are no fully paid invoices in this workspace right now.');
+  assert.equal(result.answer,'There are no fully paid invoices in this business right now.');
   assert.equal(result.evidence.complete,true);
   assert.deepEqual(result.evidence.records,[]);
 });
@@ -120,7 +120,7 @@ function providerWithFalseEmptyOutstandingAnswer(){
   return {requests,async generate(request){
     requests.push(request);
     if(request.tools)return {toolCalls:[{function:{name:'getOutstandingSummary',arguments:'{}'}}],model:'test-model',usedFallback:false};
-    return {content:"There aren't any outstanding balances in this workspace right now.",finishReason:'STOP',model:'test-model',usedFallback:false};
+    return {content:"There aren't any outstanding balances in this business right now.",finishReason:'STOP',model:'test-model',usedFallback:false};
   }};
 }
 
