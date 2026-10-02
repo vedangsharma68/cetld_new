@@ -300,7 +300,7 @@ test('bound customer hi webhook completes and attempts a guarded greeting servic
   assert.equal(sends.length, 2);
   assert.deepEqual(sends[0], {kind: 'typing', messageId: 'wamid.bound-hi'});
   assert.equal(sends[1].kind, 'normal');
-  assert.match(sends[1].body, /^Hi! I'm here for your Cetld workspace/);
+  assert.match(sends[1].body, /^Hi! I'm here for your Cetld account/);
 });
 
 test('typing indicator is skipped for STOP and a thrown indicator cannot fail a bound event', async () => {
