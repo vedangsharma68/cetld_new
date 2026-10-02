@@ -61,7 +61,7 @@ test('connections only surfaces supported accounting integrations and neutral cr
 test('settings navigation only points to existing sections; untracked setup progress is absent',()=>{
   const settingsSource=app.slice(app.indexOf('function settings()'),app.indexOf('async function saveSettings'));
   for(const section of ['profile','preferences','account'])assert.match(settingsSource,new RegExp(`href="#${section}"`));
-  assert.match(settingsSource,/class="settings-branch-label">Workspace/);
+  assert.match(settingsSource,/class="settings-branch-label">Business/);
   assert.doesNotMatch(settingsSource,/Setup guide/);
   const css=fs.readFileSync(new URL('../styles.css',import.meta.url),'utf8');
   assert.match(css,/\.setup-card\{display:none!important\}/);
