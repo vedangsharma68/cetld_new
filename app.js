@@ -34,7 +34,7 @@ const button=(action,label,cls='',id='')=>`<button type="button" class="btn ${cl
 const tag=s=>`<span class="tag ${escape(s.toLowerCase().replaceAll(' ','-'))}">${escape(s)}</span>`;
 let oauthReturnPage=new URLSearchParams(location.search).get('page')?.toLowerCase()==='connections'?'Connections':null;
 const state={user:null,profile:profileFromUser(null),workspace:null,settings:null,customers:[],demo:false,invoices:[],payments:[],page:'Overview',search:'',filter:'All',loading:false,error:'',authMode:'login',recovery:false,conversationId:null,pendingFile:null,invoiceExtractionController:null,assistantInvoiceExtractionController:null,sidebarCollapsed:false,assistantMessages:[],assistantDraft:'',assistantStatus:'idle',assistantStatusLabel:'Preparing reply',assistantError:'',assistantInvoiceFile:null,assistantAttachment:null,assistantAttachmentUrl:'',assistantSyncInvoice:null,aiSettings:{primary_model:AI_MODELS[0][0],fallback_model:null},aiSettingsError:'',aiDiagnostic:null,availableExtractionModels:[],accountingStatus:null,quickbooksStatus:null};
-let db=null,authError='',toastTimer,loadEpoch=0;
+let db=null,recoveryDb=null,linkNotice='',authError='',toastTimer,loadEpoch=0;
 state.lastSuccessfulLoadAt=null;state.ledgerStaleMessage='';
 async function accessToken(){if(state.demo||!db)return null;const {data,error}=await db.auth.getSession();if(error)throw error;return data.session?.access_token||null}
 async function whatsappTestRequest(invoiceId,{method='GET',previewToken}={}){const token=await accessToken();if(!token||!state.workspace?.id)throw Error('Sign in to review this test send.');const url=new URL('/api/whatsapp-test-send',location.origin),body={workspaceId:state.workspace.id,invoiceId};if(method==='GET')for(const [key,value] of Object.entries(body))url.searchParams.set(key,value);const response=await fetch(url,{method,credentials:'same-origin',headers:{Authorization:`Bearer ${token}`,...(method==='POST'?{'Content-Type':'application/json','X-WhatsApp-Test-Preview':previewToken}:{})},...(method==='POST'?{body:JSON.stringify(body)}:{})});const payload=await response.json().catch(()=>({}));if(!response.ok)throw Error(payload.error||'TEST send is unavailable.');return payload}
@@ -64,7 +64,7 @@ function authPage(){
 async function submitAuth(e){e.preventDefault();const form=e.currentTarget,submit=form.querySelector('[type=submit]');const data=new FormData(form);submit.disabled=true;const original=submit.innerHTML;submit.textContent='Please wait…';form.querySelector('[data-error]').classList.add('hidden');
  try{if(!db)throw Error('Authentication is unavailable. Please try again.');let result;const redirectTo=location.origin+'/app/';
  if(state.authMode==='signup'){result=await db.auth.signUp({email:data.get('email'),password:data.get('password'),options:{emailRedirectTo:redirectTo}});if(result.error)throw result.error;if(!result.data.session){authError='Check your email to confirm your account, then sign in.';state.authMode='login';authPage();return}}
- else if(state.authMode==='reset'){result=await db.auth.resetPasswordForEmail(data.get('email'),{redirectTo});if(result.error)throw result.error;authError='If this address has an account, a reset link will arrive shortly.';state.authMode='login';authPage();return}
+ else if(state.authMode==='reset'){result=await (recoveryDb||db).auth.resetPasswordForEmail(data.get('email'),{redirectTo});if(result.error)throw result.error;authError='If this address has an account, a reset link will arrive shortly.';state.authMode='login';authPage();return}
  else if(state.authMode==='recovery'){result=await db.auth.updateUser({password:data.get('password')});if(result.error)throw result.error;state.recovery=false;state.authMode='login';history.replaceState(null,'',location.pathname);toast('Password updated');await enterAccount(result.data.user);return}
  else{result=await db.auth.signInWithPassword({email:data.get('email'),password:data.get('password')});if(result.error)throw result.error}
  if(result.data?.session)await enterAccount(result.data.user);
@@ -286,11 +286,18 @@ async function init(){
  authError='Connecting securely…';authShell();
  try{
   const {createClient}=await import('https://esm.sh/@supabase/supabase-js@2.116.0');
-  db=createClient(config.url,config.key,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true,flowType:'pkce'}});
-  db.auth.onAuthStateChange((event,session)=>{syncLandingSessionCookie(session);setTimeout(()=>{if(event==='PASSWORD_RECOVERY'){state.recovery=true;state.authMode='recovery';state.user=session?.user;state.profile=profileFromUser(session?.user);authPage();return}if(event==='SIGNED_OUT'&&!state.demo){++loadEpoch;state.user=null;state.profile=profileFromUser(null);state.workspace=null;state.settings=null;state.customers=[];state.invoices=[];state.payments=[];$('#dialog').close();authPage();return}if(['INITIAL_SESSION','SIGNED_IN','TOKEN_REFRESHED','USER_UPDATED'].includes(event)&&session?.user&&!state.demo)syncSession(session)},0)});
+  const linkHash=new URLSearchParams(location.hash.replace(/^#/,'')),linkQuery=new URLSearchParams(location.search);
+  const recoveryLink=linkHash.get('type')==='recovery'&&linkHash.get('access_token')&&linkHash.get('refresh_token');
+  db=createClient(config.url,config.key,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:!recoveryLink&&!linkHash.get('error_description'),flowType:'pkce'}});
+  // Reset emails are requested with the implicit flow so the link works in any browser or mail app (no stored PKCE verifier needed).
+  recoveryDb=createClient(config.url,config.key,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false,flowType:'implicit',storageKey:'cetld-recovery-request'}});
+  const linkProblem=linkHash.get('error_description')||linkQuery.get('error_description');
+  if(linkProblem){history.replaceState(null,'',location.pathname);state.authMode='reset';linkNotice=/expired|invalid/i.test(linkProblem)?'That reset link expired or was already used. Request a new one below.':'That link could not be used. Request a new reset link below.'}
+  if(recoveryLink){const {error:recoveryError}=await db.auth.setSession({access_token:linkHash.get('access_token'),refresh_token:linkHash.get('refresh_token')});history.replaceState(null,'',location.pathname);if(recoveryError){state.authMode='reset';linkNotice='That reset link expired or was already used. Request a new one below.'}else{state.recovery=true;state.authMode='recovery'}}
+  db.auth.onAuthStateChange((event,session)=>{syncLandingSessionCookie(session);setTimeout(()=>{if(event==='PASSWORD_RECOVERY'){state.recovery=true;state.authMode='recovery';state.user=session?.user;state.profile=profileFromUser(session?.user);authPage();return}if(event==='SIGNED_OUT'&&!state.demo){++loadEpoch;state.user=null;state.profile=profileFromUser(null);state.workspace=null;state.settings=null;state.customers=[];state.invoices=[];state.payments=[];$('#dialog').close();authPage();return}if(['INITIAL_SESSION','SIGNED_IN','TOKEN_REFRESHED','USER_UPDATED'].includes(event)&&session?.user&&!state.demo&&!state.recovery)syncSession(session)},0)});
   const {data,error}=await db.auth.getSession();if(error)throw error;
-  authError='';
-  if(state.recovery)return;
+  authError=linkNotice;
+  if(state.recovery){authPage();return}
   if(data.session){const {data:userData,error:userError}=await db.auth.getUser();if(userError)throw userError;await syncSession({...data.session,user:userData.user})}
   else if(!state.demo)authPage();
  }catch(err){authError='Secure sign-in could not load. Check your connection and reload. The demo is still available.';if(!state.demo)authPage()}
