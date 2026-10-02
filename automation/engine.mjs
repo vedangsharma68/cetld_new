@@ -1,6 +1,7 @@
 import { cadenceSettings, isWithinContactHours, nextContactTime, scheduleNextFollowUp } from './cadence.mjs';
 import { createHash } from 'node:crypto';
 import { normalizeFollowUpPreferences, reminderBody, brandedReminder } from './preferences.mjs';
+import {isDeletedInvoice} from '../invoice/deleted-at-compat.mjs';
 const value = (row, camel, snake) => row[camel] ?? row[snake];
 const version = row => Number(value(row,'automationVersion','automation_version'));
 const state = row => value(row,'followupState','followup_state');
@@ -29,6 +30,7 @@ export class FollowUpEngine {
     if (!ownerId || !workspaceId || !invoiceId) throw new TypeError('Invoice scope required');
     let invoice=await this.store.getInvoice(scope);
     if (!invoice) throw new Error('Invoice not found');
+    if (isDeletedInvoice(invoice)) return {status:'skipped',reason:'invoice_deleted'};
     if (Object.hasOwn(invoice,'total_amount')) {
       const direction=invoice.metadata?.invoice_direction;
       if (direction !== 'receivable' || !invoice.due_date || Number(invoice.total_amount) <= 0 || ['void','cancelled','paid'].includes(invoice.status)) return {status:'skipped',reason:'ineligible_invoice'};
@@ -75,6 +77,10 @@ export class FollowUpEngine {
       }
       invoice=await this.store.getInvoice(scope);
       if (!invoice) throw new Error('Invoice disappeared');
+      if (isDeletedInvoice(invoice)) {
+        await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'invoice_deleted'});
+        return {status:'skipped',reason:'invoice_deleted'};
+      }
     } catch {
       await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:true,error:'payment_check_failed'});
       await this.event(scope,'needs_attention',{reason:'payment_check_failed',claimId:claim.id});
@@ -102,6 +108,18 @@ export class FollowUpEngine {
       await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'contact_hours'});
       return {status:'waiting',reason:'contact_hours'};
     }
+    // Refresh the invoice immediately before the durable authorization gate.
+    // The database RPC remains the final race-safe check before provider dispatch.
+    const dispatchInvoice=await this.store.getInvoice(scope);
+    if(!dispatchInvoice||isDeletedInvoice(dispatchInvoice)){
+      await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'invoice_deleted'});
+      return {status:'skipped',reason:'invoice_deleted'};
+    }
+    if(isPaid(dispatchInvoice)||!active(dispatchInvoice)){
+      await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'invoice_state_changed'});
+      return {status:'skipped',reason:isPaid(dispatchInvoice)?'paid':'paused'};
+    }
+    invoice=dispatchInvoice;
     const authorization=await this.store.authorizeDelivery({...scope,claimId:claim.id,preferencesVersion:finalSettings.version});
     if (!authorization.authorized) return {status:'skipped',reason:authorization.reason};
     // No asynchronous work may be inserted between this gate and provider dispatch.

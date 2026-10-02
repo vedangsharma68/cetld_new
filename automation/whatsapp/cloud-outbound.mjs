@@ -281,7 +281,10 @@ export function createWhatsAppOutbound({
         ? "You've been opted out of WhatsApp updates. We won't message you again."
         : null;
     if (kind === 'normal') {
-      try {
+      if(audience==='owner'){
+        text=nonempty(body,'body',3790);
+        if(SESSION_PRESSURE_CONTENT.test(text))return block(logger,'owner_reply_safety_guard',{workspaceId,to,kind});
+      }else try {
         const bounded=typeof body==='string'&&body.length>3790
           ?body.slice(0,3730)+'\n… View the full details in your dashboard.':body;
         text = neutralText(bounded, kind);
@@ -298,10 +301,10 @@ export function createWhatsAppOutbound({
       if (!eligibility.allowed) return block(logger, eligibility.reason, {workspaceId, to, kind});
       customerId=eligibility.customer?.id||null;
     }
-    text=`${text}\n\n— ${owner}`;
+    if(audience!=='owner')text=`${text}\n\n- ${owner}`;
     const key=`reply:${inboundId}`;
     const payload=await prepareMessage({workspaceId,to,kind,audience,customerId,key,payload:{type:'text',text:{preview_url:false,body:text}}});
-    if(!payload.text.body.endsWith(`\n\n— ${owner}`))return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed'});
+    if(audience!=='owner'&&!payload.text.body.endsWith(`\n\n- ${owner}`))return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed'});
     const authorization = await authorizeInboundReply({workspaceId, phone: to, kind, messageId: inboundId,...(audience==='owner'?{audience}: {})});
     if (authorization?.allowed !== true) return denyPrepared({workspaceId,to,kind,key,reason:authorization?.reason||'inbound_reply_denied'});
     if(workspaceId&&!await verifiedBusinessName(supabase,workspaceId,owner))
@@ -332,12 +335,14 @@ export function createWhatsAppOutbound({
     const bytes = media?.bytes;
     if (!bytes?.length || bytes.length > 10 * 1024 * 1024) throw new TypeError('invalid invoice media');
     const image = String(media.mime_type || media.mimeType).startsWith('image/');
-    const brandedCaption=`${String(caption||'').slice(0,Math.max(0,1000-businessName.length-4))}\n\n— ${businessName}`;
+    const brandedCaption=audience==='owner'?nonempty(caption,'caption',1000)
+      :`${String(caption||'').slice(0,Math.max(0,1000-businessName.length-4))}\n\n- ${businessName}`;
+    if(audience==='owner'&&SESSION_PRESSURE_CONTENT.test(brandedCaption))return block(logger,'owner_reply_safety_guard',{workspaceId,to,kind});
     const key=`reply:${messageId}`;
     const payload=await prepareMessage({workspaceId,to,kind,audience,customerId:eligibility.customer?.id||null,key,payload:image
       ? {type:'image',image:{id:'',caption:brandedCaption}}
       : {type:'document',document:{id:'',filename:media.file_name||media.fileName||'invoice.pdf',caption:brandedCaption}}});
-    if(!(payload.image?.caption||payload.document?.caption).endsWith(`\n\n— ${businessName}`))
+    if(audience!=='owner'&&!(payload.image?.caption||payload.document?.caption).endsWith(`\n\n- ${businessName}`))
       return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed'});
     const form = new FormData();
     form.set('messaging_product', 'whatsapp');

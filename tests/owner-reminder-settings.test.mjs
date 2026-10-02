@@ -92,7 +92,8 @@ test('owner reply uses fresh owner authorization and stores exactly what Meta ac
   assert.equal(db.tables.whatsapp_messages[0].body,payloads[0].text.body);
   assert.equal(db.tables.whatsapp_messages[0].provider_message_id,'sent-1');
   assert.equal(db.tables.whatsapp_messages[0].status,'accepted');
-  assert.match(db.tables.whatsapp_messages[0].body,/Vedang Test Business/);
+  assert.equal(db.tables.whatsapp_messages[0].body,'Your workspace is connected.');
+  assert.equal(payloads[0].text.body,'Your workspace is connected.');
 });
 
 test('signed callback extraction scopes statuses to this WABA and phone and inbox escapes message content',()=>{

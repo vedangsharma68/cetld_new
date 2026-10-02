@@ -63,8 +63,13 @@ export class SupabaseInboundInbox {
     const inserted = dataOrThrow(await this.supabase.from('whatsapp_inbound_events')
       .upsert(messages, { onConflict: 'provider_message_id', ignoreDuplicates: true })
       .select('*'), 'enqueue') || [];
-    const stopIds = messages.filter(message => isOptOut(message.message_text))
-      .map(message => message.provider_message_id);
+    const stopIds=[];
+    for(const message of messages.filter(item=>isOptOut(item.message_text))){
+      // A verified owner can say STOP or cancel as ordinary conversation text.
+      // Install the synchronous consent barrier only for non-owner senders.
+      const owner=await resolveOwnerIdentity({supabase:this.supabase,phone:message.sender_phone});
+      if(!owner)stopIds.push(message.provider_message_id);
+    }
     if (!stopIds.length) return inserted;
     // If storage succeeded but synchronous revocation failed, Meta's retry
     // must finish the STOP even though the message ID is already in the inbox.
@@ -127,8 +132,12 @@ export class SupabaseInboundInbox {
   }
 
   async defer(event) {
+    const receivedAt=Date.parse(event.received_at||event.created_at||'');
+    const retryAgeSteps=Number.isFinite(receivedAt)
+      ?Math.floor(Math.max(0,Date.now()-receivedAt)/60_000):Math.max(0,Number(event.attempts||1)-1);
+    const delayMs=Math.min(60_000*2**retryAgeSteps,60*60_000);
     dataOrThrow(await this.supabase.from('whatsapp_inbound_events').update({status: 'pending', processed_at: null,
-      claim_token: null, claimed_at: null, next_attempt_at: new Date().toISOString(),
+      claim_token: null, claimed_at: null, next_attempt_at: new Date(Date.now()+delayMs).toISOString(),
       attempts: Math.max(0, Number(event.attempts || 1) - 1)})
       .eq('id', event.id).eq('claim_token', event.claim_token), 'defer');
   }
@@ -140,7 +149,26 @@ const stopReply = 'Your request has been recorded. You will no longer receive Wh
 export function createInboundRuntime({ env = process.env, fetchImpl = globalThis.fetch, supabase, inbox = new SupabaseInboundInbox(supabase), outbound,
   onBoundMessage, onOwnerMessage, conversationStore = createConversationStore(supabase), logger = console, clock = () => Date.now() } = {}) {
   if (!supabase) throw new Error('Supabase service client required');
-  onOwnerMessage ||= createOwnerMessageHandler({supabase,env,fetchImpl});
+  let ownerHandler=onOwnerMessage||null;
+  const runOwnerMessage=async input=>{
+    if(!ownerHandler)ownerHandler=createOwnerMessageHandler({supabase,env,fetchImpl});
+    return ownerHandler(input);
+  };
+  async function ownerFailureContext(event){
+    let binding;
+    try{binding=await resolveOwnerBinding({supabase,phone:event.sender_phone});}
+    catch(error){
+      logger?.error?.('WhatsApp owner recovery binding lookup failed',{messageId:event.provider_message_id,
+        code:String(error?.code||'OWNER_BINDING_UNAVAILABLE').slice(0,60)});
+      return {verifiedOwner:false,bindingUnavailable:true};
+    }
+    if(!binding)return {verifiedOwner:false};
+    if(!ownerHandler)ownerHandler=createOwnerMessageHandler({supabase,env,fetchImpl});
+    if(typeof ownerHandler.createSafeFailureReply!=='function')return {verifiedOwner:true,binding,reply:null};
+    const reply=await ownerHandler.createSafeFailureReply({workspaceId:binding.workspaceId,
+      hasAttachment:Boolean(event.media_ref||['image','document'].includes(event.message_type))});
+    return {verifiedOwner:true,binding,reply};
+  }
   async function transcript(input){await conversationStore?.record(input);}
   let outboundPromise;
   const getOutbound = async () => {
@@ -228,7 +256,11 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       if (signal?.aborted || (Number.isFinite(deadlineAt) && clock() >= deadlineAt)) throw Object.assign(new Error('Inbound processing deadline expired'), {name: 'AbortError'});
     };
     active();
-    if (isOptOut(event.message_text)) {
+    // Resolve the verified owner before interpreting STOP/CANCEL or onboarding
+    // words. Those strings can be ordinary owner conversation turns; only a
+    // non-owner debtor message installs consent barriers and exits the model.
+    const owner=await resolveOwnerBinding({supabase,phone:event.sender_phone});
+    if (!owner&&isOptOut(event.message_text)) {
       if (!event.stop_processed_at) {
         await revokeOptOut(event);
         // The just-claimed copy predates the stop update; use the fresh binding
@@ -247,7 +279,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       return 'opt_out';
     }
       const linkMatch = /^\s*link[\s:-]*(\d{6})\s*$/i.exec(event.message_text || '');
-      if (linkMatch) {
+      if (!owner&&linkMatch) {
         // The sender phone comes from WhatsApp, so a matching dashboard code proves they hold the number.
         try {
           const { data: result, error } = await supabase.rpc('whatsapp_verify_owner_code', { p_phone: event.sender_phone, p_code: linkMatch[1] });
@@ -262,7 +294,6 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           logger?.error?.('WhatsApp owner link failed', { message: String(error?.message || '').slice(0, 200) });
         }
       }
-    const owner=await resolveOwnerBinding({supabase,phone:event.sender_phone});
     const bindings=owner?[owner]:await resolveActiveBindings({supabase,phone:event.sender_phone});
     if(bindings.length!==1)return 'verify';
     const binding = bindings[0];
@@ -273,7 +304,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       createdAt:event.provider_timestamp||event.received_at});
     if(!owner)dataOrThrow(await supabase.rpc('whatsapp_pause_customer_followups',{
       p_workspace_id:binding.workspaceId,p_customer_id:binding.customerId,p_message_id:event.provider_message_id}),'pause customer follow-ups');
-    const handle=owner?onOwnerMessage:onBoundMessage;
+    const handle=owner?runOwnerMessage:onBoundMessage;
     if (handle) {
       // This UX signal must never affect durable event processing. In
       // particular, Graph failures must not cause the inbound event to retry.
@@ -285,9 +316,10 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           message: String(error?.message || '').slice(0, 200)});
       }
       const media = event.media_ref && !event.media_error ? await inbox.getMedia(event) : null;
-      const response = event.media_error ? MEDIA_FETCH_FAILED_REPLY : await handle({ workspaceId: binding.workspaceId, customerId: binding.customerId, ownerId:binding.ownerId,
+      const ownerMediaError=owner&&(event.media_error||Boolean(event.media_ref&&!media))?'The attachment could not be loaded.':null;
+      const response = event.media_error&&!owner ? MEDIA_FETCH_FAILED_REPLY : await handle({ workspaceId: binding.workspaceId, customerId: binding.customerId, ownerId:binding.ownerId,
         phone: event.sender_phone, message: event.message_text, messageId: event.provider_message_id, media,
-        mediaError: event.media_ref && !media ? 'Stored media unavailable' : null, signal, deadlineAt });
+        mediaError: owner?ownerMediaError:event.media_ref && !media ? 'Stored media unavailable' : null, signal, deadlineAt });
       active();
       const answer = typeof response === 'string' ? response : response?.answer;
       if (typeof answer === 'string' && answer.trim()) {
@@ -297,6 +329,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           ...(response?.media ? {media: response.media} : {}),
           lastInboundAt: event.provider_timestamp || event.received_at, kind: 'normal', audience:owner?'owner':'customer', messageId: event.provider_message_id,
           businessName: await businessName(binding.workspaceId) });
+        if(owner&&sent?.status!=='accepted')throw Object.assign(new Error('Owner reply was not accepted for delivery.'),{code:'OWNER_REPLY_NOT_ACCEPTED'});
         if (sent?.status === 'accepted') {
           try {
             await writeConversationTurn({supabase, workspaceId: binding.workspaceId,
@@ -312,16 +345,29 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     return 'bound';
   }
   async function failFinalAttempt(event) {
+    let failedOwner=null;
     try {
+      failedOwner=await ownerFailureContext(event);
+      if(failedOwner.bindingUnavailable||(failedOwner.verifiedOwner&&!failedOwner.reply)){
+        if(typeof inbox.defer==='function'){await inbox.defer(event);return false;}
+        throw new Error('Owner message must remain queued until an AI reply can be generated.');
+      }
       const sender = await getOutbound();
-      await sender.sendServiceReply({ workspaceId: null, to: event.sender_phone, body: SAFE_FALLBACK_REPLY,
+      if(failedOwner.verifiedOwner){
+        const sent=await sender.sendServiceReply({workspaceId:failedOwner.binding.workspaceId,to:event.sender_phone,
+          body:failedOwner.reply,lastInboundAt:event.provider_timestamp||event.received_at,kind:'normal',audience:'owner',
+          messageId:event.provider_message_id,businessName:await businessName(failedOwner.binding.workspaceId)});
+        if(sent?.status!=='accepted'){await inbox.defer(event);return false;}
+      }else await sender.sendServiceReply({ workspaceId: null, to: event.sender_phone, body: SAFE_FALLBACK_REPLY,
         lastInboundAt: event.provider_timestamp || event.received_at, kind: 'verification',
         messageId: event.provider_message_id, businessName: 'CETLD' });
     } catch (error) {
       logger.error('WhatsApp final-attempt fallback failed', { messageId: event.provider_message_id,
         message: String(error?.message || '').slice(0, 200) });
+      if(failedOwner?.verifiedOwner||failedOwner?.bindingUnavailable){await inbox.defer(event);return false;}
     }
     await inbox.complete(event, 'PROCESSING_FAILED', null, false);
+    return true;
   }
   return {
     async enqueue(messages) {
@@ -366,8 +412,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           break;
         }
         if (event.attempts >= 5) {
-          await failFinalAttempt(event);
-          completed++;
+          if(await failFinalAttempt(event))completed++;
           continue;
         }
         try {
@@ -383,15 +428,32 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           logger.error('WhatsApp inbound event failed', { messageId: event.provider_message_id, name: error?.name || 'Error',
             timedOut, message: String(error?.message || '').slice(0, 200) });
           // Never leave the sender in silence: say what happened, then close the event.
+          let failedOwner=null;
+          let ownerReplyAccepted=false;
           try {
+            failedOwner=await ownerFailureContext(event);
+            if(failedOwner.bindingUnavailable)throw Object.assign(new Error('Owner binding is temporarily unavailable.'),{code:'OWNER_BINDING_UNAVAILABLE'});
             const sender = await getOutbound();
-            await sender.sendServiceReply({ workspaceId: null, to: event.sender_phone,
+            if(failedOwner.verifiedOwner){
+              if(failedOwner.reply){const sent=await sender.sendServiceReply({workspaceId:failedOwner.binding.workspaceId,to:event.sender_phone,
+                body:failedOwner.reply,lastInboundAt:event.provider_timestamp||event.received_at,kind:'normal',audience:'owner',
+                messageId:event.provider_message_id,businessName:await businessName(failedOwner.binding.workspaceId)});
+                ownerReplyAccepted=sent?.status==='accepted';
+              }
+            }else await sender.sendServiceReply({ workspaceId: null, to: event.sender_phone,
               body: timedOut ? TIMEOUT_REPLY : SAFE_FALLBACK_REPLY,
               lastInboundAt: event.provider_timestamp || event.received_at, kind: 'verification',
               messageId: event.provider_message_id, businessName: 'CETLD' });
           } catch (replyError) {
             logger.error('WhatsApp failure notice failed', { messageId: event.provider_message_id,
               message: String(replyError?.message || '').slice(0, 200) });
+          }
+          if((failedOwner?.verifiedOwner&&!ownerReplyAccepted)||failedOwner?.bindingUnavailable){
+            if(typeof inbox.defer==='function')await inbox.defer(event);
+            else await inbox.complete(event,timedOut?'PROCESSING_TIMEOUT':'PROCESSING_FAILED',
+              String(error?.message||'').slice(0,1000));
+            if(timedOut)break;
+            continue;
           }
           await inbox.complete(event, timedOut ? 'PROCESSING_TIMEOUT' : 'PROCESSING_FAILED', String(error?.message || '').slice(0, 1000));
           if (timedOut) break;

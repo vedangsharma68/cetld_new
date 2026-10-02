@@ -1,5 +1,6 @@
 import { SupabaseAutomationStore } from './store.mjs';
 import { localDateTimeToDate, addLocalDays } from './cadence.mjs';
+import {createDeletedAtCompatibility} from '../invoice/deleted-at-compat.mjs';
 
 function minor(value) {
   const match = String(value ?? '').match(/^(\d+)(?:\.(\d{1,2}))?$/);
@@ -10,14 +11,16 @@ function minor(value) {
 }
 
 export class CoreAutomationStore extends SupabaseAutomationStore {
+  constructor(options={}) { super(options); this.deletedAtCompatibility=createDeletedAtCompatibility(); }
   async getWorkspacePreferences({ownerId,workspaceId}) {
     const rows=await this.request('workspace_settings',{query:{select:'business_name,default_timezone,follow_up_preferences,updated_at',workspace_id:`eq.${workspaceId}`,limit:1}});
     return rows?.[0] ?? null;
   }
   async getInvoice(input) {
-    const rows=await this.request('invoices',{query:{select:'*',id:`eq.${input.invoiceId}`,workspace_id:`eq.${input.workspaceId}`,limit:1}});
+    const read=includeDeletedAt=>this.request('invoices',{query:{select:'*',id:`eq.${input.invoiceId}`,workspace_id:`eq.${input.workspaceId}`,...(includeDeletedAt?{deleted_at:'is.null'}:{}),limit:1}});
+    const rows=await this.deletedAtCompatibility.read({withDeletedAt:()=>read(true),legacy:()=>read(false)});
     const row=rows?.[0];
-    if (!row) return null;
+    if (!row||row.deleted_at) return null;
     const contacts=await this.request('customers',{query:{select:'phone',id:`eq.${row.customer_id}`,workspace_id:`eq.${input.workspaceId}`,limit:1}});
     const amountMinor=minor(row.total_amount), paidMinor=minor(row.amount_paid);
     return {...row,ownerId:input.ownerId,workspaceId:input.workspaceId,amountMinor,paidMinor,followupState:row.followup_state,nextFollowUpAt:row.next_follow_up_at,automationVersion:Number(row.automation_version),customerPhone:row.customer_phone || contacts?.[0]?.phone || row.metadata?.debtor_phone || null,number:row.invoice_number};
@@ -35,7 +38,8 @@ export class CoreAutomationStore extends SupabaseAutomationStore {
     return data?.[0] ?? null;
   }
   async listDueInvoices({workspaceId,now,limit=25}) {
-    return this.request('invoices',{query:{select:'id',workspace_id:`eq.${workspaceId}`,followup_state:'in.(approved,active,scheduled)',next_follow_up_at:`lte.${now}`,order:'next_follow_up_at.asc',limit}});
+    const read=includeDeletedAt=>this.request('invoices',{query:{select:'id',workspace_id:`eq.${workspaceId}`,followup_state:'in.(approved,active,scheduled)',next_follow_up_at:`lte.${now}`,...(includeDeletedAt?{deleted_at:'is.null'}:{}),order:'next_follow_up_at.asc',limit}});
+    return this.deletedAtCompatibility.read({withDeletedAt:()=>read(true),legacy:()=>read(false)});
   }
   async claimDueFollowups(input) {
     const data=await this.request('rpc/cetld_core_claim_due_followups',{method:'POST',body:{p_owner_id:input.ownerId,p_workspace_id:input.workspaceId,p_now:input.now,p_limit:input.limit??25,p_invoice_id:input.invoiceId??null}});

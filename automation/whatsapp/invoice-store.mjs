@@ -1,3 +1,5 @@
+import {createDeletedAtCompatibility} from '../../invoice/deleted-at-compat.mjs';
+
 function rows(result) { if (result?.error) throw result.error; return result?.data || []; }
 const EDITABLE_FIELDS = new Set(['total','dueDate','invoiceDate','currency','notes','clientName','status']);
 
@@ -19,16 +21,17 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, a
   if(owner&&typeof authorize!=='function')throw new TypeError('verified owner authorization required');
   const scoped = table => supabase.from(table);
   const invoices = query => owner?query:query.eq('customer_id',customerId);
+  const deletedAtCompatibility=createDeletedAtCompatibility();
+  async function activeInvoiceRows(build){return deletedAtCompatibility.read({withDeletedAt:async()=>rows(await build(true)),legacy:async()=>rows(await build(false))})}
   async function ownedInvoice(id){
-    const row=rows(await invoices(scoped('invoices').select('*').eq('workspace_id',workspaceId).eq('id',id)).limit(1))[0];
+    const [row]=await activeInvoiceRows(includeDeletedAt=>{let query=invoices(scoped('invoices').select('*').eq('workspace_id',workspaceId).eq('id',id));if(includeDeletedAt)query=query.is('deleted_at',null);return query.limit(1)});
     if(!row)throw new TypeError('invoice scope violation');
     return row;
   }
   const store = {workspaceId, userId: null,
     async findAssistantInvoice({idempotencyKey}) {
-      const result = await invoices(scoped('invoices').select('*').eq('workspace_id', workspaceId))
-        .eq('metadata->>assistant_idempotency_key', idempotencyKey).limit(1);
-      return rows(result)[0] || null;
+      const [row]=await activeInvoiceRows(includeDeletedAt=>{let query=invoices(scoped('invoices').select('*').eq('workspace_id',workspaceId));if(includeDeletedAt)query=query.is('deleted_at',null);return query.eq('metadata->>assistant_idempotency_key',idempotencyKey).limit(1)});
+      return row||null;
     },
     async findCustomer({email,name}={}) {
       if(owner){
@@ -76,13 +79,8 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, a
       return mappedInvoice(updated.data);
     },
     async findInvoices({invoiceNumber, limit} = {}) {
-      let query = invoices(scoped('invoices').select('*').eq('workspace_id', workspaceId));
-      if (invoiceNumber) {
-        if(!/^[a-z0-9_-]{1,100}$/i.test(invoiceNumber))throw new TypeError('invalid invoice number');
-        query = query.or(`invoice_number.eq.${invoiceNumber},metadata->>printed_invoice_number.eq.${invoiceNumber},metadata->>source_invoice_number.eq.${invoiceNumber}`);
-      }
-      const result = await query.order('created_at', {ascending: false}).limit(invoiceNumber ? 10 : Math.min(Number(limit) || 2, 1000));
-      const found=rows(result);
+      if(invoiceNumber&&!/^[a-z0-9_-]{1,100}$/i.test(invoiceNumber))throw new TypeError('invalid invoice number');
+      const found=await activeInvoiceRows(includeDeletedAt=>{let query=invoices(scoped('invoices').select('*').eq('workspace_id',workspaceId));if(includeDeletedAt)query=query.is('deleted_at',null);if(invoiceNumber)query=query.or(`invoice_number.eq.${invoiceNumber},metadata->>printed_invoice_number.eq.${invoiceNumber},metadata->>source_invoice_number.eq.${invoiceNumber}`);return query.order('created_at',{ascending:false}).limit(invoiceNumber?10:Math.min(Number(limit)||2,1000))});
       const ids=[...new Set(found.map(row=>row.customer_id))];
       const customers=ids.length?rows(await scoped('customers').select('id,name,email,phone').eq('workspace_id',workspaceId).in('id',ids).limit(1000)):[];
       return found.map(row=>{

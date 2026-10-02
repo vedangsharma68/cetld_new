@@ -6,7 +6,7 @@ export function cents(value) {
   if (!Number.isSafeInteger(result) || result <= 0 || result > 100000000000) throw new Error('Enter an amount between ₹0.01 and ₹1 billion.');
   return result;
 }
-export function remaining(invoice) { return Math.max(0, invoice.amount_minor - invoice.paid_minor); }
+export function remaining(invoice) { return invoice?.deleted_at ? 0 : Math.max(0, invoice.amount_minor - invoice.paid_minor); }
 export function localDate(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
 }
@@ -20,9 +20,10 @@ export function status(invoice, today = localDate()) {
   return 'Open';
 }
 export function totals(invoices) {
-  return invoices.reduce((t, x) => ({outstanding:t.outstanding+remaining(x), overdue:t.overdue+(status(x)==='Overdue'?remaining(x):0), collected:t.collected+x.paid_minor}), {outstanding:0,overdue:0,collected:0});
+  return invoices.filter(x=>!x?.deleted_at).reduce((t, x) => ({outstanding:t.outstanding+remaining(x), overdue:t.overdue+(status(x)==='Overdue'?remaining(x):0), collected:t.collected+x.paid_minor}), {outstanding:0,overdue:0,collected:0});
 }
 export function payment(invoice, amount) {
+  if(invoice?.deleted_at)throw new Error('Deleted invoices cannot accept payments.');
   if (['void','cancelled'].includes(invoice.status)) throw new Error('Terminal invoices cannot accept payments.');
   if (!Number.isSafeInteger(amount) || amount <= 0 || amount > remaining(invoice)) throw new Error('Payment must be positive and cannot exceed the balance.');
   const settled = remaining(invoice) === amount;
@@ -30,6 +31,7 @@ export function payment(invoice, amount) {
 }
 export function settleInvoice(invoiceOrPayload) {
   const invoice = invoiceOrPayload?.invoice ?? invoiceOrPayload;
+  if(invoice?.deleted_at)throw new Error('Deleted invoices cannot be settled.');
   const alreadyPaid = invoiceOrPayload?.alreadyPaid === true || invoice?.alreadyPaid === true;
   if (!alreadyPaid) return invoice;
   const hasMinorTotal = invoice?.amount_minor !== undefined && invoice?.amount_minor !== null;
@@ -61,7 +63,7 @@ export function paymentRequestKey(state,{amount,reference}={}) {
   state.paymentRequestKey=crypto.randomUUID();
   return state.paymentRequestKey;
 }
-export function canApprove(invoice) { return (invoice.invoice_direction ?? invoice.metadata?.invoice_direction) === 'receivable' && /^\d{4}-\d{2}-\d{2}$/.test(String(invoice.due_date||'')) && !['paid','void','cancelled'].includes(invoice.status) && remaining(invoice)>0 && ['draft','paused','cancelled'].includes(invoice.followup_state); }
+export function canApprove(invoice) { return !invoice?.deleted_at && (invoice.invoice_direction ?? invoice.metadata?.invoice_direction) === 'receivable' && /^\d{4}-\d{2}-\d{2}$/.test(String(invoice.due_date||'')) && !['paid','void','cancelled'].includes(invoice.status) && remaining(invoice)>0 && ['draft','paused','cancelled'].includes(invoice.followup_state); }
 export function csvCell(value) {
   const text=String(value ?? '');
   const safe=/^[\s]*[=+\-@\t\r]/.test(text)?"'"+text:text;

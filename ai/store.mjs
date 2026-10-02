@@ -1,5 +1,6 @@
 import {APIError, uuid, readJSON, readBounded} from './http.mjs';
 import {DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, sanitizeModelSettings} from './provider.mjs';
+import {createDeletedAtCompatibility} from '../invoice/deleted-at-compat.mjs';
 
 const TABLES = new Set(['invoices', 'customers', 'payments', 'invoice_files']);
 
@@ -14,11 +15,20 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
   const url = new URL(rawURL);
   if (url.protocol !== 'https:' && !(env.NODE_ENV === 'test' && url.hostname === 'localhost')) throw new APIError(503, 'INVALID_SERVER_CONFIGURATION');
   const base = url.origin, headers = {apikey: key, Authorization: authorization};
+  const deletedAtCompatibility = createDeletedAtCompatibility();
   async function request(path, options = {}) {
     let res;
     try { res = await fetchImpl(base + path, {...options, redirect: 'error', headers: {...headers, 'Content-Type': 'application/json', ...options.headers}, signal: AbortSignal.timeout(10000)}); }
     catch { throw new APIError(503, 'DATABASE_UNAVAILABLE'); }
-    if (!res.ok) throw new APIError(res.status === 401 ? 401 : res.status === 403 ? 403 : 503, 'DATABASE_REQUEST_FAILED');
+    if (!res.ok) {
+      let upstream = null;
+      try { upstream = await readJSON(res); } catch {}
+      if (['42703','PGRST204'].includes(String(upstream?.code || ''))
+        && /\bdeleted_at\b/i.test([upstream?.message,upstream?.details,upstream?.hint].filter(Boolean).join(' '))) {
+        throw new APIError(503, 'DELETED_AT_SCHEMA_MISSING');
+      }
+      throw new APIError(res.status === 401 ? 401 : res.status === 403 ? 403 : 503, 'DATABASE_REQUEST_FAILED');
+    }
     return readJSON(res);
   }
   const user = await request('/auth/v1/user');
@@ -36,8 +46,14 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
       if (!TABLES.has(table) || Object.hasOwn(filters, 'workspace_id') || !Number.isInteger(limit) || limit < 1 || limit > 1000 || !Number.isInteger(offset) || offset < 0 || offset > 10000) throw new APIError(400, 'INVALID_QUERY');
       const scoped = select === '*' || select.split(',').includes('workspace_id') ? select : select + ',workspace_id';
       const projection = scoped.split(',').map(c => ['total_amount', 'amount_paid', 'amount'].includes(c) ? c + '::text' : c).join(',');
-      const query = new URLSearchParams({...filters, workspace_id: `eq.${workspaceId}`, select: projection, order, limit: String(limit), offset: String(offset)});
-      return checkRows(await request(`/rest/v1/${table}?${query}`));
+      const read = async includeDeletedAt => {
+        const queryFilters = table === 'invoices' && includeDeletedAt ? {...filters, deleted_at: 'is.null'} : filters;
+        const selected = table === 'invoices' && includeDeletedAt && projection !== '*' && !scoped.split(',').includes('deleted_at') ? `${projection},deleted_at` : projection;
+        const query = new URLSearchParams({...queryFilters, workspace_id: `eq.${workspaceId}`, select: selected, order, limit: String(limit), offset: String(offset)});
+        return checkRows(await request(`/rest/v1/${table}?${query}`));
+      };
+      if (table !== 'invoices') return read(false);
+      return deletedAtCompatibility.read({withDeletedAt:()=>read(true),legacy:()=>read(false)});
     },
     async findAssistantInvoice({invoiceNumber, idempotencyKey}) {
       const rows = await store.query('invoices', {select: 'id,workspace_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata,created_at,updated_at', filters: {'metadata->>assistant_idempotency_key': `eq.${idempotencyKey}`}, limit: 1});
@@ -117,6 +133,8 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
       const rows = await store.query('invoice_files', {select: 'id,invoice_id,storage_path,file_name,mime_type,size_bytes', filters: {id: `eq.${fileId}`}, limit: 1});
       const row = rows[0];
       if (!row) throw new APIError(404, 'FILE_NOT_FOUND');
+      const activeInvoice = await store.query('invoices', {select: 'id', filters: {id: `eq.${uuid(row.invoice_id)}`}, limit: 1});
+      if (!activeInvoice.length) throw new APIError(404, 'FILE_NOT_FOUND');
       const parts = String(row.storage_path).split('/');
       if (parts.length !== 3 || parts[0] !== workspaceId || parts[1] !== uuid(row.invoice_id) || !parts[2] || ['.', '..'].includes(parts[2]) || /[\\\x00-\x1f]/.test(parts[2])) throw new APIError(403, 'INVALID_FILE_SCOPE');
       if (!['application/pdf', 'image/png', 'image/jpeg', 'image/webp'].includes(row.mime_type) || Number(row.size_bytes) > 10 * 1024 * 1024) throw new APIError(415, 'UNSUPPORTED_FILE');

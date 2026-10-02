@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AccountingError } from './errors.mjs';
+import {isDeletedInvoice, isMissingDeletedAtColumn} from '../../invoice/deleted-at-compat.mjs';
 
 function keyOf({ provider, userId, workspaceId }) {
   return `${provider}:${userId}:${workspaceId}`;
@@ -8,6 +9,12 @@ function majorAmount(minor, currency) {
   const code = String(currency || 'INR').toUpperCase();
   const scale = ['BHD','IQD','JOD','KWD','LYD','OMR','TND'].includes(code) ? 1000 : ['BIF','CLP','DJF','GNF','ISK','JPY','KMF','KRW','PYG','RWF','UGX','VND','VUV','XAF','XOF','XPF'].includes(code) ? 1 : 100;
   return Number(minor) / scale;
+}
+function isDeletedSyncTarget(row, {workspaceId, provider, externalId}) {
+  return isDeletedInvoice(row)
+    && row.workspace_id === workspaceId
+    && row.external_provider === provider
+    && String(row.external_invoice_id) === String(externalId);
 }
 
 export class InMemoryAccountingStore {
@@ -142,13 +149,45 @@ export class SupabaseAccountingStore {
       signal: AbortSignal.timeout(10000),
       headers: { apikey: this.key, Authorization: `Bearer ${this.key}`, Accept: 'application/json', ...(options.headers || {}) },
     });
-    if (!response.ok) throw new AccountingError('ACCOUNTING_STORE_ERROR', 'Accounting storage request failed');
+    if (!response.ok) {
+      let upstream = null;
+      try { upstream = await response.json(); } catch {}
+      if (isMissingDeletedAtColumn(upstream)) {
+        throw new AccountingError('ACCOUNTING_DELETED_AT_COLUMN_MISSING', 'Invoice deletion column is not available');
+      }
+      throw new AccountingError('ACCOUNTING_STORE_ERROR', 'Accounting storage request failed');
+    }
     if (response.status === 204) return null;
     try { return await response.json(); } catch { return null; }
   }
 
   async rpc(name, body) {
     return this.request(`rpc/${name}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  }
+
+  async findInvoiceForSync(filters, columns) {
+    const params = new URLSearchParams({...filters, select: `${columns},deleted_at`, limit: '1'});
+    try {
+      return await this.request(`invoices?${params}`);
+    } catch (error) {
+      if (error?.code !== 'ACCOUNTING_DELETED_AT_COLUMN_MISSING') throw error;
+      params.set('select', columns);
+      return this.request(`invoices?${params}`);
+    }
+  }
+
+  async patchActiveInvoice(id, workspaceId, values) {
+    const params = new URLSearchParams({id: `eq.${id}`, workspace_id: `eq.${workspaceId}`, deleted_at: 'is.null', select: 'id'});
+    const options = {method: 'PATCH', headers: {'Content-Type': 'application/json', Prefer: 'return=representation'}, body: JSON.stringify(values)};
+    let rows;
+    try {
+      rows = await this.request(`invoices?${params}`, options);
+    } catch (error) {
+      if (error?.code !== 'ACCOUNTING_DELETED_AT_COLUMN_MISSING') throw error;
+      params.delete('deleted_at');
+      rows = await this.request(`invoices?${params}`, options);
+    }
+    return !Array.isArray(rows) || rows.length > 0;
   }
 
   async putOAuthState(state) {
@@ -250,7 +289,9 @@ export class SupabaseAccountingStore {
       if (Array.isArray(saved) && saved[0]?.id) customersByExternal.set(String(customer.externalId), saved[0].id);
     }
     let invoiceCount = 0;
+    const deletedInvoiceExternalIds = new Set();
     for (const invoice of invoices) {
+      const invoiceExternalId = String(invoice.externalId);
       const externalCustomerId = String(invoice.raw?.customer_id || '');
       let customerId = customersByExternal.get(externalCustomerId);
       if (!customerId && externalCustomerId) {
@@ -261,21 +302,48 @@ export class SupabaseAccountingStore {
       const total = majorAmount(invoice.amountMinor, invoice.currency);
       const paid = Math.min(total, Math.max(0, majorAmount(invoice.paidMinor, invoice.currency)));
       const normalizedStatus = Number(invoice.balanceMinor) === 0 ? 'paid' : invoice.status === 'void' || invoice.status === 'voided' ? 'void' : invoice.status === 'overdue' ? 'overdue' : invoice.status === 'draft' ? 'draft' : 'sent';
-      const values = { workspace_id: workspaceId, customer_id: customerId, invoice_number: String(invoice.number).slice(0, 100), issue_date: invoice.invoiceDate, due_date: invoice.dueDate || null, currency: invoice.currency || 'INR', total_amount: total, amount_paid: paid, status: normalizedStatus, notes: invoice.raw?.notes || null, external_provider: provider, external_invoice_id: String(invoice.externalId), last_synced_at: syncedAt, sync_status: 'synced', last_sync_error: null, metadata: { accounting_provider: provider, external_customer_id: externalCustomerId } };
-      const existing = await this.request(`invoices?${new URLSearchParams({ select: 'id,external_invoice_id,invoice_number', workspace_id: `eq.${workspaceId}`, external_provider: `eq.${provider}`, external_invoice_id: `eq.${invoice.externalId}`, limit: '1' })}`);
+      const values = { workspace_id: workspaceId, customer_id: customerId, invoice_number: String(invoice.number).slice(0, 100), issue_date: invoice.invoiceDate, due_date: invoice.dueDate || null, currency: invoice.currency || 'INR', total_amount: total, amount_paid: paid, status: normalizedStatus, notes: invoice.raw?.notes || null, external_provider: provider, external_invoice_id: invoiceExternalId, last_synced_at: syncedAt, sync_status: 'synced', last_sync_error: null, metadata: { accounting_provider: provider, external_customer_id: externalCustomerId } };
+      const invoiceTargetFilters = {workspace_id: `eq.${workspaceId}`, external_provider: `eq.${provider}`, external_invoice_id: `eq.${invoiceExternalId}`};
+      const existing = await this.findInvoiceForSync(invoiceTargetFilters, 'id,workspace_id,external_provider,external_invoice_id,invoice_number');
       if (Array.isArray(existing) && existing[0]) {
-        await this.request(`invoices?id=eq.${existing[0].id}&workspace_id=eq.${workspaceId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' }, body: JSON.stringify(values) });
+        if (isDeletedInvoice(existing[0])) {
+          deletedInvoiceExternalIds.add(invoiceExternalId);
+          continue;
+        }
+        if (!await this.patchActiveInvoice(existing[0].id, workspaceId, values)) {
+          deletedInvoiceExternalIds.add(invoiceExternalId);
+          continue;
+        }
         invoiceCount++;
         continue;
       }
-      const sameNumber = await this.request(`invoices?${new URLSearchParams({ select: 'id,external_provider,external_invoice_id,total_amount,customer_id', workspace_id: `eq.${workspaceId}`, invoice_number: `eq.${invoice.number}`, limit: '1' })}`);
+      const sameNumber = await this.findInvoiceForSync({workspace_id: `eq.${workspaceId}`, invoice_number: `eq.${invoice.number}`}, 'id,external_provider,external_invoice_id,total_amount,customer_id');
       if (Array.isArray(sameNumber) && sameNumber[0]) {
+        if (isDeletedInvoice(sameNumber[0])) {
+          deletedInvoiceExternalIds.add(invoiceExternalId);
+          continue;
+        }
         if (sameNumber[0].external_provider && (sameNumber[0].external_provider !== provider || sameNumber[0].external_invoice_id !== String(invoice.externalId))) continue;
         if (Number(sameNumber[0].total_amount) !== Number(values.total_amount) || String(sameNumber[0].customer_id) !== String(customerId)) continue;
-        await this.request(`invoices?id=eq.${sameNumber[0].id}&workspace_id=eq.${workspaceId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' }, body: JSON.stringify(values) });
+        if (!await this.patchActiveInvoice(sameNumber[0].id, workspaceId, values)) {
+          deletedInvoiceExternalIds.add(invoiceExternalId);
+          continue;
+        }
         invoiceCount++;
       } else {
-        const saved = await this.request('invoices?on_conflict=workspace_id,external_provider,external_invoice_id', { method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([values]) });
+        let saved;
+        try {
+          saved = await this.request('invoices?on_conflict=workspace_id,external_provider,external_invoice_id', { method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([values]) });
+        } catch (writeError) {
+          let confirmedDeleted = false;
+          try {
+            const current = await this.findInvoiceForSync(invoiceTargetFilters, 'id,workspace_id,external_provider,external_invoice_id');
+            confirmedDeleted = Array.isArray(current) && isDeletedSyncTarget(current[0], {workspaceId, provider, externalId: invoiceExternalId});
+          } catch {}
+          if (!confirmedDeleted) throw writeError;
+          deletedInvoiceExternalIds.add(invoiceExternalId);
+          continue;
+        }
         if (Array.isArray(saved) && saved[0]?.id) invoiceCount++;
       }
     }
@@ -283,14 +351,35 @@ export class SupabaseAccountingStore {
     for (const payment of payments) {
       const externalInvoiceIds = payment.invoiceIds || [];
       for (const externalInvoiceId of externalInvoiceIds) {
-        const linkedInvoices = await this.request(`invoices?${new URLSearchParams({ select: 'id', workspace_id: `eq.${workspaceId}`, external_provider: `eq.${provider}`, external_invoice_id: `eq.${externalInvoiceId}`, limit: '1' })}`);
-        const invoiceId = Array.isArray(linkedInvoices) ? linkedInvoices[0]?.id : null;
+        const invoiceKey = String(externalInvoiceId);
+        if (deletedInvoiceExternalIds.has(invoiceKey)) continue;
+        const invoiceTargetFilters = {workspace_id: `eq.${workspaceId}`, external_provider: `eq.${provider}`, external_invoice_id: `eq.${invoiceKey}`};
+        const linkedInvoices = await this.findInvoiceForSync(invoiceTargetFilters, 'id,workspace_id,external_provider,external_invoice_id');
+        const linkedInvoice = Array.isArray(linkedInvoices) ? linkedInvoices[0] : null;
+        if (isDeletedInvoice(linkedInvoice)) {
+          deletedInvoiceExternalIds.add(invoiceKey);
+          continue;
+        }
+        const invoiceId = linkedInvoice?.id;
         if (!invoiceId) continue;
         const appliedAmount = payment.raw?.invoices?.find((item) => String(item.invoice_id) === String(externalInvoiceId))?.amount_applied;
         const amount = Number.isFinite(Number(appliedAmount)) ? Number(appliedAmount) : externalInvoiceIds.length === 1 ? majorAmount(payment.amountMinor, payment.currency) : null;
         if (!amount || amount <= 0) continue;
         const values = { workspace_id: workspaceId, invoice_id: invoiceId, amount, paid_at: payment.paymentDate || syncedAt, reference: payment.reference || null, external_provider: provider, external_payment_id: externalInvoiceIds.length > 1 ? `${payment.externalId}:${externalInvoiceId}` : String(payment.externalId), last_synced_at: syncedAt, sync_status: 'synced', last_sync_error: null, metadata: { accounting_provider: provider, external_payment_id: String(payment.externalId), external_invoice_id: String(externalInvoiceId) } };
-        await this.request(`payments?on_conflict=workspace_id,external_provider,external_payment_id`, { method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([values]) });
+        try {
+          await this.request(`payments?on_conflict=workspace_id,external_provider,external_payment_id`, { method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([values]) });
+        } catch (writeError) {
+          let confirmedDeleted = false;
+          try {
+            const current = await this.findInvoiceForSync({workspace_id: `eq.${workspaceId}`, id: `eq.${invoiceId}`,
+              external_provider: `eq.${provider}`, external_invoice_id: `eq.${invoiceKey}`},
+            'id,workspace_id,external_provider,external_invoice_id');
+            confirmedDeleted = Array.isArray(current) && isDeletedSyncTarget(current[0], {workspaceId, provider, externalId: invoiceKey});
+          } catch {}
+          if (!confirmedDeleted) throw writeError;
+          deletedInvoiceExternalIds.add(invoiceKey);
+          continue;
+        }
         paymentCount++;
       }
     }

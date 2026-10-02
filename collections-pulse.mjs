@@ -23,8 +23,9 @@ export function collectionsPulse(invoices=[],payments=[],{today=localDate(),defa
     if(!byCurrency.has(currency))byCurrency.set(currency,{currency,outstanding:0,overdue:0,dueNext7Days:0,collectedThisMonth:0});
     return byCurrency.get(currency);
   };
-  const invoiceById=new Map(invoices.map(invoice=>[invoice.id,invoice]));
-  for(const invoice of invoices){
+  const activeInvoices=invoices.filter(invoice=>!invoice?.deleted_at);
+  const invoiceById=new Map(activeInvoices.map(invoice=>[invoice.id,invoice]));
+  for(const invoice of activeInvoices){
     const balance=remaining(invoice);
     if(!balance||['cancelled','canceled','void'].includes(String(invoice.status||'').toLowerCase()))continue;
     const row=bucket(invoice.currency);
@@ -33,6 +34,7 @@ export function collectionsPulse(invoices=[],payments=[],{today=localDate(),defa
     else if(invoice.due_date<=through)row.dueNext7Days+=balance;
   }
   for(const payment of payments){
+    if(!invoiceById.has(payment.invoice_id))continue;
     const paidAt=payment.paid_at||payment.created_at;
     if(!paidAt||dateInZone(new Date(paidAt),timeZone).slice(0,7)!==month)continue;
     const invoice=invoiceById.get(payment.invoice_id);

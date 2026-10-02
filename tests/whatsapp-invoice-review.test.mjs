@@ -33,7 +33,7 @@ function invoiceSupabase() {
   function query(table) {
     let mode = 'select', payload;
     const q = {select() { mode = mode === 'upsert' || mode === 'update' ? mode : 'select'; return q; },
-      eq() { return q; }, limit() { return Promise.resolve({data: table === 'customers' ? [customer] : rows, error: null}); },
+      eq() { return q; }, is() { return q; }, limit() { return Promise.resolve({data: table === 'customers' ? [customer] : rows, error: null}); },
       upsert(value) { mode = 'upsert'; payload = value; return q; }, update(value) { mode = 'update'; payload = value; return q; },
       single() { Object.assign(rows[0], payload); return Promise.resolve({data: rows[0], error: null}); },
       then(resolve) {

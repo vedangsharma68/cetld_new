@@ -69,3 +69,26 @@ test('Assistant paid update settles a draft with the workspace-scoped payment RP
   assert.deepEqual(JSON.parse(rpc.options.body),{p_workspace_id:workspaceId,p_invoice_id:invoiceId,p_amount:null,p_idempotency_key:key,p_reference:'Marked paid by Cetld Assistant',p_settle_remaining:true});
   assert.equal(calls.some(call=>call.options.method==='PATCH'),false);
 });
+
+test('deleted invoices are excluded from Assistant reads and their files never reach storage',async()=>{
+  const invoiceId='22222222-2222-4222-8222-222222222222';
+  const fileId='66666666-6666-4666-8666-666666666666';
+  const calls=[];
+  const fetchImpl=async(url,options={})=>{
+    const parsed=new URL(url);calls.push({url:parsed,options});
+    if(parsed.pathname==='/auth/v1/user')return new Response(JSON.stringify({id:userId}),{status:200});
+    if(parsed.pathname==='/rest/v1/workspace_members')return new Response(JSON.stringify([{workspace_id:workspaceId,user_id:userId,role:'owner'}]),{status:200});
+    if(parsed.pathname==='/rest/v1/invoices') {
+      assert.equal(parsed.searchParams.get('deleted_at'),'is.null');
+      return new Response(JSON.stringify([]),{status:200});
+    }
+    if(parsed.pathname==='/rest/v1/invoice_files')return new Response(JSON.stringify([{id:fileId,workspace_id:workspaceId,invoice_id:invoiceId,storage_path:`${workspaceId}/${invoiceId}/proof.pdf`,file_name:'proof.pdf',mime_type:'application/pdf',size_bytes:120}]),{status:200});
+    if(parsed.pathname.startsWith('/storage/'))throw new Error('Deleted invoice files must not be downloaded');
+    throw new Error(`Unexpected request ${parsed.pathname}`);
+  };
+  const store=await authorizeAIWorkspace({headers:{authorization:'Bearer token-value-long-enough'}},workspaceId,{env:{SUPABASE_URL:'https://db.example.test',SUPABASE_PUBLISHABLE_KEY:'publishable',NODE_ENV:'test'},fetchImpl});
+  assert.deepEqual(await store.query('invoices',{select:'id,invoice_number'}),[]);
+  await assert.rejects(store.downloadInvoiceFile(fileId),error=>error.code==='FILE_NOT_FOUND');
+  assert.equal(calls.filter(call=>call.url.pathname==='/rest/v1/invoices').length,2);
+  assert.equal(calls.some(call=>call.url.pathname.startsWith('/storage/')),false);
+});

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {cents,payment,remaining,status,settleInvoice,canApprove,csvCell} from '../core.mjs';
+import {cents,payment,remaining,status,totals,settleInvoice,canApprove,csvCell} from '../core.mjs';
 import * as core from '../core.mjs';
 const invoice={amount_minor:10000,paid_minor:2000,due_date:'2026-09-01',followup_state:'approved'};
 test('money conversion is exact and rejects invalid input',()=>{assert.equal(cents('0.29'),29);assert.equal(cents('1234.56'),123456);for(const x of ['1.001','-3','Infinity','1e4','0'])assert.throws(()=>cents(x));});
@@ -21,6 +21,14 @@ test('follow-up approval requires a positive receivable with a due date',()=>{
 test('an ambiguous already-paid RPC retry reuses the saved invoice and idempotency key',async()=>{assert.equal(typeof core.saveAndSettleInvoice,'function');const state={},calls=[];let saves=0,loseFirstResponse=true;const saveInvoice=async()=>{saves++;return{id:'saved-invoice',updated_at:'invoice-version-2'}};const recordPayment=async request=>{calls.push(request);if(loseFirstResponse){loseFirstResponse=false;throw Error('RPC response was lost after commit')}return{settled:true}};const settle=()=>core.saveAndSettleInvoice({state,saveInvoice,recordPayment});await assert.rejects(settle(),/response was lost/);assert.equal(state.invoiceId,'saved-invoice');assert.equal(state.invoiceUpdatedAt,'invoice-version-2');const result=await settle();assert.deepEqual(result,{settled:true});assert.equal(saves,1);assert.equal(calls.length,2);assert.deepEqual(calls[1],calls[0]);assert.ok(calls[0].idempotencyKey)});
 test('a payment form cannot reuse its request key after changing amount or reference',()=>{assert.equal(typeof core.paymentRequestKey,'function');const state={};const key=core.paymentRequestKey(state,{amount:10,reference:'receipt 1'});assert.equal(core.paymentRequestKey(state,{amount:10,reference:'receipt 1'}),key);assert.throws(()=>core.paymentRequestKey(state,{amount:11,reference:'receipt 1'}),/pending.*same amount and reference/i);assert.throws(()=>core.paymentRequestKey(state,{amount:10,reference:'receipt 2'}),/pending.*same amount and reference/i)});
 test('overpayments and malformed payment amounts are rejected',()=>{for(const x of [8001,0,-1,1.5,NaN])assert.throws(()=>payment(invoice,x));});
+test('deleted invoices are omitted from totals and cannot accept payment or approval',()=>{
+  const deleted={id:'deleted',amount_minor:50000,paid_minor:12000,due_date:'2026-01-01',status:'sent',followup_state:'draft',deleted_at:'2026-09-10T00:00:00Z'};
+  assert.equal(remaining(deleted),0);
+  assert.deepEqual(totals([{amount_minor:10000,paid_minor:2000,due_date:'2026-10-01'},deleted]),{outstanding:8000,overdue:8000,collected:2000});
+  assert.equal(canApprove(deleted),false);
+  assert.throws(()=>payment(deleted,1),/deleted invoices/i);
+  assert.throws(()=>settleInvoice({...deleted,alreadyPaid:true}),/deleted invoices/i);
+});
 test('due dates use date-only comparison',()=>{assert.equal(status(invoice,'2026-09-01'),'Due today');assert.equal(status(invoice,'2026-09-02'),'Overdue');assert.equal(status(invoice,'2026-08-31'),'Open');});
 test('CSV export quotes values and neutralizes spreadsheet formulas',()=>{assert.equal(csvCell('=IMPORTXML("x")'),'"\'=IMPORTXML(""x"")"');assert.equal(csvCell('A, B'),'"A, B"');});
 

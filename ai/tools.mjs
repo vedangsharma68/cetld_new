@@ -423,10 +423,12 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
         if (args.invoiceId !== undefined) filters.invoice_id = `eq.${uuid(args.invoiceId, "invoiceId")}`;
         const bounds = dateBounds(args.paidAtFrom, args.paidAtTo, "paidAtFrom", "paidAtTo");
         const rows = await query(store, "payments", PAYMENT_SELECT, { filters, order: "paid_at.desc,id.asc" });
-        const filtered = bounds.lower || bounds.upper ? rows.filter((row) => withinDateBounds(row.paid_at, bounds, true)) : rows;
-        const invoiceIds = args.invoiceId ? [uuid(args.invoiceId, "invoiceId")] : [...new Set(filtered.map(row => row.invoice_id))];
+        const dated = bounds.lower || bounds.upper ? rows.filter((row) => withinDateBounds(row.paid_at, bounds, true)) : rows;
+        const invoiceIds = args.invoiceId ? [uuid(args.invoiceId, "invoiceId")] : [...new Set(dated.map(row => row.invoice_id))];
         const invoiceRows = await Promise.all(invoiceIds.map(id => query(store, 'invoices', 'id,invoice_number,customer_id,currency', {filters: {id: `eq.${id}`}, limit: 1})));
         const paymentInvoices = invoiceRows.flat();
+        const activeInvoiceIds = new Set(paymentInvoices.map(invoice=>invoice.id));
+        const filtered = dated.filter(row=>activeInvoiceIds.has(row.invoice_id));
         const paymentCustomers = await customersForInvoices(paymentInvoices);
         const invoicesById = new Map(paymentInvoices.map(i => [i.id, i]));
         const currencies = new Map(paymentInvoices.map(i => [i.id, currencyCode(i.currency)]));
@@ -509,10 +511,12 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
         const invoiceId = args.invoiceId === undefined ? null : uuid(args.invoiceId, "invoiceId");
         const invoiceFilters = invoiceId ? { id: `eq.${invoiceId}` } : {};
         const paymentFilters = invoiceId ? { invoice_id: `eq.${invoiceId}` } : {};
-        const [invoices, payments] = await Promise.all([
+        const [invoices, allPayments] = await Promise.all([
           query(store, "invoices", INVOICE_SELECT, { filters: invoiceFilters, order: "updated_at.desc,id.asc" }),
           query(store, "payments", PAYMENT_SELECT, { filters: paymentFilters, order: "paid_at.desc,id.asc" }),
         ]);
+        const activeInvoiceIds=new Set(invoices.map(invoice=>invoice.id));
+        const payments=allPayments.filter(payment=>activeInvoiceIds.has(payment.invoice_id));
         if (invoices.length + payments.length > MAX_ROWS) throw new RangeError(`Activity exceeds the ${MAX_ROWS}-row safety limit; refusing a partial answer`);
         const events = [];
         for (const invoice of invoices) {

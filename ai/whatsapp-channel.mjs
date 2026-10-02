@@ -1,6 +1,7 @@
 import {answerWorkspaceQuestion} from './assistant.mjs';
 import {createHash} from 'node:crypto';
 import {saveAssistantInvoice} from './invoice-ops.mjs';
+import {createDeletedAtCompatibility} from '../invoice/deleted-at-compat.mjs';
 
 const E164 = /^\+[1-9]\d{6,14}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -51,12 +52,13 @@ function formatWhatsAppReply(response) {
   return {...response, answer: answer || EMPTY_REPLY};
 }
 
-function checkedSelect(table, select) {
+function checkedSelect(table, select, includeDeletedAt = false) {
   if (typeof select !== 'string' || !select.trim()) throw new TypeError('select is required');
   const fields = select.split(',').map(item => item.trim());
   if (fields.some(field => !TABLE_FIELDS[table].has(field))) throw new TypeError('unsupported selected field');
   if (!fields.includes('workspace_id')) fields.push('workspace_id');
   if (table === 'invoices' && !fields.includes('customer_id')) fields.push('customer_id');
+  if (table === 'invoices' && includeDeletedAt) fields.push('deleted_at');
   if ((table === 'payments' || table === 'invoice_files') && !fields.includes('invoice_id')) fields.push('invoice_id');
   return fields.join(',');
 }
@@ -105,6 +107,7 @@ function checkedRows(result, table, workspaceId, customerId, invoiceIds) {
  */
 export function createCustomerScopedStore({supabase, workspaceId, customerId} = {}) {
   if (!supabase?.from || !UUID.test(workspaceId) || !UUID.test(customerId)) throw new TypeError('verified Supabase scope is required');
+  const deletedAtCompatibility=createDeletedAtCompatibility();
   return Object.freeze({
     workspaceId,
     customerId,
@@ -114,26 +117,38 @@ export function createCustomerScopedStore({supabase, workspaceId, customerId} = 
       const projection = checkedSelect(table, select);
       let invoiceIds = new Set();
       if (table === 'payments' || table === 'invoice_files') {
-        const owned = await supabase.from('invoices').select('id,workspace_id,customer_id', {count: 'exact'})
-          .eq('workspace_id', workspaceId).eq('customer_id', customerId).limit(1001);
-        if (owned?.error) throw owned.error;
+        let ownershipCount=null;
+        const readOwned = async includeDeletedAt => {
+          let query=supabase.from('invoices').select(includeDeletedAt?'id,workspace_id,customer_id,deleted_at':'id,workspace_id,customer_id', {count: 'exact'})
+            .eq('workspace_id', workspaceId).eq('customer_id', customerId);
+          if(includeDeletedAt)query=query.is('deleted_at',null);
+          const owned=await query.limit(1001);
+          if(owned?.error)throw owned.error;
+          ownershipCount=owned.count;
+          return owned;
+        };
+        const owned=await deletedAtCompatibility.read({withDeletedAt:async()=>{const result=await readOwned(true);return result.data},legacy:async()=>{const result=await readOwned(false);return result.data}});
         // Supabase projects can cap rows below a requested limit. Fail closed
         // if the exact count does not match the returned set.
-        if (!Array.isArray(owned?.data) || !Number.isSafeInteger(owned.count)
-          || owned.count !== owned.data.length || owned.count > 1000
-          || owned.data.some(row => row.workspace_id !== workspaceId || row.customer_id !== customerId || !UUID.test(row.id))) {
+        if (!Array.isArray(owned) || !Number.isSafeInteger(ownershipCount)
+          || ownershipCount!==owned.length || ownershipCount>1000
+          || owned.some(row => row.workspace_id !== workspaceId || row.customer_id !== customerId || !UUID.test(row.id))) {
           throw new TypeError('cannot verify invoice ownership');
         }
-        invoiceIds = new Set(owned.data.map(row => row.id));
+        invoiceIds = new Set(owned.map(row => row.id));
         if (!invoiceIds.size) return [];
       }
-      let query = supabase.from(table).select(projection).eq('workspace_id', workspaceId);
-      if (table === 'invoices') query = query.eq('customer_id', customerId);
-      if (table === 'customers') query = query.eq('id', customerId);
-      if (table === 'payments' || table === 'invoice_files') query = query.in('invoice_id', [...invoiceIds]);
-      query = applyFilters(query, table, filters);
-      query = applyOrder(query, table, order).range(offset, offset + limit - 1);
-      return checkedRows(await query, table, workspaceId, customerId, invoiceIds);
+      const read = async includeDeletedAt => {
+        let query = supabase.from(table).select(checkedSelect(table, select, table === 'invoices' && includeDeletedAt)).eq('workspace_id', workspaceId);
+        if (table === 'invoices') query = query.eq('customer_id', customerId);
+        if (table === 'invoices' && includeDeletedAt) query = query.is('deleted_at',null);
+        if (table === 'customers') query = query.eq('id', customerId);
+        if (table === 'payments' || table === 'invoice_files') query = query.in('invoice_id', [...invoiceIds]);
+        query = applyFilters(query, table, filters);
+        query = applyOrder(query, table, order).range(offset, offset + limit - 1);
+        return checkedRows(await query, table, workspaceId, customerId, invoiceIds);
+      };
+      return table==='invoices'?deletedAtCompatibility.read({withDeletedAt:()=>read(true),legacy:()=>read(false)}):read(false);
     },
   });
 }
@@ -142,20 +157,25 @@ export function createCustomerScopedStore({supabase, workspaceId, customerId} = 
 export function createOwnerScopedStore({supabase,workspaceId,ownerId,phone,authorize}={}) {
   if(!supabase?.from||!UUID.test(workspaceId)||!UUID.test(ownerId)||!E164.test(phone)||typeof authorize!=='function')
     throw new TypeError('verified owner scope is required');
+  const deletedAtCompatibility=createDeletedAtCompatibility();
   return Object.freeze({workspaceId,userId:ownerId,role:'owner',
     async query(table,{select,filters={},order='id.asc',limit=100,offset=0}={}) {
       if(!Object.hasOwn(TABLE_FIELDS,table))throw new TypeError('unsupported table');
       if(!Number.isSafeInteger(limit)||limit<1||limit>1000||!Number.isSafeInteger(offset)||offset<0||offset>10000)
         throw new TypeError('invalid pagination');
       if(!await authorize())throw new TypeError('owner binding changed');
-      let query=supabase.from(table).select(checkedSelect(table,select)).eq('workspace_id',workspaceId);
-      query=applyFilters(query,table,filters);
-      query=applyOrder(query,table,order).range(offset,offset+limit-1);
-      const result=await query;
-      if(result?.error)throw result.error;
-      if(!Array.isArray(result?.data)||result.data.some(row=>row.workspace_id!==workspaceId))
-        throw new TypeError('workspace scope violation');
-      return result.data;
+      const read=async includeDeletedAt=>{
+        let query=supabase.from(table).select(checkedSelect(table,select,table==='invoices'&&includeDeletedAt)).eq('workspace_id',workspaceId);
+        if(table==='invoices'&&includeDeletedAt)query=query.is('deleted_at',null);
+        query=applyFilters(query,table,filters);
+        query=applyOrder(query,table,order).range(offset,offset+limit-1);
+        const result=await query;
+        if(result?.error)throw result.error;
+        if(!Array.isArray(result?.data)||result.data.some(row=>row.workspace_id!==workspaceId))
+          throw new TypeError('workspace scope violation');
+        return result.data;
+      };
+      return table==='invoices'?deletedAtCompatibility.read({withDeletedAt:()=>read(true),legacy:()=>read(false)}):read(false);
     },
   });
 }

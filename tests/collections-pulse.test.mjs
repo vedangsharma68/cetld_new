@@ -36,6 +36,17 @@ test('returns a zeroed default-currency card for an empty workspace',()=>{
   ]);
 });
 
+test('deleted invoices and their payment rows never enter collections reports',()=>{
+  const rows=collectionsPulse([
+    invoice('active','INR',10000,1000,'2026-09-20'),
+    {...invoice('deleted','INR',90000,0,'2026-09-01'),deleted_at:'2026-09-10T00:00:00Z'},
+  ],[
+    {invoice_id:'active',amount_minor:1000,paid_at:'2026-09-15T00:00:00Z'},
+    {invoice_id:'deleted',amount_minor:5000,paid_at:'2026-09-15T00:00:00Z'},
+  ],{today:'2026-09-20',defaultCurrency:'INR'});
+  assert.deepEqual(rows,[{currency:'INR',outstanding:9000,overdue:0,dueNext7Days:9000,collectedThisMonth:1000}]);
+});
+
 test('excludes cancelled balances and ignores payments outside the current month',()=>{
   const rows=collectionsPulse([invoice('void','INR',5000,0,'2026-09-22','cancelled')],[
     {invoice_id:'void',amount_minor:2000,paid_at:'2026-08-31T18:00:00Z'},

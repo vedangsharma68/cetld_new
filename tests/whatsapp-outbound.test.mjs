@@ -237,7 +237,7 @@ test('service replies require an open 24-hour window and atomic inbound authoriz
   assert.equal(denied.calls.length, 0);
   const accepted = harness();
   assert.equal((await accepted.outbound.sendServiceReply({...args, lastInboundAt: NOW})).status, 'accepted');
-  assert.equal(JSON.parse(accepted.calls[0].options.body).text.body, args.body+'\n\n— Acme Studio');
+  assert.equal(JSON.parse(accepted.calls[0].options.body).text.body, args.body+'\n\n- Acme Studio');
   const unix = harness();
   assert.equal((await unix.outbound.sendServiceReply({...args, lastInboundAt: String(Date.parse(NOW) / 1000)})).status, 'accepted');
 });
@@ -247,14 +247,14 @@ test('session replies send factual invoice terms and replace pressure phrases wi
     const attempt = harness();
     assert.equal((await attempt.outbound.sendServiceReply({workspaceId: 'workspace-a', to: PHONE, body,
       businessName: 'Acme Studio', kind: 'normal', messageId: `inbound-${attempt.calls.length}`, lastInboundAt: NOW})).status, 'accepted');
-    assert.equal(JSON.parse(attempt.calls[0].options.body).text.body, body+'\n\n— Acme Studio');
+    assert.equal(JSON.parse(attempt.calls[0].options.body).text.body, body+'\n\n- Acme Studio');
   }
   for (const phrase of ['final notice', 'pay now', 'pay immediately', 'pay today', 'late fee', 'legal action']) {
     const attempt = harness();
     assert.equal((await attempt.outbound.sendServiceReply({workspaceId: 'workspace-a', to: PHONE, body: `This is a ${phrase}.`,
       businessName: 'Acme Studio', kind: 'normal', messageId: `pressure-${phrase}`, lastInboundAt: NOW})).status, 'accepted');
     assert.equal(JSON.parse(attempt.calls[0].options.body).text.body,
-      "I have your answer, but couldn't phrase it safely for WhatsApp - please check the cetld app for details.\n\n— Acme Studio");
+      "I have your answer, but couldn't phrase it safely for WhatsApp - please check the cetld app for details.\n\n- Acme Studio");
   }
 });
 
@@ -277,7 +277,7 @@ test('unknown STOP gets one platform-branded confirmation after verified claim',
   assert.equal((await outbound.sendServiceReply(args)).status, 'accepted');
   assert.equal((await outbound.sendServiceReply(args)).status, 'blocked');
   assert.equal(calls.length, 1);
-  assert.equal(JSON.parse(calls[0].options.body).text.body, "You've been opted out of WhatsApp updates. We won't message you again.\n\n— CETLD");
+  assert.equal(JSON.parse(calls[0].options.body).text.body, "You've been opted out of WhatsApp updates. We won't message you again.\n\n- CETLD");
 });
 
 test('unknown sender gets only fixed verification text after inbound authorization', async () => {
@@ -406,6 +406,7 @@ test('customer-scoped store applies workspace and customer predicates to invoice
   const supabase = {from(table) {
     const query = {table, filters: {}, select(value) { this.projection = value; return this; },
       eq(key, value) { this.filters[key] = value; return this; }, in(key, value) { this.filters[key] = value; return this; },
+      is(key, value) { this.filters[key] = `is.${value}`; return this; },
       ilike(key, value) { this.filters[key] = value; return this; }, order() { return this; },
       range() { calls.push({table, filters: {...this.filters}, projection: this.projection}); return Promise.resolve({data: []}); },
       limit() { return Promise.resolve({data: []}); }};
@@ -413,7 +414,7 @@ test('customer-scoped store applies workspace and customer predicates to invoice
   }};
   const store = createCustomerScopedStore({supabase, workspaceId, customerId});
   await store.query('invoices', {select: 'id,invoice_number', filters: {invoice_number: 'ilike.INV-1'}});
-  assert.deepEqual(calls[0].filters, {workspace_id: workspaceId, customer_id: customerId, invoice_number: 'INV-1'});
+  assert.deepEqual(calls[0].filters, {workspace_id: workspaceId, customer_id: customerId, deleted_at: 'is.null', invoice_number: 'INV-1'});
   assert.match(calls[0].projection, /workspace_id/);
   assert.match(calls[0].projection, /customer_id/);
   await assert.rejects(() => store.query('invoices', {select: 'id', filters: {workspace_id: 'eq.other'}}), /unsupported filter/);
@@ -425,7 +426,7 @@ test('customer-scoped store excludes payments when customer owns no invoices', a
   const calls = [];
   const supabase = {from(table) {
     calls.push(table);
-    const query = {select() { return this; }, eq() { return this; }, limit() { return Promise.resolve({data: [], count: 0}); }};
+    const query = {select() { return this; }, eq() { return this; }, is() { return this; }, limit() { return Promise.resolve({data: [], count: 0}); }};
     return query;
   }};
   const store = createCustomerScopedStore({supabase, workspaceId, customerId});
@@ -437,7 +438,7 @@ test('customer-scoped store fails closed on capped invoice ownership result', as
   const workspaceId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const customerId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
   const supabase = {from() {
-    return {select() { return this; }, eq() { return this; }, limit() {
+    return {select() { return this; }, eq() { return this; }, is() { return this; }, limit() {
       return Promise.resolve({data: [{id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', workspace_id: workspaceId, customer_id: customerId}], count: 2});
     }};
   }};

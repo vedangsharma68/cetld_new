@@ -309,7 +309,8 @@ test('typing indicator is skipped for STOP and a thrown indicator cannot fail a 
     stop_confirmation_due: false};
   let typing = 0;
   const stopInbox = {async claim() { return [stop]; }, async complete() {}};
-  const stopRuntime = createInboundRuntime({conversationStore:null,supabase: {}, inbox: stopInbox, outbound: {
+  const emptyOwnerLookup={from(){const q={select(){return q},eq(){return q},not(){return q},order(){return q},limit(){return Promise.resolve({data:[]})}};return q;}};
+  const stopRuntime = createInboundRuntime({conversationStore:null,supabase: emptyOwnerLookup, inbox: stopInbox, outbound: {
     async sendTypingIndicator() { typing++; }, async sendServiceReply() {}}, env});
   assert.deepEqual(await stopRuntime.processPending(), {claimed: 1, completed: 1});
   assert.equal(typing, 0);
@@ -391,6 +392,17 @@ test('inbox stores terminal planner diagnostics while marking the event done', a
   assert.equal(update.error_detail, '{"reason":"provider_error"}');
 });
 
+test('deferred inbox events use bounded backoff while keeping attempts eligible for retry',async()=>{
+  let update;
+  const supabase={from(table){assert.equal(table,'whatsapp_inbound_events');return {update(value){update=value;return this;},
+    eq(){return this;},then(resolve){return Promise.resolve({data:null,error:null}).then(resolve);}};}};
+  const inbox=new SupabaseInboundInbox(supabase);const before=Date.now();
+  await inbox.defer({id:31,claim_token:'claim',attempts:1,received_at:new Date(Date.now()-4*60_000).toISOString()});
+  assert.equal(update.status,'pending');assert.equal(update.processed_at,null);
+  assert.equal(update.attempts,0);assert.ok(Date.parse(update.next_attempt_at)>=before+16*60_000);
+  assert.ok(Date.parse(update.next_attempt_at)<=Date.now()+17*60_000);
+});
+
 test('inbound processing failure log and durable event include the truncated error message', async () => {
   const logs = [];
   const event = {id: 22, claim_token: 'claim', attempts: 1, provider_message_id: 'wamid.failure',
@@ -438,7 +450,12 @@ test('a final-attempt event receives exactly one fallback and is never retried',
   let claims = 0;
   const inbox = {async claim() { claims++; return claims === 1 ? [event] : []; },
     async complete(...args) { completions.push(args); }};
-  const runtime = createInboundRuntime({conversationStore:null,supabase: {}, inbox, env, logger: {error() {}},
+  const emptyBindingSupabase={from(){
+    const query={select(){return query;},eq(){return query;},not(){return query;},order(){return query;},limit(){return query;},
+      is(){return query;},async maybeSingle(){return {data:null};},then(resolve,reject){return Promise.resolve({data:[]}).then(resolve,reject);}};
+    return query;
+  }};
+  const runtime = createInboundRuntime({conversationStore:null,supabase: emptyBindingSupabase, inbox, env, logger: {error() {}},
     outbound: {async sendServiceReply(input) { sends.push(input); }}});
 
   assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 1});
@@ -446,6 +463,62 @@ test('a final-attempt event receives exactly one fallback and is never retried',
   assert.equal(sends[0].body, "Something broke on my side while handling that message, so I did not process it. Please send it again. If it keeps failing, tell Vedang.");
   assert.equal(completions.length, 1);
   assert.deepEqual(completions[0].slice(1), ['PROCESSING_FAILED', null, false]);
+});
+
+test('verified owner failures preserve the real business identity for model-generated recovery replies',async()=>{
+  for (const {attempts,recoveryReply} of [
+    {attempts:1,recoveryReply:true},{attempts:5,recoveryReply:true},
+    {attempts:1,recoveryReply:false},{attempts:5,recoveryReply:false},
+  ]) {
+  const event={id:6,attempts,provider_message_id:`wamid.owner-failure-${attempts}-${recoveryReply}`,sender_phone:'+919871367051',
+    message_text:'change invoice INV-3 amount',message_type:'text',received_at:new Date().toISOString()};
+  const rows={
+    whatsapp_owner_verifications:[{workspace_id:'ws-owner',requested_by:'owner-1',verified_at:'2026-10-01T00:00:00Z',created_at:'2026-10-01T00:00:00Z',phone:event.sender_phone}],
+    workspaces:[{id:'ws-owner',owner_id:'owner-1'}],workspace_members:[{workspace_id:'ws-owner',user_id:'owner-1',role:'owner'}],
+    workspace_settings:[{workspace_id:'ws-owner',business_name:'Test Business',whatsapp_owner_phone:event.sender_phone}],
+    whatsapp_global_suppressions:[],whatsapp_suppressions:[],
+    whatsapp_consents:[{workspace_id:'ws-owner',customer_id:'owner-customer',phone:event.sender_phone,revoked_at:null,consented_by:'owner-1'}],
+    customers:[{id:'owner-customer',workspace_id:'ws-owner',phone:event.sender_phone,metadata:{whatsapp_owner:true}}],
+  };
+  const supabase={from(table){
+    const query={filters:[],select(){return query;},eq(key,value){query.filters.push(row=>row[key]===value);return query;},
+      not(key,operator,value){query.filters.push(row=>operator==='is'?(row[key]??null)!==value:row[key]!==value);return query;},
+      is(key,value){query.filters.push(row=>(row[key]??null)===value);return query;},order(){return query;},limit(){return query;},
+      async maybeSingle(){return {data:(rows[table]||[]).filter(row=>query.filters.every(fn=>fn(row)))[0]||null};},
+      then(resolve,reject){return Promise.resolve({data:(rows[table]||[]).filter(row=>query.filters.every(fn=>fn(row)))}).then(resolve,reject);}};
+    return query;
+  }};
+  const completions=[];
+  const inbox={async claim(){return [event];},async complete(){completions.push('complete');},
+    async defer(retryEvent){completions.push(`defer:${retryEvent.id}`);}};
+  const sends=[];let generated=0;
+  const owner=async()=>{throw new Error('the original turn must not rerun');};
+  owner.createSafeFailureReply=async input=>{generated++;assert.equal(input.workspaceId,'ws-owner');assert.equal(input.hasAttachment,false);
+    return recoveryReply?'I could not finish the reply. Please check the invoice status before retrying.':null;};
+  const runtime=createInboundRuntime({supabase,inbox,outbound:{async sendServiceReply(input){
+    assert.equal(input.businessName,'Test Business','The outbound identity guard must accept the actual workspace business');
+    sends.push(input);return {status:'accepted'};}},
+    onOwnerMessage:owner,conversationStore:null,env,logger:{error(){}}});
+  assert.deepEqual(await runtime.processPending(),{claimed:1,completed:recoveryReply&&attempts===5?1:0});
+  assert.equal(generated,1);assert.equal(sends.length,recoveryReply?1:0);
+  assert.deepEqual(completions,recoveryReply?['complete']:[`defer:${event.id}`]);
+  if(!recoveryReply)continue;
+  assert.equal(sends[0].body,'I could not finish the reply. Please check the invoice status before retrying.');
+  assert.equal(sends[0].audience,'owner');assert.equal(sends[0].workspaceId,'ws-owner');assert.equal(sends[0].kind,'normal');
+  assert.doesNotMatch(sends[0].body,/something broke|did not process/i);
+  }
+});
+
+test('a failed owner-binding lookup keeps the event pending without sending a hardcoded verification reply',async()=>{
+  const event={id:7,attempts:5,provider_message_id:'wamid.owner-binding-outage',sender_phone:'+919871367051',
+    message_text:'Which model are you using?',message_type:'text',received_at:new Date().toISOString()};
+  const calls=[];
+  const runtime=createInboundRuntime({supabase:{from(){throw Object.assign(new Error('temporary owner database outage'),{code:'08006'});}},
+    inbox:{async claim(){return [event];},async defer(value){calls.push(['defer',value.id]);},async complete(...args){calls.push(['complete',...args]);}},
+    outbound:{async sendServiceReply(input){calls.push(['send',input]);}},conversationStore:null,env,
+    onOwnerMessage:async()=>{throw new Error('Binding lookup failure must not start model tools');},logger:{error(){}}});
+  assert.deepEqual(await runtime.processPending(),{claimed:1,completed:0});
+  assert.deepEqual(calls,[['defer',event.id]]);
 });
 
 test('a transient failure before the final attempt remains retryable', async () => {

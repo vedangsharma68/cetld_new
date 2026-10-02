@@ -15,6 +15,7 @@ function setup(patch={},checker) {
   return {store,provider,engine,calls:()=>calls};
 }
 test('paid invoice stops and never sends',async()=>{const x=setup({paidMinor:1000});assert.equal((await x.engine.run(scope)).reason,'paid');assert.equal(x.calls(),0);assert.equal(x.store.getInvoice(scope).nextFollowUpAt,null);});
+test('deleted invoice is skipped before reminder claim or provider dispatch',async()=>{const x=setup({deleted_at:'2026-09-21T00:00:00.000Z'});assert.deepEqual(await x.engine.run(scope),{status:'skipped',reason:'invoice_deleted'});assert.equal(x.calls(),0);assert.equal(x.store.claims.size,0);assert.equal(x.store.messages.size,0);});
 test('paused and draft invoices send nothing',async()=>{for(const followupState of ['paused','draft','cancelled']){const x=setup({followupState});await x.engine.run(scope);assert.equal(x.calls(),0);assert.equal(x.store.getInvoice(scope).paidMinor,0);}});
 test('real mock and store run complete reminder and persist next cadence',async()=>{const x=setup();assert.equal((await x.engine.run(scope)).status,'sent');assert.equal(x.calls(),1);const invoice=x.store.getInvoice(scope);assert.equal(invoice.reminderCount,1);assert.equal(invoice.nextFollowUpAt,'2026-09-25T09:00:00.000Z');assert.equal([...x.store.messages.values()][0].status,'sent');await x.engine.run(scope);assert.equal(x.calls(),1);});
 test('simultaneous workers send only one reminder',async()=>{const x=setup();await Promise.all(Array.from({length:12},()=>x.engine.run(scope)));assert.equal(x.calls(),1);});

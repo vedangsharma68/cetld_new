@@ -42,7 +42,7 @@ function missingFields(extracted) {
     || extracted[name].confidence < 0.75 || (name === 'direction' && extracted[name].value !== 'receivable'));
 }
 
-function reviewDraft(extracted) {
+export function reviewDraft(extracted, sourceMessageId = null) {
   const invoice = invoiceProposal(extracted) || {
     invoiceNumber: extracted?.invoiceNumber?.value ?? null, clientName: extracted?.customerName?.value ?? null,
     clientEmail: extracted?.clientEmail?.value ?? null, clientPhone: extracted?.clientPhone?.value ?? null,
@@ -55,8 +55,10 @@ function reviewDraft(extracted) {
     alreadyPaid: false, direction: extracted?.direction?.value ?? null,
     lineItems: Array.isArray(extracted?.lineItems?.value) ? extracted.lineItems.value : [],
   };
+  const hasPhotoCurrency=typeof extracted?.currency?.value==='string'&&extracted.currency.confidence>=0.75
+    &&isSupportedCurrency(extracted.currency.value);
   return {type: 'invoice_review_draft', stage: 'incomplete', invoice,
-    missingFields: missingFields(extracted), currencySource: null};
+    missingFields: missingFields(extracted), currencySource: hasPhotoCurrency?'photo':null,sourceMessageId};
 }
 
 const CURRENCY_REPLY = /^\s*([A-Za-z]{3})[.!]?\s*$/;
@@ -259,19 +261,19 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         active();
         if (extracted?.direction?.value === 'payable' && extracted.direction.confidence >= 0.75) {
           await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
-            action: {...reviewDraft(extracted), stage: 'canceled'}});
+            action: {...reviewDraft(extracted,messageId), stage: 'canceled'}});
           return 'This looks like a bill your business owes, so nothing was saved.';
         }
         if (!extracted?.customerName?.value || extracted.customerName.confidence < 0.75
           || extracted?.total?.value == null || extracted.total.confidence < 0.75 || extracted.total.value <= 0) {
           await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
-            action: {...reviewDraft(extracted), stage: 'canceled'}});
+            action: {...reviewDraft(extracted,messageId), stage: 'canceled'}});
           return "I couldn't reliably read the customer name and total. Please send a clearer photo. Nothing was saved.";
         }
         const currencyResult = inferInvoiceCurrency(extracted, extracted?.rawText || '', workspace?.default_currency || 'INR');
         if (currencyResult.unsupportedCurrency) {
           await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
-            action: {...reviewDraft(extracted), stage: 'canceled'}});
+            action: {...reviewDraft(extracted,messageId), stage: 'canceled'}});
           return `The invoice uses ${currencyResult.unsupportedCurrency}, which cannot be saved. ${CURRENCY_SUPPORT_MESSAGE} Nothing was saved.`;
         }
         const assumptions = [];
@@ -299,7 +301,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         // The database only allows extracting -> proposal -> saving, and requires
         // currencySource to be the marker 'photo' or 'user'. The readable evidence
         // is kept separately for the reply.
-        const proposal = {type: 'invoice_review_draft', stage: 'proposal', invoice: validatedInvoice,
+        const proposal = {type: 'invoice_review_draft', stage: 'proposal', invoice: validatedInvoice,sourceMessageId:messageId,
           missingFields: [], currencySource: 'photo', currencyEvidence: currencyResult.source,
           dueDateSource: due.source, assumptions};
         const proposed = await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone,
