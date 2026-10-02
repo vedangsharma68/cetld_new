@@ -16,7 +16,7 @@ export function normalizedFollowUpPreferences(value = {}) {
 export function followUpPreferencesForm(value = {}) {
   const p = normalizedFollowUpPreferences(value);
   const option = (name, label) => `<option value="${name}" ${p.tone === name ? 'selected' : ''}>${label}</option>`;
-  return `<section class="panel" id="follow-up-preferences"><div class="panel-head"><div><h2>Follow-up preferences</h2><p>Saved for this workspace. These settings control reminder drafts and scheduling. Customer delivery must also be enabled separately.</p></div></div>
+  return `<section class="panel" id="follow-up-preferences"><div class="panel-head"><div><h2>Follow-up preferences</h2><p>Saved for this business. These settings control reminder drafts and scheduling. Customer delivery must also be enabled separately.</p></div></div>
     <form class="panel-body settings-fields" id="follow-up-preferences-form">
       <label class="field">Tone<select name="tone">${option('professional','Professional')}${option('gentle','Gentle')}${option('firm','Firm')}</select></label>
       <div class="two-cols"><label class="field">First reminder, days after due<input type="number" name="firstReminderDays" min="0" max="90" step="1" value="${escapeHtml(p.firstReminderDays)}" required></label><label class="field">Cadence, days between reminders<input type="number" name="cadenceDays" min="1" max="90" step="1" value="${escapeHtml(p.cadenceDays)}" required></label></div>
