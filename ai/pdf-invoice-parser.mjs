@@ -28,7 +28,7 @@ function wrapped(value, confidence = 0.99) {
 function scalarFields(values) {
   return Object.fromEntries([
     'invoiceNumber', 'customerName', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total',
-    'outstandingAmount', 'currency', 'clientPhone', 'clientEmail', 'notes', 'direction',
+    'outstandingAmount', 'currency', 'clientPhone', 'clientPhoneRaw', 'clientEmail', 'notes', 'direction',
   ].map((key) => [key, wrapped(values[key] ?? null, key === 'direction' && values[key] === 'uncertain' ? 0 : 0.99)]));
 }
 
@@ -192,6 +192,17 @@ function explicitPhone(block) {
   return null;
 }
 
+function explicitPhoneRaw(block) {
+  for (const line of block) {
+    const match = line.match(/(?:PHONE|TEL|MOBILE|CONTACT)\s*:?\s*([+\d][\d().\s-]{7,})/i);
+    if (!match) continue;
+    const printed = clean(match[1]);
+    const normalized = printed.replace(/[\s().-]/g, '');
+    if (!/^\+[1-9]\d{7,14}$/.test(normalized)) return printed;
+  }
+  return null;
+}
+
 function explicitEmail(block) {
   for (const line of block) {
     const match = line.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
@@ -277,6 +288,7 @@ export function parsePdfInvoiceText(text, { businessName = '' } = {}) {
   const buyerBlock = partyBlock(lines, /^\s*(?:(?:BILL|SOLD|INVOICE)\s+TO|CUSTOMER|CLIENT|TO)\s*:?\s*(.*)$/i);
   const sellerBlock = partyBlock(lines, /^\s*(?:FROM|BILL\s+FROM|SOLD\s+BY|ISSUED\s+BY|SELLER|SUPPLIER|VENDOR)\s*:?\s*(.*)$/i);
   const clientPhone = explicitPhone(buyerBlock);
+  const clientPhoneRaw = clientPhone ? null : explicitPhoneRaw(buyerBlock);
   const clientEmail = explicitEmail(buyerBlock);
 
   const invoiceNumber = labeledText(lines, /^\s*INVOICE\s*(?:NUMBER|NO\.?|#)\s*[:#-]?\s*(.+)$/i);
@@ -297,6 +309,7 @@ export function parsePdfInvoiceText(text, { businessName = '' } = {}) {
     outstandingAmount: parsedTotals.outstanding === null ? null : parsedTotals.outstanding / 100,
     currency: findCurrency(lines),
     clientPhone,
+    clientPhoneRaw,
     clientEmail,
     notes: [note, extraCharges || null].filter(Boolean).join('; ') || null,
     direction: classifyDirection(lines, businessName, buyerBlock, sellerBlock),
