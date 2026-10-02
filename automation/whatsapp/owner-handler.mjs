@@ -176,6 +176,11 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
   if(contactRequest)return contactAnswer(target,{wantPhone:/phone|mobile|contact|whatsapp/i.test(message),wantEmail:/email|e-mail|contact/i.test(message)});
   if(target&&/\b(?:invoice|bill|show|details|balance|due|total|amount|tell|what|when)\b/i.test(message))return details(target);
   if(YES.test(message))return 'There is no invoice change waiting for confirmation. Tell me which invoice you want to change.';
+  const settingsAsk=message.match(/\b(?:change|set|update|rename|edit|turn|switch|make)\b[^.]{0,60}\b(workspace|business|company|profile|account)\s*(?:name)?\b|\b(?:change|set|update|edit)\b[^.]{0,40}\b(tone|reminders?|follow.?ups?|timezone|time zone|default currency|contact hours|cadence|weekdays?|settings?|preferences?)\b/i);
+  if(settingsAsk){
+   const what=(settingsAsk[1]||settingsAsk[2]||'settings').toLowerCase();
+   return `I can't change ${/name|workspace|business|company/.test(what)?'the business name':what} from WhatsApp yet. Do it in the dashboard under Settings. I can change invoices from here.`;
+  }
   const {data:settings,error}=await supabase.from('workspace_ai_settings').select('primary_model,fallback_model').eq('workspace_id',workspaceId).maybeSingle();
   if(error)throw error;
   const models=sanitizeModelSettings({primaryModel:settings?.primary_model,fallbackModel:settings?.fallback_model});
@@ -184,6 +189,6 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
   const response=await answer({provider,store:ledger,message,history,accounting:null,signal,deadlineAt});
   if(response?.pendingAction)return 'Tell me the invoice number and the exact change, for example “change invoice 1001 due date to 2026-10-15”. I will ask you to confirm it.';
   if(!await authorize(scope))return '';
-  return response?.answer||'I could not answer that right now. Try asking for an invoice number or a list of invoices.';
+  return response?.answer||'I got no answer back for that. Ask for an invoice number or say “list my invoices”.';
  };
 }
