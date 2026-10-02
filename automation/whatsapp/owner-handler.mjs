@@ -207,11 +207,12 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
   if(!candidates.length){
    const named=invoices.filter(i=>i.clientName&&targetText.toLowerCase().includes(i.clientName.toLowerCase()));
    if(named.length)candidates=named;
-   else if((contactRequest||fileRequest)&&fuzzyCustomer(invoices,targetText).length)candidates=fuzzyCustomer(invoices,targetText);
+   else if(fuzzyCustomer(invoices,targetText).length)candidates=fuzzyCustomer(invoices,targetText);
+   else if(edit&&!edit.changes.clientName&&fuzzyCustomer(invoices,message).length)candidates=fuzzyCustomer(invoices,message);
    else if(edit?.hint)candidates=matchInvoicesByHint(invoices,edit.hint);
    else if(/\b(?:it|its|this|that|the invoice|them|him|her)\b/i.test(targetText))candidates=contextualInvoice(invoices,history);
   }
-  if(contactRequest&&!edit&&candidates.length>1&&new Set(candidates.map(i=>(i.clientName||'').toLowerCase())).size===1&&candidates[0].clientName){
+  if(candidates.length>1&&new Set(candidates.map(i=>(i.clientName||'').toLowerCase()+(contactRequest&&!edit?'':'|'+(i.printedInvoiceNumber||i.invoiceNumber)))).size===1&&candidates[0].clientName){
    const withPhone=candidates.find(i=>i.metadata?.client_phone||i.metadata?.customer_phone||i.metadata?.phone||i.metadata?.debtor_phone||i.metadata?.client_phone_raw);
    candidates=[withPhone||candidates[0]];
   }
@@ -244,7 +245,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
   if(YES.test(message))return 'There is no invoice change waiting for confirmation. Tell me which invoice you want to change.';
   const {data:settings,error}=await supabase.from('workspace_ai_settings').select('primary_model,fallback_model').eq('workspace_id',workspaceId).maybeSingle();
   if(error)throw error;
-  const models=sanitizeModelSettings({primaryModel:settings?.primary_model,fallbackModel:settings?.fallback_model});
+  // Owner chat runs on the capable Gemini model; the slow free models are not used on this path.
+  const models={primaryModel:'gemini-3.5-flash',fallbackModel:'gemini-3.5-flash-lite'};
   const provider=providerFactory({...models,geminiApiKey:env.GEMINI_API_KEY,openRouterApiKey:env.OPENROUTER_API_KEY,zenApiKey:env.OPENCODE_ZEN_API_KEY,fetchImpl,timeoutMs:15000,maxAttempts:2});
   const ledger=createOwnerScopedStore({supabase,workspaceId,ownerId,phone,authorize:()=>authorize(scope)});
   let timer;
