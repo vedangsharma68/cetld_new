@@ -18,7 +18,7 @@ test('all requested Quiet Finance OS surfaces are present', () => {
     'Invoice ledger',
     'Conversations',
     'Assistant',
-    'Workspace setup',
+    'Business setup',
     'Settings',
     'detail-drawer',
     'activityFeed',
