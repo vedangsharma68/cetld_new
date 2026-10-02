@@ -191,6 +191,13 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
    const shown=list.slice(0,20);
    return `${list.length} invoice${list.length===1?'':'s'} in your business:\n${shown.map(i=>'• '+label(i)+' · '+i.status+' · '+money(i.currency,i.total)).join('\n')}${list.length>20?'\nShowing the first 20. Ask for a specific invoice or use the dashboard for the full list.':''}`;
   }
+  if(/\b(?:delete|remove|erase|trash|get rid of)\b/i.test(message)&&/\b(?:invoices?|bills?|duplicates?|dupes?|it|them|one)\b/i.test(message)&&!edit){
+   const groups=new Map();
+   for(const i of invoices){const k=[String(i.printedInvoiceNumber||i.invoiceNumber||'').toLowerCase(),String(i.clientName||'').toLowerCase(),i.total,i.currency].join('|');groups.set(k,[...(groups.get(k)||[]),i]);}
+   const dupes=[...groups.values()].filter(g=>g.length>1);
+   const found=dupes.length?'Duplicates I found:\n'+dupes.map(g=>'• '+label(g[0])+' · '+money(g[0].currency,g[0].total)+' · appears '+g.length+' times').join('\n')+'\n\n':'I found no exact duplicates (same number, customer and amount).\n\n';
+   return found+'I cannot delete invoices yet, from WhatsApp or the dashboard, so nothing was removed. I can change an invoice, for example its customer or notes, if that helps.';
+  }
   const fileRequest=/\b(?:send|show|give|download)\b.{0,70}\b(?:file|pdf|photo|document)\b/i.test(message);
   const contactRequest=(/\b(?:contact|phone|mobile|email|e-mail|whatsapp|numbers?)\b/i.test(message)&&!/\binvoice\s+(?:number|no\b)/i.test(message)&&!/\b(?:invoice|bill)s?\b.{0,20}\bnumbers?\b/i.test(message))&&!edit;
   // The value after "to" is the proposed replacement, never the target invoice.
@@ -240,7 +247,12 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
   const models=sanitizeModelSettings({primaryModel:settings?.primary_model,fallbackModel:settings?.fallback_model});
   const provider=providerFactory({...models,geminiApiKey:env.GEMINI_API_KEY,openRouterApiKey:env.OPENROUTER_API_KEY,zenApiKey:env.OPENCODE_ZEN_API_KEY,fetchImpl,timeoutMs:15000,maxAttempts:2});
   const ledger=createOwnerScopedStore({supabase,workspaceId,ownerId,phone,authorize:()=>authorize(scope)});
-  const response=await answer({provider,store:ledger,message,history,accounting:null,signal,deadlineAt,ownerMode:true});
+  let timer;
+  const budget=Number.isFinite(deadlineAt)?Math.max(4000,Math.min(22000,deadlineAt-clock().getTime()-6000)):22000;
+  const response=await Promise.race([
+   answer({provider,store:ledger,message,history,accounting:null,signal,deadlineAt,ownerMode:true}),
+   new Promise(resolve=>{timer=setTimeout(()=>resolve({answer:'My AI model took too long to answer that, so I stopped instead of guessing. Send it again in a minute, or ask for a specific invoice number.'}),budget)})
+  ]).finally(()=>clearTimeout(timer));
   if(response?.pendingAction)return 'Tell me the invoice number and the exact change, for example “change invoice 1001 due date to 2026-10-15”. I will ask you to confirm it.';
   if(!await authorize(scope))return '';
   return response?.answer||'I got no answer back for that. Ask for an invoice number or say “list my invoices”.';
