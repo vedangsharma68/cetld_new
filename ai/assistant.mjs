@@ -664,14 +664,15 @@ async function liveZohoInvoice(accounting, target) {
   return {invoice: {invoiceNumber:row.number, customerName:row.customerName, currency:row.currency, total, paid, outstanding, dueDate:row.dueDate, status:row.status, paidState:row.amountMinor > 0 && row.balanceMinor === 0 ? 'fully paid' : row.paidMinor > 0 ? 'partially paid' : 'unpaid'}};
 }
 
-export async function answerWorkspaceQuestion({provider, store, message, history = [], clock = () => new Date(), accounting = null}) {
+export async function answerWorkspaceQuestion({provider, store, message, history = [], clock = () => new Date(), accounting = null, ownerMode = false}) {
   if (typeof message !== 'string' || !message.trim() || message.length > 4000 || !Array.isArray(history) || history.length > 20 || history.some(x => !x || !['user', 'assistant'].includes(x.role) || typeof x.content !== 'string' || x.content.length > 4000 || Object.keys(x).some(k => !['role', 'content'].includes(k)))) throw new APIError(400, 'INVALID_CONVERSATION');
   if (isConversationRecallQuestion(message)) return withEvidence({answer:conversationRecallAnswer(history),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},{tool:'none',data:{complete:true,truncated:false}});
   const identity = identityAnswer(message);
   if (identity) return withEvidence({answer: identity, asOf: clock().toISOString(), timezone: 'UTC', model: null, usedFallback: false, readOnly: true}, {tool:'none',data:{complete:true,truncated:false}});
   const direct = conversationalAnswer(message);
   if (direct) return withEvidence({answer: direct, asOf: clock().toISOString(), timezone: 'UTC', model: null, usedFallback: false, readOnly: true}, {tool:'none',data:{complete:true,truncated:false}});
-  const offScope = nonFinancialPromptFallback(message);
+  // A verified owner's questions always reach the model; the keyword scope filter only guards unverified senders.
+  const offScope = ownerMode ? null : nonFinancialPromptFallback(message);
   if (offScope) return withEvidence({answer: offScope, asOf: clock().toISOString(), timezone: 'UTC', model: null, usedFallback: false, readOnly: true}, {tool:'none',data:{complete:true,truncated:false}});
 
   const tools = createAssistantTools({store, clock, accounting});
