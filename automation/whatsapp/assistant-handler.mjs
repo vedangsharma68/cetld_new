@@ -220,7 +220,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
     const models = sanitizeModelSettings({primaryModel: settings?.primary_model,
       fallbackModel: settings?.fallback_model});
     const provider = providerFactory({...models, geminiApiKey: env.GEMINI_API_KEY,
-      openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
+      openRouterApiKey: env.OPENROUTER_API_KEY, ollamaApiKey:env.OLLAMA_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
       cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN,
       fetchImpl, timeoutMs: 8000, maxAttempts: 1});
     const pending = pendingActionStoreFactory({supabase});
@@ -251,7 +251,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         // vision-capable extraction chain and its separately configured keys.
         const extractionProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
           fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, requestPurpose: 'extraction', geminiApiKey: env.GEMINI_API_KEY,
-          openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
+          openRouterApiKey: env.OPENROUTER_API_KEY, ollamaApiKey:env.OLLAMA_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
           fetchImpl, timeoutMs: 12_000, maxAttempts: 1});
         // Reserve invocation time for validation, pending-action persistence,
         // the scoped reply claim/send, and durable completion.
@@ -437,7 +437,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         try { history = await readConversationHistory({supabase, workspaceId, phone,customerId,audience}); } catch { /* optional context */ }
         const intentProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
           fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, requestPurpose: 'extraction', geminiApiKey: env.GEMINI_API_KEY,
-          openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
+          openRouterApiKey: env.OPENROUTER_API_KEY, ollamaApiKey:env.OLLAMA_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
           fetchImpl, timeoutMs: 8000, maxAttempts: 1});
         modelIntent = await classifyIntent({provider: intentProvider, message: effective, history, invoices: known, signal, deadlineAt});
         if (modelIntent.action === 'correct_invoice' && modelIntent.confidence >= 0.75) {

@@ -70,7 +70,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     const config=configurationSource==='workspace'
       ?sanitizeModelSettings({primaryModel:settings.primary_model,fallbackModel:settings.fallback_model})
       :sanitizeModelSettings({primaryModel:CF_PRIMARY_MODEL,fallbackModel:GEMINI_FALLBACK_MODEL});
-    const provider=providerFactory({...config,geminiApiKey:env.GEMINI_API_KEY,openRouterApiKey:env.OPENROUTER_API_KEY,
+    const provider=providerFactory({...config,geminiApiKey:env.GEMINI_API_KEY,openRouterApiKey:env.OPENROUTER_API_KEY,ollamaApiKey:env.OLLAMA_API_KEY,
       zenApiKey:env.OPENCODE_ZEN_API_KEY,cfAccountId:env.CLOUDFLARE_ACCOUNT_ID,cfApiToken:env.CLOUDFLARE_API_TOKEN,
       fetchImpl,timeoutMs:15000,maxAttempts:2});
     let pending,pendingStoreAvailable=true;

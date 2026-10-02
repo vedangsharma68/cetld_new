@@ -15,8 +15,8 @@ export async function runReleaseGate({run=runCommand,live=process.env.VERCEL_ENV
 }
 function runCommand(script,{live=false}={}) {
   const env={...process.env,NODE_ENV:'test'};
-  const liveKeys=new Set(['CLOUDFLARE_ACCOUNT_ID','CLOUDFLARE_API_TOKEN','GEMINI_API_KEY']);
-  for(const key of Object.keys(env))if((/^(?:WHATSAPP_|SUPABASE_|CLOUDFLARE_|GEMINI_|OPENROUTER_|OPENCODE_|ZOHO_|QUICKBOOKS_|ACCOUNTING_|CRON_SECRET|AUTOMATION_)/.test(key)
+  const liveKeys=new Set(['CLOUDFLARE_ACCOUNT_ID','CLOUDFLARE_API_TOKEN','GEMINI_API_KEY','OLLAMA_API_KEY']);
+  for(const key of Object.keys(env))if((/^(?:WHATSAPP_|SUPABASE_|CLOUDFLARE_|GEMINI_|OLLAMA_|OPENROUTER_|OPENCODE_|ZOHO_|QUICKBOOKS_|ACCOUNTING_|CRON_SECRET|AUTOMATION_)/.test(key)
     ||/(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY|SERVICE_ROLE|API_KEY|DATABASE_URL)/i.test(key))
     &&!(live&&liveKeys.has(key)))delete env[key];
   // npm exposes its actual JS entrypoint, avoiding shell quoting on Windows.
