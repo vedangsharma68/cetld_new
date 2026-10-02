@@ -371,7 +371,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       return reply;
     };
     const editLike = INTENT_REQUEST.test(effective);
-    if (!correction && /\b(?:mark|make|set|change)\b.{0,30}\bpaid\b/i.test(effective)) {
+    if (correction?.changes?.status === 'paid' || /\b(?:mark|make|set|change)\b.{0,40}\b(?:paid|paod|piad|payed|pad|settled)\b/i.test(effective)) {
       return 'Payments are recorded in the cetld dashboard, so I can’t mark this paid from WhatsApp.';
     }
     if (!correction && editLike && !FILE_REQUEST.test(message)) {
