@@ -5,7 +5,7 @@ function mappedInvoice(row) {
   if (!row) return null;
   const metadata = row.metadata || {};
   return {id: row.id, invoiceNumber: row.invoice_number, clientName: metadata.client_name || null,
-    printedInvoiceNumber: metadata.printed_invoice_number || null, invoiceDate: row.issue_date,
+    printedInvoiceNumber: metadata.printed_invoice_number || metadata.source_invoice_number || null, invoiceDate: row.issue_date,
     dueDate: row.due_date, currency: row.currency, total: Number(row.total_amount), notes: row.notes,
     status: row.status, amountPaid: Number(row.amount_paid || 0), metadata, createdAt: row.created_at,
     updatedAt: row.updated_at};
@@ -43,7 +43,7 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId} =
     },
     async findInvoices({invoiceNumber, limit} = {}) {
       let query = scoped('invoices').select('*').eq('workspace_id', workspaceId);
-      if (invoiceNumber) query = query.or(`invoice_number.eq.${invoiceNumber},metadata->>printed_invoice_number.eq.${invoiceNumber}`);
+      if (invoiceNumber) query = query.or(`invoice_number.eq.${invoiceNumber},metadata->>printed_invoice_number.eq.${invoiceNumber},metadata->>source_invoice_number.eq.${invoiceNumber}`);
       const result = await query.order('created_at', {ascending: false}).limit(invoiceNumber ? 10 : Math.min(Number(limit) || 2, 50));
       return rows(result).map(mappedInvoice);
     },
