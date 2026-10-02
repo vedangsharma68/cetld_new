@@ -398,3 +398,4 @@ input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-to
   input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-toggle input):checked:after{display:none;content:none}
   input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-toggle input):focus-visible{outline-color:Highlight;box-shadow:none}
 }
+.boot>.brand{justify-self:center}
