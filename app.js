@@ -323,8 +323,10 @@ settings=()=>{
   const report=state.aiDiagnostic;
   const diagnostic=aiAdministrator&&!state.demo?`<section class="panel" id="ai-diagnostic" aria-labelledby="ai-diagnostic-title"><div class="panel-head"><div><h2 id="ai-diagnostic-title">Gemini connection diagnostic</h2><p>Runs four fixed synthetic checks. It does not use or save invoices.</p></div></div><div class="panel-body"><button class="btn" type="button" data-action="ai-diagnostic">Run diagnostic</button><small class="settings-hint">Uses the server credential and fixed model only. No prompts, files, provider messages, or secrets are displayed.</small>${report?`<div class="diagnostic-report" role="status"><strong>${escape(report.model)}</strong><ul>${report.stages.map(item=>`<li>${escape(item.stage)} · ${escape(item.status)} · ${escape(item.category)}${Number.isInteger(item.httpStatus)?` · HTTP ${item.httpStatus}`:''}</li>`).join('')}</ul></div>`:''}</div></section>`:'';
   const attestation=`<section class="panel whatsapp-attestation" id="whatsapp" aria-labelledby="whatsapp-attestation-title"><div class="panel-head"><div><h2 id="whatsapp-attestation-title">WhatsApp client agreement</h2><p>Required before adding any client phone number.</p></div></div><div class="panel-body">${attested?`<p class="whatsapp-attestation-status">Confirmed on ${escape(new Date(attested).toLocaleString('en-IN'))} by the workspace owner.</p>`:owner?`<form id="whatsapp-attestation-form"><label class="whatsapp-attestation-check"><input type="checkbox" name="attest" required><span>I confirm my clients have agreed to receive invoice updates from my business on WhatsApp, and I will only add numbers where that is true.</span></label><p class="settings-hint">Each client's agreement must also be confirmed when you add their number. This owner confirmation alone does not make a number messageable.</p><div class="error hidden" data-error role="alert"></div><button class="btn primary" type="submit">Confirm agreement</button></form>`:'<p class="settings-hint">Ask the workspace owner to confirm this before adding client numbers.</p>'}</div></section>`;
+  const ownerCustomer=(state.customers||[]).find(c=>c.metadata?.whatsapp_owner===true||c.metadata?.whatsapp_owner==='true');
+  const ownerNumber=`<section class="panel" id="whatsapp-owner" aria-labelledby="whatsapp-owner-title"><div class="panel-head"><div><h2 id="whatsapp-owner-title">Your WhatsApp number</h2><p>The number you text the cetld bot from. It is recognised from your first message.</p></div></div><div class="panel-body">${ownerCustomer?.phone?`<p class="whatsapp-attestation-status">Linked: <strong>${escape(ownerCustomer.phone)}</strong></p>`:'<p class="settings-hint">No number linked yet.</p>'}${owner&&attested?`<form id="whatsapp-owner-form"><label class="field">WhatsApp number with country code<input name="phone" type="tel" inputmode="tel" placeholder="+919876543210" value="${escape(ownerCustomer?.phone||'')}" required></label><div class="error hidden" data-error role="alert"></div><button class="btn primary" type="submit">${ownerCustomer?.phone?'Change number':'Link number'}</button></form>`:owner?'<p class="settings-hint">Confirm the WhatsApp client agreement above first.</p>':'<p class="settings-hint">Only the workspace owner can link a number.</p>'}</div></section>`;
   return content.replace('<a href="#account">Account</a>', `<a href="#account">Account</a>${aiAdministrator&&!state.demo?'<a href="#ai-diagnostic">AI diagnostic</a>':''}<a href="#whatsapp">WhatsApp</a>`)
-    .replace(/<\/div><\/div>$/, `${diagnostic}${attestation}</div></div>`);
+    .replace(/<\/div><\/div>$/, `${diagnostic}${attestation}${ownerNumber}</div></div>`);
 };
 
 document.addEventListener('click',async event=>{
@@ -332,6 +334,20 @@ document.addEventListener('click',async event=>{
   buttonEl.disabled=true;buttonEl.textContent='Running fixed checks…';
   try{state.aiDiagnostic=await aiRequest('diagnostic',{timeoutMs:47000,body:{workspaceId:state.workspace.id}});render();toast('Gemini diagnostic finished. No production root cause is claimed until this report is reviewed.');}
   catch(error){toast(error?.message||'Diagnostic unavailable.');buttonEl.disabled=false;buttonEl.textContent='Run diagnostic';}
+});
+
+document.addEventListener('submit',async event=>{
+  if(event.target.id!=='whatsapp-owner-form')return;
+  event.preventDefault();
+  const form=event.target,submit=form.querySelector('[type=submit]');
+  const phone='+'+String(form.elements.phone.value||'').replace(/[^\d]/g,'');
+  submit.disabled=true;
+  try{
+    if(state.demo)throw Error('Sign in to link your number.');
+    const {error}=await db.rpc('owner_bind_whatsapp',{p_workspace_id:state.workspace.id,p_phone:phone});
+    if(error)throw error;
+    await loadData();toast('WhatsApp number linked. Text the bot from it.');
+  }catch(error){showError(form,error)}finally{submit.disabled=false}
 });
 
 document.addEventListener('submit',async event=>{
