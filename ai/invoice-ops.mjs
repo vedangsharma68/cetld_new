@@ -1,7 +1,7 @@
 import {APIError, object, uuid} from './http.mjs';
 import {AMOUNT_PRECISION_MESSAGE,CURRENCY_SUPPORT_MESSAGE,isSupportedCurrency} from '../currency-contract.mjs';
 
-const INPUT_FIELDS = ['invoiceNumber', 'clientName', 'clientEmail', 'clientPhone', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total', 'outstanding', 'currency', 'notes', 'alreadyPaid', 'direction', 'lineItems'];
+const INPUT_FIELDS = ['invoiceNumber', 'clientName', 'clientEmail', 'clientPhone', 'clientPhoneRaw', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total', 'outstanding', 'currency', 'notes', 'alreadyPaid', 'direction', 'lineItems'];
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const LINE_ITEM_FIELDS = ['description', 'quantity', 'unitPrice', 'amount', 'confidence'];
 
@@ -75,13 +75,15 @@ export function validateAssistantInvoice(value) {
   if (email && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 320)) throw new APIError(422, 'INVALID_CLIENT_EMAIL');
   const phone = value.clientPhone == null ? null : String(value.clientPhone).trim();
   if (phone && phone.length > 40) throw new APIError(422, 'INVALID_CLIENT_PHONE');
+  const phoneRaw = value.clientPhoneRaw == null ? null : String(value.clientPhoneRaw).trim();
+  if (phoneRaw && phoneRaw.length > 80) throw new APIError(422, 'INVALID_CLIENT_PHONE');
   const notes = value.notes == null ? null : String(value.notes).trim().slice(0, 2000) || null;
   const items = lineItems(value.lineItems);
   if (value.alreadyPaid !== undefined && typeof value.alreadyPaid !== 'boolean') throw new APIError(422, 'INVALID_PAID_STATE');
   const alreadyPaid = value.alreadyPaid === true;
   if (alreadyPaid && outstanding !== null && outstanding !== 0) throw new APIError(422, 'PAID_INVOICE_HAS_OUTSTANDING_BALANCE');
   if (!alreadyPaid && outstanding !== null && outstanding !== total) throw new APIError(422, 'PARTIAL_BALANCE_REQUIRES_PAYMENT_RECORD');
-  return {invoiceNumber, clientName, clientEmail: email || null, clientPhone: phone || null, invoiceDate: value.invoiceDate, dueDate: value.dueDate, subtotal, tax, total, outstanding: alreadyPaid ? 0 : total, currency, notes, lineItems: items, alreadyPaid, direction: 'receivable', missingDueDate};
+  return {invoiceNumber, clientName, clientEmail: email || null, clientPhone: phone || null, clientPhoneRaw: phoneRaw || null, invoiceDate: value.invoiceDate, dueDate: value.dueDate, subtotal, tax, total, outstanding: alreadyPaid ? 0 : total, currency, notes, lineItems: items, alreadyPaid, direction: 'receivable', missingDueDate};
 }
 
 function responseInvoice(row) {
