@@ -10,7 +10,7 @@ const DEFAULT_PROCESS_BUDGET_MS = 40_000;
 // Leave enough runway for a database lookup and a deterministic reply. Slow
 // planner work may use the first slot, but is never started near the deadline.
 const MIN_EVENT_BUDGET_MS = 5_000;
-const SAFE_FALLBACK_REPLY = "I couldn't safely check that just now. Please try again.";
+const SAFE_FALLBACK_REPLY = "Something broke on my side while handling that message, so I did not process it. Please send it again. If it keeps failing, tell Vedang.";
 const MEDIA_FETCH_FAILED_REPLY = "I couldn't fetch that photo. Please resend it and I'll try again.";
 const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
 const E164 = /^\+[1-9]\d{6,14}$/;
