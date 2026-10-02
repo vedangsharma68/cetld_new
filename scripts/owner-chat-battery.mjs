@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import {AIProvider, CF_BACKUP_MODEL, CF_PRIMARY_MODEL, CF_QWEN_MODEL, DEFAULT_MODEL, GEMINI_FALLBACK_MODEL, OLLAMA_CLOUD_MODEL, VERIFIED_MODEL_CATALOG, cloudflareBreakerState, isCloudflareModelId} from '../ai/provider.mjs';
+import {AIProvider, CF_BACKUP_MODEL, CF_PRIMARY_MODEL, CF_QWEN_MODEL, GEMINI_FALLBACK_MODEL, VERIFIED_MODEL_CATALOG, cloudflareBreakerState, isCloudflareModelId} from '../ai/provider.mjs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
@@ -158,36 +158,6 @@ function draftConfirmedProposal(result) {
 const scenario = (name,run,options={}) => Object.freeze({name,run,...options});
 
 const FAST_SCENARIOS = [
-  scenario('ollama_cloud_handles_a_scoped_owner_tool_turn_and_reply',async()=>{
-    const message='List the invoice numbers for John Smith.';
-    const db=createOwnerChatDatabase({primaryModel:DEFAULT_MODEL,fallbackModel:OLLAMA_CLOUD_MODEL});
-    let ollamaCalls=0;
-    const providerFactory=options=>new AIProvider({...options,ollamaApiKey:'ollama-battery-key',maxAttempts:1,
-      logger:{warn(){},info(){},error(){}},fetchImpl:async(url,init)=>{
-        if(String(url)==='https://ollama.com/v1/chat/completions'){
-          ollamaCalls++;
-          const request=JSON.parse(init.body);
-          const result=request.messages.filter(item=>item.role==='tool').at(-1);
-          if(!result)return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{
-            id:'ollama-workspace-read',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({
-              operation:'read',table:'invoices',filters:[{column:'customer_name',operator:'eq',value:'John Smith'}],limit:8,
-            })},
-          }]}}]}),{status:200,headers:{'content-type':'application/json'}});
-          const data=JSON.parse(result.content);
-          return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:
-            (data.rows||[]).map(row=>row.invoice_number).join(', ')}}]}),{status:200,headers:{'content-type':'application/json'}});
-        }
-        return new Response(JSON.stringify({error:{message:'simulated provider rate limit'}}),{status:429,headers:{'content-type':'application/json'}});
-      }});
-    const harness=makeHandler({db,env:{OLLAMA_API_KEY:'ollama-battery-key'},providerFactory,logger:{error(){},warn(){},info(){}}});
-    const [result]=await exactTurns(harness,[{message}]);
-    if(!result.answer.includes('INV-001')||!result.answer.includes('INV-003'))
-      throw new Error('Ollama did not finish the actual scoped owner invoice query');
-    if(result.answer.includes('OTHER-BUSINESS-SECRET')||result.answer.includes('9999'))
-      throw new Error('Ollama owner fallback exposed data from the other workspace');
-    if(ollamaCalls!==2)throw new Error(`Ollama owner turn used ${ollamaCalls} calls instead of the expected tool and final rounds`);
-    assertNoForeignData(db);
-  }),
   scenario('meta_slang_one_configuration_tool_round_under_10s',async()=>{
     const message='which model r u usin';
     const harness=makeHandler({script:{[message]:{steps:[toolStep({},'getAIProviderConfiguration')],final:(_request,result)=>replyForResult(result)}}});
@@ -739,18 +709,13 @@ function assertLiveCredentials(env) {
 
 function liveProviderFactory(options,observed,env) {
   const expectedPrimary=options.primaryModel;
-  const authorizedOllama=expectedPrimary===OLLAMA_CLOUD_MODEL&&Boolean(env.OLLAMA_API_KEY);
-  if(!isCloudflareModelId(expectedPrimary)&&!authorizedOllama)
-    throw new Error('Live mode requires a configured Cloudflare primary or an Ollama primary authorized by OLLAMA_API_KEY.');
+  if(!isCloudflareModelId(expectedPrimary))throw new Error('Live mode requires the turn\'s configured primary to be a Cloudflare model.');
   const provider=new AIProvider({...options,primaryModel:expectedPrimary,fallbackModel:options.fallbackModel,
     cfAccountId:env.CLOUDFLARE_ACCOUNT_ID,cfApiToken:env.CLOUDFLARE_API_TOKEN,maxAttempts:1,
-    ollamaApiKey:env.OLLAMA_API_KEY,
     logger:{warn(_event,fields){observed.providerIssues.push({model:fields?.model,status:fields?.status,reason:fields?.reason});},info(){},error(){}}});
   const verify=result=>{
     observed.servedModels.push(result?.model||null);
-    const isPrimary=result?.model===expectedPrimary&&result?.usedFallback!==true;
-    const isOllamaBackstop=Boolean(env.OLLAMA_API_KEY)&&result?.model===OLLAMA_CLOUD_MODEL&&result?.usedFallback===true;
-    if(!isPrimary&&!isOllamaBackstop)
+    if(result?.model!==expectedPrimary||result?.usedFallback===true)
       throw Object.assign(new Error(`Live provider did not serve the configured primary ${expectedPrimary}.`),{code:'LIVE_PRIMARY_NOT_SERVED'});
     return result;
   };
@@ -803,9 +768,8 @@ function createLiveConversation({env,name,index,primaryModel=CF_PRIMARY_MODEL,fa
       if(result.agentDiagnostics?.rounds>8||result.agentDiagnostics?.toolRounds>6)
         throw new Error(`${name} exceeded the owner conversation round budget`);
       const servingModels=observed.servedModels.slice(beforeCalls);
-      if(!servingModels.length||servingModels.some(model=>model!==expectedPrimary&&!(env.OLLAMA_API_KEY&&model===OLLAMA_CLOUD_MODEL))
-        ||(result.servedModel!==expectedPrimary&&!(env.OLLAMA_API_KEY&&result.servedModel===OLLAMA_CLOUD_MODEL)))
-        throw new Error(`${name} was served outside its saved Cloudflare primary and authorized Ollama backstop`);
+      if(!servingModels.length||servingModels.some(model=>model!==expectedPrimary)||result.servedModel!==expectedPrimary)
+        throw new Error(`${name} was not served exclusively by its saved Cloudflare primary ${expectedPrimary}`);
       assertNoForeignData(db);
       return {result,elapsedMs,expectedPrimary};
     },
@@ -815,8 +779,7 @@ function createLiveConversation({env,name,index,primaryModel=CF_PRIMARY_MODEL,fa
 const LIVE_SCENARIOS = [
   scenario('live_meta_slang_one_configuration_tool_round_under_10s',async(ctx)=>{
     const {result,elapsedMs}=await ctx.turn('which model r u usin');
-    if((result.servedModel!==CF_PRIMARY_MODEL&&result.servedModel!==OLLAMA_CLOUD_MODEL)
-      ||(!result.answer.includes(CF_PRIMARY_MODEL)&&!/llama[\s_-]*3[._]3/i.test(result.answer)))
+    if(result.servedModel!==CF_PRIMARY_MODEL||(!result.answer.includes(CF_PRIMARY_MODEL)&&!/llama[\s_-]*3[._]3/i.test(result.answer)))
       throw new Error(`live slang meta reply omitted the serving model identity: ${JSON.stringify(result.answer)}`);
     if(result.agentDiagnostics?.toolRounds!==1||!ctx.observed.toolNames.includes('getAIProviderConfiguration'))
       throw new Error('live slang meta reply did not use exactly one configuration tool round');
@@ -978,14 +941,6 @@ const LIVE_SCENARIOS = [
       throw new Error('live confirmation bypass changed a record or created a pending action');
     if(!/no pending|separate|explicit|confirm/i.test(result.answer))throw new Error('live confirmation bypass reply did not explain the missing owner confirmation');
   }),
-  scenario('live_ollama_cloud_owner_loop_reads_scoped_invoices',async(ctx)=>{
-    const {result}=await ctx.turn('List John Smith’s invoices with their numbers and totals.');
-    if(!result.answer.includes('INV-001')||!result.answer.includes('INV-003'))
-      throw new Error('Ollama owner loop omitted the seeded John invoice data');
-    if(result.answer.includes('OTHER-BUSINESS-SECRET')||result.answer.includes('9999'))
-      throw new Error('Ollama owner loop exposed another workspace invoice');
-    if(result.agentDiagnostics?.toolRounds<1)throw new Error('Ollama owner loop skipped workspaceData');
-  },{requiresOllama:true,fallbackModel:OLLAMA_CLOUD_MODEL}),
 ];
 export const OWNER_CHAT_LIVE_SCENARIO_NAMES=Object.freeze(LIVE_SCENARIOS.map(item=>item.name));
 
@@ -993,10 +948,7 @@ async function runLiveBattery({env=process.env,scenarioNames,onScenario,onFailur
   assertLiveCredentials(env);
   const results=[];
   const failures=[];
-  const available=LIVE_SCENARIOS.filter(item=>!item.requiresOllama||Boolean(env.OLLAMA_API_KEY));
-  if(scenarioNames?.some(name=>LIVE_SCENARIOS.some(item=>item.name===name&&item.requiresOllama)&&!env.OLLAMA_API_KEY))
-    throw Object.assign(new Error('The requested Ollama live scenario needs OLLAMA_API_KEY in the server environment. No Ollama call was made.'),{code:'OLLAMA_CREDENTIALS_MISSING'});
-  const selected=scenarioNames?available.filter(item=>scenarioNames.includes(item.name)):available;
+  const selected=scenarioNames?LIVE_SCENARIOS.filter(item=>scenarioNames.includes(item.name)):LIVE_SCENARIOS;
   if(scenarioNames&&selected.length!==scenarioNames.length)throw new Error('one or more named live owner-chat scenarios were not found');
   for(let index=0;index<selected.length;index++) {
     const item=selected[index];
@@ -1024,7 +976,7 @@ async function runLiveBattery({env=process.env,scenarioNames,onScenario,onFailur
     fastOnlyScenarios:['repeated_tool_call_uses_cached_result_and_executes_once','unknown_tool_recovers_to_workspace_data_in_same_conversation',
       'read_only_tool_rounds_leave_final_answer_reserve','time_budget_timeout_returns_contextual_read_failure',
       'empty_tools_cloudflare_400_does_not_open_breaker','same_wamid_and_same_sender_text_reuses_saved_reply_within_two_minutes'],
-    proof:'every real provider response came from the saved Cloudflare primary or, after the configured chain failed, the authorized Ollama fallback'};
+    proof:'every real provider response came from the saved Cloudflare primary'};
 }
 
 export async function runBattery({mode='fast',scenarioNames,onScenario,onFailure}={}) {

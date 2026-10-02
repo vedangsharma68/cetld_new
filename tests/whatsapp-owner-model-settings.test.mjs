@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
-import {CF_PRIMARY_MODEL, CF_BACKUP_MODEL, GEMINI_FALLBACK_MODEL, OLLAMA_CLOUD_MODEL} from '../ai/provider.mjs';
+import {CF_PRIMARY_MODEL, CF_BACKUP_MODEL, GEMINI_FALLBACK_MODEL} from '../ai/provider.mjs';
 
 const scope = {workspaceId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',ownerId:'11111111-1111-4111-8111-111111111111',
   customerId:'22222222-2222-4222-8222-222222222222',phone:'+919871367051',messageId:'wamid.test',message:'Who owes the most?'};
@@ -35,13 +35,6 @@ test('owner bot uses the saved dashboard primary and fallback models', async()=>
   assert.equal(options.fallbackModel,'gemini-3.5-flash-lite');
 });
 
-test('owner handler forwards Ollama credentials only to the server-side provider factory',async()=>{
-  let options;
-  const handler=handlerFor({primary_model:CF_PRIMARY_MODEL,fallback_model:OLLAMA_CLOUD_MODEL},value=>options=value,null,{OLLAMA_API_KEY:'ollama-test-secret'});
-  await handler(scope);
-  assert.equal(options.ollamaApiKey,'ollama-test-secret');
-  assert.equal(JSON.stringify(options).includes('ollama-test-secret'),true);
-});
 
 test('owner bot keeps its existing Cloudflare and Gemini defaults when workspace settings are absent', async()=>{
   let options;

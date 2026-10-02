@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {AIProvider,CF_BACKUP_MODEL,CF_PRIMARY_MODEL,DEFAULT_EXTRACTION_MODEL,GEMINI_FALLBACK_MODEL,OLLAMA_CLOUD_MODEL,cloudflareBreakerState} from '../ai/provider.mjs';
+import {AIProvider,CF_BACKUP_MODEL,CF_PRIMARY_MODEL,DEFAULT_EXTRACTION_MODEL,GEMINI_FALLBACK_MODEL,cloudflareBreakerState} from '../ai/provider.mjs';
 
 const ok=(body)=>({ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify(body)});
 const failed=(status,body={error:{message:'private upstream detail'}})=>({ok:false,status,headers:{get:()=>null},text:async()=>JSON.stringify(body)});
@@ -118,26 +118,6 @@ test('the default Cloudflare safety chain is Llama, Scout, Gemini Flash, then Li
  assert.equal(result.model,DEFAULT_EXTRACTION_MODEL);
 });
 
-test('Ollama is the final configured and automatic fallback after the intact Cloudflare and Gemini chain',async()=>{
- const reset=make(async()=>ok({choices:[{finish_reason:'stop',message:{content:'reset'}}]}));
- await reset.generate({messages:[{role:'user',content:'reset breaker'}]});
- const calls=[];
- const p=new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:OLLAMA_CLOUD_MODEL,
-  cfAccountId:'acc',cfApiToken:'tok',geminiApiKey:'g',ollamaApiKey:'ollama-test-key',
-  maxAttempts:1,logger:{warn(){},info(){}},fetchImpl:async(url,init)=>{
-   if(String(url).includes('ollama.com')){
-    const body=JSON.parse(init.body);calls.push(body.model);
-    return ok({choices:[{finish_reason:'stop',message:{content:'Ollama recovered the owner turn.'}}]});
-   }
-   if(String(url).includes('cloudflare'))calls.push(JSON.parse(init.body).model);
-   else calls.push(String(url).includes(DEFAULT_EXTRACTION_MODEL)?DEFAULT_EXTRACTION_MODEL:GEMINI_FALLBACK_MODEL);
-   return failed(503);
-  }});
- const result=await p.generate({messages:[{role:'user',content:'which model r u usin'}]});
- assert.deepEqual(calls,[CF_PRIMARY_MODEL,CF_BACKUP_MODEL,GEMINI_FALLBACK_MODEL,DEFAULT_EXTRACTION_MODEL,OLLAMA_CLOUD_MODEL]);
- assert.equal(result.model,OLLAMA_CLOUD_MODEL);
- assert.equal(result.usedFallback,true);
-});
 
 test('an open Cloudflare circuit skips configured and primary Cloudflare legs',async()=>{
  const reset=make(async()=>ok({choices:[{finish_reason:'stop',message:{content:'reset'}}]}));

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   AIError, AIProvider, CF_BACKUP_MODEL, CF_PRIMARY_MODEL, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL,
-  DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, GEMINI_FALLBACK_MODEL, OPENROUTER_FREE_MODEL, OLLAMA_CLOUD_MODEL,
+  DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, GEMINI_FALLBACK_MODEL, OPENROUTER_FREE_MODEL,
   ZEN_FALLBACK_MODEL, ZEN_PRIMARY_MODEL,
   isFallbackModelId, isModelId, isPrimaryModelId, sanitizeModelSettings, verifyModel,
 } from '../ai/provider.mjs';
@@ -411,42 +411,8 @@ test('Cloudflare catalog verification uses the account model search endpoint and
   await assert.rejects(verifyModel(model,{fetchImpl:async()=>{throw Error('must not fetch');},cfAccountId:'account-123',cfApiToken:''}),error=>error.code==='API_KEY_MISSING');
 });
 
-test('Ollama Cloud is verified with a key only when the account can access the tool model',async()=>{
-  const {isOllamaModelId,VERIFIED_MODEL_CATALOG}=await import('../ai/provider.mjs');
-  assert.equal(isFallbackModelId(OLLAMA_CLOUD_MODEL),true);
-  assert.equal(isPrimaryModelId(OLLAMA_CLOUD_MODEL),false);
-  assert.equal(isOllamaModelId(OLLAMA_CLOUD_MODEL),true);
-  assert.equal(VERIFIED_MODEL_CATALOG.find(entry=>entry.id===OLLAMA_CLOUD_MODEL)?.provider,'ollama');
-  let request;
-  await assert.rejects(verifyModel(OLLAMA_CLOUD_MODEL,{fetchImpl:async(url,init)=>{
-    request={url:String(url),init};return jsonResponse({id:OLLAMA_CLOUD_MODEL,object:'model',owned_by:'test'});
-  }}),error=>error.code==='API_KEY_MISSING');
-  assert.equal(request,undefined);
-  assert.deepEqual(await verifyModel(OLLAMA_CLOUD_MODEL,{ollamaApiKey:'ollama-test-key',fetchImpl:async(url,init)=>{
-    request={url:String(url),init};return jsonResponse({id:OLLAMA_CLOUD_MODEL,object:'model',owned_by:'test'});
-  }}),{id:OLLAMA_CLOUD_MODEL,provider:'ollama'});
-  assert.equal(request.url,'https://ollama.com/v1/models/gpt-oss%3A20b-cloud');
-  assert.equal(request.init.headers.Authorization,'Bearer ollama-test-key');
-});
 
-test('Ollama Cloud chat maps tools and responses through the OpenAI-compatible API',async()=>{
-  let request;
-  const ai=new AIProvider({primaryModel:DEFAULT_MODEL,fallbackModel:OLLAMA_CLOUD_MODEL,ollamaApiKey:'ollama-test-key',
-    maxAttempts:1,fetchImpl:async(url,init)=>{
-      request={url:String(url),init};
-      return jsonResponse({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[
-        {id:'call_1',type:'function',function:{name:'workspaceData',arguments:'{"operation":"read"}'}},
-      ]}}]});
-    }});
-  const tools=[{type:'function',function:{name:'workspaceData',parameters:{type:'object',properties:{operation:{type:'string'}}}}}];
-  const result=await ai.generate({messages:[{role:'system',content:'Use tools.'},{role:'user',content:'List invoices.'}],
-    tools,toolChoice:'auto',maxTokens:128,temperature:0});
-  assert.equal(request.url,'https://ollama.com/v1/chat/completions');
-  assert.equal(request.init.headers.Authorization,'Bearer ollama-test-key');
-  const body=JSON.parse(request.init.body);
-  assert.equal(body.model,OLLAMA_CLOUD_MODEL);
-  assert.deepEqual(body.tools,tools);
-  assert.deepEqual(body.messages,[{role:'system',content:'Use tools.'},{role:'user',content:'List invoices.'}]);
-  assert.equal(result.toolCalls[0].function.name,'workspaceData');
-  assert.equal(result.usedFallback,true);
+
+test('removed Ollama model is not accepted by the verified model catalog',()=>{
+  assert.equal(isModelId('gpt-oss:20b-cloud'),false);
 });

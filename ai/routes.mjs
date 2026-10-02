@@ -20,7 +20,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
       if (action === 'models') {
         const checks = await Promise.all(VERIFIED_MODELS.map(async id => {
           try { await verify(id, {fetchImpl, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY,
-            ollamaApiKey:env.OLLAMA_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY, cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN, timeoutMs: 5000}); return id; }
+            zenApiKey: env.OPENCODE_ZEN_API_KEY, cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN, timeoutMs: 5000}); return id; }
           catch { return null; }
         }));
         const available = [...new Set(checks.filter(Boolean))];
@@ -78,15 +78,15 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         if (!['owner', 'admin'].includes(store.role)) throw new APIError(403, 'SETTINGS_ADMIN_REQUIRED');
         const {primary_model, fallback_model = null} = body;
         if (!isPrimaryModelId(primary_model) || (fallback_model !== null && !isFallbackModelId(fallback_model)) || primary_model === fallback_model) throw new APIError(400, 'INVALID_MODEL_CONFIGURATION');
-        await verify(primary_model, {fetchImpl, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY, ollamaApiKey:env.OLLAMA_API_KEY,
+        await verify(primary_model, {fetchImpl, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY,
           zenApiKey: env.OPENCODE_ZEN_API_KEY, cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN});
-        if (fallback_model) await verify(fallback_model, {fetchImpl, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY, ollamaApiKey:env.OLLAMA_API_KEY,
+        if (fallback_model) await verify(fallback_model, {fetchImpl, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY,
           zenApiKey: env.OPENCODE_ZEN_API_KEY, cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN});
         return res.status(200).json({...await store.saveSettings({primary_model, fallback_model}), role:store.role});
       }
       const settings = await store.getSettings();
       const provider = providerFactory({primaryModel: settings.primary_model, fallbackModel: settings.fallback_model,
-        geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY, ollamaApiKey:env.OLLAMA_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
+        geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
         cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN, fetchImpl, timeoutMs: 16000});
       if (action === 'extract') {
         const extractionBudgetMs = 42_000;

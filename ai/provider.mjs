@@ -1,6 +1,5 @@
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
-const OLLAMA_BASE_URL = 'https://ollama.com/v1';
 const ZEN_CHAT_COMPLETIONS_URL = 'https://opencode.ai/zen/v1/chat/completions';
 const DEFAULT_TIMEOUT_MS = 16_000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -13,7 +12,6 @@ function assertServerRuntime() {
 export const ZEN_PRIMARY_MODEL = globalThis.process?.env?.ZEN_PRIMARY_MODEL || 'space-bunny-free';
 export const ZEN_FALLBACK_MODEL = globalThis.process?.env?.ZEN_FALLBACK_MODEL || 'longcat-2.5-preview-free';
 export const GEMINI_FALLBACK_MODEL = 'gemini-3.5-flash';
-export const OLLAMA_CLOUD_MODEL = 'gpt-oss:20b-cloud';
 export const DEFAULT_MODEL = ZEN_PRIMARY_MODEL;
 export const DEFAULT_FALLBACK_MODEL = ZEN_FALLBACK_MODEL;
 export const DEFAULT_EXTRACTION_MODEL = 'gemini-3.5-flash-lite';
@@ -47,7 +45,6 @@ export const VERIFIED_MODEL_CATALOG = Object.freeze([
   catalogEntry(CF_GLM_MODEL,'GLM 4.7 Flash (Cloudflare)','cloudflare'),
   catalogEntry(GEMINI_FALLBACK_MODEL,'Gemini 3.5 Flash','google'),
   catalogEntry(DEFAULT_EXTRACTION_MODEL,'Gemini 3.5 Flash Lite','google'),
-  catalogEntry(OLLAMA_CLOUD_MODEL,'GPT OSS 20B Cloud (Ollama)','ollama',['fallback']),
 ]);
 export const VERIFIED_MODELS = Object.freeze([...new Set(VERIFIED_MODEL_CATALOG.map(entry=>entry.id))]);
 export const VERIFIED_FREE_MODELS = VERIFIED_MODELS;
@@ -79,7 +76,6 @@ export class AIError extends Error {
 export function isGeminiModelId(value) {
   return typeof value === 'string' && /^gemini-[a-zA-Z0-9.-]{1,100}$/.test(value) && GEMINI_MODEL_IDS.includes(value);
 }
-export const isOllamaModelId = value => value === OLLAMA_CLOUD_MODEL;
 function catalogRoles(value) { return VERIFIED_MODEL_CATALOG.find(entry=>entry.id===value)?.roles || []; }
 export function isPrimaryModelId(value) { return catalogRoles(value).includes('primary'); }
 export function isFallbackModelId(value) { return catalogRoles(value).includes('fallback'); }
@@ -170,7 +166,7 @@ function validateMessages(messages) {
   if (!Array.isArray(messages) || !messages.length || messages.length > 200 || safeJsonStringify(messages).length > 15 * 1024 * 1024) throw invalidArgument();
 }
 
-export async function verifyModel(modelId, {fetchImpl = globalThis.fetch, timeoutMs = 10_000, geminiApiKey = globalThis.process?.env?.GEMINI_API_KEY, openRouterApiKey = globalThis.process?.env?.OPENROUTER_API_KEY, ollamaApiKey = globalThis.process?.env?.OLLAMA_API_KEY, zenApiKey = globalThis.process?.env?.OPENCODE_ZEN_API_KEY, cfAccountId = globalThis.process?.env?.CLOUDFLARE_ACCOUNT_ID, cfApiToken = globalThis.process?.env?.CLOUDFLARE_API_TOKEN} = {}) {
+export async function verifyModel(modelId, {fetchImpl = globalThis.fetch, timeoutMs = 10_000, geminiApiKey = globalThis.process?.env?.GEMINI_API_KEY, openRouterApiKey = globalThis.process?.env?.OPENROUTER_API_KEY, zenApiKey = globalThis.process?.env?.OPENCODE_ZEN_API_KEY, cfAccountId = globalThis.process?.env?.CLOUDFLARE_ACCOUNT_ID, cfApiToken = globalThis.process?.env?.CLOUDFLARE_API_TOKEN} = {}) {
   assertServerRuntime();
   if (!isModelId(modelId)) throw new AIError('INVALID_MODEL', 400);
   const controller = new AbortController();
@@ -179,16 +175,6 @@ export async function verifyModel(modelId, {fetchImpl = globalThis.fetch, timeou
     if (isZenModelId(modelId)) {
       if (!zenApiKey) throw new AIError('API_KEY_MISSING', 503);
       return {id: modelId, provider: 'opencode-zen'};
-    }
-    if (isOllamaModelId(modelId)) {
-      if(!ollamaApiKey)throw new AIError('API_KEY_MISSING',503);
-      const response=await fetchImpl(`${OLLAMA_BASE_URL}/models/${encodeURIComponent(modelId)}`,{
-        method:'GET',headers:{Authorization:`Bearer ${ollamaApiKey}`},signal:controller.signal,
-      });
-      if(!response.ok)throw statusError(response.status);
-      const body=await readBoundedJson(response);
-      if(body?.id!==modelId)throw new AIError('INVALID_MODEL',404);
-      return {id:modelId,provider:'ollama'};
     }
     if (modelId === OPENROUTER_FREE_MODEL) {
       if (!openRouterApiKey) throw new AIError('API_KEY_MISSING', 503);
@@ -273,7 +259,6 @@ function openRouterRequest(messages, options) {
 export class AIProvider {
   #geminiApiKey;
   #openRouterApiKey;
-  #ollamaApiKey;
   #zenApiKey;
   #cfAccountId;
   #cfApiToken;
@@ -282,7 +267,6 @@ export class AIProvider {
     fallbackModel = DEFAULT_FALLBACK_MODEL,
     geminiApiKey = globalThis.process?.env?.GEMINI_API_KEY,
     openRouterApiKey = globalThis.process?.env?.OPENROUTER_API_KEY,
-    ollamaApiKey = globalThis.process?.env?.OLLAMA_API_KEY,
     zenApiKey = globalThis.process?.env?.OPENCODE_ZEN_API_KEY,
     cfAccountId = globalThis.process?.env?.CLOUDFLARE_ACCOUNT_ID,
     cfApiToken = globalThis.process?.env?.CLOUDFLARE_API_TOKEN,
@@ -303,7 +287,6 @@ export class AIProvider {
     this.fallbackModel = fallbackModel;
     this.#geminiApiKey = typeof geminiApiKey === 'string' ? geminiApiKey : '';
     this.#openRouterApiKey = typeof openRouterApiKey === 'string' ? openRouterApiKey : (typeof apiKey === 'string' ? apiKey : '');
-    this.#ollamaApiKey = typeof ollamaApiKey === 'string' ? ollamaApiKey : '';
     this.#zenApiKey = typeof zenApiKey === 'string' ? zenApiKey : '';
     this.#cfAccountId = typeof cfAccountId === 'string' ? cfAccountId : '';
     this.#cfApiToken = typeof cfApiToken === 'string' ? cfApiToken : '';
@@ -348,15 +331,12 @@ export class AIProvider {
     } else if (this.primaryModel === CF_PRIMARY_MODEL) {
       const defaultCfFallback = this.fallbackModel === null || this.fallbackModel === CF_BACKUP_MODEL || this.fallbackModel === GEMINI_FALLBACK_MODEL;
       if (defaultCfFallback) candidates.push(CF_BACKUP_MODEL);
-      if (this.fallbackModel && this.fallbackModel!==OLLAMA_CLOUD_MODEL) candidates.push(this.fallbackModel);
+      if (this.fallbackModel) candidates.push(this.fallbackModel);
       if (!defaultCfFallback) candidates.push(CF_BACKUP_MODEL);
       candidates.push(GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL);
-      if(this.fallbackModel===OLLAMA_CLOUD_MODEL)candidates.push(OLLAMA_CLOUD_MODEL);
     } else if (isCfModel(this.primaryModel)) {
       if(this.fallbackModel){
-        if(this.fallbackModel!==OLLAMA_CLOUD_MODEL)candidates.push(this.fallbackModel);
-        candidates.push(GEMINI_FALLBACK_MODEL,DEFAULT_EXTRACTION_MODEL);
-        if(this.fallbackModel===OLLAMA_CLOUD_MODEL)candidates.push(OLLAMA_CLOUD_MODEL);
+        candidates.push(this.fallbackModel, GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL);
       }
     } else if (!this.fallbackModel) {
       return candidates;
@@ -367,9 +347,7 @@ export class AIProvider {
       candidates.push(this.fallbackModel);
       candidates.push(GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL);
     }
-    if(this.#ollamaApiKey&&(this.primaryModel===CF_PRIMARY_MODEL||this.fallbackModel!==null))candidates.push(OLLAMA_CLOUD_MODEL);
-    return [...new Set(candidates)].filter(model=>(!isCfModel(model)||Date.now()>=cfBreaker.openUntil)
-      &&(model!==OLLAMA_CLOUD_MODEL||Boolean(this.#ollamaApiKey)));
+    return [...new Set(candidates)].filter(model=>!isCfModel(model)||Date.now()>=cfBreaker.openUntil);
   }
 
   async generateStructured({messages, schema, name, validate, maxTokens, ...options} = {}) {
@@ -450,7 +428,7 @@ export class AIProvider {
   }
 
   #providerName(model) {
-    return isCfModel(model) ? 'cloudflare' : isZenModelId(model) ? 'opencode-zen' : model === OPENROUTER_FREE_MODEL ? 'openrouter' : isOllamaModelId(model) ? 'ollama' : 'google';
+    return isCfModel(model) ? 'cloudflare' : isZenModelId(model) ? 'opencode-zen' : model === OPENROUTER_FREE_MODEL ? 'openrouter' : 'google';
   }
 
   async #request(model, messages, options, usedFallback) {
@@ -504,22 +482,6 @@ export class AIProvider {
         if (!content && !toolCalls.length) throw new AIError('INVALID_RESPONSE');
         return {content, finishReason: choice.finish_reason || null, toolCalls, model, usedFallback};
       }, {signal, deadlineAt});
-    }
-    if(isOllamaModelId(model)){
-      if(!this.#ollamaApiKey)throw new AIError('API_KEY_MISSING',503);
-      return this.#fetch(`${OLLAMA_BASE_URL}/chat/completions`,{
-        method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${this.#ollamaApiKey}`},
-        body:safeJsonStringify({...wireOptions,model,messages,stream:false}),
-      },async response=>{
-        const body=await readBoundedJson(response);
-        if(!response.ok||body?.error)throw statusError(response.status||Number(body?.error?.code)||502,classifyProviderError(body,response.status));
-        const message=body?.choices?.[0]?.message;
-        if(!message)throw new AIError('INVALID_RESPONSE');
-        const content=typeof message.content==='string'?message.content:Array.isArray(message.content)?message.content.map(part=>part?.text||'').join(''):'';
-        const toolCalls=Array.isArray(message.tool_calls)?message.tool_calls:[];
-        if(!content&&!toolCalls.length)throw new AIError('INVALID_RESPONSE');
-        return {content,finishReason:body?.choices?.[0]?.finish_reason||null,toolCalls,model,usedFallback};
-      },{signal,deadlineAt});
     }
     if (model === OPENROUTER_FREE_MODEL) {
       if (!this.#openRouterApiKey) throw new AIError('API_KEY_MISSING', 503);

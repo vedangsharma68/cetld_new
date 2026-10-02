@@ -78,24 +78,10 @@ It does not connect to WhatsApp, Supabase or Vercel and cannot message a custome
 The existing isolation tests also run in the full test suite.
 
 Run `npm run test:owner-chat:live` to check the conversations with the real
-Cloudflare provider. Supply server-only `CLOUDFLARE_ACCOUNT_ID` and
+Cloudflare and Gemini provider chain. Supply server-only `CLOUDFLARE_ACCOUNT_ID` and
 `CLOUDFLARE_API_TOKEN` in your process environment. Live mode still uses
-fictional workspace data and never sends WhatsApp messages. When
-`OLLAMA_API_KEY` is configured, the live battery also exercises the owner loop
-against Ollama Cloud and accepts it as the final fallback after the Cloudflare
-and Gemini chain. Without that key, Ollama-only live coverage is skipped.
-Do not paste provider credentials into this repository or a chat.
-
-Ollama Cloud is an optional last-resort provider. To enable it, add
-`OLLAMA_API_KEY` as a server-only Production environment variable in Vercel,
-then redeploy. The key is never sent to the browser. The dashboard fallback
-picker offers `gpt-oss:20b-cloud` after the migration
-`supabase/migrations/20261003120000_ollama_cloud_owner_fallback.sql` is applied
-in Supabase SQL Editor. The key can work as a provider backstop even before the
-picker migration, but the model cannot be saved as the workspace fallback.
-Ollama's free plan has limited monthly starter usage and one concurrent
-request; it is not unlimited free access. Check the current Ollama plan and
-model pricing before enabling usage that could incur charges.
+fictional workspace data and never sends WhatsApp messages. Do not paste
+provider credentials into this repository or a chat.
 
 GitHub Actions runs the fast battery, TypeScript checks and full test suite
 on every push and pull request. Vercel runs the same release gate as its build
