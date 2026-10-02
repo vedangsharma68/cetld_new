@@ -297,7 +297,7 @@ test('genuine planner failures keep the retry answer and emit a safe classified 
   console.warn=(message,details)=>warnings.push({message,details});
   try {
     const result=await answerWorkspaceQuestion({provider:{generate:async()=>({toolCalls:[],model:'planner-fixture'})},store,message:'Show recent collection activity for the last fortnight'});
-    assert.match(result.answer,/Please try again/i);
+    assert.match(result.answer,/could not tell what you are asking/i);
     assert.equal(warnings.length,1);
     assert.deepEqual(warnings[0].details,{provider:'Object',model:'planner-fixture',status:'missing_or_multiple_tool_calls',reason:'missing_or_multiple_tool_calls'});
     assert.doesNotMatch(JSON.stringify(warnings),/collection activity|fortnight/i);
