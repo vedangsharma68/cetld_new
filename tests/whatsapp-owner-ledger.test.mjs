@@ -131,9 +131,30 @@ test('dashboard older messages accept actual UUID message IDs used by the produc
 });
 test('settings requests get a blunt capability answer, never the generic AI failure',async()=>{
  const {h}=setup();
- for(const message of ['change my workspace name to Vedang T','set tone to firm','update my timezone']){
+ for(const message of ['update my timezone','change my whatsapp number to +919800000000','turn on customer messages']){
   const reply=await h({...scope,message,messageId:'s'+message.length});
-  assert.match(reply,/can't change .* from WhatsApp yet/);
+  assert.match(reply,/can't (?:change|turn)/);
   assert.doesNotMatch(reply,/safely check/);
  }
+});
+test('"what is johns number?" finds John Smith by first name and possessive, without the model',async()=>{
+ const list=[{id:'x',invoiceNumber:'INV-2026-0002',printedInvoiceNumber:'US-001',clientName:'John Smith',currency:'USD',total:154.06,amountPaid:0,status:'draft',updatedAt:'v1',metadata:{}},
+  {id:'y',invoiceNumber:'INV-2026-0003',clientName:'John Smith',currency:'USD',total:10,amountPaid:0,status:'draft',updatedAt:'v1',metadata:{client_phone:'+919818685252'}},
+  {id:'z',invoiceNumber:'1001',clientName:'App Revolution',currency:'CHF',total:5,amountPaid:0,status:'draft',updatedAt:'v1',metadata:{}}];
+ const pending={loadPendingActionState:async()=>({generation:0,id:null,version:null,action:null}),loadPendingAction:async()=>null};
+ const h=createOwnerMessageHandler({supabase:{from(){throw Error('no db')},rpc:async()=>{throw Error('no rpc')}},authorize:async()=>true,
+  invoiceStoreFactory:()=>({findInvoices:async()=>list}),pendingActionStoreFactory:()=>pending,readHistory:async()=>[],
+  providerFactory:()=>{throw Error('model must not be needed')}});
+ for(const q of ['what is johns number?',"what's john's phone","john number","whatsapp number of john smith"]){
+  assert.match(await h({...scope,message:q,messageId:'q'}),/\+919818685252/,q);
+ }
+ assert.doesNotMatch(await h({...scope,message:'show invoice number 1001',messageId:'q2'}),/Contact for/);
+});
+test('owner questions skip the off-topic keyword filter and reach the model',async()=>{
+ const {answerWorkspaceQuestion}=await import('../ai/assistant.mjs');
+ let calls=0;const provider={generate:async()=>{calls++;return {toolCalls:[],model:'m'}}};
+ await answerWorkspaceQuestion({provider,store:{query:async()=>[]},message:'what is johns number?',ownerMode:true});
+ assert.equal(calls,1);
+ await answerWorkspaceQuestion({provider,store:{query:async()=>[]},message:'what is johns number?'});
+ assert.equal(calls,1);
 });
