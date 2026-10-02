@@ -5,6 +5,7 @@ import {authorizeOwnerPhone} from './owner-binding.mjs';
 import {createWhatsAppInvoiceStore} from './invoice-store.mjs';
 import {createWhatsAppPendingActionStore} from './pending-actions.mjs';
 import {createWhatsAppBoundMessageHandler,parseInvoiceCorrection,matchInvoicesByHint,contactAnswer} from './assistant-handler.mjs';
+import {parseSettingsRequest,unsupportedAnswer,describeSettingsChange,createOwnerSettingsStore} from './owner-settings.mjs';
 import {isSupportedCurrency,CURRENCY_SUPPORT_MESSAGE} from '../../currency-contract.mjs';
 
 const YES=/^\s*(?:yes|y|ok|okay|confirm|confirmed|do it|go ahead|proceed|approve)\s*[.!]?\s*$/i;
@@ -22,6 +23,22 @@ function contextualInvoice(invoices,history){
   if(found.length>1)return [];
  }
  return [];
+}
+function nameTokens(text){return String(text||'').toLowerCase().replace(/[’']s\b/g,'').split(/[^a-z0-9]+/).filter(t=>t.length>=3);}
+const STOP_WORDS=new Set(['the','and','for','what','whats','who','whom','his','her','their','number','phone','mobile','email','contact','whatsapp','send','show','give','file','pdf','photo','document','invoice','bill','with','has','have','got','tell','about','please']);
+// "johns number" / "john's phone" -> that customer's invoices, best one first. Only an unambiguous single customer matches.
+function fuzzyCustomer(invoices,text){
+ const asked=nameTokens(text).flatMap(t=>t.endsWith('s')&&t.length>3?[t,t.slice(0,-1)]:[t]).filter(t=>!STOP_WORDS.has(t));
+ if(!asked.length)return [];
+ const groups=new Map();
+ for(const i of invoices){
+  const name=(i.clientName||'').toLowerCase().trim();if(!name)continue;
+  if(nameTokens(name).some(t=>asked.includes(t)))groups.set(name,[...(groups.get(name)||[]),i]);
+ }
+ if(groups.size!==1)return [];
+ const list=[...groups.values()][0];
+ const hasPhone=i=>Boolean(i.metadata?.client_phone||i.metadata?.customer_phone||i.metadata?.phone||i.metadata?.client_phone_raw);
+ return [list.find(hasPhone)||list[0]];
 }
 function details(i){
  return `Invoice ${label(i)}\nTotal: ${money(i.currency,i.total)}\nPaid: ${money(i.currency,i.amountPaid||0)}\nBalance: ${money(i.currency,Math.max(0,i.total-(i.amountPaid||0)))}\nStatus: ${i.status}\nIssue date: ${i.invoiceDate||'not recorded'}\nDue date: ${i.dueDate||'not recorded'}${i.notes?'\nNotes: '+i.notes:''}`;
@@ -85,6 +102,24 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
   const pending=pendingActionStoreFactory({supabase});
   const current=await pending.loadPendingAction({workspaceId,customerId,phone});
   let reviewReceipt=null;
+  const settingsStore=createOwnerSettingsStore(supabase);
+  if(current?.action?.type==='owner_settings_update'&&(YES.test(message)||CANCEL.test(message))){
+   const consumed=await pending.consumePendingAction({id:current.id,workspaceId,customerId,phone});
+   if(!consumed)return 'That settings request was already handled.';
+   if(CANCEL.test(message))return 'Canceled. Nothing was changed.';
+   if(Date.parse(current.action.expiresAt)<clock().getTime())return 'That settings request expired. Ask for the change again.';
+   if(!await authorize(scope))return '';
+   try{
+    const now=await settingsStore.read(workspaceId);
+    if(!now||now.updated_at!==current.action.expectedUpdatedAt)return 'Your settings changed since you asked, so I did not apply this. Ask again and I will show the current values.';
+    const saved=await settingsStore.write(workspaceId,now.updated_at,current.action.request,now);
+    if(!saved)return 'Your settings changed while I was saving, so nothing was applied. Ask again.';
+    return 'Done. '+describeSettingsChange(now,current.action.request).join('\n')+'\nThe dashboard shows the same values. Reminders already approved are paused until you approve them again.';
+   }catch(error){
+    logger?.error?.('Owner settings save failed',{workspaceId,code:error?.code});
+    return 'I could not save that: '+(String(error?.message||'unknown database error').slice(0,160))+'. Nothing was changed.';
+   }
+  }
   if(YES.test(message)||CANCEL.test(message)){
    const result=await supabase.rpc('whatsapp_confirm_owner_invoice_action',{
     p_workspace_id:workspaceId,p_owner_id:ownerId,p_phone:phone,p_action_id:current?.id??null,p_version:current?.version??null,
@@ -119,6 +154,25 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     authorizeScope:()=>authorize(scope),invoiceStoreFactory:()=>invoiceStoreFactory(scope),audience:'owner'});
    return delegate(scope);
   }
+  const settingsGap=unsupportedAnswer(message);
+  if(settingsGap)return settingsGap;
+  const settingsRequest=parseSettingsRequest(message);
+  if(settingsRequest){
+   if(settingsRequest.error)return settingsRequest.error;
+   try{
+    const now=await settingsStore.read(workspaceId);
+    if(!now)return 'I could not find your business settings, so nothing was changed. Open Settings in the dashboard.';
+    const lines=describeSettingsChange(now,settingsRequest);
+    const expectedState=await pending.loadPendingActionState({workspaceId,customerId,phone});
+    const saved=await pending.storePendingAction({workspaceId,customerId,phone,expectedState,source:'whatsapp',action:{type:'owner_settings_update',request:settingsRequest,expectedUpdatedAt:now.updated_at,
+     requestedAt:clock().toISOString(),expiresAt:new Date(clock().getTime()+10*60*1000).toISOString(),sourceMessageId:messageId}});
+    if(!saved)return 'Another request is in progress. Please finish or cancel it, then ask again.';
+    return `Confirm settings change:\n${lines.join('\n')}\nReply yes to confirm, or cancel. This request expires in 10 minutes.`;
+   }catch(error){
+    logger?.error?.('Owner settings proposal failed',{workspaceId,code:error?.code});
+    return 'I could not read your settings to prepare that change: '+String(error?.message||'unknown database error').slice(0,160)+'. Nothing was changed.';
+   }
+  }
   const history=await readHistory({supabase,workspaceId,phone});
   const store=invoiceStoreFactory(scope);
   const invoices=await store.findInvoices({limit:1000});
@@ -138,7 +192,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
    return `${list.length} invoice${list.length===1?'':'s'} in your business:\n${shown.map(i=>'• '+label(i)+' · '+i.status+' · '+money(i.currency,i.total)).join('\n')}${list.length>20?'\nShowing the first 20. Ask for a specific invoice or use the dashboard for the full list.':''}`;
   }
   const fileRequest=/\b(?:send|show|give|download)\b.{0,70}\b(?:file|pdf|photo|document)\b/i.test(message);
-  const contactRequest=/\b(?:contact|phone|mobile|email|e-mail|whatsapp number)\b/i.test(message)&&!edit;
+  const contactRequest=(/\b(?:contact|phone|mobile|email|e-mail|whatsapp|numbers?)\b/i.test(message)&&!/\binvoice\s+(?:number|no\b)/i.test(message)&&!/\b(?:invoice|bill)s?\b.{0,20}\bnumbers?\b/i.test(message))&&!edit;
   // The value after "to" is the proposed replacement, never the target invoice.
   const targetText=edit?message.split(/\b(?:amount|amt|amnt|total|price|value|due\s+date|issue\s+date|invoice\s+date|customer|client|currency|notes?|invoice\s+number|paid)\b/i)[0]:message;
   const explicit=mentioned(invoices,targetText);
@@ -146,8 +200,13 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
   if(!candidates.length){
    const named=invoices.filter(i=>i.clientName&&targetText.toLowerCase().includes(i.clientName.toLowerCase()));
    if(named.length)candidates=named;
+   else if((contactRequest||fileRequest)&&fuzzyCustomer(invoices,targetText).length)candidates=fuzzyCustomer(invoices,targetText);
    else if(edit?.hint)candidates=matchInvoicesByHint(invoices,edit.hint);
    else if(/\b(?:it|its|this|that|the invoice|them|him|her)\b/i.test(targetText))candidates=contextualInvoice(invoices,history);
+  }
+  if(contactRequest&&!edit&&candidates.length>1&&new Set(candidates.map(i=>(i.clientName||'').toLowerCase())).size===1&&candidates[0].clientName){
+   const withPhone=candidates.find(i=>i.metadata?.client_phone||i.metadata?.customer_phone||i.metadata?.phone||i.metadata?.debtor_phone||i.metadata?.client_phone_raw);
+   candidates=[withPhone||candidates[0]];
   }
   if((edit||fileRequest||contactRequest)&&candidates.length!==1){
    if(edit){
@@ -173,20 +232,15 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
    return `Confirm change to invoice ${label(target)}:\n${changes}\nReply yes to confirm, or cancel. This request expires in 10 minutes.`;
   }
   if(fileRequest){const file=await store.latestInvoiceFile(target.id);return file?{answer:'Here is invoice '+label(target)+'.',media:file}:'No file is stored for invoice '+label(target)+'.';}
-  if(contactRequest)return contactAnswer(target,{wantPhone:/phone|mobile|contact|whatsapp/i.test(message),wantEmail:/email|e-mail|contact/i.test(message)});
+  if(contactRequest)return contactAnswer(target,{wantPhone:/phone|mobile|contact|whatsapp|number/i.test(message),wantEmail:/email|e-mail|contact/i.test(message)});
   if(target&&/\b(?:invoice|bill|show|details|balance|due|total|amount|tell|what|when)\b/i.test(message))return details(target);
   if(YES.test(message))return 'There is no invoice change waiting for confirmation. Tell me which invoice you want to change.';
-  const settingsAsk=message.match(/\b(?:change|set|update|rename|edit|turn|switch|make)\b[^.]{0,60}\b(workspace|business|company|profile|account)\s*(?:name)?\b|\b(?:change|set|update|edit)\b[^.]{0,40}\b(tone|reminders?|follow.?ups?|timezone|time zone|default currency|contact hours|cadence|weekdays?|settings?|preferences?)\b/i);
-  if(settingsAsk){
-   const what=(settingsAsk[1]||settingsAsk[2]||'settings').toLowerCase();
-   return `I can't change ${/name|workspace|business|company/.test(what)?'the business name':what} from WhatsApp yet. Do it in the dashboard under Settings. I can change invoices from here.`;
-  }
   const {data:settings,error}=await supabase.from('workspace_ai_settings').select('primary_model,fallback_model').eq('workspace_id',workspaceId).maybeSingle();
   if(error)throw error;
   const models=sanitizeModelSettings({primaryModel:settings?.primary_model,fallbackModel:settings?.fallback_model});
-  const provider=providerFactory({...models,geminiApiKey:env.GEMINI_API_KEY,openRouterApiKey:env.OPENROUTER_API_KEY,zenApiKey:env.OPENCODE_ZEN_API_KEY,fetchImpl,timeoutMs:8000,maxAttempts:1});
+  const provider=providerFactory({...models,geminiApiKey:env.GEMINI_API_KEY,openRouterApiKey:env.OPENROUTER_API_KEY,zenApiKey:env.OPENCODE_ZEN_API_KEY,fetchImpl,timeoutMs:15000,maxAttempts:2});
   const ledger=createOwnerScopedStore({supabase,workspaceId,ownerId,phone,authorize:()=>authorize(scope)});
-  const response=await answer({provider,store:ledger,message,history,accounting:null,signal,deadlineAt});
+  const response=await answer({provider,store:ledger,message,history,accounting:null,signal,deadlineAt,ownerMode:true});
   if(response?.pendingAction)return 'Tell me the invoice number and the exact change, for example “change invoice 1001 due date to 2026-10-15”. I will ask you to confirm it.';
   if(!await authorize(scope))return '';
   return response?.answer||'I got no answer back for that. Ask for an invoice number or say “list my invoices”.';
