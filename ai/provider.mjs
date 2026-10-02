@@ -17,18 +17,36 @@ export const DEFAULT_FALLBACK_MODEL = ZEN_FALLBACK_MODEL;
 export const DEFAULT_EXTRACTION_MODEL = 'gemini-3.5-flash-lite';
 export const CF_PRIMARY_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 export const CF_BACKUP_MODEL = '@cf/meta/llama-4-scout-17b-16e-instruct';
-const isCfModel = value => value === CF_PRIMARY_MODEL || value === CF_BACKUP_MODEL;
+export const CF_MISTRAL_MODEL = '@cf/mistralai/mistral-small-3.1-24b-instruct';
+export const CF_GPT_OSS_MODEL = '@cf/openai/gpt-oss-20b';
+export const CF_QWEN_MODEL = '@cf/qwen/qwen3-30b-a3b-fp8';
+export const CF_GLM_MODEL = '@cf/zai-org/glm-4.7-flash';
+export const CLOUDFLARE_MODEL_IDS = Object.freeze([
+  CF_PRIMARY_MODEL, CF_BACKUP_MODEL, CF_MISTRAL_MODEL, CF_GPT_OSS_MODEL, CF_QWEN_MODEL, CF_GLM_MODEL,
+]);
+export const GEMINI_MODEL_IDS = Object.freeze([GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL]);
+export const isCloudflareModelId = value => CLOUDFLARE_MODEL_IDS.includes(value);
+const isCfModel = isCloudflareModelId;
 const cfBreaker = {failures: 0, openUntil: 0};
 export function cloudflareBreakerState() { return {...cfBreaker, open: Date.now() < cfBreaker.openUntil}; }
 export const OPENROUTER_FREE_MODEL = 'openrouter/free';
 export const DEFAULT_EXTRACTION_FALLBACK_MODEL = GEMINI_FALLBACK_MODEL;
-export const VERIFIED_MODELS = Object.freeze([
-  DEFAULT_MODEL,
-  DEFAULT_FALLBACK_MODEL,
-  GEMINI_FALLBACK_MODEL,
-  DEFAULT_EXTRACTION_MODEL,
-  DEFAULT_EXTRACTION_FALLBACK_MODEL,
+const BOTH_MODEL_ROLES = Object.freeze(['primary','fallback']);
+const catalogEntry = (id,label,provider,roles=BOTH_MODEL_ROLES,supportsTools=true) =>
+  Object.freeze({id,label,provider,roles:Object.freeze([...roles]),supportsTools});
+export const VERIFIED_MODEL_CATALOG = Object.freeze([
+  catalogEntry(ZEN_PRIMARY_MODEL,'Space Bunny Free','opencode-zen',['primary']),
+  catalogEntry(ZEN_FALLBACK_MODEL,'LongCat 2.5 Preview Free','opencode-zen',['fallback']),
+  catalogEntry(CF_PRIMARY_MODEL,'Llama 3.3 70B Instruct (Cloudflare)','cloudflare'),
+  catalogEntry(CF_BACKUP_MODEL,'Llama 4 Scout (Cloudflare)','cloudflare'),
+  catalogEntry(CF_MISTRAL_MODEL,'Mistral Small 3.1 24B (Cloudflare)','cloudflare'),
+  catalogEntry(CF_GPT_OSS_MODEL,'GPT OSS 20B (Cloudflare)','cloudflare'),
+  catalogEntry(CF_QWEN_MODEL,'Qwen3 30B A3B (Cloudflare)','cloudflare'),
+  catalogEntry(CF_GLM_MODEL,'GLM 4.7 Flash (Cloudflare)','cloudflare'),
+  catalogEntry(GEMINI_FALLBACK_MODEL,'Gemini 3.5 Flash','google'),
+  catalogEntry(DEFAULT_EXTRACTION_MODEL,'Gemini 3.5 Flash Lite','google'),
 ]);
+export const VERIFIED_MODELS = Object.freeze([...new Set(VERIFIED_MODEL_CATALOG.map(entry=>entry.id))]);
 export const VERIFIED_FREE_MODELS = VERIFIED_MODELS;
 
 const SAFE_MESSAGES = Object.freeze({
@@ -56,24 +74,32 @@ export class AIError extends Error {
 }
 
 export function isGeminiModelId(value) {
-  return typeof value === 'string' && /^gemini-[a-zA-Z0-9.-]{1,100}$/.test(value) && VERIFIED_MODELS.includes(value);
+  return typeof value === 'string' && /^gemini-[a-zA-Z0-9.-]{1,100}$/.test(value) && GEMINI_MODEL_IDS.includes(value);
 }
-export function isPrimaryModelId(value) {
-  return value === ZEN_PRIMARY_MODEL;
-}
-export function isFallbackModelId(value) {
-  return value === ZEN_FALLBACK_MODEL || value === GEMINI_FALLBACK_MODEL;
-}
+function catalogRoles(value) { return VERIFIED_MODEL_CATALOG.find(entry=>entry.id===value)?.roles || []; }
+export function isPrimaryModelId(value) { return catalogRoles(value).includes('primary'); }
+export function isFallbackModelId(value) { return catalogRoles(value).includes('fallback'); }
 function isZenModelId(value) { return value === ZEN_PRIMARY_MODEL || value === ZEN_FALLBACK_MODEL; }
 export function isModelId(value) {
-  return value === OPENROUTER_FREE_MODEL || isPrimaryModelId(value) || isFallbackModelId(value) || isGeminiModelId(value);
+  return value === OPENROUTER_FREE_MODEL || isPrimaryModelId(value) || isFallbackModelId(value);
 }
 export const isFreeModelId = isModelId;
+
+function defaultFallbackFor(primary) {
+  if (primary === CF_PRIMARY_MODEL) return CF_BACKUP_MODEL;
+  if (primary === ZEN_PRIMARY_MODEL) return ZEN_FALLBACK_MODEL;
+  if (primary === GEMINI_FALLBACK_MODEL) return DEFAULT_EXTRACTION_MODEL;
+  if (primary === DEFAULT_EXTRACTION_MODEL) return GEMINI_FALLBACK_MODEL;
+  return GEMINI_FALLBACK_MODEL;
+}
 
 export function sanitizeModelSettings({primaryModel, fallbackModel} = {}) {
   const primary = isPrimaryModelId(primaryModel) ? primaryModel : DEFAULT_MODEL;
   if (fallbackModel === null) return {primaryModel: primary, fallbackModel: null};
-  const fallback = isFallbackModelId(fallbackModel) ? fallbackModel : DEFAULT_FALLBACK_MODEL;
+  const preferredFallback = fallbackModel === undefined ? defaultFallbackFor(primary) : fallbackModel;
+  let fallback = isFallbackModelId(preferredFallback) && preferredFallback !== primary
+    ? preferredFallback : defaultFallbackFor(primary);
+  if (fallback === primary) fallback = DEFAULT_FALLBACK_MODEL === primary ? GEMINI_FALLBACK_MODEL : DEFAULT_FALLBACK_MODEL;
   return {primaryModel: primary, fallbackModel: fallback};
 }
 
@@ -140,7 +166,7 @@ function validateMessages(messages) {
   if (!Array.isArray(messages) || !messages.length || messages.length > 200 || safeJsonStringify(messages).length > 15 * 1024 * 1024) throw invalidArgument();
 }
 
-export async function verifyModel(modelId, {fetchImpl = globalThis.fetch, timeoutMs = 10_000, geminiApiKey = globalThis.process?.env?.GEMINI_API_KEY, openRouterApiKey = globalThis.process?.env?.OPENROUTER_API_KEY, zenApiKey = globalThis.process?.env?.OPENCODE_ZEN_API_KEY} = {}) {
+export async function verifyModel(modelId, {fetchImpl = globalThis.fetch, timeoutMs = 10_000, geminiApiKey = globalThis.process?.env?.GEMINI_API_KEY, openRouterApiKey = globalThis.process?.env?.OPENROUTER_API_KEY, zenApiKey = globalThis.process?.env?.OPENCODE_ZEN_API_KEY, cfAccountId = globalThis.process?.env?.CLOUDFLARE_ACCOUNT_ID, cfApiToken = globalThis.process?.env?.CLOUDFLARE_API_TOKEN} = {}) {
   assertServerRuntime();
   if (!isModelId(modelId)) throw new AIError('INVALID_MODEL', 400);
   const controller = new AbortController();
@@ -157,6 +183,18 @@ export async function verifyModel(modelId, {fetchImpl = globalThis.fetch, timeou
       const body = JSON.parse(await readBoundedText(response));
       if (!body?.data?.some(entry => entry?.id === OPENROUTER_FREE_MODEL)) throw new AIError('INVALID_MODEL', 404);
       return {id: modelId, provider: 'openrouter'};
+    }
+    if (isCfModel(modelId)) {
+      if (!cfAccountId || !cfApiToken) throw new AIError('API_KEY_MISSING', 503);
+      const search = modelId.split('/').at(-1);
+      const url = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(cfAccountId)}/ai/models/search?search=${encodeURIComponent(search)}&per_page=100`;
+      const response = await fetchImpl(url, {method: 'GET', headers: {Authorization: `Bearer ${cfApiToken}`}, signal: controller.signal});
+      if (!response.ok) throw statusError(response.status);
+      const body = await readBoundedJson(response);
+      const listed = Array.isArray(body?.result) ? body.result : Array.isArray(body?.data) ? body.data : [];
+      const shortName = modelId.split('/').at(-1);
+      if (!body?.success || !listed.some(entry => entry?.id === modelId || entry?.model_id === modelId || entry?.model === modelId || entry?.name === modelId || entry?.name === shortName)) throw new AIError('INVALID_MODEL', 404);
+      return {id: modelId, provider: 'cloudflare'};
     }
     if (!geminiApiKey) throw new AIError('API_KEY_MISSING', 503);
     const response = await fetchImpl(`${GEMINI_BASE_URL}/models/${encodeURIComponent(modelId)}?key=${encodeURIComponent(geminiApiKey)}`, {signal: controller.signal});
@@ -242,13 +280,7 @@ export class AIProvider {
   } = {}) {
     assertServerRuntime();
     const extractionPrimary = primaryModel === DEFAULT_EXTRACTION_MODEL;
-    const extractionFallback = extractionPrimary && fallbackModel === GEMINI_FALLBACK_MODEL;
-    const geminiPrimary = primaryModel === GEMINI_FALLBACK_MODEL;
-    const geminiFallback = geminiPrimary && fallbackModel === DEFAULT_EXTRACTION_MODEL;
-    const cfPrimary = primaryModel === CF_PRIMARY_MODEL;
-    const cfFallback = cfPrimary && (fallbackModel === CF_BACKUP_MODEL || fallbackModel === GEMINI_FALLBACK_MODEL || fallbackModel === DEFAULT_EXTRACTION_MODEL);
-    if (cfPrimary && fallbackModel !== null && !cfFallback) throw new AIError('INVALID_MODEL', 400);
-    if (!cfPrimary && (!isPrimaryModelId(primaryModel) && !extractionPrimary && !geminiPrimary) || (fallbackModel !== null && !isFallbackModelId(fallbackModel) && !extractionFallback && !geminiFallback)) throw new AIError('INVALID_MODEL', 400);
+    if (!isPrimaryModelId(primaryModel) || (fallbackModel !== null && (!isFallbackModelId(fallbackModel) || fallbackModel === primaryModel))) throw new AIError('INVALID_MODEL', 400);
     this.primaryModel = primaryModel;
     this.fallbackModel = fallbackModel;
     this.#geminiApiKey = typeof geminiApiKey === 'string' ? geminiApiKey : '';
@@ -273,6 +305,7 @@ export class AIProvider {
     const candidates = this.#candidates();
     let lastError;
     for (const model of candidates) {
+      if (isCfModel(model) && Date.now() < cfBreaker.openUntil) continue;
       assertActive(options.signal, options.deadlineAt);
       try { return await this.#generateWithModel(model, messages, requestOptions, model !== this.primaryModel); }
       catch (error) {
@@ -285,15 +318,28 @@ export class AIProvider {
   }
 
   #candidates() {
+    let candidates = [this.primaryModel];
     if (this.primaryModel === CF_PRIMARY_MODEL) {
-      const chain = Date.now() < cfBreaker.openUntil ? [] : [CF_PRIMARY_MODEL, CF_BACKUP_MODEL];
-      return [...chain, GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL];
+      const defaultCfFallback = this.fallbackModel === null || this.fallbackModel === CF_BACKUP_MODEL || this.fallbackModel === GEMINI_FALLBACK_MODEL;
+      if (defaultCfFallback) candidates.push(CF_BACKUP_MODEL);
+      if (this.fallbackModel) candidates.push(this.fallbackModel);
+      if (!defaultCfFallback) candidates.push(CF_BACKUP_MODEL);
+      candidates.push(GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL);
+    } else if (isCfModel(this.primaryModel)) {
+      if (this.fallbackModel) candidates.push(this.fallbackModel, GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL);
+    } else if (!this.fallbackModel) {
+      return candidates;
+    } else if (this.primaryModel === DEFAULT_EXTRACTION_MODEL) {
+      candidates.push(this.fallbackModel);
+      candidates.push(GEMINI_FALLBACK_MODEL, ZEN_PRIMARY_MODEL, ZEN_FALLBACK_MODEL);
+    } else if (this.primaryModel === ZEN_PRIMARY_MODEL) {
+      candidates.push(this.fallbackModel);
+      candidates.push(GEMINI_FALLBACK_MODEL);
+    } else {
+      candidates.push(this.fallbackModel);
+      candidates.push(GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL);
     }
-    if (!this.fallbackModel) return [this.primaryModel];
-    if (this.primaryModel === DEFAULT_EXTRACTION_MODEL) {
-      return [...new Set([this.primaryModel, GEMINI_FALLBACK_MODEL, ZEN_PRIMARY_MODEL, ZEN_FALLBACK_MODEL])];
-    }
-    return [...new Set([this.primaryModel, this.fallbackModel, GEMINI_FALLBACK_MODEL])];
+    return [...new Set(candidates)].filter(model=>!isCfModel(model)||Date.now()>=cfBreaker.openUntil);
   }
 
   async generateStructured({messages, schema, name, validate, maxTokens, ...options} = {}) {
@@ -326,6 +372,7 @@ export class AIProvider {
       const {messages: _messages, maxTokens: _maxTokens, ...providerOptions} = requestOptions;
       let lastError = error;
       for (const fallbackModel of this.#candidates().slice(1)) {
+        if (isCfModel(fallbackModel) && Date.now() < cfBreaker.openUntil) continue;
         try {
           const fallback = await this.#generateWithModel(fallbackModel, messages, {
             ...providerOptions,
@@ -397,6 +444,7 @@ export class AIProvider {
           return {content, finishReason: choice.finish_reason || null, toolCalls, model, usedFallback};
         }, {signal, deadlineAt});
         cfBreaker.failures = 0;
+        cfBreaker.openUntil = 0;
         return result;
       } catch (error) {
         // Bench Cloudflare for 10 minutes after repeated failures (quota cap, outage); Gemini serves meanwhile.

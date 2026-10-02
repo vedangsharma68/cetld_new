@@ -7,7 +7,8 @@ the user's token, RLS, and an explicit workspace filter. No service-role key.
 
 ## Configuration
 
-Server environment: `GEMINI_API_KEY`, `OPENCODE_ZEN_API_KEY`, `SUPABASE_URL`,
+Server environment: `GEMINI_API_KEY`, `OPENCODE_ZEN_API_KEY`,
+`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `SUPABASE_URL`,
 `SUPABASE_PUBLISHABLE_KEY`. Never prefix the AI key with a public/client variable
 prefix or put it in a database, URL, request from a browser, or source file.
 Rotate any key previously shared in chat before configuring hosting secrets.
@@ -40,17 +41,26 @@ the target **non-production** database before integration testing. The forward
 migration normalizes legacy rows before enforcing the provider-specific model
 contract. This branch does not apply migrations remotely or deploy production.
 
-Workspace answers use OpenCode Zen `space-bunny-free` as the primary model,
-followed automatically by `longcat-2.5-preview-free`, with
-`gemini-3.5-flash` as the final backup. Invoice extraction continues to use
-`gemini-3.5-flash-lite`, followed by the Zen chain. The Zen model IDs can be
-overridden server-side with `ZEN_PRIMARY_MODEL` and `ZEN_FALLBACK_MODEL`.
-Unknown and paid IDs are rejected at the API, provider, and database boundaries;
-primary must be the configured Space Bunny model; fallback can be LongCat or Gemini. The models endpoint and
-settings writes verify current provider availability. A retryable provider failure receives bounded
+Workspace answers use the saved primary and fallback models. Existing default
+selections remain OpenCode Zen `space-bunny-free` and `longcat-2.5-preview-free`.
+Both pickers also offer Cloudflare Llama 3.3, Llama 4 Scout, Mistral Small 3.1,
+GPT OSS 20B, Qwen3 30B A3B, GLM 4.7 Flash, and Gemini 3.5 Flash and Flash Lite.
+The browser labels for GPT OSS, Qwen3, and GLM map to their canonical Cloudflare
+IDs; those full IDs are stored, not the shorthand labels. Unknown IDs are
+rejected at the API and provider boundaries. The models endpoint and settings
+writes check Cloudflare and Gemini catalogs; legacy Zen checks require its
+server credential. These checks do not prove successful live generation.
+A retryable provider failure receives bounded
 retries before the configured fallback is tried. A 429 is surfaced as a safe
 temporary rate-limit error after those attempts; no key or provider response
-body is returned. There is no automatic paid-model substitution.
+body is returned. Cloudflare failures continue through the existing Gemini
+recovery chain, and the Cloudflare circuit breaker remains active. Invoice
+extraction continues to use its dedicated Gemini configuration. The Zen model
+IDs can be overridden server-side with `ZEN_PRIMARY_MODEL` and `ZEN_FALLBACK_MODEL`.
+
+Provider references: [Cloudflare model catalog](https://developers.cloudflare.com/workers-ai/models/),
+[Cloudflare OpenAI compatibility](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/),
+and [Cloudflare model search API](https://developers.cloudflare.com/api/resources/ai/subresources/models/methods/list/).
 
 `AIProvider.generate()` / `generateStructured()` are the shared server abstraction
 for extraction and assistant planning. Authentication errors advance to the
@@ -76,6 +86,26 @@ Owner/admin only; both IDs are checked against their provider catalogs. Members 
 The SQL table contains model IDs and timestamps only. An absent settings row
 reads as defaults; updates are atomic upserts. Direct database writes are also
 restricted by RLS; syntactically valid but unavailable IDs still fail at runtime.
+
+The primary model is excluded from the fallback picker and the fallback model
+is excluded from the primary picker. A legacy duplicate selection retains the
+primary and clears the duplicate in the picker; server reads resolve it to a
+distinct default. New duplicate writes
+are rejected by the API and database constraint.
+Unavailable options remain visible but disabled. Saved selections are retained
+during temporary provider outages; saving other settings does not replace them.
+
+WhatsApp owner chat reads the same `workspace_ai_settings.primary_model` and
+`fallback_model` columns. No separate `owner_provider` or `owner_model` columns
+are needed. With no settings row, owner chat keeps its current Cloudflare Llama
+3.3 primary and Gemini Flash fallback. An explicitly disabled fallback remains
+disabled as a user selection; provider safety recovery follows its existing policy.
+
+Before using the new model selections, review and apply
+`supabase/migrations/20261002060000_workspace_ai_model_choices.sql` to the target
+database. It expands model checks without rewriting saved rows or changing RLS.
+This migration is generated only and has not been executed, including locally.
+The migration-executing tests are excluded from this change's verification.
 
 ## Invoice extraction (review required, never auto-saved)
 

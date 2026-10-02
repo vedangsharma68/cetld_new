@@ -4,7 +4,8 @@ import {authorizeAIWorkspace} from '../ai/store.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
 import {readFile} from 'node:fs/promises';
 import {answerWorkspaceQuestion} from '../ai/assistant.mjs';
-import {DEFAULT_EXTRACTION_MODEL, DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, GEMINI_FALLBACK_MODEL, ZEN_FALLBACK_MODEL, AIProvider} from '../ai/provider.mjs';
+import {AIProvider,CF_BACKUP_MODEL,CF_GLM_MODEL,CF_GPT_OSS_MODEL,CF_MISTRAL_MODEL,CF_PRIMARY_MODEL,CF_QWEN_MODEL,
+  DEFAULT_EXTRACTION_MODEL,DEFAULT_FALLBACK_MODEL,DEFAULT_MODEL,GEMINI_FALLBACK_MODEL,ZEN_FALLBACK_MODEL} from '../ai/provider.mjs';
 const A='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', B='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', U='11111111-1111-4111-8111-111111111111', F='22222222-2222-4222-8222-222222222222';
 const env={SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUBLISHABLE_KEY:'public-test-key'};
 
@@ -74,15 +75,19 @@ test('file extraction download checks workspace and invoice path before accessin
 function response(){return {headers:{},setHeader(k,v){this.headers[k]=v;},status(n){this.code=n;return this;},json(data){this.data=data;return this;}};}
 test('models endpoint separates Space Bunny primary, extraction, and ordered fallbacks',async()=>{
   const verified=[];
-  const handler=createAIHandler({env:{GEMINI_API_KEY:'gemini-secret',OPENCODE_ZEN_API_KEY:'zen-secret'},verify:async(id,opts)=>{verified.push([id,opts.geminiApiKey,opts.zenApiKey]);return {id};}});
+  const handler=createAIHandler({env:{GEMINI_API_KEY:'gemini-secret',OPENCODE_ZEN_API_KEY:'zen-secret',
+    CLOUDFLARE_ACCOUNT_ID:'cf-account',CLOUDFLARE_API_TOKEN:'cf-token'},verify:async(id,opts)=>{
+      verified.push([id,opts.geminiApiKey,opts.zenApiKey,opts.cfAccountId,opts.cfApiToken]);return {id};}});
   const res=response();await handler({method:'GET',query:{action:'models'}},res);
   assert.equal(res.code,200);
-  assert.deepEqual(res.data.models,[DEFAULT_MODEL]);
-  assert.deepEqual(res.data.fallbackModels,[ZEN_FALLBACK_MODEL,GEMINI_FALLBACK_MODEL]);
+  const cloudflare=[CF_PRIMARY_MODEL,CF_BACKUP_MODEL,CF_MISTRAL_MODEL,CF_GPT_OSS_MODEL,CF_QWEN_MODEL,CF_GLM_MODEL];
+  assert.deepEqual(res.data.models,[DEFAULT_MODEL,...cloudflare,GEMINI_FALLBACK_MODEL,DEFAULT_EXTRACTION_MODEL]);
+  assert.deepEqual(res.data.fallbackModels,[ZEN_FALLBACK_MODEL,...cloudflare,GEMINI_FALLBACK_MODEL,DEFAULT_EXTRACTION_MODEL]);
   assert.deepEqual(res.data.extractionModels,[DEFAULT_EXTRACTION_MODEL]);
   assert.equal(res.data.openRouterFallback,false);
   assert.ok(verified.some(([id])=>id===DEFAULT_MODEL));
-  assert.ok(verified.every(([,geminiKey,zenKey])=>geminiKey==='gemini-secret'&&zenKey==='zen-secret'));
+  assert.ok(verified.every(([,geminiKey,zenKey,cfAccountId,cfApiToken])=>geminiKey==='gemini-secret'
+    &&zenKey==='zen-secret'&&cfAccountId==='cf-account'&&cfApiToken==='cf-token'));
 });
 test('settings API validates models, permissions, and unknown fields before saving',async()=>{
   let saves=0,verified=[];
