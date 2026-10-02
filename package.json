@@ -6,7 +6,10 @@
     "test": "node --import tsx --test tests/*.test.ts tests/*.test.mjs",
     "test:ai": "node --test tests/ai-*.test.mjs",
     "test:ai:live": "node scripts/ai-smoke.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:owner-chat": "node scripts/owner-chat-battery.mjs --fast",
+    "test:owner-chat:live": "node scripts/owner-chat-battery.mjs --live",
+    "check:release": "node scripts/check-owner-chat-gate.mjs"
   },
   "keywords": [],
   "author": "",

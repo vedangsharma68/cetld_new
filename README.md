@@ -62,3 +62,43 @@ has no invoice PDF renderer or customer portal; those outputs need the same
 disclosure added where they are generated.
 Do not put Meta credentials in browser code or commit populated `.env` files.
 
+## Owner chat regression battery
+
+Run the complete local release check before pushing:
+
+```bash
+npm ci --include=dev
+npm run check:release
+```
+
+For a quick conversation check, run `npm run test:owner-chat`. It uses a
+scripted model and fictional workspaces, but exercises the actual owner
+handler, agent loop, scoped data tools, confirmations and saved replies.
+It does not connect to WhatsApp, Supabase or Vercel and cannot message a customer.
+The existing isolation tests also run in the full test suite.
+
+Run `npm run test:owner-chat:live` to check the conversations with the real
+Cloudflare provider. Supply server-only `CLOUDFLARE_ACCOUNT_ID` and
+`CLOUDFLARE_API_TOKEN` in your process environment. Live mode still uses
+fictional workspace data and never sends WhatsApp messages. It fails if the
+required provider cannot serve the conversation; a fallback is not counted
+as proof that Cloudflare worked. Do not paste credentials into this repository.
+
+GitHub Actions runs the fast battery, TypeScript checks and full test suite
+on every push and pull request. Vercel runs the same release gate as its build
+command, then runs the live battery for production builds using its existing
+provider credentials. Any failing check stops that build before publication,
+so a failed GitHub check cannot race an automatic production deployment.
+The generated `owner-chat-build.json` identifies the checked commit and source
+hashes, contains no customer data or secrets, and is generated only after the
+gate passes.
+
+Add scenarios in `scripts/owner-chat-battery.mjs`; seeded records and the
+strict workspace query fixture live in `tests/fixtures/owner-chat-battery.mjs`.
+Each scenario should exercise the handler or loop, assert a nonempty reply
+within the deadline, verify the expected records or confirmation, and check
+that no foreign workspace was read or changed. Add normal conversation cases
+to both modes. Keep induced transport failures explicitly labeled as simulated.
+`tests/owner-chat-battery.test.mjs` runs the fast scenarios in the normal test
+suite. Run both modes when changing model prompts, tools or provider routing.
+

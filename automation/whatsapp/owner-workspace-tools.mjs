@@ -9,6 +9,7 @@ export function createOwnerWorkspaceTools(options = {}) {
   if(options.signal?.aborted)abort();
   else options.signal?.addEventListener('abort',abort,{once:true});
   let writeAttempted = false;
+  let lastTool = null;
   const safety = createOwnerSafetyTools({...options,signal:controller.signal});
   const invoke = (name, args = {}) => safety.execute(name, args);
   const target = params => {
@@ -58,18 +59,27 @@ export function createOwnerWorkspaceTools(options = {}) {
     },
   });
   return {
-    definitions:[tool.definition],
+    definitions:[{type:'function',function:{name:'getAIProviderConfiguration',description:'Read this turn\'s actual primary, fallback and serving model configuration.',parameters:{type:'object',properties:{},additionalProperties:false}}},tool.definition],
     async execute(name, args, context) {
-      if (name !== 'workspaceData') return {ok:false, code:'UNKNOWN_TOOL', message:'That tool does not exist. Use workspaceData with a description of what you need.'};
+      if (!['workspaceData','getAIProviderConfiguration'].includes(name)) return {ok:false, code:'UNKNOWN_TOOL', message:'That tool does not exist. Use workspaceData with a description of what you need.'};
+      lastTool=name;
       if(context?.signal?.aborted)abort();
       else context?.signal?.addEventListener('abort',abort,{once:true});
-      try{return await tool.execute(args,context);}
+      try{
+        if(name==='getAIProviderConfiguration'){
+          if(!args||typeof args!=='object'||Array.isArray(args)||Object.keys(args).length)return {ok:false,code:'INVALID',readOnly:true};
+          const result=await invoke(name,args);
+          return {...result,ok:result?.ok!==false,readOnly:true,operation:'configuration'};
+        }
+        return await tool.execute(args,context);
+      }
       finally{context?.signal?.removeEventListener('abort',abort);}
     },
     setServedModel: safety.setServedModel,
     getMedia: safety.getMedia,
     getAttachmentIngested: safety.getAttachmentIngested,
     getWriteAttempted: () => writeAttempted || tool.getWriteAttempted?.() || false,
+    getAttemptedOperation: () => lastTool==='getAIProviderConfiguration'?lastTool:tool.getAttemptedOperation?.(),
     getReplyRequirement() {return tool.getReplyRequirement?.() || safety.getReplyRequirement();},
   };
 }

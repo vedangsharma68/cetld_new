@@ -321,6 +321,10 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
         phone: event.sender_phone, message: event.message_text, messageId: event.provider_message_id, media,
         mediaError: owner?ownerMediaError:event.media_ref && !media ? 'Stored media unavailable' : null, signal, deadlineAt });
       active();
+      // An accepted reply can outlive its inbox lease. Finish that recovered
+      // event without a second Graph send or another claim of the same reply.
+      if(owner&&response?.replayed&&response.replayMessageId===event.provider_message_id
+        &&['accepted','sent','delivered','read'].includes(response.replayDeliveryStatus))return 'bound';
       const answer = typeof response === 'string' ? response : response?.answer;
       if (typeof answer === 'string' && answer.trim()) {
         const sender = await getOutbound();

@@ -1,5 +1,7 @@
 {
   "framework": null,
+  "installCommand": "npm ci --include=dev",
+  "buildCommand": "npm run check:release",
   "functions": {
     "api/ai.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 60},
     "api/whatsapp.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 60},

@@ -4,3 +4,5 @@ node_modules/
 coverage/
 supabase/.temp/
 .superpowers/
+owner-chat-build.json
+.vercel/

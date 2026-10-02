@@ -84,39 +84,26 @@ const WRITE_SCHEMA = Object.freeze({
 });
 
 function definition() {
-  const allColumns=[...new Set(Object.values(TABLES).flatMap(table=>table.columns))].sort();
-  const valueFields=[
-    'name','company_name','email','phone','business_name','default_currency','default_timezone','primary_model','fallback_model',
-    'invoice_number','customer_name','client_name','customer_id','customer_email','customer_phone','issue_date',
-    'due_date','currency','total_amount','subtotal','tax','notes','status','amount','method','reference',
-  ];
-  const valueProperties=Object.fromEntries(valueFields.map(key=>[key,{type:['string','number','boolean','null']} ]));
-  valueProperties.follow_up_preferences={type:'object',additionalProperties:false,properties:{
-    tone:{type:'string',enum:['gentle','professional','firm']},maxReminders:{type:'integer',minimum:1,maximum:20},
-    cadenceDays:{type:'integer',minimum:1,maximum:90},firstReminderDays:{type:'integer',minimum:0,maximum:90},
-    contactStart:{type:'string',pattern:'^([01]\\d|2[0-3]):[0-5]\\d$'},contactEnd:{type:'string',pattern:'^([01]\\d|2[0-3]):[0-5]\\d$'},
-    pauseOnReply:{type:'boolean'},dailySummary:{type:'boolean'},
-  }};
-  valueProperties.invoice_direction={type:'string',enum:['receivable','payable','uncertain']};
-  valueProperties.direction={type:'string',enum:['receivable','payable','uncertain']};
+  // The server validates the full catalog. Do not send that catalog on every
+  // model request; describe exposes it when the model needs unfamiliar fields.
   return {type:'function',function:{name:'workspaceData',
-    description:'Read or safely change the verified owner workspace business data. Give either a natural-language request or one structured operation. Reads use only the published table and column catalog, are scoped to this workspace, and never join across workspaces. Writes create one stale-protected proposal that needs a later explicit owner confirmation. Use separate calls to compose multiple reads. No raw SQL, schema changes, bulk writes, or bulk invoice deletion.',
+    description:'Read or propose changes to workspace data. Use structured fields or request text. Invoice filters include customer_name and invoice_number. Settings fields include primary_model, fallback_model and follow_up_preferences. describe returns the field catalog; pending/confirm/cancel handle proposals.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         request:{type:'string',minLength:1,maxLength:1200},
         operation:{type:'string',enum:OPERATIONS},
         table:{type:'string',enum:Object.keys(TABLES)},
-        columns:{type:'array',maxItems:20,items:{type:'string',enum:allColumns}},
+        columns:{type:'array',maxItems:20,items:{type:'string'}},
         filters:{type:'array',maxItems:8,items:{type:'object',additionalProperties:false,
-          properties:{column:{type:'string',enum:[...new Set(Object.values(TABLES).flatMap(table=>table.filters))]},
+          properties:{column:{type:'string'},
             operator:{type:'string',enum:FILTER_OPERATORS},
             value:{type:['string','number','boolean','null','array'],items:{type:['string','number','boolean','null']}}},
           required:['column','operator','value']}},
-        values:{type:'object',additionalProperties:false,properties:valueProperties},
+        values:{type:'object'},
         limit:{type:'integer',minimum:1,maximum:MAX_LIMIT},
         offset:{type:'integer',minimum:0,maximum:100000},
         order:{type:'object',additionalProperties:false,
-          properties:{column:{type:'string',enum:allColumns},direction:{type:'string',enum:['asc','desc']}},required:['column','direction']},
+          properties:{column:{type:'string'},direction:{type:'string',enum:['asc','desc']}},required:['column','direction']},
       },
     }}};
 }
@@ -128,6 +115,7 @@ function catalog() {
       label:spec.label,columns:spec.columns,filters:spec.filters,
       writeFields:WRITE_SCHEMA[name]||{},
       ...(name==='invoices'?{writeValueConstraints:{update:{status:['paid']}}}:{}),
+      ...(name==='workspace_settings'?{writeValueConstraints:{update:{follow_up_preferences:{tone:['gentle','professional','firm']}}}}:{}),
       operations:name==='invoices'?['read','create','update','delete','restore','reviewAttachment']
         :name==='customers'?['read','create','update','delete']
           :name==='workspace_settings'||name==='workspace_ai_settings'?['read','update']
@@ -355,6 +343,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
   if(!supabase?.from||typeof scope?.workspaceId!=='string')throw new TypeError('Supabase and verified workspace scope required');
   let replyRequirement=null;
   let writeAttempted=false;
+  let attemptedOperation=null;
   const readScoped=async ({table,columns,filters,limit,offset,order},internalColumns=[],ctx)=>{
     const spec=TABLES[table];
     const selected=columns||spec.defaults;
@@ -667,9 +656,14 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
       const params=await normalizeRequest(raw,scope,planRequest,ctx);
       ctx.assertLive();
-      if(params.operation==='describe')return await describe(ctx);
-      if(['pending','confirm','cancel'].includes(params.operation))return await handlePending(params.operation,ctx);
-      if(params.operation==='read')return await read(params,ctx);
+      attemptedOperation={operation:params.operation,...(params.table?{table:params.table}:{})};
+      const readResult=result=>({...result,operation:params.operation,table:params.table,readOnly:true});
+      if(params.operation==='describe')return readResult(await describe(ctx));
+      if(['pending','confirm','cancel'].includes(params.operation)) {
+        const result=await handlePending(params.operation,ctx);
+        return params.operation==='pending'?readResult(result):result;
+      }
+      if(params.operation==='read')return readResult(await read(params,ctx));
       if(params.operation==='create'||params.operation==='update'||params.operation==='delete')return await propose(params,ctx);
       if(['restore','analyzeAttachment','saveAttachment','reviewAttachment','sendFile'].includes(params.operation)) {
         if(typeof executeSafetyOperation!=='function')return fail();
@@ -679,5 +673,5 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     } catch(error) { return error instanceof TypeError?fail():safeError(error); }
   };
   return Object.freeze({definition:definition(),execute,getReplyRequirement:()=>replyRequirement?{...replyRequirement}:null,
-    getWriteAttempted:()=>writeAttempted});
+    getWriteAttempted:()=>writeAttempted,getAttemptedOperation:()=>attemptedOperation});
 }

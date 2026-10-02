@@ -74,7 +74,7 @@ test('each verified owner message, including greeting, meta, thanks, yes and med
   const supabase=memorySupabase();let calls=0,metaToolResult,analysisResult,lastResponse;
   const providerFactory=()=>({async generate(request){
     calls++;
-    assert.ok(Array.isArray(request.tools)&&request.tools.length>0,'owner turn must include tools');
+    if(!request.messages.some(item=>item.role==='tool'))assert.ok(Array.isArray(request.tools)&&request.tools.length>0,'initial owner turn must include tools');
     const current=request.messages.filter(item=>item.role==='user').at(-1)?.content||'';
     if(current==='Which model is answering?'&&!request.messages.some(item=>item.role==='tool')){
       const tool=request.tools.find(item=>item.function.name==='getAIProviderConfiguration');assert.ok(tool);
@@ -163,7 +163,7 @@ test('available model repairs its own unsafe draft before any owner reply is ret
   const tools={definitions:[{type:'function',function:{name:'read',parameters:{type:'object',properties:{}}}}],
     async execute(){return {ok:true};},setServedModel(){}};
   const provider={async generate({messages,tools:provided}){
-    calls++;assert.equal(provided.length,1);
+    calls++;if(calls===1)assert.equal(provided.length,1);else assert.equal(provided,undefined);
     return calls===1?{model:CF_QWEN_MODEL,content:'I am Vedang, and I will send you a final notice — pay now.'}
       :{model:CF_QWEN_MODEL,content:'I can help review an invoice or account question.'};
   }};
@@ -437,9 +437,9 @@ test('the model proposes one deletion, ordinary yes cannot confirm strong delete
   assert.equal(f.deleted,false);assert.equal(f.calls.filter(call=>call.action==='undo').length,1);
   assert.match(restored.answer,/restored/i);
   const replay=await handler({...scope,message:'RESTORE INV-17',messageId:'wamid.undo'});
-  assert.match(replay.answer,/restored/i);assert.equal(f.calls.filter(call=>call.action==='undo').length,2);
+  assert.match(replay.answer,/restored/i);assert.equal(replay.replayed,true);assert.equal(f.calls.filter(call=>call.action==='undo').length,1);
   const undoCalls=f.calls.filter(call=>call.action==='undo');
-  assert.equal(undoCalls.at(-1).args.p_idempotency_key,undoCalls.at(-2).args.p_idempotency_key);
+  assert.ok(undoCalls[0].args.p_idempotency_key);
   assert.equal(f.deleted,false);
 });
 
@@ -447,7 +447,7 @@ test('generic delete copy is model-repaired to name the invoice, customer, amoun
   const f=lifecycleFixture();let calls=0,repairInstruction='';
   const provider={async generate({messages,tools}){
     calls++;
-    assert.ok(tools.length>0);
+    if(calls<=2)assert.ok(tools.length>0);else assert.equal(tools,undefined);
     if(calls===1)return {model:CF_QWEN_MODEL,content:'',toolCalls:[{id:'prepare',type:'function',function:{name:'prepareInvoiceDeletion',arguments:'{"target":"INV-17"}'}}]};
     if(calls===2)return {model:CF_QWEN_MODEL,content:'To remove it, reply exactly DELETE INV-17, or cancel.'};
     repairInstruction=messages.at(-1).content;

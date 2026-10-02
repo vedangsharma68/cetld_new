@@ -34,12 +34,13 @@ function handler(db,provider,history=[]) {
     ownerStoreFactory:()=>({query:async()=>[]}),historyReader:async()=>history,providerFactory:()=>provider,logger:{error(){}}});
 }
 
-test('default owner handler exposes only workspaceData and answers meta questions from live config',async()=>{
+test('default owner handler exposes compact workspace and configuration tools and answers meta in one tool round',async()=>{
   const db=database();let calls=0;
   const h=handler(db,{async generate({tools,messages}){
-    calls++;assert.deepEqual(tools.map(tool=>tool.function.name),['workspaceData']);
+    calls++;if(tools){assert.deepEqual(tools.map(tool=>tool.function.name),['getAIProviderConfiguration','workspaceData']);assert.ok(JSON.stringify(tools).length<2600);}
     const results=messages.filter(message=>message.role==='tool');
-    if(!results.length)return {model:CF_QWEN_MODEL,toolCalls:[call({operation:'describe'})]};
+    if(!results.length)return {model:CF_QWEN_MODEL,toolCalls:[{id:'config-call',type:'function',function:{name:'getAIProviderConfiguration',arguments:'{}'}}]};
+    assert.equal(tools,undefined);
     const runtime=JSON.parse(results.at(-1).content);
     assert.ok(JSON.stringify(runtime).includes(CF_QWEN_MODEL));
     assert.ok(JSON.stringify(runtime).includes(GEMINI_FALLBACK_MODEL));
@@ -47,6 +48,7 @@ test('default owner handler exposes only workspaceData and answers meta question
   }});
   const result=await h({...scope,message:'Which model are you using?',messageId:'meta-1'});
   assert.equal(calls,2);assert.match(result.answer,/qwen3/);assert.doesNotMatch(result.answer,/invoice|OTHER-BUSINESS/);
+  assert.equal(result.agentDiagnostics.toolRounds,1);
 });
 
 test('natural-language workspaceData reads real fixture invoices and preserves John across later turns',async()=>{
@@ -58,7 +60,7 @@ test('natural-language workspaceData reads real fixture invoices and preserves J
     planned++;assert.match(messages.at(-1).content,/John/);
     return {data:{operation:'read',table:'customers',columns:['name'],filters:[{column:'name',operator:'ilike',value:'%John%'}]}};
   },async generate({tools,messages}){
-    assert.deepEqual(tools.map(tool=>tool.function.name),['workspaceData']);
+    if(tools)assert.deepEqual(tools.map(tool=>tool.function.name),['getAIProviderConfiguration','workspaceData']);
     assert.ok(messages.some(message=>message.content==='John Smith is my customer'));
     const results=messages.filter(message=>message.role==='tool');
     if(!results.length)return {model:CF_QWEN_MODEL,toolCalls:[call({request:"Find John's customer record"})]};
@@ -88,7 +90,7 @@ test('the whole owner turn is bounded even when loading conversation history han
   const started=Date.now();
   const result=await h({...scope,message:'Show invoices',messageId:'hung-setup',deadlineAt:Date.now()+5_040});
   assert.ok(Date.now()-started<1_000);assert.equal(modelCalls,0);
-  assert.equal(result.plannerFailure.code,'OWNER_LOOP_TIMEOUT');assert.match(result.answer,/too long/i);
+  assert.equal(result.plannerFailure.code,'OWNER_LOOP_TIMEOUT');assert.match(result.answer,/recent conversation.*Nothing was changed/i);
 });
 
 test('the default single tool preserves invoice delete confirmation and undo end to end',async()=>{
@@ -124,7 +126,7 @@ test('the default single tool preserves invoice delete confirmation and undo end
       }
       return rows;
     }}),providerFactory:()=>{const index=turn++;return {async generate({messages,tools}){
-      assert.deepEqual(tools.map(tool=>tool.function.name),['workspaceData']);
+      if(tools)assert.deepEqual(tools.map(tool=>tool.function.name),['getAIProviderConfiguration','workspaceData']);
       if(!messages.some(message=>message.role==='tool'))return {model:CF_QWEN_MODEL,toolCalls:[call(plans[index])]};
       const result=JSON.parse(messages.find(message=>message.role==='tool').content);toolResults.push(result);
       return {model:CF_QWEN_MODEL,content:answers[index]};
@@ -160,7 +162,7 @@ test('model selection is proposed through workspaceData, confirmed later, and us
     ownerStoreFactory:()=>({query:async()=>[]}),historyReader:async()=>[],logger:{error(){}},providerFactory:config=>{
       const index=turn++;configured.push(config.primaryModel);
       return {async generate({messages,tools}){
-        assert.deepEqual(tools.map(tool=>tool.function.name),['workspaceData']);
+        if(tools)assert.deepEqual(tools.map(tool=>tool.function.name),['getAIProviderConfiguration','workspaceData']);
         if(!messages.some(message=>message.role==='tool'))return {model:config.primaryModel,toolCalls:[call(plans[index])]};
         const output=JSON.parse(messages.find(message=>message.role==='tool').content);
         assert.equal(output.ok,true);
