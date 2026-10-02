@@ -145,3 +145,36 @@ test('a successful planner retry returns the recovered answer without diagnostic
   assert.equal(await handler(scope), 'Invoice INV-1 is paid.');
   assert.equal(asks, 2);
 });
+
+function contactFlow({consentAnswer = 'yes'} = {}) {
+  let row = {id: 12, action: {type: 'invoice_debtor_phone', stage: 'awaiting_phone', invoiceId: 'invoice-1',
+    clientName: 'Acme', clientPhoneRaw: '(415) 555-0244'}};
+  const rpcCalls = [];
+  const db = fakeSupabase();
+  db.rpc = async (name, args) => { rpcCalls.push({name, args}); return {data: {id: 'consent-1'}, error: null}; };
+  const pending = {async loadPendingAction() { return row; }, async consumePendingAction() { row = null; return {}; },
+    async loadPendingActionState() { return {generation: 1, id: null, version: null}; },
+    async storePendingAction({action}) { row = {id: 13, action}; return row; }, async loadInvoiceReview() { return null; }};
+  const writes = [];
+  const handler = createWhatsAppBoundMessageHandler({supabase: db, providerFactory: () => ({}),
+    pendingActionStoreFactory: () => pending, invoiceStoreFactory: () => ({async saveDebtorPhone(input) { writes.push(input); }}),
+    channelFactory: () => ({async ask() { throw new Error('provider must not be called'); }})});
+  return {handler, writes, rpcCalls, consentAnswer};
+}
+
+test('pending invoice phone answer requires E.164 and saves it with logged default consent, no consent RPC', async () => {
+  const flow = contactFlow();
+  assert.match(await flow.handler({...scope, message: '415 bananas'}), /full WhatsApp number with country code/i);
+  assert.equal(flow.writes.length, 0);
+  assert.match(await flow.handler({...scope, message: '+1 (415) 555-0244'}), /Saved \+14155550244.*Consent is logged as yes/s);
+  assert.equal(flow.writes.length, 1);
+  assert.equal(flow.writes[0].invoiceId, 'invoice-1');
+  assert.equal(flow.writes[0].phone, '+14155550244');
+  assert.equal(flow.rpcCalls.length, 0);
+});
+
+test('a country-code-only answer completes the printed local number without guessing', async () => {
+  const flow = contactFlow();
+  assert.match(await flow.handler({...scope, message: '+1'}), /Saved \+14155550244/);
+  assert.equal(flow.writes[0].phone, '+14155550244');
+});
