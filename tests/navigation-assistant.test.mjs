@@ -61,11 +61,19 @@ test('connections only surfaces supported accounting integrations and neutral cr
 test('settings navigation only points to existing sections; untracked setup progress is absent',()=>{
   const settingsSource=app.slice(app.indexOf('function settings()'),app.indexOf('async function saveSettings'));
   for(const section of ['profile','preferences','account'])assert.match(settingsSource,new RegExp(`href="#${section}"`));
+  assert.deepEqual([...settingsSource.matchAll(/<a href="#([^"]+)">/g)].map(match=>match[1]),['profile','follow-up-preferences','owner-whatsapp','preferences','account']);
+  const sectionPositions=['id="profile"','${followUpPreferencesForm','${ownerNumberForm()','id="preferences"','id="account"'].map(token=>settingsSource.indexOf(token));
+  assert.ok(sectionPositions.every(position=>position>=0));
+  assert.deepEqual(sectionPositions,[...sectionPositions].sort((a,b)=>a-b));
+  assert.match(app,/import \{mountSettingsNavigation,destroySettingsNavigation\}/);
+  assert.match(app,/function render\(\)\{destroySettingsNavigation\(\)/);
+  assert.match(app,/if\(state\.page==='Settings'\)mountSettingsNavigation/);
   assert.match(settingsSource,/class="settings-branch-label">Business/);
   assert.doesNotMatch(settingsSource,/Setup guide/);
   const css=fs.readFileSync(new URL('../styles.css',import.meta.url),'utf8');
   assert.match(css,/\.setup-card\{display:none!important\}/);
-  assert.match(css,/\.settings-layout:has\(#preferences:target\)/);
+  assert.match(css,/\.settings-branch-children>a\[aria-current="location"\]/);
+  assert.doesNotMatch(css,/\.settings-layout:has\(#preferences:target\)/);
   assert.match(css,/\.settings-branch-children>a:active\{transform:translateX\(2px\) scale\(\.985,\.96\)\}/);
   assert.match(css,/@media\(prefers-reduced-motion:reduce\)\{\.settings-branch-children>a/);
 });
