@@ -28,7 +28,7 @@ export function profileFromUser(user) {
     fullName,
     businessName,
     initials: initialsFor(fullName),
-    secondaryLabel: businessName || 'Workspace owner',
+    secondaryLabel: businessName || 'Business owner',
   };
 }
 
