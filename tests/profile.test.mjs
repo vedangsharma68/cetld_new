@@ -19,7 +19,7 @@ test('profile uses safe fallbacks when metadata is missing', () => {
     fullName: 'vedang',
     businessName: '',
     initials: 'VE',
-    secondaryLabel: 'Workspace owner',
+    secondaryLabel: 'Business owner',
   });
   assert.equal(profileFromUser(null).fullName, 'Account');
   assert.equal(profileFromUser(null).initials, 'AC');
