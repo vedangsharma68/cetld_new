@@ -281,3 +281,5 @@ body{min-height:100vh;isolation:isolate;overflow-x:hidden}#app{position:relative
 @media(prefers-reduced-motion:reduce){.invoice-dropzone,.choice-control{transition:none!important}.invoice-dropzone:hover,.invoice-dropzone.is-dragging{transform:none}}
 .invoice-ledger-drop-overlay{position:fixed;inset:20px;z-index:90;display:grid;place-content:center;justify-items:center;gap:10px;border:2px dashed var(--mint);border-radius:18px;background:color-mix(in srgb,var(--cedar) 90%,transparent);color:#fff;opacity:0;pointer-events:none;transform:scale(.985);transition:opacity .16s,transform .16s;backdrop-filter:blur(8px)}.invoice-ledger-drop-overlay.is-visible{opacity:1;transform:none}.invoice-ledger-drop-overlay>span{display:grid;place-items:center;width:64px;height:64px;border-radius:17px;background:var(--acid);color:#17342b}.invoice-ledger-drop-overlay .icon{width:28px;height:28px}.invoice-ledger-drop-overlay strong{font-size:1.2rem}.invoice-ledger-drop-overlay small{color:#bfd0ca}
 @media(prefers-reduced-motion:reduce){.invoice-ledger-drop-overlay{transition:none!important;transform:none}}
+
+.whatsapp-code{font-size:1.6rem;letter-spacing:.08em;margin:12px 0}
