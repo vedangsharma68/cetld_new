@@ -182,7 +182,7 @@ test('currency-missing photo uses a default and auto-saves without confirmation'
   const fields = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-50',customerName:'Buyer',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:0,total:100,outstandingAmount:100,direction:'receivable'})[name] ?? null,
       confidence: name === 'currency' ? 0 : .99}]));
-  const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory: () => ({}),
+  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase, providerFactory: () => ({}),
     pendingActionStoreFactory: () => pending, invoiceStoreFactory: () => ({}),
     saveInvoice: async ({invoice}) => { saves++; return {saved: true, invoice}; },
     channelFactory: () => ({async ask() { planner++; return {answer: 'planner'}; }}),
@@ -200,7 +200,7 @@ test('default handler, real invoice store auto-saves a photo exactly once', asyn
   const fields = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-50',customerName:'Buyer',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:0,total:100,outstandingAmount:100,direction:'receivable'})[name] ?? null,
       confidence: name === 'currency' ? 0 : .99}]));
-  const handler = createWhatsAppBoundMessageHandler({supabase: db, providerFactory: () => ({}),
+  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase: db, providerFactory: () => ({}),
     extract: async () => ({...fields, lineItems: {value: [], confidence: .99}})});
   const logged = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/png'}});
   assert.match(logged, /^Logged invoice INV-50/);
@@ -217,7 +217,7 @@ test('default handler, real invoice store auto-saves a photo exactly once', asyn
   const complete = structuredClone(fields);
   complete.invoiceNumber.value = 'INV-51';
   complete.currency = {value: 'USD', confidence: .99};
-  const completeHandler = createWhatsAppBoundMessageHandler({supabase: completeDb, providerFactory: () => ({}),
+  const completeHandler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase: completeDb, providerFactory: () => ({}),
     extract: async () => ({...complete, lineItems: {value: [], confidence: .99}})});
   assert.match(await completeHandler({...scope, message: '', media: {bytes: Buffer.from([2]), mimeType: 'image/png'}}), /^Logged invoice INV-51/);
   assert.equal(completeDb.invoices.length, 1);

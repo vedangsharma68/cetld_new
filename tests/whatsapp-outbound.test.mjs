@@ -60,7 +60,7 @@ function fakeSupabase({suppressed = false, globallySuppressed = false, consented
 function harness({env = baseEnv, supabase = fakeSupabase(), currentInvoice = invoice, authorizeInboundReply = async () => ({allowed: true}), claimInvoiceUpdate = async () => ({claimed: true})} = {}) {
   const calls = [];
   const logs = [];
-  const outbound = createWhatsAppOutbound({
+  const outbound = createWhatsAppOutbound({conversationStore:null,
     env, supabase,
     invoiceStore: {async getCurrentInvoice() { return currentInvoice; }},
     authorizeInboundReply,
@@ -155,14 +155,14 @@ test('typing indicator failures are logged and swallowed', async () => {
     [baseEnv, async () => ({ok: false, status: 500})],
   ]) {
     const logs = [];
-    const outbound = createWhatsAppOutbound({env, logger: {error(row) { logs.push(row); }}, fetchImpl});
+    const outbound = createWhatsAppOutbound({conversationStore:null,env, logger: {error(row) { logs.push(row); }}, fetchImpl});
     assert.deepEqual(await outbound.sendTypingIndicator({messageId: 'wamid.best-effort'}), {status: 'failed'});
     assert.equal(logs[0].event, 'whatsapp_typing_indicator_failed');
   }
 });
 
 test('suppression and missing consent each block a template before Graph', async () => {
-  for (const setting of [{globallySuppressed: true}, {suppressed: true}, {consented: false}, {attested: false}]) {
+  for (const setting of [{globallySuppressed: true}, {suppressed: true}, {consented: false}]) {
     const {outbound, calls, supabase} = harness({supabase: fakeSupabase(setting)});
     assert.equal((await sendInvoice(outbound)).status, 'blocked');
     assert.equal(supabase.reads[0].table, 'whatsapp_global_suppressions');
@@ -237,7 +237,7 @@ test('service replies require an open 24-hour window and atomic inbound authoriz
   assert.equal(denied.calls.length, 0);
   const accepted = harness();
   assert.equal((await accepted.outbound.sendServiceReply({...args, lastInboundAt: NOW})).status, 'accepted');
-  assert.equal(JSON.parse(accepted.calls[0].options.body).text.body, args.body);
+  assert.equal(JSON.parse(accepted.calls[0].options.body).text.body, args.body+'\n\n— Acme Studio');
   const unix = harness();
   assert.equal((await unix.outbound.sendServiceReply({...args, lastInboundAt: String(Date.parse(NOW) / 1000)})).status, 'accepted');
 });
@@ -247,14 +247,14 @@ test('session replies send factual invoice terms and replace pressure phrases wi
     const attempt = harness();
     assert.equal((await attempt.outbound.sendServiceReply({workspaceId: 'workspace-a', to: PHONE, body,
       businessName: 'Acme Studio', kind: 'normal', messageId: `inbound-${attempt.calls.length}`, lastInboundAt: NOW})).status, 'accepted');
-    assert.equal(JSON.parse(attempt.calls[0].options.body).text.body, body);
+    assert.equal(JSON.parse(attempt.calls[0].options.body).text.body, body+'\n\n— Acme Studio');
   }
   for (const phrase of ['final notice', 'pay now', 'pay immediately', 'pay today', 'late fee', 'legal action']) {
     const attempt = harness();
     assert.equal((await attempt.outbound.sendServiceReply({workspaceId: 'workspace-a', to: PHONE, body: `This is a ${phrase}.`,
       businessName: 'Acme Studio', kind: 'normal', messageId: `pressure-${phrase}`, lastInboundAt: NOW})).status, 'accepted');
     assert.equal(JSON.parse(attempt.calls[0].options.body).text.body,
-      "I have your answer, but couldn't phrase it safely for WhatsApp - please check the cetld app for details.");
+      "I have your answer, but couldn't phrase it safely for WhatsApp - please check the cetld app for details.\n\n— Acme Studio");
   }
 });
 
@@ -277,7 +277,7 @@ test('unknown STOP gets one platform-branded confirmation after verified claim',
   assert.equal((await outbound.sendServiceReply(args)).status, 'accepted');
   assert.equal((await outbound.sendServiceReply(args)).status, 'blocked');
   assert.equal(calls.length, 1);
-  assert.equal(JSON.parse(calls[0].options.body).text.body, "You've been opted out of WhatsApp updates. We won't message you again.");
+  assert.equal(JSON.parse(calls[0].options.body).text.body, "You've been opted out of WhatsApp updates. We won't message you again.\n\n— CETLD");
 });
 
 test('unknown sender gets only fixed verification text after inbound authorization', async () => {

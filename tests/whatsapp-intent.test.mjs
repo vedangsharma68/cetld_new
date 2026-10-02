@@ -40,7 +40,7 @@ const inv={id:'i1',invoiceNumber:'INV-2026-0003',printedInvoiceNumber:'INV-2026-
 function mkHandler({provider,store,channelAsk}){
   const sb={from(){const q={select(){return q},eq(){return q},order(){return q},limit(){return q},range(){return q},in(){return q},delete(){return q},
     async maybeSingle(){return {data:{primary_model:'space-bunny-free',fallback_model:null}}},insert(){return Promise.resolve({data:null})},then(r){return r({data:[]})}};return q}};
-  return createWhatsAppBoundMessageHandler({supabase:sb,providerFactory:()=>provider,channelFactory:()=>({ask:channelAsk||(async()=>({answer:'planner',model:'m',usedFallback:false}))}),
+  return createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase:sb,providerFactory:()=>provider,channelFactory:()=>({ask:channelAsk||(async()=>({answer:'planner',model:'m',usedFallback:false}))}),
     pendingActionStoreFactory:()=>({loadInvoiceReview:async()=>null}),invoiceStoreFactory:()=>store,clock:()=>new Date('2026-10-01T12:00:00Z')});
 }
 test('slang edit is classified by the model and applied through the store rails',async()=>{

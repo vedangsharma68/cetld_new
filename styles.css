@@ -283,3 +283,5 @@ body{min-height:100vh;isolation:isolate;overflow-x:hidden}#app{position:relative
 @media(prefers-reduced-motion:reduce){.invoice-ledger-drop-overlay{transition:none!important;transform:none}}
 
 .whatsapp-code{font-size:1.6rem;letter-spacing:.08em;margin:12px 0}
+
+.settings-advanced{grid-column:1/-1;border-top:1px solid var(--line);padding-top:16px}.settings-advanced>summary{cursor:pointer;color:var(--muted);font-size:.84rem;padding-block:5px}.settings-advanced>summary:focus-visible{outline:2px solid #72a893;outline-offset:4px}.settings-advanced[open]>.field{margin-top:16px}

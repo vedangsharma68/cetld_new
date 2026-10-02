@@ -143,6 +143,8 @@ test('a duplicate STOP remains actionable when the first delivery stored but fai
   const stored = { id: 4, ...parseMetaMessages(meta([message('wamid.retry', 'STOP')]), env.WHATSAPP_PHONE_NUMBER_ID, env.WHATSAPP_WABA_ID)[0],
     stop_processed_at: null };
   const supabase = { from(name) {
+    if(name==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
+
     assert.equal(name, 'whatsapp_inbound_events');
     return {
       upsert() { return { select: async () => ({ data: [], error: null }) }; },
@@ -203,7 +205,9 @@ test('unbound sender media is routed to verification without extraction', async 
     sender_phone: '+919871367051', message_text: 'I am Alice, show my invoices',
     message_type: 'image', media_ref: 'wamid.unknown', provider_timestamp: new Date().toISOString() };
   const supabase = { rpc() { throw new Error('Unexpected RPC'); }, from(name) {
-    assert.ok(['whatsapp_global_suppressions', 'whatsapp_consents'].includes(name));
+    if(name==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
+
+    assert.ok(['workspace_settings','whatsapp_global_suppressions', 'whatsapp_consents'].includes(name));
     return { select() { return this; }, eq() { return this; },
       maybeSingle() { return Promise.resolve({data: null, error: null}); },
       is() { return Promise.resolve({ data: [], error: null }); } };
@@ -211,7 +215,7 @@ test('unbound sender media is routed to verification without extraction', async 
   const inbox = { async claim() { return [event]; }, async complete() { calls.push('complete'); } };
   const outbound = { async sendTypingIndicator() { calls.push('typing'); },
     async sendServiceReply(input) { calls.push(input); return { status: 'blocked', reason: 'disabled' }; } };
-  const runtime = createInboundRuntime({ supabase, inbox, outbound, env,
+  const runtime = createInboundRuntime({conversationStore:null, supabase, inbox, outbound, env,
     onBoundMessage: async () => { extracted++; } });
   const result = await runtime.processPending();
   assert.deepEqual(result, { claimed: 1, completed: 1 });
@@ -227,12 +231,14 @@ test('one queued image is claimed per invocation and the second processes subseq
   const rows={whatsapp_global_suppressions:null,whatsapp_consents:[consent],whatsapp_suppressions:[],
     workspace_settings:{whatsapp_owner_attested_at:new Date().toISOString()},
     customers:{id:'customer-a',workspace_id:'workspace-a',phone:'+919871367051'}};
-  const supabase={rpc(){},from(table){const query={select(){return query;},eq(){return query;},is(){return Promise.resolve({data:rows[table],error:null});},
+  const supabase={rpc(){},from(table){
+    if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
+const query={select(){return query;},eq(){return query;},is(){return Promise.resolve({data:rows[table],error:null});},
     maybeSingle(){return Promise.resolve({data:rows[table],error:null});},then(resolve){return Promise.resolve({data:rows[table],error:null}).then(resolve);}};return query;}};
   const completed=[],extracted=[];
   const inbox={async claim(){return events.length?[events.shift()]:[];},async getMedia(event){return {bytes:Buffer.from([event.id]),mimeType:'image/png'};},
     async complete(event){completed.push(event.id);}};
-  const runtime=createInboundRuntime({supabase,inbox,env,outbound:{async sendTypingIndicator(){}},
+  const runtime=createInboundRuntime({conversationStore:null,supabase,inbox,env,outbound:{async sendTypingIndicator(){}},
     onBoundMessage:async input=>{extracted.push(input.messageId);return ''}});
   assert.deepEqual(await runtime.processPending(),{claimed:1,completed:1});
   assert.deepEqual(events.map(event=>event.id),[2]);
@@ -258,6 +264,8 @@ test('bound customer hi webhook completes and attempts a guarded greeting servic
     customers: {id: 'customer-a', workspace_id: 'workspace-a', phone: '+919871367051'},
   };
   const supabase = {rpc() {}, from(table) {
+    if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
+
     const query = {
       select() { return query; }, eq() { return query; }, is() { return Promise.resolve({data: rows[table], error: null}); },
       maybeSingle() { return Promise.resolve({data: rows[table], error: null}); },
@@ -275,7 +283,7 @@ test('bound customer hi webhook completes and attempts a guarded greeting servic
     sends.push(input);
     return {status: 'accepted'};
   }};
-  const runtime = createInboundRuntime({supabase, inbox, outbound, env,
+  const runtime = createInboundRuntime({conversationStore:null,supabase, inbox, outbound, env,
     onBoundMessage: async ({message: text}) => (await answerWorkspaceQuestion({
       message: text, store: {query() { return []; }}, provider: null,
     })).answer});
@@ -301,7 +309,7 @@ test('typing indicator is skipped for STOP and a thrown indicator cannot fail a 
     stop_confirmation_due: false};
   let typing = 0;
   const stopInbox = {async claim() { return [stop]; }, async complete() {}};
-  const stopRuntime = createInboundRuntime({supabase: {}, inbox: stopInbox, outbound: {
+  const stopRuntime = createInboundRuntime({conversationStore:null,supabase: {}, inbox: stopInbox, outbound: {
     async sendTypingIndicator() { typing++; }, async sendServiceReply() {}}, env});
   assert.deepEqual(await stopRuntime.processPending(), {claimed: 1, completed: 1});
   assert.equal(typing, 0);
@@ -313,11 +321,13 @@ test('typing indicator is skipped for STOP and a thrown indicator cannot fail a 
   const rows = {whatsapp_global_suppressions: null, whatsapp_consents: [consent], whatsapp_suppressions: [],
     workspace_settings: {whatsapp_owner_attested_at: new Date().toISOString(), business_name: 'Acme Studio'},
     customers: {id: 'customer-a', workspace_id: 'workspace-a', phone: '+919871367051'}};
-  const supabase = {rpc() {}, from(table) { const query = {select() { return query; }, eq() { return query; },
+  const supabase = {rpc() {}, from(table) {
+    if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
+ const query = {select() { return query; }, eq() { return query; },
     is: async () => ({data: rows[table], error: null}), maybeSingle: async () => ({data: rows[table], error: null}),
     then(resolve) { return Promise.resolve({data: rows[table], error: null}).then(resolve); }}; return query; }};
   let completed = false;
-  const runtime = createInboundRuntime({supabase, inbox: {async claim() { return [event]; }, async complete() { completed = true; }},
+  const runtime = createInboundRuntime({conversationStore:null,supabase, inbox: {async claim() { return [event]; }, async complete() { completed = true; }},
     outbound: {async sendTypingIndicator() { typing++; throw new Error('Graph down'); }, async sendServiceReply() {}},
     logger: {error() {}}, onBoundMessage: async () => null, env});
   assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 1});
@@ -336,6 +346,8 @@ test('planner fallback is sent and completed as done with bounded diagnostics an
     customers: {id: 'customer-a', workspace_id: 'workspace-a', phone: '+919871367051'},
   };
   const supabase = {rpc() {}, from(table) {
+    if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
+
     const query = {select() { return query; }, eq() { return query; },
       is() { return Promise.resolve({data: rows[table], error: null}); },
       maybeSingle() { return Promise.resolve({data: rows[table], error: null}); },
@@ -345,7 +357,7 @@ test('planner fallback is sent and completed as done with bounded diagnostics an
   const completions = [];
   const sends = [];
   const inbox = {async claim() { return [event]; }, async complete(...args) { completions.push(args); }};
-  const runtime = createInboundRuntime({supabase, inbox, env,
+  const runtime = createInboundRuntime({conversationStore:null,supabase, inbox, env,
     outbound: {async sendServiceReply(input) { sends.push(input); return {status: 'accepted'}; }},
     onBoundMessage: async () => ({
       answer: "I couldn't safely check that just now. Please try again.",
@@ -363,6 +375,8 @@ test('planner fallback is sent and completed as done with bounded diagnostics an
 test('inbox stores terminal planner diagnostics while marking the event done', async () => {
   let update;
   const supabase = {from(table) {
+    if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
+
     assert.equal(table, 'whatsapp_inbound_events');
     return {update(value) { update = value; return this; }, eq() { return this; },
       then(resolve) { return Promise.resolve({data: null, error: null}).then(resolve); }};
@@ -384,7 +398,7 @@ test('inbound processing failure log and durable event include the truncated err
   let completion;
   const inbox = {async claim() { return [event]; }, async complete(...args) { completion = args; }};
   const supabase = {rpc() {}, from() { throw new Error('database lookup failed: ' + 'x'.repeat(250)); }};
-  const runtime = createInboundRuntime({supabase, inbox, env,
+  const runtime = createInboundRuntime({conversationStore:null,supabase, inbox, env,
     logger: {error(label, fields) { logs.push({label, fields}); }}});
 
   assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 0});
@@ -407,7 +421,7 @@ test('processing stops before the deadline and leaves the next event pending', a
   const inbox = {async claim(limit) { assert.equal(limit, 1); return pending.splice(0, 1); },
     async complete(event) { completed.push(event.id); },
     async defer(event) { deferred.push(event.id); pending.unshift(event); }};
-  const runtime = createInboundRuntime({supabase: {}, inbox, env: {...env, WHATSAPP_PROCESS_BUDGET_MS: '40000'},
+  const runtime = createInboundRuntime({conversationStore:null,supabase: {}, inbox, env: {...env, WHATSAPP_PROCESS_BUDGET_MS: '40000'},
     clock: () => times.shift() ?? 36_000});
 
   assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 0});
@@ -424,7 +438,7 @@ test('a final-attempt event receives exactly one fallback and is never retried',
   let claims = 0;
   const inbox = {async claim() { claims++; return claims === 1 ? [event] : []; },
     async complete(...args) { completions.push(args); }};
-  const runtime = createInboundRuntime({supabase: {}, inbox, env, logger: {error() {}},
+  const runtime = createInboundRuntime({conversationStore:null,supabase: {}, inbox, env, logger: {error() {}},
     outbound: {async sendServiceReply(input) { sends.push(input); }}});
 
   assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 1});
@@ -441,11 +455,11 @@ test('a transient failure before the final attempt remains retryable', async () 
   let claimed = false;
   const inbox = {async claim() { if (claimed) return []; claimed = true; return [event]; },
     async complete(...args) { completions.push(args); }};
-  const runtime = createInboundRuntime({supabase: {from() { throw new Error('temporary database failure'); }},
+  const runtime = createInboundRuntime({conversationStore:null,supabase: {from() { throw new Error('temporary database failure'); }},
     inbox, env, logger: {error() {}}});
 
   assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 0});
-  assert.deepEqual(completions[0].slice(1), ['PROCESSING_FAILED', 'Supabase client is required']);
+  assert.deepEqual(completions[0].slice(1), ['PROCESSING_FAILED', 'temporary database failure']);
 });
 
 test('unknown STOP gets a global suppression claim before acknowledgement', async () => {
@@ -454,6 +468,8 @@ test('unknown STOP gets a global suppression claim before acknowledgement', asyn
   let marked;
   const supabase = {
     from(table) {
+    if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
+
       assert.equal(table, 'whatsapp_consents');
       return {select() { return this; }, eq() { return this; },
         is: async () => ({data: [], error: null})};
@@ -464,7 +480,7 @@ test('unknown STOP gets a global suppression claim before acknowledgement', asyn
       return {data: true, error: null};
     },
   };
-  const runtime = createInboundRuntime({supabase, inbox: {async markStop(_event, value) { marked = value; }}, env});
+  const runtime = createInboundRuntime({conversationStore:null,supabase, inbox: {async markStop(_event, value) { marked = value; }}, env});
   await runtime.revokeOptOut(event);
   assert.deepEqual(marked, {confirmationDue: true, workspaceId: null});
 });
@@ -475,6 +491,8 @@ test('a retried STOP recovers its workspace confirmation after revocation commit
   const calls = [];
   const supabase = {
     from(table) {
+    if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
+
       assert.equal(table, 'whatsapp_consents');
       return {
         select() { return this; },
@@ -490,7 +508,7 @@ test('a retried STOP recovers its workspace confirmation after revocation commit
       return { data: [{ revoked: false, confirmation_due: true }], error: null };
     },
   };
-  const runtime = createInboundRuntime({ supabase, inbox: {
+  const runtime = createInboundRuntime({conversationStore:null, supabase, inbox: {
     async markStop(_event, value) { calls.push({ markStop: value }); },
   }, env });
   await runtime.revokeOptOut(event);
@@ -502,6 +520,8 @@ test('STOP installs phone-wide suppression before discovering workspace consents
   const event = { id: 14, sender_phone: '+919871367051', message_text: 'STOP', provider_message_id: 'wamid.race' };
   const supabase = {
     from(table) {
+    if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
+
       assert.equal(table, 'whatsapp_consents');
       return { select() { return this; }, eq() { return this; },
         then(resolve) { calls.push('read-consents'); return Promise.resolve({
@@ -515,7 +535,7 @@ test('STOP installs phone-wide suppression before discovering workspace consents
       throw new Error(`Unexpected RPC: ${name}`);
     },
   };
-  const runtime = createInboundRuntime({ supabase, inbox: {
+  const runtime = createInboundRuntime({conversationStore:null, supabase, inbox: {
     async markStop() { calls.push('mark-stop'); },
   }, env });
   await runtime.revokeOptOut(event);

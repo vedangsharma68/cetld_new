@@ -68,6 +68,7 @@ before(async () => {
     ['legacy-yen', 'sent', '0.00', '118.25', {}, 'JPY'],
     ['legacy-dinar', 'sent', '0.00', '10.125', {}, 'KWD'],
   ]) {
+    if(metadata.followup_state==='approved'){metadata.approved_reminder_text='Invoice update.\n\n— Alpha';}
     invoiceIds[label] = (await withOwner(() => db.query(
       `insert into public.invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,total_amount,amount_paid,status,metadata,currency)
        values ($1,$2,$3,'2026-09-01','2026-10-01',$4,$5,$6,$7::jsonb,$8) returning id`,
@@ -192,7 +193,7 @@ test('authenticated members can create and edit ordinary invoice fields without 
   assert.equal(Number(created.amount_paid), 0);
   assert.equal(created.status, 'draft');
   const updated = (await db.query(
-    `update public.invoices set due_date='2026-10-15',notes='edited note',metadata='{"followup_state":"approved"}'::jsonb
+    `update public.invoices set due_date='2026-10-15',notes='edited note',metadata='{"followup_state":"approved","approved_reminder_text":"Invoice update.\\n\\n— Alpha"}'::jsonb
      where id=$1 returning due_date,notes,metadata,amount_paid,status`,
     [created.id],
   )).rows[0];

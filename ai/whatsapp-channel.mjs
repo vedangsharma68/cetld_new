@@ -138,6 +138,28 @@ export function createCustomerScopedStore({supabase, workspaceId, customerId} = 
   });
 }
 
+/** Owner reads are scoped to their workspace and reauthorize the configured phone on every query. */
+export function createOwnerScopedStore({supabase,workspaceId,ownerId,phone,authorize}={}) {
+  if(!supabase?.from||!UUID.test(workspaceId)||!UUID.test(ownerId)||!E164.test(phone)||typeof authorize!=='function')
+    throw new TypeError('verified owner scope is required');
+  return Object.freeze({workspaceId,userId:ownerId,role:'owner',
+    async query(table,{select,filters={},order='id.asc',limit=100,offset=0}={}) {
+      if(!Object.hasOwn(TABLE_FIELDS,table))throw new TypeError('unsupported table');
+      if(!Number.isSafeInteger(limit)||limit<1||limit>1000||!Number.isSafeInteger(offset)||offset<0||offset>10000)
+        throw new TypeError('invalid pagination');
+      if(!await authorize())throw new TypeError('owner binding changed');
+      let query=supabase.from(table).select(checkedSelect(table,select)).eq('workspace_id',workspaceId);
+      query=applyFilters(query,table,filters);
+      query=applyOrder(query,table,order).range(offset,offset+limit-1);
+      const result=await query;
+      if(result?.error)throw result.error;
+      if(!Array.isArray(result?.data)||result.data.some(row=>row.workspace_id!==workspaceId))
+        throw new TypeError('workspace scope violation');
+      return result.data;
+    },
+  });
+}
+
 /**
  * Only a trusted server can construct this channel. `authorizeChannel` must
  * recheck the active phone/customer binding, and `createCustomerScopedStore`
@@ -159,6 +181,7 @@ export function createWhatsAppAssistantChannel({
   createInvoiceStore,
   saveInvoice = saveAssistantInvoice,
   clock = () => new Date(),
+  allowInvoiceWrites = true,
 } = {}) {
   const makeStore = scopedStoreFactory || (scope => createCustomerScopedStore({supabase, ...scope}));
   if (typeof authorizeChannel !== 'function' || (typeof scopedStoreFactory !== 'function' && !supabase?.from)) {
@@ -177,6 +200,7 @@ export function createWhatsAppAssistantChannel({
       || authorized.customerId !== scope.customerId || authorized.phone !== scope.phone) {
       return {answer: 'Please verify your number in cetld before discussing account details.', pendingAction: null, denied: true};
     }
+    if(!allowInvoiceWrites&&CONFIRMATION.test(text))return {answer:'Invoice changes must be confirmed by the business owner.',pendingAction:null};
     if (CONFIRMATION.test(text) && typeof loadInvoiceReview === 'function'
       && typeof transitionInvoiceReview === 'function') {
       const review = await loadInvoiceReview(scope);
@@ -250,6 +274,7 @@ export function createWhatsAppAssistantChannel({
     // separately stored proposal and a fresh confirmation from this scope.
     const response = await answer({provider: replyProvider, store: scopedStore, message: text, history, accounting: null, clock});
     if (!response?.pendingAction) return {...formatWhatsAppReply(response), pendingAction: null};
+    if(!allowInvoiceWrites)return {answer:'Only the business owner can create or change invoices. Please contact the business about this invoice.',pendingAction:null};
     if (typeof storePendingAction !== 'function') return {
       answer: 'Please open cetld while signed in to prepare and confirm this change.',
       pendingAction: null,

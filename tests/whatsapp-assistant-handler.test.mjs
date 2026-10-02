@@ -35,7 +35,7 @@ test('stored WhatsApp turns flow into ask and the inbound user turn is persisted
     {id: 1, role: 'user', content: 'Show invoice INV-1', created_at: '2026-09-30T10:00:00Z'},
     {id: 2, role: 'assistant', content: 'INV-1 is open.', created_at: '2026-09-30T10:00:01Z'},
   ];
-  const handler = createWhatsAppBoundMessageHandler({supabase: fakeSupabase({turns}), logger: {error() {}},
+  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase: fakeSupabase({turns}), logger: {error() {}},
     providerFactory: () => ({}), channelFactory: () => ({async ask(input) {
       assert.deepEqual(input.history, [{role: 'user', content: 'Show invoice INV-1'},
         {role: 'assistant', content: 'INV-1 is open.'}]);
@@ -47,7 +47,7 @@ test('stored WhatsApp turns flow into ask and the inbound user turn is persisted
 
 test('missing conversation table falls back to empty history and still answers', async () => {
   const logs = [];
-  const handler = createWhatsAppBoundMessageHandler({
+  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,
     supabase: fakeSupabase({memoryError: new Error('relation does not exist')}), logger: {error(...args) { logs.push(args); }},
     providerFactory: () => ({}), channelFactory: () => ({async ask(input) {
       assert.deepEqual(input.history, []);
@@ -66,7 +66,7 @@ test('WhatsApp functions have enough execution time for AI-backed replies', asyn
 
 test('verified inbound binding is rechecked before the customer-scoped assistant runs', async () => {
   let asks = 0;
-  const handler = createWhatsAppBoundMessageHandler({supabase: fakeSupabase(),
+  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase: fakeSupabase(),
     providerFactory: () => ({}),
     channelFactory: ({authorizeChannel}) => ({async ask(input) {
       asks++;
@@ -82,7 +82,7 @@ test('verified inbound binding is rechecked before the customer-scoped assistant
 test('WhatsApp provider attempts are bounded to fit the function duration', async () => {
   let providerOptions;
   const fetchImpl = () => {};
-  const handler = createWhatsAppBoundMessageHandler({
+  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,
     supabase: fakeSupabase(),
     env: {GEMINI_API_KEY: 'gemini-key', OPENROUTER_API_KEY: 'openrouter-key'},
     fetchImpl,
@@ -115,7 +115,7 @@ test('a customer mismatch fails channel authorization', async () => {
 
 test('planner failure is retried exactly once and its final diagnostic is returned', async () => {
   let asks = 0;
-  const handler = createWhatsAppBoundMessageHandler({supabase: fakeSupabase(),
+  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase: fakeSupabase(),
     providerFactory: () => ({}),
     channelFactory: () => ({async ask() {
       asks++;
@@ -133,7 +133,7 @@ test('planner failure is retried exactly once and its final diagnostic is return
 
 test('a successful planner retry returns the recovered answer without diagnostics', async () => {
   let asks = 0;
-  const handler = createWhatsAppBoundMessageHandler({supabase: fakeSupabase(),
+  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase: fakeSupabase(),
     providerFactory: () => ({}),
     channelFactory: () => ({async ask() {
       asks++;
@@ -156,17 +156,17 @@ function contactFlow({consentAnswer = 'yes'} = {}) {
     async loadPendingActionState() { return {generation: 1, id: null, version: null}; },
     async storePendingAction({action}) { row = {id: 13, action}; return row; }, async loadInvoiceReview() { return null; }};
   const writes = [];
-  const handler = createWhatsAppBoundMessageHandler({supabase: db, providerFactory: () => ({}),
+  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase: db, providerFactory: () => ({}),
     pendingActionStoreFactory: () => pending, invoiceStoreFactory: () => ({async saveDebtorPhone(input) { writes.push(input); }}),
     channelFactory: () => ({async ask() { throw new Error('provider must not be called'); }})});
   return {handler, writes, rpcCalls, consentAnswer};
 }
 
-test('pending invoice phone answer requires E.164 and saves it with logged default consent, no consent RPC', async () => {
+test('pending invoice phone answer requires E.164 and saves contact details without fabricating client consent', async () => {
   const flow = contactFlow();
   assert.match(await flow.handler({...scope, message: '415 bananas'}), /full WhatsApp number with country code/i);
   assert.equal(flow.writes.length, 0);
-  assert.match(await flow.handler({...scope, message: '+1 (415) 555-0244'}), /Saved \+14155550244.*Consent is logged as yes/s);
+  assert.match(await flow.handler({...scope, message: '+1 (415) 555-0244'}), /Saved \+14155550244.*confirm their agreement/s);
   assert.equal(flow.writes.length, 1);
   assert.equal(flow.writes[0].invoiceId, 'invoice-1');
   assert.equal(flow.writes[0].phone, '+14155550244');
@@ -177,4 +177,19 @@ test('a country-code-only answer completes the printed local number without gues
   const flow = contactFlow();
   assert.match(await flow.handler({...scope, message: '+1'}), /Saved \+14155550244/);
   assert.equal(flow.writes[0].phone, '+14155550244');
+});
+
+
+test('ordinary customers cannot upload, edit, or confirm a legacy invoice draft',async()=>{
+ for(const message of ['change invoice INV-1 amount to 1','yes','USD']){
+  const handler=createWhatsAppBoundMessageHandler({supabase:fakeSupabase(),providerFactory:()=>({}),
+   pendingActionStoreFactory:()=>({loadPendingAction:async()=>null,loadInvoiceReview:async()=>({id:1,action:{type:'invoice_review_draft',stage:'proposal'}})}),
+   invoiceStoreFactory:()=>{throw Error('Must not access a writable store')},
+   saveInvoice:()=>{throw Error('Must not save')},channelFactory:options=>{
+    assert.equal(options.allowInvoiceWrites,false);return {ask:()=>{throw Error('Must not plan a write')}};
+   }});
+  assert.match(await handler({...scope,message}),/Only the business owner/);
+ }
+ const upload=createWhatsAppBoundMessageHandler({supabase:{from(){throw Error('No extraction or queries for a customer upload')}}});
+ assert.match(await upload({...scope,media:{bytes:Buffer.from('photo')}}),/Only the business owner/);
 });

@@ -13,7 +13,7 @@ export function createWhatsAppInvoiceUpdateStore({supabase} = {}) {
       },
     },
     async claimInvoiceUpdate({workspaceId, invoiceId, customerId, phone, idempotencyKey, expectedUpdatedAt}) {
-      const {data, error} = await supabase.rpc('whatsapp_claim_invoice_update', {
+      const {data, error} = await supabase.rpc('whatsapp_claim_logged_invoice_update', {
         p_workspace_id: workspaceId, p_invoice_id: invoiceId,
         p_customer_id: customerId, p_phone: phone,
         p_idempotency_key: idempotencyKey, p_expected_updated_at: expectedUpdatedAt,

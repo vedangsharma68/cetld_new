@@ -11,7 +11,7 @@ function setup(patch={},checker) {
   store.seedInvoice({id:scope.invoiceId,...scope,amountMinor:1000,paidMinor:0,followupState:'approved',nextFollowUpAt:'2026-09-22T09:00:00Z',customerPhone:'+919876543210',reminderCount:0,...patch});
   const provider=new MockWhatsAppProvider();let calls=0;
   const original=provider.sendReminder.bind(provider);provider.sendReminder=async input=>{calls++;return original(input);};
-  const engine=new FollowUpEngine({store,provider,clock:()=>at,paymentChecker:checker || (async ({invoice})=>({paidMinor:invoice.paidMinor}))});
+  const engine=new FollowUpEngine({settings:{businessName:'Test Business'},store,provider,clock:()=>at,paymentChecker:checker || (async ({invoice})=>({paidMinor:invoice.paidMinor}))});
   return {store,provider,engine,calls:()=>calls};
 }
 test('paid invoice stops and never sends',async()=>{const x=setup({paidMinor:1000});assert.equal((await x.engine.run(scope)).reason,'paid');assert.equal(x.calls(),0);assert.equal(x.store.getInvoice(scope).nextFollowUpAt,null);});

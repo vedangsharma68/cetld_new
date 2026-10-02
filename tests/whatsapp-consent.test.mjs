@@ -61,7 +61,7 @@ test('active consent requires current customer phone and category',async()=>{
   const changed=fakeSupabase({consents:[{...active}],customers:[{...customer,phone:'+919999999999'}]});
   assert.equal((await getSendEligibility({supabase:changed,workspaceId:'workspace-1',phone})).reason,'unbound');
   const noOwner=fakeSupabase({consents:[{...active}],customers:[customer],settings:[]});
-  assert.equal((await getSendEligibility({supabase:noOwner,workspaceId:'workspace-1',phone})).reason,'owner_attestation_missing');
+  assert.equal((await getSendEligibility({supabase:noOwner,workspaceId:'workspace-1',phone})).allowed,true);
 });
 
 test('inbound bindings include only active, unsuppressed, matching customer records',async()=>{
@@ -72,7 +72,7 @@ test('inbound bindings include only active, unsuppressed, matching customer reco
   const wrongCategory=fakeSupabase({consents:[{...active,categories:['customer_service']}],customers:[customer]});
   assert.deepEqual(await resolveActiveBindings({supabase:wrongCategory,phone}),[]);
   const noOwner=fakeSupabase({consents:[{...active}],customers:[customer],settings:[]});
-  assert.deepEqual(await resolveActiveBindings({supabase:noOwner,phone}),[]);
+  assert.deepEqual((await resolveActiveBindings({supabase:noOwner,phone})).map(r=>r.workspaceId),['workspace-1']);
 });
 
 test('STOP revokes once and claims only one confirmation, scoped to workspace',async()=>{
