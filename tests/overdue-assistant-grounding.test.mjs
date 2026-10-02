@@ -226,7 +226,7 @@ test('who-do-I-owe phrasing does not enter the largest customer debtor shortcut'
     clock:fixedClock,
   });
   assert.equal(providerCalled,true);
-  assert.match(result.answer,/couldn.t safely check that just now/i);
+  assert.match(result.answer,/AI service failed/i);
 });
 
 test('explicit Zoho largest-debtor questions use connected Zoho data rather than the local ledger',async()=>{
