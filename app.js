@@ -324,7 +324,7 @@ settings=()=>{
   const diagnostic=aiAdministrator&&!state.demo?`<section class="panel" id="ai-diagnostic" aria-labelledby="ai-diagnostic-title"><div class="panel-head"><div><h2 id="ai-diagnostic-title">Gemini connection diagnostic</h2><p>Runs four fixed synthetic checks. It does not use or save invoices.</p></div></div><div class="panel-body"><button class="btn" type="button" data-action="ai-diagnostic">Run diagnostic</button><small class="settings-hint">Uses the server credential and fixed model only. No prompts, files, provider messages, or secrets are displayed.</small>${report?`<div class="diagnostic-report" role="status"><strong>${escape(report.model)}</strong><ul>${report.stages.map(item=>`<li>${escape(item.stage)} · ${escape(item.status)} · ${escape(item.category)}${Number.isInteger(item.httpStatus)?` · HTTP ${item.httpStatus}`:''}</li>`).join('')}</ul></div>`:''}</div></section>`:'';
   const attestation=`<section class="panel whatsapp-attestation" id="whatsapp" aria-labelledby="whatsapp-attestation-title"><div class="panel-head"><div><h2 id="whatsapp-attestation-title">WhatsApp client agreement</h2><p>Required before adding any client phone number.</p></div></div><div class="panel-body">${attested?`<p class="whatsapp-attestation-status">Confirmed on ${escape(new Date(attested).toLocaleString('en-IN'))} by the workspace owner.</p>`:owner?`<form id="whatsapp-attestation-form"><label class="whatsapp-attestation-check"><input type="checkbox" name="attest" required><span>I confirm my clients have agreed to receive invoice updates from my business on WhatsApp, and I will only add numbers where that is true.</span></label><p class="settings-hint">Each client's agreement must also be confirmed when you add their number. This owner confirmation alone does not make a number messageable.</p><div class="error hidden" data-error role="alert"></div><button class="btn primary" type="submit">Confirm agreement</button></form>`:'<p class="settings-hint">Ask the workspace owner to confirm this before adding client numbers.</p>'}</div></section>`;
   const ownerCustomer=(state.customers||[]).find(c=>c.metadata?.whatsapp_owner===true||c.metadata?.whatsapp_owner==='true');
-  const ownerNumber=`<section class="panel" id="whatsapp-owner" aria-labelledby="whatsapp-owner-title"><div class="panel-head"><div><h2 id="whatsapp-owner-title">Your WhatsApp number</h2><p>The number you text the cetld bot from. It is recognised from your first message.</p></div></div><div class="panel-body">${ownerCustomer?.phone?`<p class="whatsapp-attestation-status">Linked: <strong>${escape(ownerCustomer.phone)}</strong></p>`:'<p class="settings-hint">No number linked yet.</p>'}${owner&&attested&&!(state.settings?.business_name||'').trim()?'<p class="settings-hint">Set your business name in the Profile section above and save it first. It appears in every reminder.</p>':''}${owner&&attested?`<form id="whatsapp-owner-form"><label class="field">WhatsApp number with country code<input name="phone" type="tel" inputmode="tel" placeholder="+919876543210" value="${escape(ownerCustomer?.phone||'')}" required></label><div class="error hidden" data-error role="alert"></div><button class="btn primary" type="submit">${ownerCustomer?.phone?'Change number':'Link number'}</button></form>`:owner?'<p class="settings-hint">Confirm the WhatsApp client agreement above first.</p>':'<p class="settings-hint">Only the workspace owner can link a number.</p>'}</div></section>`;
+  const ownerNumber=`<section class="panel" id="whatsapp-owner" aria-labelledby="whatsapp-owner-title"><div class="panel-head"><div><h2 id="whatsapp-owner-title">Your WhatsApp number</h2><p>The number you text the cetld bot from. It is recognised from your first message.</p></div></div><div class="panel-body">${ownerCustomer?.phone?`<p class="whatsapp-attestation-status">Linked: <strong>${escape(ownerCustomer.phone)}</strong></p>`:'<p class="settings-hint">No number linked yet.</p>'}${owner&&attested&&!(state.settings?.business_name||'').trim()?'<p class="settings-hint">Set your business name in the Profile section above and save it first. It appears in every reminder.</p>':''}${owner&&attested?(state.ownerVerify?`<div class="whatsapp-verify"><p>From <strong>${escape(state.ownerVerify.phone)}</strong>, send this exact message to the cetld bot on WhatsApp (+91 73033 38959):</p><p class="whatsapp-code"><strong>LINK ${escape(state.ownerVerify.code)}</strong></p><p class="settings-hint">Expires in 10 minutes. It only works from that number. This page updates by itself once the bot confirms.</p><p><a class="btn" href="https://wa.me/917303338959?text=${encodeURIComponent('LINK '+state.ownerVerify.code)}" target="_blank" rel="noopener">Open WhatsApp</a> <button class="btn" type="button" data-action="owner-verify-cancel">Use a different number</button></p></div>`:`<form id="whatsapp-owner-form"><label class="field">WhatsApp number with country code<input name="phone" type="tel" inputmode="tel" placeholder="+919876543210" value="${escape(ownerCustomer?.phone||'')}" required></label><p class="settings-hint">We verify you own it: you text the bot from this number and enter the code it sends back.</p><div class="error hidden" data-error role="alert"></div><button class="btn primary" type="submit">${ownerCustomer?.phone?'Change number':'Verify number'}</button></form>`):owner?'<p class="settings-hint">Confirm the WhatsApp client agreement above first.</p>':'<p class="settings-hint">Only the workspace owner can link a number.</p>'}</div></section>`;
   return content.replace('<a href="#account">Account</a>', `<a href="#account">Account</a>${aiAdministrator&&!state.demo?'<a href="#ai-diagnostic">AI diagnostic</a>':''}<a href="#whatsapp">WhatsApp</a>`)
     .replace(/<\/div><\/div>$/, `${diagnostic}${attestation}${ownerNumber}</div></div>`);
 };
@@ -336,6 +336,20 @@ document.addEventListener('click',async event=>{
   catch(error){toast(error?.message||'Diagnostic unavailable.');buttonEl.disabled=false;buttonEl.textContent='Run diagnostic';}
 });
 
+let ownerVerifyTimer=null;
+function stopOwnerVerifyPoll(){if(ownerVerifyTimer){clearInterval(ownerVerifyTimer);ownerVerifyTimer=null}}
+function startOwnerVerifyPoll(){
+  stopOwnerVerifyPoll();
+  ownerVerifyTimer=setInterval(async()=>{
+    const v=state.ownerVerify;
+    if(!v||Date.now()>v.expiresAt+5000){stopOwnerVerifyPoll();if(v){state.ownerVerify=null;render();toast('The code expired. Start again.')}return}
+    try{
+      const {data}=await db.rpc('owner_whatsapp_verification_status',{p_workspace_id:state.workspace.id});
+      if(data==='linked'){stopOwnerVerifyPoll();state.ownerVerify=null;await loadData();toast('Number verified and linked. Text the bot from it.')}
+      else if(data==='expired'){stopOwnerVerifyPoll();state.ownerVerify=null;render();toast('That code expired or was refused. Start again.')}
+    }catch{}
+  },3000);
+}
 document.addEventListener('submit',async event=>{
   if(event.target.id!=='whatsapp-owner-form')return;
   event.preventDefault();
@@ -344,10 +358,15 @@ document.addEventListener('submit',async event=>{
   submit.disabled=true;
   try{
     if(state.demo)throw Error('Sign in to link your number.');
-    const {error}=await db.rpc('owner_bind_whatsapp',{p_workspace_id:state.workspace.id,p_phone:phone});
+    const {data,error}=await db.rpc('owner_start_whatsapp_verification',{p_workspace_id:state.workspace.id,p_phone:phone});
     if(error)throw error;
-    await loadData();toast('WhatsApp number linked. Text the bot from it.');
+    const row=Array.isArray(data)?data[0]:data;
+    state.ownerVerify={phone,code:row.code,expiresAt:new Date(row.expires_at).getTime()};render();startOwnerVerifyPoll();
   }catch(error){showError(form,error)}finally{submit.disabled=false}
+});
+
+document.addEventListener('click',event=>{
+  if(event.target.closest?.('[data-action=owner-verify-cancel]')){stopOwnerVerifyPoll();state.ownerVerify=null;render()}
 });
 
 document.addEventListener('submit',async event=>{
