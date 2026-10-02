@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import {AIProvider, CF_BACKUP_MODEL, CF_PRIMARY_MODEL, CF_QWEN_MODEL, GEMINI_FALLBACK_MODEL, cloudflareBreakerState, isCloudflareModelId} from '../ai/provider.mjs';
+import {AIProvider, CF_BACKUP_MODEL, CF_PRIMARY_MODEL, CF_QWEN_MODEL, GEMINI_FALLBACK_MODEL, VERIFIED_MODEL_CATALOG, cloudflareBreakerState, isCloudflareModelId} from '../ai/provider.mjs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
@@ -472,6 +472,168 @@ const FAST_SCENARIOS = [
     if(!result.answer.includes('INV-001'))throw new Error('bounded-history conversation did not answer the current request');
     assertNoForeignData(harness.db);
   }),
+  scenario('mixed_natural_language_request_with_read_table_hints_uses_planner',async()=>{
+    const message='Can you look up John Smith’s unpaid invoices from this workspace?';
+    const naturalRequest='Find John Smith invoices that are still unpaid';
+    const args={request:naturalRequest,operation:'read',table:'invoices'};
+    const planner=(prompt)=>{
+      const normalized=String(prompt).toLowerCase();
+      if(!normalized.includes('john')||!normalized.includes('invoice')||!normalized.includes('unpaid'))
+        throw new Error(`planner did not receive the mixed request meaning: ${prompt}`);
+      return {columns:['invoice_number','customer_name','total_amount','currency','status'],
+        filters:[{column:'customer_name',operator:'eq',value:'John Smith'},{column:'amount_paid',operator:'eq',value:0}],limit:6};
+    };
+    const harness=makeHandler({planner,script:text=>/john|invoice|unpaid/i.test(text)
+      ?{steps:[toolStep(args)],final:(_request,result)=>replyForResult(result)}:{steps:[],final:'I can help with your workspace.'}});
+    const [result]=await exactTurns(harness,[{message}]);
+    if(harness.observed.plans.length!==1)throw new Error(`mixed NL request ran through ${harness.observed.plans.length} planner calls`);
+    if(!result.answer.includes('INV-001')||!result.answer.includes('INV-003'))throw new Error('mixed NL request did not return the requested unpaid invoices');
+    const toolResults=harness.observed.calls.flatMap(call=>toolResultMessages(call.request.messages)).map(item=>{
+      try{return JSON.parse(item.content);}catch{return null;}
+    }).filter(Boolean);
+    if(!toolResults.some(item=>item.ok===true&&item.operation==='read'&&item.table==='invoices'))
+      throw new Error('read/table hints were not applied to the planned operation');
+    assertNoForeignData(harness.db);
+  }),
+  scenario('mixed_natural_language_request_rejects_planner_table_disagreement',async()=>{
+    const message='Find John Smith invoices.';
+    const args={request:'Find John Smith invoices',operation:'read',table:'invoices'};
+    const planner=prompt=>/john/i.test(prompt)&&/invoice/i.test(prompt)
+      ?{operation:'read',table:'customers',columns:['name'],filters:[{column:'name',operator:'ilike',value:'%John%'}],limit:6}
+      :{operation:'read',table:'customers',columns:['name'],limit:6};
+    const harness=makeHandler({planner,script:{[message]:{steps:[toolStep(args)],final:(_request,result)=>replyForResult(result)}}});
+    const [result]=await exactTurns(harness,[{message}]);
+    if(harness.observed.plans.length!==1)throw new Error('mixed NL request was not sent through its planner once');
+    const toolResults=harness.observed.calls.flatMap(call=>toolResultMessages(call.request.messages)).map(item=>{
+      try{return JSON.parse(item.content);}catch{return null;}
+    }).filter(Boolean);
+    if(!toolResults.some(item=>item.ok===false&&item.code==='INVALID'))
+      throw new Error('planner disagreement with the invoice table hint was not rejected');
+    if(harness.db.readCalls.some(call=>['customers','invoices'].includes(call.table)))
+      throw new Error('planner table disagreement reached customer or invoice rows');
+    assertNoForeignData(harness.db);
+  }),
+  scenario('describe_with_table_hint_returns_static_invoice_catalog',async()=>{
+    const message='What fields can I use when I read invoice information?';
+    const harness=makeHandler({script:{[message]:{steps:[toolStep({operation:'describe',table:'invoices'})],final:(_request,result)=>{
+      const columns=result?.catalog?.tables?.invoices?.columns||[];
+      return columns.length?`Invoice fields include ${columns.join(', ')}.`:'The invoice field catalog is available.';
+    }}}});
+    const [result]=await exactTurns(harness,[{message}]);
+    const outputs=harness.observed.calls.flatMap(call=>toolResultMessages(call.request.messages)).map(item=>{
+      try{return JSON.parse(item.content);}catch{return null;}
+    }).filter(Boolean);
+    const spec=outputs.find(item=>item.catalog?.tables?.invoices)?.catalog.tables.invoices;
+    if(!spec?.columns?.includes('invoice_number')||spec.columns.includes('workspace_id'))
+      throw new Error('describe with an invoice table hint did not return the static safe invoice catalog');
+    if(!result.answer.includes('invoice_number')||harness.observed.plans.length)
+      throw new Error('describe/table lookup did not answer from the static catalog directly');
+    if(harness.db.readCalls.some(call=>call.table==='invoices'))throw new Error('static describe unexpectedly queried invoice rows');
+    assertNoForeignData(harness.db);
+  }),
+  scenario('invalid_customer_fields_return_catalog_then_recover_with_scoped_query',async()=>{
+    const message='Find John Smith’s email and customer tax identifier.';
+    const invalid={operation:'read',table:'customers',columns:['name','tax_id'],
+      filters:[{column:'name',operator:'eq',value:'John Smith'}],limit:6};
+    const corrected={operation:'read',table:'customers',columns:['name','email'],
+      filters:[{column:'name',operator:'eq',value:'John Smith'}],limit:6};
+    const script=text=>/john|customer|email|tax/i.test(text)?{steps:[
+      toolStep(invalid),
+      toolStep(corrected,'workspaceData',request=>{
+        const results=toolResultMessages(request.messages).map(item=>{try{return JSON.parse(item.content);}catch{return null;}}).filter(Boolean);
+        const rejected=results.find(item=>item.code==='INVALID'&&item.catalog?.tables?.customers);
+        const fields=rejected?.catalog?.tables?.customers?.columns||[];
+        if(!fields.includes('email')||!fields.includes('phone')||fields.includes('tax_id'))
+          throw new Error('invalid customer field did not receive the static allowed-field catalog');
+        if(JSON.stringify(rejected).includes('john@example.test')||JSON.stringify(rejected).includes('John Smith'))
+          throw new Error('invalid-field feedback included customer row data');
+      }),
+    ],final:(_request,result)=>(result?.rows||[]).map(row=>`${row.name||'Customer'}: ${row.email||'no email on file'}`).join('\n')}
+      :{steps:[],final:'Which customer should I check?'};
+    const harness=makeHandler({script});
+    const [result]=await exactTurns(harness,[{message}]);
+    if(!result.answer.includes('john@example.test'))throw new Error('valid scoped recovery did not return John’s email');
+    if(harness.observed.plans.length)throw new Error('structured customer-field repair unexpectedly needed NL planning');
+    const customerReads=harness.db.readCalls.filter(call=>call.table==='customers');
+    if(customerReads.length!==1||!customerReads[0].columns.includes('email'))
+      throw new Error('only the corrected customer-field query should reach the scoped database');
+    assertNoForeignData(harness.db);
+  }),
+  scenario('invalid_invoice_write_field_can_recover_before_any_write_attempt',async()=>{
+    const message='Mark INV-003 paid using the verified invoice fields.';
+    const filters=[{column:'invoice_number',operator:'eq',value:'INV-003'}];
+    const harness=makeHandler({script:{[message]:{steps:[
+      toolStep({operation:'update',table:'invoices',filters,values:{payment_status:'paid'}}),
+      toolStep({operation:'update',table:'invoices',filters,values:{status:'paid'}},'workspaceData',request=>{
+        const rejected=toolResultMessages(request.messages).map(item=>JSON.parse(item.content)).find(item=>item.code==='INVALID');
+        if(!rejected?.catalog?.tables?.invoices?.writeFields?.update?.includes('status'))throw new Error('invalid invoice write omitted the valid field catalog');
+        if(harness.db.tables.payments.length)throw new Error('invalid invoice write recorded a payment');
+      }),
+    ],final:(_request,result)=>replyForResult(result)}}});
+    const [result]=await exactTurns(harness,[{message}]);
+    if(!/reply yes/i.test(result.answer)||harness.db.tables.invoices.find(row=>row.invoice_number==='INV-003').status==='paid')
+      throw new Error('corrected invoice write did not remain a proposal awaiting confirmation');
+    if(!harness.db.tables.whatsapp_pending_actions.some(action=>!action.consumed_at))throw new Error('corrected write failed to create a pending proposal');
+    assertNoForeignData(harness.db);
+  }),
+  scenario('ambiguous_one_off_requests_and_foreign_workspace_ids_are_rejected_before_planning',async()=>{
+    const cases=[
+      {message:'Look up John invoices with an explicit customer filter.',args:{request:'Find John Smith invoices',operation:'read',table:'invoices',
+        filters:[{column:'customer_name',operator:'eq',value:'John Smith'}]}},
+      {message:'Change the customer email using these fields.',args:{request:'Change John Smith email',operation:'update',table:'customers',
+        values:{email:'changed@example.test'}}},
+      {message:'Show invoice records for another workspace.',args:{operation:'read',table:'invoices',
+        filters:[{column:'workspace_id',operator:'eq',value:OTHER_WORKSPACE_ID}]}},
+    ];
+    for(const [index,item] of cases.entries()) {
+      const harness=makeHandler({script:{[item.message]:{steps:[toolStep(item.args)],final:(_request,result)=>replyForResult(result)}}});
+      const [result]=await exactTurns(harness,[{message:item.message,messageId:`wamid.owner-invalid-oneoff-${index+1}`}]);
+      const outputs=harness.observed.calls.flatMap(call=>toolResultMessages(call.request.messages)).map(message=>{
+        try{return JSON.parse(message.content);}catch{return null;}
+      }).filter(Boolean);
+      if(!outputs.some(output=>output.ok===false&&output.code==='INVALID'))
+        throw new Error(`unsafe one-off request ${index+1} was not rejected as invalid`);
+      if(harness.observed.plans.length)throw new Error(`unsafe one-off request ${index+1} reached the natural-language planner`);
+      if(harness.db.readCalls.some(call=>['customers','invoices'].includes(call.table)))
+        throw new Error(`unsafe one-off request ${index+1} reached customer or invoice rows`);
+      if(harness.db.tables.whatsapp_pending_actions.some(action=>!action.consumed_at))
+        throw new Error(`unsafe one-off request ${index+1} created a pending workspace action`);
+      if(!result.answer.trim())throw new Error(`unsafe one-off request ${index+1} returned no corrective reply`);
+      assertNoForeignData(harness.db);
+    }
+  }),
+  scenario('ordinary_owner_confirmation_accepts_yes_case_and_type_yes_cancel_prompt',async()=>{
+    const harness=makeHandler({script:text=>{
+      const value=String(text).trim().toLowerCase();
+      if(value.includes('professional tone'))return {steps:[toolStep({operation:'update',table:'workspace_settings',
+        values:{follow_up_preferences:{tone:'professional'}}})],final:(_request,result)=>replyForResult(result)};
+      if(value==='yes')return {steps:[toolStep({operation:'confirm'})],final:(_request,result)=>replyForResult(result,{defaultText:'The professional tone is confirmed.'})};
+      if(value.includes('default timezone'))return {steps:[toolStep({operation:'update',table:'workspace_settings',
+        values:{default_timezone:'Europe/London'}})],final:'Timezone will be Europe/London. Type yes to confirm, or cancel.'};
+      return {steps:[],final:'I can help change a workspace setting.'};
+    }});
+    const turns=[
+      {message:'Set my follow-up reminders to a professional tone.',messageId:'wamid.owner-battery-ordinary-1'},
+      {message:'Yes',messageId:'wamid.owner-battery-ordinary-2'},
+      {message:'Set the default timezone to Europe/London.',messageId:'wamid.owner-battery-ordinary-3'},
+      {message:'Yes',messageId:'wamid.owner-battery-ordinary-4'},
+    ];
+    const firstResults=await exactTurns(harness,turns.slice(0,2));
+    if(harness.db.tables.workspace_settings[0].follow_up_preferences.tone!=='professional')
+      throw new Error('case-insensitive Yes did not confirm the first owner settings proposal');
+    const [proposal]=await exactTurns(harness,[turns[2]]);
+    if(!/europe\/london[\s\S]*type yes to confirm, or cancel/i.test(proposal.answer)
+      ||harness.db.tables.workspace_settings[0].default_timezone!=='Asia/Kolkata')
+      throw new Error(`the timezone proposal did not preserve its explicit Type yes confirmation cue: ${JSON.stringify({proposal:proposal.answer,timezone:harness.db.tables.workspace_settings[0].default_timezone})}`);
+    const [confirmed]=await exactTurns(harness,[turns[3]]);
+    if(harness.db.tables.workspace_settings[0].default_timezone!=='Europe/London')
+      throw new Error('the explicit Type yes confirmation cue did not apply the second settings proposal');
+    if(!/professional|complete|updated|changed/i.test(firstResults[1].answer)||!/timezone|complete|updated|changed/i.test(confirmed.answer))
+      throw new Error(`confirmed settings replies did not acknowledge both owner changes: ${JSON.stringify([firstResults[1].answer,confirmed.answer])}`);
+    if(harness.db.tables.whatsapp_pending_actions.some(action=>!action.consumed_at))
+      throw new Error('ordinary confirmations left a completed workspace proposal pending');
+    assertNoForeignData(harness.db);
+  }),
   scenario('time_budget_timeout_returns_contextual_read_failure',async()=>{
     const message='List my invoices.';
     const observed={calls:[],plans:[],firstToolSchemaBytes:null,firstPayloadBytes:null};
@@ -559,7 +721,15 @@ function liveProviderFactory(options,observed,env) {
   };
   return {
     async generate(request) {
+      for(const message of request.messages||[]){
+        if(message.role!=='tool')continue;
+        try {
+          const result=JSON.parse(message.content);
+          observed.toolResults.push({ok:result.ok,code:result.code,primaryModel:result.primaryModel||result.configuration?.primaryModel});
+        } catch {}
+      }
       const result=verify(await provider.generate(request));
+      if(result.content)observed.drafts.push(result.content.slice(0,1000));
       for(const call of result.toolCalls||[]){
         observed.toolNames.push(call?.function?.name||'');
         observed.operations.push({name:call?.function?.name,args:String(call?.function?.arguments||'').slice(0,500)});
@@ -575,7 +745,7 @@ function liveProviderFactory(options,observed,env) {
 
 function createLiveConversation({env,name,index}) {
   const db=createOwnerChatDatabase({primaryModel:CF_PRIMARY_MODEL,fallbackModel:CF_BACKUP_MODEL});
-  const observed={servedModels:[],toolNames:[],providerIssues:[],operations:[],lastReply:null};
+  const observed={servedModels:[],toolNames:[],providerIssues:[],operations:[],toolResults:[],drafts:[],lastReply:null};
   const handler=createOwnerMessageHandler({supabase:db.supabase,env,authorize:async()=>true,
     providerFactory:options=>liveProviderFactory(options,observed,env),clock:()=>DEFAULT_NOW,logger:{error(){},warn(){},info(){}}});
   let turnIndex=0;
@@ -593,6 +763,7 @@ function createLiveConversation({env,name,index}) {
       const elapsedMs=Date.now()-started;
       observed.lastReply={answer:result?.answer,diagnostics:result?.agentDiagnostics,code:result?.plannerFailure?.code};
       assertAnswer(result);
+      if(result.plannerFailure)throw new Error(`${name} owner failure ${result.plannerFailure.code}: ${result.answer}`);
       if(elapsedMs>40_500)throw new Error(`${name} turn exceeded the 40.5 second owner time budget (${elapsedMs}ms)`);
       if(result.agentDiagnostics?.rounds>8||result.agentDiagnostics?.toolRounds>6)
         throw new Error(`${name} exceeded the owner conversation round budget`);
@@ -612,6 +783,8 @@ const LIVE_SCENARIOS = [
       throw new Error(`live slang meta reply omitted the serving model identity: ${JSON.stringify(result.answer)}`);
     if(result.agentDiagnostics?.toolRounds!==1||!ctx.observed.toolNames.includes('getAIProviderConfiguration'))
       throw new Error('live slang meta reply did not use exactly one configuration tool round');
+    if(!ctx.observed.toolResults.some(result=>result.ok===true&&result.primaryModel===CF_PRIMARY_MODEL))
+      throw new Error('live slang meta reply did not receive the actual saved provider configuration');
     if(elapsedMs>=10_000)throw new Error(`live slang meta response exceeded 10 seconds (${elapsedMs}ms)`);
     return {elapsedMs,providerCalls:ctx.observed.servedModels.length,diagnostics:result.agentDiagnostics};
   }),
@@ -661,7 +834,8 @@ const LIVE_SCENARIOS = [
   scenario('live_primary_model_proposal_yes_applies_after_later_turn',async(ctx)=>{
     const proposal=await ctx.turn(`Set the primary model to ${CF_QWEN_MODEL}. Keep the current fallback.`);
     if(ctx.db.tables.workspace_ai_settings[0].primary_model!==CF_PRIMARY_MODEL)throw new Error('live primary model changed before confirmation');
-    if(!/yes|confirm/i.test(proposal.result.answer)||!proposal.result.answer.includes(CF_QWEN_MODEL))
+    const targetLabel=VERIFIED_MODEL_CATALOG.find(entry=>entry.id===CF_QWEN_MODEL).label.replace(/\s*\([^)]*\)\s*$/,'');
+    if(!/yes|confirm/i.test(proposal.result.answer)||(!proposal.result.answer.includes(CF_QWEN_MODEL)&&!proposal.result.answer.toLowerCase().includes(targetLabel.toLowerCase())))
       throw new Error('live primary model proposal omitted its target or confirmation request');
     const confirmation=await ctx.turn('yes');
     if(ctx.db.tables.workspace_ai_settings[0].primary_model!==CF_QWEN_MODEL)throw new Error('live confirmed primary model proposal was not applied');
@@ -722,7 +896,7 @@ const LIVE_SCENARIOS = [
     if(!proposal.result.answer.includes('DELETE INV-005'))throw new Error('live deletion did not require exact uppercase DELETE confirmation');
     await ctx.turn('DELETE INV-005');
     if(!invoice.deleted_at)throw new Error('live exact confirmation did not delete the intended invoice');
-    const undone=await ctx.turn('Undo deletion of invoice INV-005.');
+    const undone=await ctx.turn('undo delete INV-005');
     if(invoice.deleted_at!==null)throw new Error('live undo did not restore the deleted invoice');
     if(!/restor|undo|INV-005/i.test(undone.result.answer))throw new Error('live undo reply did not identify the restored invoice');
   }),
@@ -788,7 +962,7 @@ async function runLiveBattery({env=process.env,scenarioNames,onScenario,onFailur
       onScenario?.(outcome);
     } catch(error) {
       error.message=`${item.name}: ${error?.message||String(error)}${ctx.observed.providerIssues.length?' Provider legs: '+JSON.stringify(ctx.observed.providerIssues.slice(-3)):''}`
-        +` Fictional conversation: ${JSON.stringify({reply:ctx.observed.lastReply,tools:ctx.observed.operations.slice(-4)})}`;
+        +` Fictional conversation: ${JSON.stringify({reply:ctx.observed.lastReply,tools:ctx.observed.operations.slice(-4),drafts:ctx.observed.drafts.slice(-2)})}`;
       failures.push(error.message);
       onFailure?.(error.message);
       // Stop on an outage or denied credentials instead of charging for many

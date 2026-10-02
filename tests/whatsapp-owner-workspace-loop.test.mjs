@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
+import {ownerReplySafetyIssue,runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 
 const toolDefinition=(name)=>({type:'function',function:{name,description:'Workspace data tool',parameters:{type:'object',properties:{description:{type:'string'}},required:['description'],additionalProperties:false}}});
 const call=(name,args={},id='call-1')=>({id,type:'function',function:{name,arguments:JSON.stringify(args)}});
@@ -339,4 +339,39 @@ test('a timed-out final answer after provider configuration names the completed 
  assert.match(result.answer,/looked up AI provider configuration/i);
  assert.match(result.answer,/couldn\'t finish the reply/i);
  assert.match(result.answer,/nothing changed/i);
+});
+
+test('reply safety checks flattened nested values with typed whole-token matching',()=>{
+ const requirement={confirmationText:'yes',requiresCancel:true,requiresReplyCue:true,requiredFacts:{changeValues:[
+  {field:'follow_up_preferences',value:{tone:'professional',maxReminders:3,pauseOnReply:false,contactEnd:null}},
+ ]}};
+ assert.equal(ownerReplySafetyIssue(
+  'Follow-up tone professional, a limit of three reminders, pause on reply off, and contact time cleared. Reply yes, or cancel.',
+  requirement),null);
+});
+
+test('numeric changed values reject longer numbers but accept a sentence-ending period',()=>{
+ const requirement={confirmationText:'yes',requiresCancel:true,requiresReplyCue:true,requiredFacts:{changeValues:[{field:'maxReminders',value:3}]}};
+ assert.equal(ownerReplySafetyIssue('The limit is 30 reminders. Reply yes, or cancel.',requirement),'confirmation_change_value');
+ assert.equal(ownerReplySafetyIssue('The limit is 3. Reply yes, or cancel.',requirement),null);
+});
+
+test('reply safety does not match a changed name inside a longer word',()=>{
+ const requirement={confirmationText:'yes',requiresCancel:true,requiresReplyCue:true,requiredFacts:{changeValues:[{field:'business_name',value:'Ann'}]}};
+ assert.equal(ownerReplySafetyIssue('The business name is Annual. Reply yes to confirm, or cancel.',requirement),'confirmation_change_value');
+ assert.equal(ownerReplySafetyIssue('The business name is Ann. Reply yes to confirm, or cancel.',requirement),null);
+});
+
+test('confirmation requires a positive yes instruction while DELETE remains exact',()=>{
+ const yesRequirement={confirmationText:'yes',requiresCancel:true,requiresReplyCue:true};
+ assert.equal(ownerReplySafetyIssue('Reply yes, or cancel.',yesRequirement),null);
+ assert.equal(ownerReplySafetyIssue('Nothing was changed. Reply **yes**, or cancel.',yesRequirement),null);
+ assert.equal(ownerReplySafetyIssue("Reply 'yes' to confirm, or cancel.",yesRequirement),null);
+ assert.equal(ownerReplySafetyIssue('Do not reply yes to confirm; cancel if needed.',yesRequirement),'confirmation_instruction');
+ assert.equal(ownerReplySafetyIssue("Don't reply 'yes'; cancel instead.",yesRequirement),'confirmation_instruction');
+
+ const deleteRequirement={confirmationText:'DELETE INV-7',requiresCancel:true,requiresReplyCue:true};
+ assert.equal(ownerReplySafetyIssue('Reply DELETE INV-7 to confirm, or cancel.',deleteRequirement),null);
+ assert.equal(ownerReplySafetyIssue('Reply DELETE INV-8 to confirm, or cancel.',deleteRequirement),'confirmation_instruction');
+ assert.equal(ownerReplySafetyIssue('Reply delete INV-7 to confirm, or cancel.',deleteRequirement),'confirmation_instruction');
 });

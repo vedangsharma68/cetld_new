@@ -87,7 +87,7 @@ function definition() {
   // The server validates the full catalog. Do not send that catalog on every
   // model request; describe exposes it when the model needs unfamiliar fields.
   return {type:'function',function:{name:'workspaceData',
-    description:'Read or propose changes to workspace data. Use structured fields or request text. Invoice filters include customer_name and invoice_number. Settings fields include primary_model, fallback_model and follow_up_preferences. describe returns the field catalog; pending/confirm/cancel handle proposals.',
+    description:'Read or propose workspace changes. Use request text alone, or structured fields. Customers use name/email/phone; invoices use customer_name/invoice_number/total_amount/status. Settings use primary_model/fallback_model/follow_up_preferences. describe lists fields; pending reads existing proposals; confirm/cancel decide them.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         request:{type:'string',minLength:1,maxLength:1200},
@@ -108,14 +108,15 @@ function definition() {
     }}};
 }
 
-function catalog() {
+function catalog(table=null) {
   return {
     operations:OPERATIONS,
-    tables:Object.fromEntries(Object.entries(TABLES).map(([name,spec])=>[name,{
+    tables:Object.fromEntries(Object.entries(TABLES).filter(([name])=>!table||name===table).map(([name,spec])=>[name,{
       label:spec.label,columns:spec.columns,filters:spec.filters,
       writeFields:WRITE_SCHEMA[name]||{},
       ...(name==='invoices'?{writeValueConstraints:{update:{status:['paid']}}}:{}),
       ...(name==='workspace_settings'?{writeValueConstraints:{update:{follow_up_preferences:{tone:['gentle','professional','firm']}}}}:{}),
+      ...(name==='workspace_ai_settings'?{writeValueConstraints:{update:{primary_model:VERIFIED_MODEL_CATALOG.filter(entry=>entry.roles.includes('primary')).map(entry=>entry.id),fallback_model:[null,...VERIFIED_MODEL_CATALOG.filter(entry=>entry.roles.includes('fallback')).map(entry=>entry.id)]}}}:{}),
       operations:name==='invoices'?['read','create','update','delete','restore','reviewAttachment']
         :name==='customers'?['read','create','update','delete']
           :name==='workspace_settings'||name==='workspace_ai_settings'?['read','update']
@@ -222,10 +223,18 @@ function normalizeRequest(raw,scope,planRequest,ctx) {
   if(containsForbiddenIdentity(raw,scope))throw new TypeError('scope identity supplied');
   if(Object.keys(raw).some(key=>!ALLOWED_ARGS.has(key)))throw new TypeError('unknown arguments');
   if(typeof raw.request==='string') {
-    if(Object.keys(raw).some(key=>key!=='request')||!raw.request.trim()||raw.request.length>1200)throw new TypeError('invalid request');
+    if(Object.keys(raw).some(key=>!['request','operation','table'].includes(key))||!raw.request.trim()||raw.request.length>1200)throw new TypeError('invalid request');
+    if(raw.operation!==undefined&&!OPERATIONS.includes(raw.operation)||raw.table!==undefined&&!Object.hasOwn(TABLES,raw.table))throw new TypeError('invalid request hints');
     if(typeof planRequest!=='function')throw new TypeError('natural-language planning unavailable');
-    return Promise.resolve(planRequest(raw.request.trim(),{catalog:catalog(),signal:ctx.signal,deadlineAt:ctx.deadlineAt}))
-      .then(planned=>{ctx.assertLive();return normalizeStructured(planned);});
+    const hints=Object.fromEntries(['operation','table'].filter(key=>raw[key]!==undefined).map(key=>[key,raw[key]]));
+    const text=Object.keys(hints).length?JSON.stringify({request:raw.request.trim(),hints}):raw.request.trim();
+    return Promise.resolve(planRequest(text,{catalog:catalog(raw.table||null),signal:ctx.signal,deadlineAt:ctx.deadlineAt}))
+      .then(planned=>{
+        ctx.assertLive();
+        if(!ownObject(planned)||containsForbiddenIdentity(planned,scope))throw new TypeError('invalid planned operation');
+        for(const[key,value]of Object.entries(hints))if(planned[key]!==undefined&&planned[key]!==value)throw new TypeError('conflicting request hints');
+        return normalizeStructured({...hints,...planned});
+      });
   }
   return Promise.resolve(normalizeStructured(raw));
   function normalizeStructured(args) {
@@ -236,7 +245,8 @@ function normalizeRequest(raw,scope,planRequest,ctx) {
     if(table!==null&&!Object.hasOwn(TABLES,table))throw new TypeError('unknown table');
     const noTableOps=['pending','confirm','cancel','describe','analyzeAttachment','saveAttachment'];
     if(!table&&!noTableOps.includes(operation))throw new TypeError('table required');
-    if(table&&!['read','create','update','delete','restore','reviewAttachment','sendFile'].includes(operation))throw new TypeError('invalid table operation');
+    if(table&&!['read','create','update','delete','restore','reviewAttachment','sendFile','describe'].includes(operation))throw new TypeError('invalid table operation');
+    if(['pending','confirm','cancel','describe'].includes(operation)&&Object.keys(args).some(key=>!['operation',...(operation==='describe'?['table']:[])].includes(key)))throw new TypeError('unexpected operation fields');
     const filters=args.filters===undefined?[]:args.filters;
     if(!Array.isArray(filters)||filters.length>8)throw new TypeError('invalid filters');
     const normalizedFilters=filters.map(filter=>validateFilter(filter,table||'invoices'));
@@ -245,6 +255,8 @@ function normalizeRequest(raw,scope,planRequest,ctx) {
       ||columns.some(column=>typeof column!=='string'||!TABLES[table]?.columns.includes(column))))throw new TypeError('invalid columns');
     const values=args.values===undefined?{}:args.values;
     if(!ownObject(values))throw new TypeError('invalid values');
+    if(table==='invoices'&&['create','update','reviewAttachment'].includes(operation)
+      &&(!exactKeys(values,WRITE_SCHEMA.invoices[operation])||!Object.keys(values).length||values.status!==undefined&&values.status!=='paid'))throw new TypeError('invalid invoice fields');
     const limit=args.limit===undefined?20:Number(args.limit);
     if(!Number.isInteger(limit)||limit<1||limit>MAX_LIMIT)throw new TypeError('invalid limit');
     const offset=args.offset===undefined?0:Number(args.offset);
@@ -578,9 +590,9 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       },ctx);
       if(saved.ok!==true) return safeRpcResult(saved);
       replyRequirement={confirmationText:'yes',requiresCancel:true,requiresReplyCue:true,
-        requiredFacts:{changeSummary:target.summary},maxLength:3790};
+        requiredFacts:{changeValues:Object.entries(target.clean).filter(([key,value])=>JSON.stringify(value)!==JSON.stringify(target.row?.[key])).map(([field,value])=>({field:displayField(field),value,...(VERIFIED_MODEL_CATALOG.some(entry=>entry.id===value)?{alternatives:[value,VERIFIED_MODEL_CATALOG.find(entry=>entry.id===value).label.replace(/ \([^)]*\)$/,'')]}:{})}))},maxLength:3790};
       return {ok:true,requiresConfirmation:true,table:params.table,operation:params.operation,
-        summary:target.summary,expiresAt:saved.expires_at||saved.expiresAt||null};
+        summary:target.summary,changes:target.clean,confirmationText:'yes',expiresAt:saved.expires_at||saved.expiresAt||null};
     }
     return fail();
   };
@@ -625,18 +637,18 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     if(typeof executeSafetyOperation!=='function')return fail('NO_PENDING_ACTION','There is no matching pending owner action.');
     return delegate({operation},ctx);
   };
-  const describe=async ctx=>{
+  const describe=async (ctx,table=null)=>{
     let runtime=null;
-    if(typeof getRuntimeConfig==='function')try{await ctx.assertAuthorized();runtime=await getRuntimeConfig();await ctx.assertAuthorized();}catch{runtime=null;}
+    if(!table&&typeof getRuntimeConfig==='function')try{await ctx.assertAuthorized();runtime=await getRuntimeConfig();await ctx.assertAuthorized();}catch{runtime=null;}
     ctx.assertLive();
     const safeRuntime=runtime&&typeof runtime==='object'?Object.fromEntries([
       'configurationSource','workspaceSettingsAvailable','activePrimaryModel','activePrimaryProvider','activeFallbackModel',
       'activeFallbackProvider','primaryModel','primaryProvider','fallbackModel','fallbackProvider','planningModel','planningProvider','servedModel','servedProvider',
     ].filter(key=>runtime[key]!==undefined).map(key=>[key,runtime[key]])):null;
     await ctx.assertAuthorized();
-    return {ok:true,catalog:catalog(),runtime:safeRuntime,modelChoices:VERIFIED_MODEL_CATALOG.map(({id,label,provider,roles})=>({id,label,provider,roles}))};
+    return {ok:true,catalog:catalog(table),...(!table?{runtime:safeRuntime}:{}),...(!table||table==='workspace_ai_settings'?{modelChoices:VERIFIED_MODEL_CATALOG.map(({id,label,provider,roles})=>({id,label,provider,roles}))}:{})};
   };
-  const execute=async (raw,executionOptions={})=>{
+  const executeRequest=async (raw,executionOptions={})=>{
     const signals=[signal,executionOptions?.signal].filter(Boolean);
     const combinedSignal=signals.length>1&&typeof AbortSignal?.any==='function'?AbortSignal.any(signals):signals[0];
     const deadlines=[deadlineAt,executionOptions?.deadlineAt].map(asEpoch).filter(Number.isFinite);
@@ -658,7 +670,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       ctx.assertLive();
       attemptedOperation={operation:params.operation,...(params.table?{table:params.table}:{})};
       const readResult=result=>({...result,operation:params.operation,table:params.table,readOnly:true});
-      if(params.operation==='describe')return readResult(await describe(ctx));
+      if(params.operation==='describe')return readResult(await describe(ctx,params.table));
       if(['pending','confirm','cancel'].includes(params.operation)) {
         const result=await handlePending(params.operation,ctx);
         return params.operation==='pending'?readResult(result):result;
@@ -670,7 +682,11 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         return delegate(params,ctx);
       }
       return fail();
-    } catch(error) { return error instanceof TypeError?fail():safeError(error); }
+    } catch(error) {return error instanceof TypeError?fail():safeError(error);}
+  };
+  const execute=async(raw,options)=>{
+    const result=await executeRequest(raw,options);
+    return result?.code==='INVALID'?{...result,message:'Use request text alone, or the structured fields in this catalog. Do not combine request with filters, values or columns. pending/confirm/cancel take no table or values.',catalog:catalog(typeof raw?.table==='string'&&Object.hasOwn(TABLES,raw.table)?raw.table:null)}:result;
   };
   return Object.freeze({definition:definition(),execute,getReplyRequirement:()=>replyRequirement?{...replyRequirement}:null,
     getWriteAttempted:()=>writeAttempted,getAttemptedOperation:()=>attemptedOperation});
