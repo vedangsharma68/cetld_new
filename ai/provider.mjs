@@ -234,7 +234,9 @@ export class AIProvider {
     assertServerRuntime();
     const extractionPrimary = primaryModel === DEFAULT_EXTRACTION_MODEL;
     const extractionFallback = extractionPrimary && fallbackModel === GEMINI_FALLBACK_MODEL;
-    if ((!isPrimaryModelId(primaryModel) && !extractionPrimary) || (fallbackModel !== null && !isFallbackModelId(fallbackModel) && !extractionFallback)) throw new AIError('INVALID_MODEL', 400);
+    const geminiPrimary = primaryModel === GEMINI_FALLBACK_MODEL;
+    const geminiFallback = geminiPrimary && fallbackModel === DEFAULT_EXTRACTION_MODEL;
+    if ((!isPrimaryModelId(primaryModel) && !extractionPrimary && !geminiPrimary) || (fallbackModel !== null && !isFallbackModelId(fallbackModel) && !extractionFallback && !geminiFallback)) throw new AIError('INVALID_MODEL', 400);
     this.primaryModel = primaryModel;
     this.fallbackModel = fallbackModel;
     this.#geminiApiKey = typeof geminiApiKey === 'string' ? geminiApiKey : '';
