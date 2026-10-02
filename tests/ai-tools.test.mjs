@@ -190,3 +190,15 @@ test("aggregate tools fail closed rather than returning partial results over 500
   const store = makeStore({ invoices: tooMany });
   await assert.rejects(createAssistantTools({ store }).execute("getOutstandingSummary", {}), /5000-row safety limit/);
 });
+
+test('lookupInvoice matches the printed/source invoice number', async () => {
+  const row = {id: '11111111-1111-4111-8111-111111111111', invoice_number: 'INV-2026-0003', customer_id: null, issue_date: '2026-08-01', due_date: '2026-08-19', currency: 'USD', total_amount: '6767.00', amount_paid: '0', status: 'draft', notes: null, metadata: {source_invoice_number: 'INV-2026-0720', client_name: 'Global Dynamics Inc.'}, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z'};
+  const store = {async query(table, {filters = {}}) {
+    if (table !== 'invoices') return [];
+    if (filters.invoice_number) return [];
+    return [row];
+  }};
+  const tools = createAssistantTools({store});
+  const match = await tools.lookupInvoice('INV-2026-0720');
+  assert.equal(match.invoices.length, 1);
+});
