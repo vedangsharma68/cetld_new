@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 const DEFAULT_OCR_TIMEOUT_MS = 8_000;
 const UNCERTAIN_FIELDS = [
   'invoiceNumber', 'customerName', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total',
-  'outstandingAmount', 'currency', 'clientPhone', 'clientEmail', 'notes', 'direction', 'lineItems',
+  'outstandingAmount', 'currency', 'clientPhone', 'clientPhoneRaw', 'clientEmail', 'notes', 'direction', 'lineItems',
 ];
 const CURRENCIES = new Set(['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD', 'CHF']);
 
@@ -147,6 +147,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     outstandingAmount: field(outstandingAmount, confidence),
     currency: field(currency, confidence),
     clientPhone: field(null, confidence),
+    clientPhoneRaw: field(null, confidence),
     clientEmail: field(null, confidence),
     notes: field(null, confidence),
     direction: {value: 'uncertain', confidence: 0},

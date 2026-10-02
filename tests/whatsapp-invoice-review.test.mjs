@@ -51,6 +51,7 @@ function invoiceSupabase() {
 
 function combinedSupabase() {
   let review = null;
+  let pendingAction = null;
   const invoices = [];
   const customer = {id: scope.customerId, workspace_id: scope.workspaceId, phone: scope.phone, name: 'Buyer'};
   const clone = value => value == null ? value : structuredClone(value);
@@ -68,6 +69,14 @@ function combinedSupabase() {
         || args.p_customer_id !== scope.customerId || args.p_phone !== scope.phone) return {data: [], error: null};
       review = {...review, version: review.version + 1, action: clone(args.p_action)};
       return {data: [clone(review)], error: null};
+    }
+    if (name === 'whatsapp_load_pending_action_state') return {data: pendingAction
+      ? [{generation: pendingAction.generation, id: pendingAction.id, version: pendingAction.version, action: clone(pendingAction.action)}]
+      : [{generation: 0, id: null, version: null, action: null}], error: null};
+    if (name === 'whatsapp_store_pending_action') {
+      pendingAction = {id: 90, version: (pendingAction?.version || 0) + 1,
+        generation: args.p_expected_generation + 1, action: clone(args.p_action), created_at: new Date().toISOString()};
+      return {data: [clone(pendingAction)], error: null};
     }
     throw new Error(`unexpected RPC ${name}`);
   };
@@ -97,6 +106,17 @@ function combinedSupabase() {
   }
   return {rpc, from, invoices, get review() { return review; }};
 }
+
+test('E.164 extraction is stored under dashboard phone keys without creating consent', async () => {
+  const db = invoiceSupabase();
+  const store = createWhatsAppInvoiceStore({supabase: db, ...scope});
+  await store.createAssistantInvoice({customerId: scope.customerId, invoice: {...invoice,
+    idempotencyKey: 'wa_invoice_contact_test', clientPhone: '+14155550244', clientPhoneRaw: null}});
+  assert.equal(db.rows[0].metadata.debtor_phone, '+14155550244');
+  assert.equal(db.rows[0].metadata.client_phone, '+14155550244');
+  assert.equal(db.rows[0].metadata.client_phone_raw, null);
+  assert.equal(Object.keys(db.rows[0].metadata).some(key => /consent/i.test(key)), false);
+});
 
 test('real WhatsApp channel and invoice save path claim concurrent YES once and make replay idempotent', async () => {
   const state = durableReview({type: 'invoice_review_draft', stage: 'proposal', invoice,
@@ -159,7 +179,7 @@ test('currency-missing photo uses a default and auto-saves without confirmation'
       if (table === 'customers') return {data: {id: scope.customerId, phone: scope.phone}};
       throw new Error(table);
     }}; return q; }};
-  const fields = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
+  const fields = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-50',customerName:'Buyer',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:0,total:100,outstandingAmount:100,direction:'receivable'})[name] ?? null,
       confidence: name === 'currency' ? 0 : .99}]));
   const handler = createWhatsAppBoundMessageHandler({supabase, providerFactory: () => ({}),
@@ -177,7 +197,7 @@ test('currency-missing photo uses a default and auto-saves without confirmation'
 
 test('default handler, real invoice store auto-saves a photo exactly once', async () => {
   const db = combinedSupabase();
-  const fields = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
+  const fields = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-50',customerName:'Buyer',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:0,total:100,outstandingAmount:100,direction:'receivable'})[name] ?? null,
       confidence: name === 'currency' ? 0 : .99}]));
   const handler = createWhatsAppBoundMessageHandler({supabase: db, providerFactory: () => ({}),

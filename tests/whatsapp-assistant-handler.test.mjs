@@ -145,3 +145,48 @@ test('a successful planner retry returns the recovered answer without diagnostic
   assert.equal(await handler(scope), 'Invoice INV-1 is paid.');
   assert.equal(asks, 2);
 });
+
+function contactFlow({consentAnswer = 'yes'} = {}) {
+  let row = {id: 12, action: {type: 'invoice_debtor_phone', stage: 'awaiting_phone', invoiceId: 'invoice-1',
+    clientName: 'Acme', clientPhoneRaw: '(415) 555-0244'}};
+  const rpcCalls = [];
+  const db = fakeSupabase();
+  db.rpc = async (name, args) => { rpcCalls.push({name, args}); return {data: {id: 'consent-1'}, error: null}; };
+  const pending = {async loadPendingAction() { return row; }, async consumePendingAction() { row = null; return {}; },
+    async loadPendingActionState() { return {generation: 1, id: null, version: null}; },
+    async storePendingAction({action}) { row = {id: 13, action}; return row; }, async loadInvoiceReview() { return null; }};
+  const writes = [];
+  const handler = createWhatsAppBoundMessageHandler({supabase: db, providerFactory: () => ({}),
+    pendingActionStoreFactory: () => pending, invoiceStoreFactory: () => ({async saveDebtorPhone(input) { writes.push(input); }}),
+    channelFactory: () => ({async ask() { throw new Error('provider must not be called'); }})});
+  return {handler, writes, rpcCalls, consentAnswer};
+}
+
+test('pending invoice phone answer requires E.164, saves it, then records only a clear yes', async () => {
+  const flow = contactFlow();
+  assert.match(await flow.handler({...scope, message: '415 bananas'}), /full WhatsApp number with country code/i);
+  assert.equal(flow.writes.length, 0);
+  assert.match(await flow.handler({...scope, message: '+1 (415) 555-0244'}), /Saved \+14155550244.*Reply yes or no/s);
+  assert.deepEqual(flow.writes, [{invoiceId: 'invoice-1', phone: '+14155550244'}]);
+  assert.equal(flow.rpcCalls.length, 0);
+  assert.equal(await flow.handler({...scope, message: 'yes'}), 'Consent recorded for +14155550244.');
+  assert.equal(flow.rpcCalls[0].name, 'whatsapp_record_verbal_consent_service');
+  assert.equal(flow.rpcCalls[0].args.p_consent_text_version, 'invoice_updates_v1');
+});
+
+test('a country-code-only answer completes the printed local number without guessing', async () => {
+  const flow = contactFlow();
+  assert.match(await flow.handler({...scope, message: '+1'}), /Saved \+14155550244/);
+  assert.deepEqual(flow.writes, [{invoiceId: 'invoice-1', phone: '+14155550244'}]);
+});
+
+test('no or silence never records invoice-update consent', async () => {
+  const no = contactFlow();
+  await no.handler({...scope, message: '+14155550244'});
+  assert.match(await no.handler({...scope, message: 'no'}), /Reminders will not be sent/);
+  assert.equal(no.rpcCalls.length, 0);
+  const unclear = contactFlow();
+  await unclear.handler({...scope, message: '+14155550244'});
+  assert.match(await unclear.handler({...scope, message: 'maybe'}), /Reply yes or no/);
+  assert.equal(unclear.rpcCalls.length, 0);
+});

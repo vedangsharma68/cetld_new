@@ -150,7 +150,7 @@ test('parses all 28 printed rows and reconciles subtotal, tax, shipping, and tot
   );
   assert.equal(Math.round(result.lineItems.value.reduce((sum, row) => sum + row.amount, 0) * 100), 596450);
   assert.deepEqual(Object.keys(result).sort(), [
-    'clientEmail', 'clientPhone', 'currency', 'customerName', 'direction', 'dueDate', 'invoiceDate',
+    'clientEmail', 'clientPhone', 'clientPhoneRaw', 'currency', 'customerName', 'direction', 'dueDate', 'invoiceDate',
     'invoiceNumber', 'lineItems', 'notes', 'outstandingAmount', 'subtotal', 'tax', 'total',
   ].sort());
   for (const [key, value] of Object.entries(result)) {

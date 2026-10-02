@@ -101,7 +101,7 @@ test('expired proposal is refused and consumed', async () => {
 test('bound media extracts and immediately saves with a logged reply', async () => {
   const saved = [];
   const providerOptions = [];
-  const values = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
+  const values = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-7',customerName:'Buyer Co',invoiceDate:'2026-09-30',dueDate:'2026-10-30',subtotal:100,tax:0,total:100,outstandingAmount:100,currency:'INR',direction:'receivable'})[name] ?? null, confidence: .99}]));
   const supabase = {from(table) { return {select() { return this; }, eq() { return this; }, async maybeSingle() {
     if (table === 'workspace_ai_settings') return {data: {primary_model: 'gemini-3.5-flash-lite', fallback_model: null}};
@@ -122,7 +122,7 @@ test('bound media extracts and immediately saves with a logged reply', async () 
 
 test('production extraction advances an incomplete OCR draft to vision and proposes a confident invoice', async () => {
   let visionCalls = 0, stored = 0;
-  const raw = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
+  const raw = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-10',customerName:'Buyer Co',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:18,total:118,currency:'INR',direction:'receivable'})[name] ?? null, confidence: .98}]));
   raw.lineItems = {value: [], confidence: .8};
   const provider = {generateStructured: async ({validate}) => { visionCalls++; return {data: validate(invoiceWire(raw)), model: 'vision', usedFallback: false}; }};
@@ -150,7 +150,7 @@ test('incomplete media returns bounded review guidance and stores no proposal', 
     if (table === 'workspace_settings') return {data: {business_name: 'Seller'}};
     throw new Error(table);
   }}; }};
-  const incomplete = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
+  const incomplete = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name => [name, {value: null, confidence: 0}]));
   incomplete.direction = {value: 'uncertain', confidence: 0};
   incomplete.lineItems = {value: [], confidence: 0};
@@ -181,7 +181,7 @@ test('Vercel traces OCR assets into both WhatsApp functions', async () => {
 
 test('photo save preserves printed identity and links the original file without making save depend on storage', async () => {
   const transitions=[]; const files=[];
-  const values=Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
+  const values=Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name=>[name,{value:({invoiceNumber:'INV-2026-0720',customerName:'Global Dynamics Inc.',invoiceDate:'2026-09-30',dueDate:'2026-10-30',subtotal:100,tax:0,total:100,outstandingAmount:100,currency:'USD',direction:'receivable'})[name]??null,confidence:.99}]));
   const db={from(table){return {select(){return this},eq(){return this},async maybeSingle(){return {data:table==='workspace_ai_settings'?{primary_model:'space-bunny-free',fallback_model:null}:{business_name:'Seller'}}}}}};
   const make=keepInvoiceFile=>createWhatsAppBoundMessageHandler({supabase:db,providerFactory:()=>({}),channelFactory:()=>({ask(){throw Error('unused')}}),

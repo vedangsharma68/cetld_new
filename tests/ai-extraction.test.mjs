@@ -18,6 +18,7 @@ function response(overrides = {}) {
     outstandingAmount: { value: 118, confidence: 0.94 },
     currency: { value: 'INR', confidence: 0.98 },
     clientPhone: { value: '+919876543210', confidence: 0.88 },
+    clientPhoneRaw: { value: null, confidence: 0 },
     clientEmail: { value: 'billing@example.com', confidence: 0.97 },
     notes: { value: 'Payment due within 30 days', confidence: 0.9 },
     lineItems: {
@@ -151,11 +152,13 @@ test('discards invalid calendar dates and malformed email; rejects malformed str
   await assert.rejects(run(response({ invoiceDate: { value: 20260228, confidence: 0.9 } })), /invoiceDate must be a string/);
 });
 
-test('only accepts complete E.164 phone numbers and never invents a prefix', async () => {
-  const result = await run(response({ clientPhone: { value: '9876543210', confidence: 0.99 } }));
+test('keeps a printed local number raw and never invents a prefix', async () => {
+  const result = await run(response({clientPhone: {value: null, confidence: 0},
+    clientPhoneRaw: {value: '(415) 555-0244', confidence: 0.99}}));
   assert.equal(result.clientPhone.value, null);
+  assert.equal(result.clientPhoneRaw.value, '(415) 555-0244');
   assert.ok(result.uncertainFields.includes('clientPhone'));
-  assert.ok(result.warnings.some((warning) => /complete E\.164/.test(warning)));
+  assert.equal(result.warnings.some((warning) => /complete E\.164/.test(warning)), false);
 });
 
 test('explicitly instructs the model to return printed client email without inference', async () => {

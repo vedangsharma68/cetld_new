@@ -9,6 +9,16 @@ export function normalizeWhatsAppPhone(phone) {
   return value;
 }
 
+/** Record an owner's answer from the verified inbound assistant using the service-only RPC. */
+export async function recordInvoiceUpdateConsent({supabase, workspaceId, customerId, phone}) {
+  requireClient(supabase);
+  const data = unwrap(await supabase.rpc('whatsapp_record_verbal_consent_service', {
+    p_workspace_id: requireWorkspace(workspaceId), p_customer_id: customerId,
+    p_phone: normalizeWhatsAppPhone(phone), p_consent_text_version: 'invoice_updates_v1',
+  }));
+  return Array.isArray(data) ? data[0] : data;
+}
+
 function requireClient(supabase) {
   if (!supabase?.from || !supabase?.rpc) throw new Error('Supabase client is required');
   return supabase;

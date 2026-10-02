@@ -8,7 +8,7 @@ const CONFIDENCE_THRESHOLD = 0.75;
 
 const FIELD_NAMES = [
   'invoiceNumber', 'customerName', 'invoiceDate', 'dueDate', 'subtotal', 'tax',
-  'total', 'outstandingAmount', 'currency', 'clientPhone', 'clientEmail', 'notes', 'direction',
+  'total', 'outstandingAmount', 'currency', 'clientPhone', 'clientPhoneRaw', 'clientEmail', 'notes', 'direction',
   'currencySource', 'addressHint', 'paymentTerms',
 ];
 const SCALAR_FIELDS = FIELD_NAMES;
@@ -40,6 +40,7 @@ export const invoiceExtractionResponseSchema = {
     outstandingAmount: nullable('number'), outstandingAmountConfidence: {type: 'number'},
     currency: nullable('string'), currencyConfidence: {type: 'number'},
     clientPhone: nullable('string'), clientPhoneConfidence: {type: 'number'},
+    clientPhoneRaw: nullable('string'), clientPhoneRawConfidence: {type: 'number'},
     clientEmail: nullable('string'), clientEmailConfidence: {type: 'number'},
     notes: nullable('string'), notesConfidence: {type: 'number'},
     direction: {type: 'string'}, directionConfidence: {type: 'number'},
@@ -148,7 +149,7 @@ export function invoiceExtractionPrompt(businessName = '') {
     `The workspace business name is ${JSON.stringify(String(businessName || '').slice(0, 255))}. Classify direction as receivable only if the workspace is clearly the seller/issuer and the counterparty owes it; payable only if the workspace is clearly the buyer/bill-to party; otherwise uncertain. Never infer direction merely from the word invoice or from the upload action.`,
     'Infer currency from printed currency codes and symbols together with addresses, country names, phone country codes, and tax identifiers (including GST, GSTIN, PAN, and postal codes). CETLD supports INR, USD, EUR, GBP, AED, SGD, AUD, CAD, and CHF. If an unsupported currency such as JPY, KWD, or BHD is printed, return that code so local validation can reject it clearly. A bare $ without country evidence is ambiguous: return null. Put a short description of the printed evidence in currencySource, the relevant printed address/country/phone/tax text in addressHint, and printed payment terms such as Net 30 in paymentTerms. Monetary amounts may have no more than two decimal places.',
     'Return clientEmail exactly when a client/bill-to email address is explicitly printed; otherwise return null. Never infer an email address.',
-    'Return clientPhone only when the complete number is explicitly present in valid E.164 form including its + country code. Do not invent a country prefix.',
+    'Return clientPhone only when the complete number is explicitly present in valid E.164 form including its + country code. Return a printed client phone that is not valid E.164 in clientPhoneRaw instead. Never put the same number in both fields and never invent a country prefix.',
     'Return short useful notes only when explicitly printed; otherwise return null. Extract up to 100 printed line items with description, quantity, unitPrice, and amount; return an empty array when none are legible. Set confidence per field and line item from 0 to 1 based only on legibility and direct support.',
     'Use the flat response fields exactly as specified. For every scalar field, put its evidence value in that field and its evidence confidence in the matching field whose name ends with Confidence. Use lineItemsConfidence for the lineItems array. Missing evidence must use null with confidence 0; direction must be uncertain when evidence does not establish it. Do not fabricate a value or confidence.',
   ].join(' ');
@@ -204,6 +205,10 @@ export function validateInvoiceExtractionResponse(raw, {verifiedPrintedAdjustmen
       value = null;
       warnings.push('Invalid clientEmail was discarded.');
     }
+    if (name === 'clientPhoneRaw' && value !== null && /^\+[1-9]\d{7,14}$/.test(value.replace(/[\s().-]/g, ''))) {
+      value = null;
+      warnings.push('clientPhoneRaw was omitted because the number belongs in clientPhone.');
+    }
     if (name === 'clientPhone' && value !== null && !/^\+[1-9]\d{7,14}$/.test(value.replace(/[\s().-]/g, ''))) {
       value = null;
       warnings.push('clientPhone was omitted because it is not a complete E.164 number.');
@@ -219,7 +224,7 @@ export function validateInvoiceExtractionResponse(raw, {verifiedPrintedAdjustmen
       }
     }
 
-    if (!['currencySource', 'addressHint', 'paymentTerms'].includes(name)
+    if (!['currencySource', 'addressHint', 'paymentTerms', 'clientPhoneRaw'].includes(name)
       && (value === null || confidence < CONFIDENCE_THRESHOLD || (name === 'direction' && value === 'uncertain'))) uncertainFields.add(name);
     result[name] = { value, confidence };
   }

@@ -70,6 +70,8 @@ test('contact lookup answers from stored metadata and says plainly when it is mi
   assert.equal(contactAnswer({...inv,metadata:{}},{wantPhone:true,wantEmail:false}),"I don't have a contact number for INV-2026-0720 (Global Dynamics Inc.).");
   assert.equal(contactAnswer({...inv,metadata:{}},{wantPhone:false,wantEmail:true}),"I don't have an email address for INV-2026-0720 (Global Dynamics Inc.).");
   assert.match(contactAnswer({...inv,metadata:{debtor_phone:'+919999999999'}},{wantPhone:true,wantEmail:false}),/📞 \+919999999999/);
+  assert.match(contactAnswer({...inv,metadata:{client_phone_raw:'(415) 555-0244'}},{wantPhone:true,wantEmail:false}),
+    /I only have a local number \(415\) 555-0244, no country code/);
   const noAi={async generateStructured(){throw new Error('503')}};
   const h=mkHandler({provider:noAi,store:{findInvoices:async()=>[{...inv,updatedAt:'2026-10-02',metadata:{}}]},channelAsk:async()=>{throw Error('planner must not run')}});
   assert.equal(await h({...scopeH,message:'whats the contact number for this invoice',messageId:'c1'}),"I don't have a contact number for INV-2026-0720 (Global Dynamics Inc.).");
