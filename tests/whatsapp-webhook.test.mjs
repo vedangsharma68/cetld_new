@@ -360,12 +360,12 @@ test('planner fallback is sent and completed as done with bounded diagnostics an
   const runtime = createInboundRuntime({conversationStore:null,supabase, inbox, env,
     outbound: {async sendServiceReply(input) { sends.push(input); return {status: 'accepted'}; }},
     onBoundMessage: async () => ({
-      answer: "I couldn't safely check that just now. Please try again.",
+      answer: "Something broke on my side while handling that message, so I did not process it. Please send it again. If it keeps failing, tell Vedang.",
       plannerFailure: {provider: 'AIProvider', model: 'free-model', status: 429, reason: 'provider_error'},
     })});
 
   assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 1});
-  assert.equal(sends[0].body, "I couldn't safely check that just now. Please try again.");
+  assert.equal(sends[0].body, "Something broke on my side while handling that message, so I did not process it. Please send it again. If it keeps failing, tell Vedang.");
   assert.equal(completions[0][1], 'ASSISTANT_PLANNER_FAILED');
   assert.deepEqual(JSON.parse(completions[0][2]),
     {provider: 'AIProvider', model: 'free-model', status: 429, reason: 'provider_error'});
@@ -443,7 +443,7 @@ test('a final-attempt event receives exactly one fallback and is never retried',
 
   assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 1});
   assert.equal(sends.length, 1);
-  assert.equal(sends[0].body, "I couldn't safely check that just now. Please try again.");
+  assert.equal(sends[0].body, "Something broke on my side while handling that message, so I did not process it. Please send it again. If it keeps failing, tell Vedang.");
   assert.equal(completions.length, 1);
   assert.deepEqual(completions[0].slice(1), ['PROCESSING_FAILED', null, false]);
 });
