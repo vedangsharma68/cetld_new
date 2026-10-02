@@ -44,9 +44,14 @@ function plannerFailureResult(message, clock, writeIntent, provider, plan, reaso
     reason,
   };
   console.warn('Cetld assistant planner failure:', plannerFailure);
+  const providerDown = reason === 'provider_error';
   const answer = writeIntent
-    ? 'I couldn’t safely prepare that invoice request just now. No change was made; please try again.'
-    : 'I couldn’t safely check that just now. Please try again.';
+    ? (providerDown
+      ? 'The AI service failed while I was reading that change, so nothing was changed. Try again in a minute, or send it exactly like “change invoice 1001 due date to 2026-10-15”.'
+      : 'I could not turn that into a specific invoice change, so nothing was changed. Name the invoice and the change, like “change invoice 1001 due date to 2026-10-15”.')
+    : (providerDown
+      ? 'The AI service failed while I was looking that up. Try again in a minute, or ask for a specific invoice number.'
+      : 'I could not tell what you are asking. I can list invoices, check a balance, send an invoice file, or change an invoice. Which one?');
   const source = asksForZoho(message) ? 'getZohoBooksData' : 'none';
   const result = withEvidence({
     answer,
