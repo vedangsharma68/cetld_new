@@ -232,16 +232,26 @@ test('client wording, official integration logos and global contact links are pr
 });
 
 test('workspace AI settings and invoice extraction use the centralized server API', () => {
-  assert.match(app, /aiRequest\('settings'/);
-  assert.match(app, /method:'PUT'/);
-  assert.match(app, /primary_model:primaryModel/);
-  assert.match(app, /fallback_model:fallbackModel/);
+  const aiSettingsImport = app.match(/import \{([^}]+)\} from '\.\/settings-ai\.js';/)?.[1] || '';
+  for (const helper of ['loadAIWorkspaceConfiguration', 'saveAISettings', 'renderAIModelOptions', 'bindAIModelPickers', 'readAIModelPickerValues']) {
+    assert.ok(aiSettingsImport.split(',').some(name => name.trim() === helper), `settings-ai.js must provide ${helper}`);
+  }
+  assert.match(app, /loadAIWorkspaceConfiguration\(aiRequest,workspace\.id,/);
+  assert.match(app, /readAIModelPickerValues\(form\.querySelector/);
+  assert.match(app, /saveAISettings\(aiRequest,state\.workspace\.id,\{primary_model:primaryModel,fallback_model:fallbackModel\}/);
+  assert.match(app, /bindAIModelPickers\(settingsForm\.querySelector/);
+  assert.doesNotMatch(app, /aiRequest\(['"]settings['"]/);
   assert.match(app, /aiRequest\('extract'/);
   assert.match(app, /reviewRequired!==true/);
   assert.match(app, /applyInvoiceExtraction/);
   assert.match(app, /value\('currency'\)/);
   assert.doesNotMatch(app, /OPENROUTER_API_KEY/);
   assert.doesNotMatch(app, /cetld_primary_ai_model:primaryModel/);
+});
+
+test('settings rerenders clean up and mount the shared section navigation', () => {
+  assert.match(app, /function render\(\)\{destroySettingsNavigation\(\)/);
+  assert.match(app, /if\(state\.page==='Settings'\)mountSettingsNavigation\(document\.querySelector\("#app"\)\)/);
 });
 
 test('New Invoice extraction does not persist line items without an item review control', () => {

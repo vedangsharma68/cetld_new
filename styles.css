@@ -261,8 +261,6 @@ body{min-height:100vh;isolation:isolate;overflow-x:hidden}#app{position:relative
 .settings-branch-children>a:before{content:"";position:absolute;left:-15px;top:50%;width:10px;border-top:1px solid var(--line)}
 .settings-branch-children>a:hover,.settings-branch-children>a:focus-visible{background:var(--soft);color:var(--ink);transform:translateX(2px) scaleX(1.01)}
 .settings-branch-children>a:active{transform:translateX(2px) scale(.985,.96)}
-.settings-branch-children>a[href="#profile"],.settings-layout:has(#preferences:target) a[href="#profile"],.settings-layout:has(#account:target) a[href="#profile"]{color:var(--muted);background:transparent}
-.settings-layout:has(#profile:target) a[href="#profile"],.settings-layout:has(#preferences:target) a[href="#preferences"],.settings-layout:has(#account:target) a[href="#account"],.settings-layout:not(:has(.settings-content>:target)) a[href="#profile"]{color:var(--ink);background:var(--soft);box-shadow:inset 3px 0 0 var(--mint);transform:translateX(2px)}
 .tally-logo{width:34px;height:24px}
 @media(max-width:800px){.settings-nav{overflow-x:auto}.settings-branch-label{display:none}.settings-branch-children{display:flex;margin:0;padding:0;border:0;min-width:max-content}.settings-branch-children>a{border-radius:8px}.settings-branch-children>a:before{display:none}}
 @media(prefers-reduced-motion:reduce){.settings-branch-children>a{transition:none!important}}
@@ -276,7 +274,7 @@ body{min-height:100vh;isolation:isolate;overflow-x:hidden}#app{position:relative
 /* Comfortable invoice entry and consistent custom form controls. */
 .field select,.filter,.settings-content select,.invoice-entry-form select,.invoice-review-form select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 18px) calc(50% - 2px),calc(100% - 13px) calc(50% - 2px);background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:38px;cursor:pointer}
 #dialog:has(.invoice-entry-form),#dialog:has(.invoice-review-form){width:min(900px,calc(100vw - 40px))}
-.invoice-entry-form .dialog-body,.invoice-review-form .dialog-body{gap:24px;padding:28px 34px}.form-section{display:grid;gap:18px;padding:24px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--white) 92%,var(--soft))}.section-heading{display:grid;gap:5px}.section-kicker{color:var(--muted);font-size:.68rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase}.invoice-dropzone{min-height:128px;border:1.5px dashed color-mix(in srgb,var(--mint) 65%,var(--line));border-radius:12px;background:color-mix(in srgb,var(--soft) 72%,transparent);display:flex;align-items:center;justify-content:center;gap:16px;padding:22px;text-align:left;cursor:pointer;transition:border-color .18s,background .18s,transform .18s}.invoice-dropzone:hover,.invoice-dropzone.is-dragging{border-color:var(--mint);background:color-mix(in srgb,var(--mint) 14%,var(--soft));transform:translateY(-1px)}.invoice-dropzone input{position:absolute;width:1px;height:1px;opacity:0}.invoice-dropzone:focus-within{outline:2px solid var(--mint);outline-offset:3px}.dropzone-icon{display:grid;place-items:center;width:48px;height:48px;border-radius:12px;background:var(--white);color:var(--mint);box-shadow:0 7px 20px rgba(8,24,34,.08)}.invoice-dropzone strong,.invoice-dropzone small{display:block}.invoice-dropzone small,.upload-privacy{margin-top:5px;color:var(--muted);font-size:.76rem;line-height:1.5}.choice-card{position:relative;display:grid;grid-template-columns:22px minmax(0,1fr);gap:12px;align-items:start;padding:15px 16px;border:1px solid var(--line);border-radius:10px;background:var(--soft);cursor:pointer}.choice-card input{position:absolute;opacity:0;pointer-events:none}.choice-control{width:20px;height:20px;border:1.5px solid var(--muted);border-radius:6px;background:var(--white);display:grid;place-items:center;transition:.18s}.choice-card input:checked+.choice-control{border-color:var(--mint);background:var(--mint)}.choice-card input:checked+.choice-control:after{content:'✓';color:#0d1a20;font-size:13px;font-weight:800}.choice-card:has(input:focus-visible){outline:2px solid var(--mint);outline-offset:3px}.choice-card strong,.choice-card small{display:block}.choice-card small{margin-top:4px;line-height:1.45}.settings-content input[type="checkbox"]:not(.toggle),#follow-up-preferences input[type="checkbox"]{appearance:none;width:20px;height:20px;border:1.5px solid var(--muted);border-radius:6px;background:var(--white);display:inline-grid;place-items:center;vertical-align:middle;cursor:pointer}.settings-content input[type="checkbox"]:not(.toggle):checked,#follow-up-preferences input[type="checkbox"]:checked{border-color:var(--mint);background:var(--mint)}.settings-content input[type="checkbox"]:not(.toggle):checked:after,#follow-up-preferences input[type="checkbox"]:checked:after{content:'✓';color:#0d1a20;font-size:13px;font-weight:800}.invoice-line-items-review{display:grid;gap:15px;padding:20px;border:1px solid var(--line);border-radius:12px;background:var(--soft)}
+.invoice-entry-form .dialog-body,.invoice-review-form .dialog-body{gap:24px;padding:28px 34px}.form-section{display:grid;gap:18px;padding:24px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--white) 92%,var(--soft))}.section-heading{display:grid;gap:5px}.section-kicker{color:var(--muted);font-size:.68rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase}.invoice-dropzone{min-height:128px;border:1.5px dashed color-mix(in srgb,var(--mint) 65%,var(--line));border-radius:12px;background:color-mix(in srgb,var(--soft) 72%,transparent);display:flex;align-items:center;justify-content:center;gap:16px;padding:22px;text-align:left;cursor:pointer;transition:border-color .18s,background .18s,transform .18s}.invoice-dropzone:hover,.invoice-dropzone.is-dragging{border-color:var(--mint);background:color-mix(in srgb,var(--mint) 14%,var(--soft));transform:translateY(-1px)}.invoice-dropzone input{position:absolute;width:1px;height:1px;opacity:0}.invoice-dropzone:focus-within{outline:2px solid var(--mint);outline-offset:3px}.dropzone-icon{display:grid;place-items:center;width:48px;height:48px;border-radius:12px;background:var(--white);color:var(--mint);box-shadow:0 7px 20px rgba(8,24,34,.08)}.invoice-dropzone strong,.invoice-dropzone small{display:block}.invoice-dropzone small,.upload-privacy{margin-top:5px;color:var(--muted);font-size:.76rem;line-height:1.5}.choice-card{position:relative;display:grid;grid-template-columns:22px minmax(0,1fr);gap:12px;align-items:start;padding:15px 16px;border:1px solid var(--line);border-radius:10px;background:var(--soft);cursor:pointer}.choice-card input{position:absolute;opacity:0;pointer-events:none}.choice-control{width:20px;height:20px;border:1.5px solid var(--muted);border-radius:6px;background:var(--white);display:grid;place-items:center;transition:.18s}.choice-card input:checked+.choice-control{border-color:var(--mint);background:var(--mint)}.choice-card input:checked+.choice-control:after{content:'✓';color:#0d1a20;font-size:13px;font-weight:800}.choice-card:has(input:focus-visible){outline:2px solid var(--mint);outline-offset:3px}.choice-card strong,.choice-card small{display:block}.choice-card small{margin-top:4px;line-height:1.45}.invoice-line-items-review{display:grid;gap:15px;padding:20px;border:1px solid var(--line);border-radius:12px;background:var(--soft)}
 @media(max-width:700px){#dialog:has(.invoice-entry-form),#dialog:has(.invoice-review-form){width:calc(100vw - 16px);max-height:calc(100dvh - 16px);margin:auto}.invoice-entry-form .dialog-body,.invoice-review-form .dialog-body{padding:16px;gap:16px}.form-section{padding:17px}.invoice-dropzone{min-height:112px}}
 @media(prefers-reduced-motion:reduce){.invoice-dropzone,.choice-control{transition:none!important}.invoice-dropzone:hover,.invoice-dropzone.is-dragging{transform:none}}
 .invoice-ledger-drop-overlay{position:fixed;inset:20px;z-index:90;display:grid;place-content:center;justify-items:center;gap:10px;border:2px dashed var(--mint);border-radius:18px;background:color-mix(in srgb,var(--cedar) 90%,transparent);color:#fff;opacity:0;pointer-events:none;transform:scale(.985);transition:opacity .16s,transform .16s;backdrop-filter:blur(8px)}.invoice-ledger-drop-overlay.is-visible{opacity:1;transform:none}.invoice-ledger-drop-overlay>span{display:grid;place-items:center;width:64px;height:64px;border-radius:17px;background:var(--acid);color:#17342b}.invoice-ledger-drop-overlay .icon{width:28px;height:28px}.invoice-ledger-drop-overlay strong{font-size:1.2rem}.invoice-ledger-drop-overlay small{color:#bfd0ca}
@@ -285,3 +283,114 @@ body{min-height:100vh;isolation:isolate;overflow-x:hidden}#app{position:relative
 .whatsapp-code{font-size:1.6rem;letter-spacing:.08em;margin:12px 0}
 
 .settings-advanced{grid-column:1/-1;border-top:1px solid var(--line);padding-top:16px}.settings-advanced>summary{cursor:pointer;color:var(--muted);font-size:.84rem;padding-block:5px}.settings-advanced>summary:focus-visible{outline:2px solid #72a893;outline-offset:4px}.settings-advanced[open]>.field{margin-top:16px}
+
+/* Settings layout: more air around sections, with the existing CETLD palette. */
+.settings-layout{grid-template-columns:minmax(178px,205px) minmax(0,840px);gap:clamp(24px,3vw,42px);align-items:start;width:100%;max-width:1160px}
+.settings-nav{top:92px;z-index:5;gap:10px;padding:15px}
+.settings-branch-children{gap:4px}
+.settings-branch-children>a{padding:10px 12px;line-height:1.4}
+.settings-branch-children>a[aria-current="location"]{color:var(--ink);background:var(--soft);font-weight:650;box-shadow:inset 3px 0 0 var(--mint);transform:translateX(2px)}
+.settings-branch-children>a[aria-current="location"]:before{border-color:var(--mint)}
+.settings-content{gap:28px;min-width:0}
+.settings-content>.panel{scroll-margin-top:96px;border-radius:14px}
+.settings-content>.panel>.panel-head{padding:25px 28px;gap:18px}
+.settings-content>.panel>.panel-head p{max-width:62ch;line-height:1.55}
+.settings-content>.panel>.panel-body{padding:28px}
+.settings-content .settings-fields:not(.owner-whatsapp-change){grid-template-columns:repeat(2,minmax(0,1fr));gap:22px 24px}
+.settings-content .settings-fields>.field{min-width:0;align-content:start}
+.settings-content .settings-fields>.settings-advanced{margin-top:2px;padding-top:18px}
+.settings-content .settings-fields>.settings-advanced[open]>.field{margin-top:18px}
+.settings-content .setting-row{gap:20px;min-height:56px}
+.settings-content .setting-row+.setting-row{padding-top:20px}
+
+/* Keep visible settings links available at narrow widths and while scrolling. */
+@media(max-width:1100px){.settings-layout{grid-template-columns:minmax(170px,190px) minmax(0,1fr);gap:26px}}
+@media(max-width:800px){
+  .settings-layout{grid-template-columns:minmax(0,1fr);gap:20px}
+  .settings-nav{position:sticky;top:72px;display:block;width:100%;max-width:100%;min-width:0;overflow-x:auto;overflow-y:hidden;padding:8px;z-index:9;scrollbar-width:thin;overscroll-behavior-x:contain;backdrop-filter:blur(10px)}
+  .settings-branch-label{display:none}
+  .settings-branch-children{display:flex;gap:5px;min-width:max-content;margin:0;padding:0;border:0}
+  .settings-nav .settings-branch-children>a{display:flex!important;flex:0 0 auto;align-items:center;min-height:42px;padding:9px 12px;border-radius:8px;white-space:nowrap}
+  .settings-branch-children>a:before{display:none}
+  .settings-branch-children>a[aria-current="location"]{box-shadow:inset 0 -2px 0 var(--mint);transform:none}
+  .settings-content{gap:22px}
+  .settings-content>.panel>.panel-head{padding:21px 22px}
+  .settings-content>.panel>.panel-body{padding:22px}
+  .settings-content>.panel{scroll-margin-top:140px}
+}
+@media(max-width:600px){
+  .settings-layout{gap:16px}
+  .settings-content{gap:18px}
+  .settings-content>.panel>.panel-head{padding:19px 18px}
+  .settings-content>.panel>.panel-body{padding:19px 18px}
+  .settings-content .settings-fields:not(.owner-whatsapp-change){grid-template-columns:minmax(0,1fr);gap:18px}
+  .settings-content .settings-fields>p,.settings-content .settings-fields>.settings-advanced{grid-column:1}
+  .settings-content .setting-row{min-height:50px;gap:14px}
+  .settings-content .setting-row+.setting-row{padding-top:16px}
+  .settings-content>.panel{scroll-margin-top:140px}
+}
+
+/* WhatsApp settings use distinct status, action, and number-change groups. */
+.owner-whatsapp-layout{display:grid;gap:22px;min-width:0}
+.owner-whatsapp-status{display:grid;gap:8px;padding:17px 19px;border:1px solid var(--line);border-radius:11px;background:var(--soft)}
+.owner-whatsapp-status>p[role="status"]{display:flex;align-items:center;gap:9px;color:var(--ink);font-weight:650;line-height:1.5;overflow-wrap:anywhere}
+.owner-whatsapp-status>p[role="status"]:before{content:"";flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:#5d916d;box-shadow:0 0 0 4px color-mix(in srgb,#5d916d 16%,transparent)}
+.owner-whatsapp-status .settings-hint{margin:0;line-height:1.55}
+.owner-whatsapp-verification{display:grid;gap:16px;padding:17px 19px;border:1px solid var(--line);border-radius:11px;background:var(--soft)}
+.owner-whatsapp-verification>p:first-child{line-height:1.6}
+.owner-whatsapp-verification .settings-hint{margin:0;line-height:1.55}
+.owner-whatsapp-verification>.btn{justify-self:start;min-height:44px}
+.owner-whatsapp-verification details{display:grid;gap:9px;padding:14px;border:1px solid var(--line);border-radius:9px;background:var(--white)}
+.owner-whatsapp-verification details>summary{cursor:pointer;font-weight:550}
+.owner-whatsapp-verification details>p{color:var(--muted);font-size:.84rem;line-height:1.55;overflow-wrap:anywhere}
+.owner-whatsapp-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.owner-whatsapp-actions>.btn{min-height:44px}
+.owner-whatsapp-change{display:grid;gap:16px;padding:22px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--paper) 76%,var(--white))}
+.owner-whatsapp-change>#whatsapp-owner-form,.owner-whatsapp-change#whatsapp-owner-form{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:13px 18px}
+.owner-whatsapp-change>form>.field{grid-column:1;min-width:0}
+.owner-whatsapp-change>form>.settings-hint,.owner-whatsapp-change>form>.error{grid-column:1/-1;margin:0}
+.owner-whatsapp-change>form>.btn{grid-column:2;grid-row:1;justify-self:end;min-height:46px;white-space:nowrap}
+.owner-whatsapp-change details{display:grid;gap:10px}
+@media(max-width:600px){
+  .owner-whatsapp-layout{gap:17px}
+  .owner-whatsapp-status{padding:15px}
+  .owner-whatsapp-verification{gap:14px;padding:15px}
+  .owner-whatsapp-verification details{padding:12px}
+  .owner-whatsapp-actions{gap:8px}
+  .owner-whatsapp-change{padding:17px}
+  .owner-whatsapp-change>#whatsapp-owner-form,.owner-whatsapp-change#whatsapp-owner-form{grid-template-columns:minmax(0,1fr);gap:13px}
+  .owner-whatsapp-change>form>.field,.owner-whatsapp-change>form>.settings-hint,.owner-whatsapp-change>form>.error,.owner-whatsapp-change>form>.btn{grid-column:1;grid-row:auto}
+  .owner-whatsapp-change>form>.btn{justify-self:start;white-space:normal}
+}
+
+/* Shared dashboard form controls. Toggles and hidden choice/upload inputs stay custom. */
+.field :is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"]),select,textarea),.filter,.search input{min-width:0;min-height:46px;padding:11px 14px;border:1px solid var(--line);border-radius:9px;background-color:var(--white);color:var(--ink);font:inherit;font-size:.9rem;font-weight:400;line-height:1.4;box-shadow:0 1px 2px rgba(24,43,37,.035);transition:border-color .16s ease,box-shadow .16s ease,background-color .16s ease}
+.field :is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"]),select,textarea)::placeholder,.search input::placeholder{color:var(--muted);opacity:.76}
+.field textarea{min-height:112px;line-height:1.55}
+.field :is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"]),select,textarea):hover:not(:disabled):not(:focus-visible),.filter:hover:not(:disabled):not(:focus-visible),.search input:hover:not(:disabled):not(:focus-visible){border-color:color-mix(in srgb,var(--cedar) 32%,var(--line))}
+.field :is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"]),select,textarea):focus-visible,.filter:focus-visible,.search input:focus-visible{border-color:#72a893;outline:2px solid #72a893;outline-offset:2px;box-shadow:0 0 0 3px color-mix(in srgb,#72a893 14%,transparent)}
+.field :is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"]),select,textarea):disabled,.field input:read-only:not([type="checkbox"]),.filter:disabled{background-color:var(--soft);color:var(--muted);cursor:not-allowed;box-shadow:none}
+.field input[readonly]:not([type="checkbox"]){cursor:text}
+.field select,.filter{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 18px) calc(50% - 2px),calc(100% - 13px) calc(50% - 2px);background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:38px;cursor:pointer}
+input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-toggle input){appearance:none;flex:0 0 auto;width:19px;height:19px;min-height:19px;margin:0;padding:0;border:1.5px solid #9aa99e;border-radius:5px;background:var(--white);color:var(--cedar);display:inline-grid;place-items:center;vertical-align:middle;cursor:pointer;box-shadow:none;transition:border-color .16s ease,background-color .16s ease,box-shadow .16s ease}
+input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-toggle input):checked{border-color:var(--cedar);background:var(--cedar)}
+input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-toggle input):checked:after{content:"✓";color:#fff;font-size:13px;font-weight:750;line-height:1}
+input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-toggle input):focus-visible{outline:2px solid #72a893;outline-offset:2px;box-shadow:0 0 0 3px color-mix(in srgb,#72a893 14%,transparent)}
+input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-toggle input):disabled{background:var(--soft);border-color:var(--line);color:var(--muted);cursor:not-allowed}
+input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-toggle input):checked:disabled{background:var(--cedar);border-color:var(--cedar);color:#fff}
+#follow-up-preferences-form>.two-cols,#follow-up-preferences-form>.setting-row,#follow-up-preferences-form>[data-error],#follow-up-preferences-form>[type="submit"]{grid-column:1/-1}
+#follow-up-preferences-form>.setting-row{padding-block:15px}
+#follow-up-preferences-form>.setting-row+.setting-row{border-top:1px solid var(--line)}
+#follow-up-preferences-form>[type="submit"]{justify-self:start}
+#follow-up-preferences fieldset.field{grid-column:1/-1;min-width:0;margin:0;padding:0;border:0}
+#follow-up-preferences fieldset.field legend{margin-bottom:10px;padding:0;font-size:.875rem;font-weight:500}
+#follow-up-preferences fieldset.field>.row{display:flex;flex-wrap:wrap;gap:8px}
+#follow-up-preferences fieldset.field>.row label{display:flex;align-items:center;gap:7px;min-height:38px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--white);font-size:.8rem;font-weight:500;cursor:pointer}
+.search:focus-within{border-color:#72a893;border-radius:9px;box-shadow:0 0 0 3px color-mix(in srgb,#72a893 14%,transparent)}
+@media(prefers-reduced-motion:reduce){.settings-branch-children>a,.field :is(input,select,textarea),.filter,.search input,input[type="checkbox"]{transition:none!important}}
+@media(forced-colors:active){
+  input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-toggle input){appearance:auto;accent-color:auto;border-color:ButtonText;background:Canvas;color:CanvasText;box-shadow:none}
+  input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-toggle input):checked{border-color:ButtonText;background:Canvas}
+  input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-toggle input):checked:after{display:none;content:none}
+  input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-toggle input):focus-visible{outline-color:Highlight;box-shadow:none}
+}

@@ -272,6 +272,7 @@ export class AIProvider {
     cfApiToken = globalThis.process?.env?.CLOUDFLARE_API_TOKEN,
     apiKey,
     fetchImpl = globalThis.fetch,
+    requestPurpose = 'chat',
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxAttempts = 2,
     retryDelayMs = 120,
@@ -279,8 +280,9 @@ export class AIProvider {
     logger = console,
   } = {}) {
     assertServerRuntime();
-    const extractionPrimary = primaryModel === DEFAULT_EXTRACTION_MODEL;
+    if (!['chat', 'extraction'].includes(requestPurpose)) throw invalidArgument();
     if (!isPrimaryModelId(primaryModel) || (fallbackModel !== null && (!isFallbackModelId(fallbackModel) || fallbackModel === primaryModel))) throw new AIError('INVALID_MODEL', 400);
+    this.requestPurpose = requestPurpose;
     this.primaryModel = primaryModel;
     this.fallbackModel = fallbackModel;
     this.#geminiApiKey = typeof geminiApiKey === 'string' ? geminiApiKey : '';
@@ -290,7 +292,7 @@ export class AIProvider {
     this.#cfApiToken = typeof cfApiToken === 'string' ? cfApiToken : '';
     this.fetchImpl = fetchImpl;
     this.timeoutMs = Math.max(1, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
-    this.maxAttempts = extractionPrimary ? 1 : Math.min(2, Math.max(1, Number(maxAttempts) || 2));
+    this.maxAttempts = requestPurpose === 'extraction' ? 1 : Math.min(2, Math.max(1, Number(maxAttempts) || 2));
     this.retryDelayMs = Math.min(500, Math.max(0, Number(retryDelayMs) || 0));
     this.sleepImpl = sleepImpl;
     this.logger = logger;
@@ -319,7 +321,12 @@ export class AIProvider {
 
   #candidates() {
     let candidates = [this.primaryModel];
-    if (this.primaryModel === CF_PRIMARY_MODEL) {
+    if (this.requestPurpose === 'extraction') {
+      if (this.fallbackModel) {
+        candidates.push(this.fallbackModel);
+        candidates.push(GEMINI_FALLBACK_MODEL, ZEN_PRIMARY_MODEL, ZEN_FALLBACK_MODEL);
+      }
+    } else if (this.primaryModel === CF_PRIMARY_MODEL) {
       const defaultCfFallback = this.fallbackModel === null || this.fallbackModel === CF_BACKUP_MODEL || this.fallbackModel === GEMINI_FALLBACK_MODEL;
       if (defaultCfFallback) candidates.push(CF_BACKUP_MODEL);
       if (this.fallbackModel) candidates.push(this.fallbackModel);
@@ -329,9 +336,6 @@ export class AIProvider {
       if (this.fallbackModel) candidates.push(this.fallbackModel, GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL);
     } else if (!this.fallbackModel) {
       return candidates;
-    } else if (this.primaryModel === DEFAULT_EXTRACTION_MODEL) {
-      candidates.push(this.fallbackModel);
-      candidates.push(GEMINI_FALLBACK_MODEL, ZEN_PRIMARY_MODEL, ZEN_FALLBACK_MODEL);
     } else if (this.primaryModel === ZEN_PRIMARY_MODEL) {
       candidates.push(this.fallbackModel);
       candidates.push(GEMINI_FALLBACK_MODEL);

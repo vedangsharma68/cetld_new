@@ -142,6 +142,21 @@ test('Gemini Flash fallback receives structured extraction schema and its output
   assert.deepEqual(result.data,{invoiceNumber:'INV-1048',total:84600}); assert.equal(result.usedFallback,true);
 });
 
+test('Gemini Flash Lite chat retries its primary before using the configured fallback',async()=>{
+  const calls=[];
+  const ai=provider(async(url,init)=>{
+    const model=String(url).includes('generativelanguage')
+      ?decodeURIComponent(new URL(url).pathname.split('/models/')[1].split(':')[0])
+      :JSON.parse(init.body).model;
+    calls.push(model);
+    return model===DEFAULT_EXTRACTION_MODEL?gemini('',{status:503}):openRouter('Recovered by the configured fallback');
+  },{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:ZEN_FALLBACK_MODEL});
+  const result=await ai.generate({messages:[{role:'user',content:'Hi'}]});
+  assert.deepEqual(calls,[DEFAULT_EXTRACTION_MODEL,DEFAULT_EXTRACTION_MODEL,ZEN_FALLBACK_MODEL]);
+  assert.equal(result.model,ZEN_FALLBACK_MODEL);
+  assert.equal(result.usedFallback,true);
+});
+
 test('network failures and abort timeouts can use the configured fallback',async()=>{
   const networkCalls=[];
   const network=provider(async(url,init)=>{
@@ -185,7 +200,7 @@ test('extraction tries Gemini Lite, Gemini Flash, then both Zen legs once',async
   const ai=provider(async url=>{
     calls.push(String(url).includes('generativelanguage')?'gemini':'openrouter');
     return calls.at(-1)==='gemini'?gemini('',{status:503}):openRouter('',{status:503});
-  },{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL});
+  },{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL,requestPurpose:'extraction'});
   await assert.rejects(ai.generate({messages:[{role:'user',content:'Extract this invoice'}]}),error=>error.code==='PROVIDER_UNAVAILABLE');
   assert.deepEqual(calls,['gemini','gemini','openrouter','openrouter']);
 });

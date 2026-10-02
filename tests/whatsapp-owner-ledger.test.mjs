@@ -61,6 +61,15 @@ test('settings has one simple owner flow, prefilled WhatsApp link, no client att
  assert.match(html,/Open WhatsApp/);assert.match(html,/LINK%20173043/);
  assert.doesNotMatch(html,/client agreement|name="code"|whatsapp-code|Confirm agreement/);
  assert.match(html,/Send the prefilled message/);
+ assert.match(html,/class="owner-whatsapp-verification"/);
+ const connected=ownerWhatsAppSettings({owner:true,phone:scope.phone,businessName:'CETLD test'});
+ assert.match(connected,/class="owner-whatsapp-status"[^>]*aria-label="WhatsApp connection status"/);
+ assert.match(connected,/class="owner-whatsapp-actions" role="group" aria-label="WhatsApp actions"/);
+ assert.match(connected,/data-action="owner-disconnect"/);
+ assert.match(connected,/class="owner-whatsapp-change"[^>]*><form id="whatsapp-owner-form" class="settings-fields"/);
+ assert.match(connected,/Chat with the bot/);assert.match(connected,/Connect a different number/);
+ assert.ok(connected.indexOf('owner-whatsapp-status')<connected.indexOf('owner-whatsapp-actions'));
+ assert.ok(connected.indexOf('owner-whatsapp-actions')<connected.indexOf('owner-whatsapp-change'));
  assert.match(ownerWhatsAppSettings({owner:true,phone:scope.phone,businessName:'CETLD test'}),/Connected/);
 });
 

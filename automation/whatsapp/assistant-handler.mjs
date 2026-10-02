@@ -248,7 +248,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         // model choice. This preserves conversational behavior while using the
         // vision-capable extraction chain and its separately configured keys.
         const extractionProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
-          fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, geminiApiKey: env.GEMINI_API_KEY,
+          fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, requestPurpose: 'extraction', geminiApiKey: env.GEMINI_API_KEY,
           openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
           fetchImpl, timeoutMs: 12_000, maxAttempts: 1});
         // Reserve invocation time for validation, pending-action persistence,
@@ -434,7 +434,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         let history = [];
         try { history = await readConversationHistory({supabase, workspaceId, phone,customerId,audience}); } catch { /* optional context */ }
         const intentProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
-          fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, geminiApiKey: env.GEMINI_API_KEY,
+          fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, requestPurpose: 'extraction', geminiApiKey: env.GEMINI_API_KEY,
           openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
           fetchImpl, timeoutMs: 8000, maxAttempts: 1});
         modelIntent = await classifyIntent({provider: intentProvider, message: effective, history, invoices: known, signal, deadlineAt});

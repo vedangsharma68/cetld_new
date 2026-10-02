@@ -6,6 +6,7 @@ import {createWhatsAppAssistantChannel} from '../ai/whatsapp-channel.mjs';
 import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistant-handler.mjs';
 import {extractInvoice} from '../ai/extraction.mjs';
 import {parseOfflineInvoiceText} from '../ai/image-text.mjs';
+import {CF_QWEN_MODEL} from '../ai/provider.mjs';
 
 const scope = {workspaceId: 'workspace-a', customerId: 'customer-a', phone: '+919871367051'};
 const action = {type: 'create_invoice', payload: {invoice: {invoiceNumber: 'INV-7', clientName: 'Buyer Co',
@@ -104,7 +105,7 @@ test('bound media extracts and immediately saves with a logged reply', async () 
   const values = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-7',customerName:'Buyer Co',invoiceDate:'2026-09-30',dueDate:'2026-10-30',subtotal:100,tax:0,total:100,outstandingAmount:100,currency:'INR',direction:'receivable'})[name] ?? null, confidence: .99}]));
   const supabase = {from(table) { return {select() { return this; }, eq() { return this; }, async maybeSingle() {
-    if (table === 'workspace_ai_settings') return {data: {primary_model: 'gemini-3.5-flash-lite', fallback_model: null}};
+    if (table === 'workspace_ai_settings') return {data: {primary_model: CF_QWEN_MODEL, fallback_model: 'gemini-3.5-flash-lite'}};
     if (table === 'workspace_settings') return {data: {business_name: 'Seller'}};
     throw new Error(table);
   }}; }};
@@ -116,8 +117,9 @@ test('bound media extracts and immediately saves with a logged reply', async () 
   assert.match(answer, /^Logged invoice INV-7[\s\S]*INR/);
   assert.doesNotMatch(answer, /reply yes/i);
   assert.deepEqual(saved.map(item => item.action.stage), ['proposal', 'saving', 'saved']);
-  assert.equal(providerOptions[0].primaryModel, 'space-bunny-free', 'chat keeps the configured/default conversational model');
+  assert.equal(providerOptions[0].primaryModel, CF_QWEN_MODEL, 'chat keeps the configured conversational model');
   assert.equal(providerOptions[1].primaryModel, 'gemini-3.5-flash-lite', 'media uses the vision extraction model');
+  assert.equal(providerOptions[1].requestPurpose, 'extraction', 'media extraction uses its bounded provider policy');
 });
 
 test('production extraction advances an incomplete OCR draft to vision and proposes a confident invoice', async () => {
