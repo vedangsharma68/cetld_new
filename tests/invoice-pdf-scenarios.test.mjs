@@ -12,7 +12,7 @@ const base = {
   customerName: field('Northlake Foods'), invoiceDate: field('2026-09-01'),
   dueDate: field('2026-10-01'), subtotal: field(100), tax: field(18),
   total: field(118), outstandingAmount: field(118), currency: field('INR'),
-  clientPhone: field(null, 0), clientEmail: field(null, 0), notes: field(null, 0),
+  clientPhone: field(null, 0), clientPhoneRaw: field(null, 0), clientEmail: field(null, 0), notes: field(null, 0),
   lineItems: { value: [], confidence: 0 },
 };
 
