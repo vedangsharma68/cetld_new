@@ -219,6 +219,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       fallbackModel: settings?.fallback_model});
     const provider = providerFactory({...models, geminiApiKey: env.GEMINI_API_KEY,
       openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
+      cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN,
       fetchImpl, timeoutMs: 8000, maxAttempts: 1});
     const pending = pendingActionStoreFactory({supabase});
     const eligible=async()=>authorizeScope?{allowed:await authorizeScope({workspaceId,customerId,phone}),customer:{id:customerId}}

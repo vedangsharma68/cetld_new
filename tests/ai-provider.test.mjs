@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  AIError, AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL,
+  AIError, AIProvider, CF_BACKUP_MODEL, CF_PRIMARY_MODEL, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL,
   DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, GEMINI_FALLBACK_MODEL, OPENROUTER_FREE_MODEL,
   ZEN_FALLBACK_MODEL, ZEN_PRIMARY_MODEL,
   isFallbackModelId, isModelId, isPrimaryModelId, sanitizeModelSettings, verifyModel,
@@ -301,7 +301,8 @@ test('paid or reversed provider pairs are rejected before any upstream request',
   let calls=0;const fetchImpl=async()=>{calls++;throw Error('unexpected request')};
   assert.throws(()=>provider(fetchImpl,{primaryModel:'openai/gpt-4.1-mini'}),error=>error.code==='INVALID_MODEL');
   assert.throws(()=>provider(fetchImpl,{primaryModel:'openrouter/free'}),error=>error.code==='INVALID_MODEL');
-  assert.throws(()=>provider(fetchImpl,{fallbackModel:'gemini-3.5-flash-lite'}),error=>error.code==='INVALID_MODEL');
+  assert.throws(()=>provider(fetchImpl,{primaryModel:ZEN_FALLBACK_MODEL}),error=>error.code==='INVALID_MODEL');
+  assert.throws(()=>provider(fetchImpl,{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_MODEL}),error=>error.code==='INVALID_MODEL');
   assert.throws(()=>provider(fetchImpl,{fallbackModel:'openai/gpt-4.1-mini'}),error=>error.code==='INVALID_MODEL');
   assert.equal(calls,0);
 });
@@ -343,4 +344,54 @@ test('catalog verification uses Gemini generation methods and the OpenRouter fre
   let called=false;
   await assert.rejects(verifyModel('openai/gpt-4.1-mini',{fetchImpl:async()=>{called=true;}}),error=>error.code==='INVALID_MODEL');
   assert.equal(called,false);
+});
+
+test('verified picker catalog contains canonical Cloudflare and Gemini models for both roles',async()=>{
+  const {VERIFIED_MODEL_CATALOG}=await import('../ai/provider.mjs');
+  const expected=[
+    [CF_PRIMARY_MODEL,'cloudflare'],
+    [CF_BACKUP_MODEL,'cloudflare'],
+    ['@cf/mistralai/mistral-small-3.1-24b-instruct','cloudflare'],
+    ['@cf/openai/gpt-oss-20b','cloudflare'],
+    ['@cf/qwen/qwen3-30b-a3b-fp8','cloudflare'],
+    ['@cf/zai-org/glm-4.7-flash','cloudflare'],
+    [GEMINI_FALLBACK_MODEL,'google'],
+    [DEFAULT_EXTRACTION_MODEL,'google'],
+  ];
+  assert.ok(Array.isArray(VERIFIED_MODEL_CATALOG));
+  for(const [id,providerName] of expected){
+    const entry=VERIFIED_MODEL_CATALOG.find(item=>item.id===id);
+    assert.ok(entry,`${id} must be visible in the shared picker catalog`);
+    assert.equal(entry.provider,providerName);
+    assert.deepEqual(entry.roles,['primary','fallback']);
+    assert.equal(isModelId(id),true);
+    assert.equal(isPrimaryModelId(id),true);
+    assert.equal(isFallbackModelId(id),true);
+  }
+  assert.ok(Object.isFrozen(VERIFIED_MODEL_CATALOG));
+});
+
+test('model settings resolve same-model conflicts to a deterministic distinct fallback',()=>{
+  assert.deepEqual(sanitizeModelSettings({primaryModel:CF_PRIMARY_MODEL,fallbackModel:CF_PRIMARY_MODEL}),
+    {primaryModel:CF_PRIMARY_MODEL,fallbackModel:CF_BACKUP_MODEL});
+  assert.deepEqual(sanitizeModelSettings({primaryModel:GEMINI_FALLBACK_MODEL,fallbackModel:GEMINI_FALLBACK_MODEL}),
+    {primaryModel:GEMINI_FALLBACK_MODEL,fallbackModel:DEFAULT_EXTRACTION_MODEL});
+  assert.deepEqual(sanitizeModelSettings({primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_MODEL}),
+    {primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:GEMINI_FALLBACK_MODEL});
+});
+
+test('Cloudflare catalog verification uses the account model search endpoint and bearer token',async()=>{
+  const model='@cf/openai/gpt-oss-20b';
+  let request;
+  const result=await verifyModel(model,{
+    fetchImpl:async(url,init)=>{request={url:String(url),init};return jsonResponse({success:true,result:[{id:'opaque-catalog-id',name:model}]});},
+    cfAccountId:'account-123',cfApiToken:'cf-test-secret',
+  });
+  assert.deepEqual(result,{id:model,provider:'cloudflare'});
+  assert.match(request.url,/api\.cloudflare\.com\/client\/v4\/accounts\/account-123\/ai\/models\/search/);
+  assert.match(request.url,/search=gpt-oss-20b/);
+  assert.equal(request.init.method,'GET');
+  assert.equal(request.init.headers.Authorization,'Bearer cf-test-secret');
+  assert.equal(request.url.includes('cf-test-secret'),false);
+  await assert.rejects(verifyModel(model,{fetchImpl:async()=>{throw Error('must not fetch');},cfAccountId:'account-123',cfApiToken:''}),error=>error.code==='API_KEY_MISSING');
 });

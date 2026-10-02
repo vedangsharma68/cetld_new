@@ -1,4 +1,4 @@
-import {AIProvider,sanitizeModelSettings} from '../../ai/provider.mjs';
+import {AIProvider,CF_PRIMARY_MODEL,GEMINI_FALLBACK_MODEL,sanitizeModelSettings} from '../../ai/provider.mjs';
 import {answerWorkspaceQuestion} from '../../ai/assistant.mjs';
 import {createOwnerScopedStore} from '../../ai/whatsapp-channel.mjs';
 import {authorizeOwnerPhone} from './owner-binding.mjs';
@@ -245,9 +245,12 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
   if(YES.test(message))return 'There is no invoice change waiting for confirmation. Tell me which invoice you want to change.';
   const {data:settings,error}=await supabase.from('workspace_ai_settings').select('primary_model,fallback_model').eq('workspace_id',workspaceId).maybeSingle();
   if(error)throw error;
-  // Owner chat: Cloudflare Llama 3.3 70B first, then Scout, then Gemini. Never the slow free Zen models.
-  const models={primaryModel:'@cf/meta/llama-3.3-70b-instruct-fp8-fast',fallbackModel:'gemini-3.5-flash'};
-  const provider=providerFactory({...models,geminiApiKey:env.GEMINI_API_KEY,openRouterApiKey:env.OPENROUTER_API_KEY,zenApiKey:env.OPENCODE_ZEN_API_KEY,fetchImpl,timeoutMs:15000,maxAttempts:2});
+  const models=settings
+   ?sanitizeModelSettings({primaryModel:settings.primary_model,fallbackModel:settings.fallback_model})
+   :{primaryModel:CF_PRIMARY_MODEL,fallbackModel:GEMINI_FALLBACK_MODEL};
+  const provider=providerFactory({...models,geminiApiKey:env.GEMINI_API_KEY,openRouterApiKey:env.OPENROUTER_API_KEY,
+   zenApiKey:env.OPENCODE_ZEN_API_KEY,cfAccountId:env.CLOUDFLARE_ACCOUNT_ID,cfApiToken:env.CLOUDFLARE_API_TOKEN,
+   fetchImpl,timeoutMs:15000,maxAttempts:2});
   const ledger=createOwnerScopedStore({supabase,workspaceId,ownerId,phone,authorize:()=>authorize(scope)});
   let timer;
   const budget=Number.isFinite(deadlineAt)?Math.max(4000,Math.min(22000,deadlineAt-clock().getTime()-6000)):22000;
