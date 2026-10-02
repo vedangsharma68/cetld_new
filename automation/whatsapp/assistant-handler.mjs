@@ -1,7 +1,7 @@
 import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL,
   sanitizeModelSettings} from '../../ai/provider.mjs';
 import {createWhatsAppAssistantChannel} from '../../ai/whatsapp-channel.mjs';
-import {getSendEligibility} from './consent.mjs';
+import {getSendEligibility, normalizeWhatsAppPhone} from './consent.mjs';
 import {readConversationHistory, writeConversationTurn} from './conversation-memory.mjs';
 import {extractInvoice} from '../../ai/extraction.mjs';
 import {createWhatsAppPendingActionStore} from './pending-actions.mjs';
@@ -30,6 +30,7 @@ function invoiceProposal(extracted) {
     || extracted.direction.value !== 'receivable') return null;
   return {invoiceNumber: extracted.invoiceNumber.value, clientName: extracted.customerName.value,
     clientEmail: extracted.clientEmail.value, clientPhone: extracted.clientPhone.value,
+    clientPhoneRaw: extracted.clientPhoneRaw.value,
     invoiceDate: extracted.invoiceDate.value, dueDate: extracted.dueDate.value,
     subtotal: extracted.subtotal.value, tax: extracted.tax.value, total: extracted.total.value,
     outstanding: extracted.outstandingAmount.value ?? extracted.total.value, currency: extracted.currency.value,
@@ -45,6 +46,7 @@ function reviewDraft(extracted) {
   const invoice = invoiceProposal(extracted) || {
     invoiceNumber: extracted?.invoiceNumber?.value ?? null, clientName: extracted?.customerName?.value ?? null,
     clientEmail: extracted?.clientEmail?.value ?? null, clientPhone: extracted?.clientPhone?.value ?? null,
+    clientPhoneRaw: extracted?.clientPhoneRaw?.value ?? null,
     invoiceDate: extracted?.invoiceDate?.value ?? null, dueDate: extracted?.dueDate?.value ?? null,
     subtotal: extracted?.subtotal?.value ?? null, tax: extracted?.tax?.value ?? null,
     total: extracted?.total?.value ?? null,
@@ -135,11 +137,13 @@ const firstMeta = (metadata, keys) => {
 export function contactAnswer(invoice, {wantPhone, wantEmail}) {
   const label = `${invoice.printedInvoiceNumber || invoice.invoiceNumber}${invoice.clientName ? ` (${invoice.clientName})` : ''}`;
   const phone = firstMeta(invoice.metadata, PHONE_KEYS);
+  const rawPhone = firstMeta(invoice.metadata, ['client_phone_raw']);
   const email = firstMeta(invoice.metadata, EMAIL_KEYS);
   const lines = [];
-  if (wantPhone) lines.push(phone ? `📞 ${phone}` : `I don't have a contact number for ${label}.`);
+  if (wantPhone) lines.push(phone ? `📞 ${phone}` : rawPhone
+    ? `I only have a local number ${rawPhone}, no country code.` : `I don't have a contact number for ${label}.`);
   if (wantEmail) lines.push(email ? `✉️ ${email}` : `I don't have an email address for ${label}.`);
-  if (phone || email) lines.unshift(`Contact for ${label}:`);
+  if (phone || rawPhone || email) lines.unshift(`Contact for ${label}:`);
   return lines.join('\n');
 }
 
@@ -177,6 +181,19 @@ function loggedSummary(invoice, {currencySource, dueDateSource, assumptions, fil
     `Currency source: ${invoice.currency}, ${currencySource}`,
     assumptions.length ? `Assumptions: ${assumptions.join('; ')}` : null, fileKept ? null : 'The invoice was saved, but the original file was not kept.',
     "Reply with any corrections, like 'change the due date to 2026-08-19'."].filter(Boolean).join('\n');
+}
+
+const PHONE_CANDIDATE = /\+[\d\s().-]{7,24}\d/;
+
+function phoneQuestion(client, raw) {
+  return raw ? `I see ${raw} on the invoice. Which country code?`
+    : `What's ${client}'s WhatsApp number? Include the country code, like +91...`;
+}
+
+async function persistContactQuestion(pending, scope, action) {
+  if (typeof pending.loadPendingActionState !== 'function' || typeof pending.storePendingAction !== 'function') return null;
+  const expectedState = await pending.loadPendingActionState(scope);
+  return pending.storePendingAction({...scope, action, source: 'whatsapp_invoice_contact', expectedState});
 }
 
 /** Create an inbound assistant handler only after the webhook has verified Meta. */
@@ -266,6 +283,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         }
         const invoice = {invoiceNumber: extracted?.invoiceNumber?.value || 'AUTO', clientName: extracted.customerName.value,
           clientEmail: extracted?.clientEmail?.value ?? null, clientPhone: extracted?.clientPhone?.value ?? null,
+          clientPhoneRaw: extracted?.clientPhoneRaw?.value ?? null,
           invoiceDate, dueDate: due.dueDate, subtotal: extracted?.subtotal?.value ?? null,
           tax: extracted?.tax?.value ?? null, total: extracted.total.value,
           outstanding: extracted?.outstandingAmount?.value ?? extracted.total.value,
@@ -307,7 +325,14 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           const completed = await pending.transitionInvoiceReview({...claimed, workspaceId, customerId, phone,
             fromStage: 'saving', action: {...action, stage: 'saved', invoice: savedInvoice}});
           if (!completed) return 'The invoice was saved, but I could not finish its WhatsApp status update. Please check cetld before retrying.';
-          return loggedSummary(savedInvoice, {currencySource: currencyResult.source, dueDateSource: due.source, assumptions, fileKept});
+          const summary = loggedSummary(savedInvoice, {currencySource: currencyResult.source, dueDateSource: due.source, assumptions, fileKept});
+          if (!validatedInvoice.clientPhone) {
+            const contactAction = {type: 'invoice_debtor_phone', stage: 'awaiting_phone', invoiceId: savedInvoice.id,
+              clientName: validatedInvoice.clientName, clientPhoneRaw: validatedInvoice.clientPhoneRaw || null};
+            await persistContactQuestion(pending, {workspaceId, customerId, phone}, contactAction);
+            return `${summary}\n\n${phoneQuestion(validatedInvoice.clientName, validatedInvoice.clientPhoneRaw)}`;
+          }
+          return summary;
         } catch (saveError) {
           await pending.transitionInvoiceReview({...claimed, workspaceId, customerId, phone,
             fromStage: 'saving', action: {...action, stage: 'failed'}}).catch(() => null);
@@ -320,6 +345,28 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
           action: {type: 'invoice_review_draft', stage: 'canceled'}}).catch(() => null);
         return "I couldn't reliably read that invoice. Please send a clearer photo. Nothing was saved.";
+      }
+    }
+    let contactPending = null;
+    try { contactPending = typeof pending.loadPendingAction === 'function'
+      ? await pending.loadPendingAction({workspaceId, customerId, phone}) : null; }
+    catch { /* optional for deployments upgrading the pending-action table */ }
+    if (contactPending?.action?.type === 'invoice_debtor_phone') {
+      const contact = contactPending.action;
+      if (contact.stage === 'awaiting_phone') {
+        const text = String(message || '').trim();
+        let candidate = text.match(PHONE_CANDIDATE)?.[0]?.replace(/[\s().-]/g, '') || '';
+        const countryCode = text.match(/^\+(\d{1,3})[.!]?$/)?.[1];
+        if (!candidate && countryCode && contact.clientPhoneRaw) {
+          candidate = `+${countryCode}${String(contact.clientPhoneRaw).replace(/\D/g, '')}`;
+        }
+        let normalized;
+        try { normalized = normalizeWhatsAppPhone(candidate); }
+        catch { return 'Send the full WhatsApp number with country code, like +919876543210.'; }
+        const store = await invoiceStoreFactory({supabase, workspaceId, customerId});
+        await store.saveDebtorPhone({invoiceId: contact.invoiceId, phone: normalized, assumedConsentAt: clock().toISOString()});
+        await pending.consumePendingAction({...contactPending, workspaceId, customerId, phone});
+        return `Saved ${normalized} as ${contact.clientName}'s WhatsApp number on this invoice. Consent is logged as yes (your default). Reminders still go out only through the dashboard's follow-up approval, and a STOP from them is always honored.`;
       }
     }
     const current = await pending.loadInvoiceReview({workspaceId, customerId, phone});
