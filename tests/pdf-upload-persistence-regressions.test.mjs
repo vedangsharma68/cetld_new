@@ -51,7 +51,7 @@ const SAMPLE_INVOICE={
   total:{value:6610.95,confidence:0.99},
   outstandingAmount:{value:6610.95,confidence:0.92},
   currency:{value:null,confidence:0},
-  clientPhone:{value:'+33140260294',confidence:0.9},
+  clientPhone:{value:'+33140260294',confidence:0.9},clientPhoneRaw:{value:null,confidence:0},
   clientEmail:{value:null,confidence:0},
   notes:{value:'Due after 30 days',confidence:0.86},
   lineItems:{value:extractionLineItems,confidence:0.96},
