@@ -76,3 +76,8 @@ test('contact lookup answers from stored metadata and says plainly when it is mi
   const h2=mkHandler({provider:noAi,store:{findInvoices:async()=>[{...inv,updatedAt:'2026-10-02',metadata:{client_phone:'+911234567890',client_email:'a@b.co'}}]}});
   assert.match(await h2({...scopeH,message:'what is the email for global dynamics',messageId:'c2'}),/a@b\.co/);
 });
+
+test('mark-paid typos get the dashboard refusal before any lookup',async()=>{
+  const h=mkHandler({provider:{async generateStructured(){throw new Error('no ai')}},store:{findInvoices:async()=>{throw new Error('lookup must not run')}}});
+  for (const [n,t] of ['mark it paod','mark INV-2026-0720 piad','mark it paid'].entries()) assert.match(await h({...scopeH,message:t,messageId:'mp'+n}),/dashboard/);
+});
