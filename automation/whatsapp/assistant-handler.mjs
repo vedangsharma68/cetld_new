@@ -123,6 +123,26 @@ export function matchInvoicesByHint(invoices, hint) {
   });
 }
 
+const CONTACT_PHONE_REQUEST = /\b(?:contact|phone|mobile|whatsapp|call)\b/i;
+const CONTACT_EMAIL_REQUEST = /\be-?mail\b/i;
+const PHONE_KEYS = ['debtor_phone', 'client_phone', 'buyer_phone', 'customer_phone', 'contact_phone', 'phone'];
+const EMAIL_KEYS = ['debtor_email', 'client_email', 'buyer_email', 'customer_email', 'contact_email', 'email'];
+const firstMeta = (metadata, keys) => {
+  for (const key of keys) { const value = metadata?.[key]; if (typeof value === 'string' && value.trim()) return value.trim(); }
+  return null;
+};
+/** Deterministic contact lookup from the stored invoice, with plain "I don't have it" answers. */
+export function contactAnswer(invoice, {wantPhone, wantEmail}) {
+  const label = `${invoice.printedInvoiceNumber || invoice.invoiceNumber}${invoice.clientName ? ` (${invoice.clientName})` : ''}`;
+  const phone = firstMeta(invoice.metadata, PHONE_KEYS);
+  const email = firstMeta(invoice.metadata, EMAIL_KEYS);
+  const lines = [];
+  if (wantPhone) lines.push(phone ? `📞 ${phone}` : `I don't have a contact number for ${label}.`);
+  if (wantEmail) lines.push(email ? `✉️ ${email}` : `I don't have an email address for ${label}.`);
+  if (phone || email) lines.unshift(`Contact for ${label}:`);
+  return lines.join('\n');
+}
+
 function requestedInvoiceNumber(message) {
   return String(message || '').match(/\bINV-[A-Z0-9-]+\b/i)?.[0]?.toUpperCase() || null;
 }
@@ -313,6 +333,34 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           if (original) effective = `${original.content} ${message.trim().replace(/[.!]$/, '')}`;
         }
       } catch { /* fall through to normal routing */ }
+    }
+    contactLookup: if ((CONTACT_PHONE_REQUEST.test(message) || CONTACT_EMAIL_REQUEST.test(message)) && !parseInvoiceCorrection(effective, clock)
+      && !/\b(?:your|you|my own)\b/i.test(message)) {
+      try {
+        const store = await invoiceStoreFactory({supabase, workspaceId, customerId});
+        const known = await store.findInvoices({limit: 50});
+        const number = requestedInvoiceNumber(message);
+        const hint = invoiceHint(message.replace(/\b(?:contact|phone|mobile|whatsapp|call|number|e-?mail|address|info|details?|what'?s|whats|what|is|the|for|of|this|that|invoice|bill)\b/gi, ' '));
+        let candidates = number ? known.filter(item => [item.invoiceNumber, item.printedInvoiceNumber].some(n => String(n || '').toUpperCase() === number)) : [];
+        if (!candidates.length && hint) candidates = matchInvoicesByHint(known, hint);
+        const refersToInvoice = /\b(?:invoice|bill|customer|client|debtor|this|that|him|her|them)\b/i.test(message);
+        if (!candidates.length && !refersToInvoice) break contactLookup;
+        if (!candidates.length) {
+          let turns = [];
+          try { turns = await readConversationHistory({supabase, workspaceId, phone}); } catch { /* optional */ }
+          for (const turn of [...turns].reverse()) {
+            const mentioned = String(turn.content || '').match(/\bINV-[A-Z0-9-]+\b/ig) || [];
+            const hit = known.find(item => mentioned.some(m => [item.invoiceNumber, item.printedInvoiceNumber].some(n => String(n || '').toUpperCase() === m.toUpperCase())));
+            if (hit) { candidates = [hit]; break; }
+          }
+        }
+        if (!candidates.length && known.length) candidates = [[...known].sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0]];
+        if (!candidates.length) return "I couldn't find an invoice to look up.";
+        return contactAnswer(candidates[0], {wantPhone: CONTACT_PHONE_REQUEST.test(message) || !CONTACT_EMAIL_REQUEST.test(message), wantEmail: CONTACT_EMAIL_REQUEST.test(message)});
+      } catch (contactError) {
+        logger?.error?.('WhatsApp contact lookup failed', {workspaceId, message: String(contactError?.message || '').slice(0, 200)});
+        return "I couldn't read that invoice's contact details right now. Please try again in a minute.";
+      }
     }
     let correction = parseInvoiceCorrection(effective, clock);
     let modelIntent = null;
