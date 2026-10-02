@@ -92,7 +92,7 @@ test('ledger refresh failure retains rows and displays its cause and last succes
   assert.match(page, /Ledger data may be out of date/);
   assert.match(page, /last successful ledger snapshot from/);
   assert.match(page, /state\.ledgerStaleMessage/);
-  assert.match(render, /Could not load your workspace: \$\{escape\(state\.error\)\}/);
+  assert.match(render, /Could not load your business: \$\{escape\(state\.error\)\}/);
   assert.match(css, /\.ledger-stale/);
 });
 
