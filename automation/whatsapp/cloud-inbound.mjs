@@ -222,6 +222,21 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       // An unbound or ambiguous phone has no authorized workspace/recipient
       // scope. Keep verification inside the established binding flow rather
       // than emitting a direct workspace-null message.
+      const linkMatch = bindings.length === 0 && /^\s*link[\s:-]*(\d{6})\s*$/i.exec(event.message_text || '');
+      if (linkMatch) {
+        // The sender phone comes from WhatsApp, so a matching dashboard code proves they hold the number.
+        try {
+          const { data: result, error } = await supabase.rpc('whatsapp_verify_owner_code', { p_phone: event.sender_phone, p_code: linkMatch[1] });
+          if (error) throw error;
+          const sender = await getOutbound();
+          await sender.sendServiceReply({ workspaceId: null, to: event.sender_phone, body: '',
+            ownerLinkResult: result?.ok === true ? 'linked' : 'failed',
+            lastInboundAt: event.provider_timestamp || event.received_at, kind: 'verification',
+            messageId: event.provider_message_id, businessName: 'CETLD' });
+        } catch (error) {
+          logger?.error?.('WhatsApp owner link failed', { message: String(error?.message || '').slice(0, 200) });
+        }
+      }
       return 'verify';
     }
     const binding = bindings[0];
