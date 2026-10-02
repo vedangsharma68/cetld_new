@@ -56,7 +56,7 @@ test('general chit-chat gets the friendly scope answer without calling a provide
     let calls = 0;
     const result = await answerWorkspaceQuestion({provider:{generate:async()=>{ calls++; throw Error('not expected'); }},store,message});
     assert.equal(calls, 0);
-    assert.match(result.answer, /Cetld workspace.*invoices, payments, customers, and balances/i);
+    assert.match(result.answer, /Cetld account.*invoices, payments, customers, and balances/i);
   }
 });
 
@@ -318,7 +318,7 @@ test('generic overdue invoice questions read the ledger without planning or a fa
 test('empty overdue, payments, and activity results use distinct accurate answers', async () => {
   const emptyStore = {query:async()=>[]};
   const cases = [
-    ['getOverdueInvoices','Which invoices are overdue?','There aren\'t any overdue invoices in this workspace right now.'],
+    ['getOverdueInvoices','Which invoices are overdue?','There aren\'t any overdue invoices in this business right now.'],
     ['getPayments','What payments were recorded?','There are no recorded payments for that period.'],
     ['getActivity','What happened recently?','There is no recorded invoice or payment activity yet.'],
   ];
