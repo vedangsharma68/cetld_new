@@ -64,3 +64,15 @@ test('paid via WhatsApp is refused and writes nothing',async()=>{
   const h=mkHandler({provider:providerOutput({...base,action:'correct_invoice',confidence:.99,field:'notes',value:'x'}),store:{findInvoices:async()=>[inv],applyCorrection:async i=>{assert.equal(i.changes.status,'paid');return {reason:'use_dashboard_for_payment'}}}});
   assert.match(await h({...scopeH,message:'mark it paid please',messageId:'x5'}),/dashboard/);
 });
+
+test('contact lookup answers from stored metadata and says plainly when it is missing',async()=>{
+  const {contactAnswer}=await import('../automation/whatsapp/assistant-handler.mjs');
+  assert.equal(contactAnswer({...inv,metadata:{}},{wantPhone:true,wantEmail:false}),"I don't have a contact number for INV-2026-0720 (Global Dynamics Inc.).");
+  assert.equal(contactAnswer({...inv,metadata:{}},{wantPhone:false,wantEmail:true}),"I don't have an email address for INV-2026-0720 (Global Dynamics Inc.).");
+  assert.match(contactAnswer({...inv,metadata:{debtor_phone:'+919999999999'}},{wantPhone:true,wantEmail:false}),/📞 \+919999999999/);
+  const noAi={async generateStructured(){throw new Error('503')}};
+  const h=mkHandler({provider:noAi,store:{findInvoices:async()=>[{...inv,updatedAt:'2026-10-02',metadata:{}}]},channelAsk:async()=>{throw Error('planner must not run')}});
+  assert.equal(await h({...scopeH,message:'whats the contact number for this invoice',messageId:'c1'}),"I don't have a contact number for INV-2026-0720 (Global Dynamics Inc.).");
+  const h2=mkHandler({provider:noAi,store:{findInvoices:async()=>[{...inv,updatedAt:'2026-10-02',metadata:{client_phone:'+911234567890',client_email:'a@b.co'}}]}});
+  assert.match(await h2({...scopeH,message:'what is the email for global dynamics',messageId:'c2'}),/a@b\.co/);
+});
