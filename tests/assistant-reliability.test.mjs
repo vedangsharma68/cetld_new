@@ -101,7 +101,8 @@ test('model plans cannot derail a simple overdue question', async () => {
     {toolCalls:[{function:{name:'unknownTool',arguments:'{}'}}]},
     {toolCalls:[{function:{name:'getOverdueInvoices',arguments:'not-json'}}]},
   ]) {
-    const result = await answerWorkspaceQuestion({provider:{generate:async()=>plan},store,message:'List overdue invoices'});
+    const result = await answerWorkspaceQuestion({provider:{generate:async()=>plan},store,message:'List overdue invoices',
+      clock: () => new Date('2026-09-30T12:00:00Z')});
     assert.match(result.answer, /There aren't any overdue invoices/i);
     assert.doesNotMatch(result.answer, /TOOL_NOT_ALLOWED|INVALID_TOOL_ARGUMENTS|INVALID_ASSISTANT_PLAN/);
     assert.equal(result.evidence.complete, true);
