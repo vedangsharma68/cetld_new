@@ -34,13 +34,13 @@ export function whatsappInbox({messages=[],customers=[],selectedThread=null,erro
     customers.find(customer=>customer.id===message.customer_id)?.name||message.phone;
   const thread=groups.get(selected)||[];
   const content=thread.slice().sort(compareMessages);
-  return `<section class="panel whatsapp-inbox"><div class="panel-head"><div><h2>WhatsApp messages</h2><p>Received messages, bot replies, and delivery status for this workspace.</p></div></div>
+  return `<section class="panel whatsapp-inbox"><div class="panel-head"><div><h2>WhatsApp messages</h2><p>Received messages, bot replies, and delivery status for this business.</p></div></div>
     ${error?`<p class="error" role="alert">Message history could not sync: ${escape(error)}</p>`:''}
     ${keys.length?`<div class="conversation-shell"><aside class="conversation-list" aria-label="WhatsApp conversations">
       ${keys.map(key=>{const latest=groups.get(key)[0];return `<button class="conversation-row ${key===selected?'active':''}" data-action="select-whatsapp-thread" data-thread="${escape(key)}"><span><strong>${escape(name(latest))}</strong><small>${escape(latest.phone)}</small></span></button>`;}).join('')}
       </aside><section class="conversation-thread" aria-label="WhatsApp message history"><header><h3>${escape(name(thread[0]))}</h3></header><div class="thread-body" aria-live="polite">
       ${content.map(message=>`<div class="message-bubble ${message.direction==='outbound'?'message-outbound':''}"><p>${escape(message.body).replaceAll('\n','<br>')}</p><small>${message.direction==='inbound'?'WhatsApp sender':'cetld'} · ${escape(labels[message.status]||message.status)} · ${escape(new Date(message.created_at).toLocaleString('en-IN'))}</small></div>`).join('')}
-      </div></section></div>`:`<div class="panel-body"><p>${error?'Retry with Refresh to load your messages.':'No WhatsApp messages have been recorded for this workspace yet.'}</p></div>`}
+      </div></section></div>`:`<div class="panel-body"><p>${error?'Retry with Refresh to load your messages.':'No WhatsApp messages have been recorded for this business yet.'}</p></div>`}
     ${hasMore?'<div class="panel-body"><button class="btn ghost" data-action="older-whatsapp-messages">Load older messages</button></div>':''}
     <div class="panel-body"><small>“Accepted by Meta” means submitted. Delivery is confirmed when WhatsApp reports “Delivered” or “Read”.</small></div>
   </section>`;
