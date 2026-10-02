@@ -210,7 +210,7 @@ export function createWhatsAppOutbound({
     }});
   }
 
-  async function sendServiceReply({workspaceId = null, to, body, lastInboundAt, kind = 'normal', messageId, businessName} = {}) {
+  async function sendServiceReply({workspaceId = null, to, body, lastInboundAt, kind = 'normal', messageId, businessName, ownerLinkResult} = {}) {
     const blocked = preflight({workspaceId, to, kind});
     if (blocked) return blocked;
     recipient(to);
@@ -226,7 +226,13 @@ export function createWhatsAppOutbound({
     } else if (!await verifiedBusinessName(supabase, workspaceId, owner)) {
       return block(logger, 'business_name_mismatch', {workspaceId, to, kind});
     }
-    let text = kind === 'verification'
+    // Fixed owner-linking confirmations are the only variants allowed on the unbound verification path.
+    const linkText = kind === 'verification' ? {
+      linked: 'Done. This number is linked to your cetld account. You can send me invoices now.',
+      failed: 'We could not link this number. Start again from Settings on the dashboard and send the new code.',
+    }[ownerLinkResult] : null;
+    let text = linkText ? linkText
+      : kind === 'verification'
       ? 'Please contact the business that issued your invoice to verify your WhatsApp number. Reply STOP to opt out.'
       : kind === 'stop_confirmation'
         ? "You've been opted out of WhatsApp updates. We won't message you again."
