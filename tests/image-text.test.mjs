@@ -137,7 +137,7 @@ test('an expired image deadline starts neither preprocessing nor OCR', async () 
 
 test('OCR failure reaches vision extraction with all required invoice fields', async () => {
   let visionCalls = 0;
-  const raw = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
+  const raw = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-8',customerName:'Buyer',invoiceDate:'2026-10-01',total:25,currency:'INR',direction:'receivable'})[name] ?? null, confidence: .99}]));
   raw.lineItems = {value: [], confidence: .99};
   const result = await extractInvoice({bytes: tinyPng, mimeType: 'image/png', fileName: 'invoice.png', businessName: 'Seller',
@@ -151,7 +151,7 @@ test('OCR failure reaches vision extraction with all required invoice fields', a
 test('subtotal and total from real offline parsing do not short-circuit vision extraction', async () => {
   let visionCalls = 0;
   const offline = parseOfflineInvoiceText('Subtotal 100.00\nTax 18.00\nTotal 118.00', {ocrConfidence: 96});
-  const raw = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientEmail','notes','direction']
+  const raw = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-9',customerName:'Buyer Co',invoiceDate:'2026-10-01',subtotal:100,tax:18,total:118,currency:'INR',direction:'receivable'})[name] ?? null, confidence: .98}]));
   raw.lineItems = {value: [], confidence: .8};
   const result = await extractInvoice({bytes: tinyPng, mimeType: 'image/png', fileName: 'invoice.png', businessName: 'Seller',
