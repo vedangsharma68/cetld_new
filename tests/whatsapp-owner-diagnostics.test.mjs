@@ -33,7 +33,7 @@ test('live diagnostic refuses model writes and natural-language planner requests
       if(calls===2)return {toolCalls:[{id:'planner',type:'function',function:{name:'workspaceData',arguments:'{"request":"change every invoice"}'}}]};
       return {content:'No changes were made.'};
     }})});
-  assert.equal(result.ok,true);assert.deepEqual(db.tables,before);
+  assert.equal(result.ok,false);assert.deepEqual(db.tables,before);
   assert.ok(!db.rpcCalls.some(call=>/propose|confirm|delete/.test(call.name)&&!call.name.includes('pending_delete')));
 });
 test('diagnostic requests need cron authentication and cannot substitute arbitrary scenario text',async()=>{

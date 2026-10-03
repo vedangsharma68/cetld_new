@@ -1388,7 +1388,8 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
       pendingToolCalls=parsed;
       await saveCheckpoint();
       settledToolCalls=new Set();
-      const hasWorkspaceData=calls.length>1&&parsed.some(item=>item.name==='workspaceData');
+      const readOnlyBatch=parsed.every(item=>item.args&&isReadOnlyToolRequest(item.name,item.args));
+      const hasWorkspaceData=calls.length>1&&parsed.some(item=>item.name==='workspaceData')&&!readOnlyBatch;
       const mixedLegacyWrites=calls.length>1&&parsed.some(item=>WRITE_TOOLS.has(item.name)||tools.writeTools?.has?.(item.name));
       const resultStates=[];
       for(const {call,name,args} of parsed){

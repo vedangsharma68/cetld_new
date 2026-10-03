@@ -87,7 +87,7 @@ function definition() {
   // The server validates the full catalog. Do not send that catalog on every
   // model request; describe exposes it when the model needs unfamiliar fields.
   return {type:'function',function:{name:'workspaceData',
-    description:'Read or propose workspace changes. Prefer structured fields; request text is available for unfamiliar operations. Customers use name/email/phone; invoices use customer_name/invoice_number/total_amount/status. Settings use primary_model/fallback_model/follow_up_preferences. describe lists fields; pending reads existing proposals; confirm/cancel decide them.',
+    description:'Read or propose workspace changes. Prefer structured fields; request text handles unfamiliar operations. Omit columns for defaults. Customers use name/email/phone; invoices use customer_name (joined name; ilike for partial names), invoice_number/total_amount/status. Settings use primary_model/fallback_model/follow_up_preferences. describe lists fields; pending reads proposals; confirm/cancel decide them.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         request:{type:'string',minLength:1,maxLength:1200},

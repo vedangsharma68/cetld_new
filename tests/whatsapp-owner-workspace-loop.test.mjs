@@ -135,6 +135,17 @@ test('only one workspaceData call runs from a model tool batch',async()=>{
  assert.match(result.answer,/choose one workspace action/);
 });
 
+test('independent structured workspace reads in one model round can both run',async()=>{
+ let calls=0,executions=0;
+ const provider={async generate(request){
+  if(++calls===1)return {toolCalls:[call('workspaceData',{operation:'read',table:'customers'},'customers'),
+   call('workspaceData',{operation:'read',table:'invoices'},'invoices')]};
+  assert.equal(request.messages.filter(turn=>turn.role==='tool').length,2);return answer('I found John and his invoices.');
+ }};
+ const result=await runOwnerAgent({provider,tools:tools(['workspaceData'],async()=>{executions++;return {ok:true,readOnly:true};}),message:'John invoices'});
+ assert.equal(executions,2);assert.equal(result.agentDiagnostics.toolRounds,1);assert.equal(result.plannerFailure,undefined);
+});
+
 test('the loop-limit repair request omits tool fields',async()=>{
  let calls=0;
  const provider={async generate(request){
