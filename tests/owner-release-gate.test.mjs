@@ -28,6 +28,7 @@ test('Vercel and GitHub run the same mandatory release gate',async()=>{
   const config=JSON.parse(await readFile(new URL('../vercel.json',import.meta.url),'utf8'));
   const workflow=await readFile(new URL('../.github/workflows/owner-chat.yml',import.meta.url),'utf8');
   assert.equal(config.buildCommand,'npm run check:release');
+  assert.equal(config.outputDirectory,'.','the static app lives at the repository root after the verification build');
   assert.equal(config.installCommand,'npm ci --include=dev');
   assert.match(workflow,/push:/);assert.match(workflow,/pull_request:/);assert.match(workflow,/npm run check:release/);
 });

@@ -1,5 +1,6 @@
 {
   "framework": null,
+  "outputDirectory": ".",
   "installCommand": "npm ci --include=dev",
   "buildCommand": "npm run check:release",
   "functions": {
