@@ -335,6 +335,7 @@ function ownerReadStore(rows){
     let found=table==='invoices'?[...rows]:table==='customers'?[{id:customerId,workspace_id:workspaceId,name:'John',company_name:'John Smith',email:'john@example.test',phone:'+919900000001'}]:[];
     for(const [key,expression] of Object.entries(filters)){
       if(expression.startsWith('eq.'))found=found.filter(row=>String(row[key])===expression.slice(3));
+      else if(expression.startsWith('ilike.'))found=found.filter(row=>String(row[key]).toLocaleLowerCase()===expression.slice(6).replace(/\\/g,'').toLocaleLowerCase());
       else if(expression.startsWith('in.(')){const ids=expression.slice(4,-1).split(',');found=found.filter(row=>ids.includes(String(row[key])));}
     }
     return found.slice(offset,offset+limit);
@@ -358,17 +359,20 @@ function pendingMemory(){
 }
 
 function lifecycleFixture({rows=[invoiceRow('00000000-0000-4000-8000-000000000017')],requiresExactConfirmation=true,
-  expectedPrepareMessage='Please delete invoice INV-17'}={}){
+  expectedPrepareMessage='Please delete invoice INV-17',startAt='2026-10-02T08:00:00.000Z'}={}){
+  let currentTime=new Date(startAt);
+  const clock=()=>new Date(currentTime);
   const db=memorySupabase();const pending=pendingMemory(),calls=[],undoResults=new Map();let proposal=null,deleted=false;
   const originalRpc=db.rpc;
   db.rpc=async(name,args)=>{
     if(name!=='invoice_lifecycle_action')return originalRpc(name,args);
     calls.push({action:args.p_action,args});
     const base={proposalId:'00000000-0000-4000-8000-0000000000aa',invoiceId:rows[0].id,invoiceNumber:'INV-17',
-      customerName:'John Smith',totalAmount:'100.00',currency:'USD',status:'sent',expiresAt:'2026-10-02T08:10:00.000Z',
+      customerName:'John Smith',totalAmount:'100.00',currency:'USD',status:'sent',expiresAt:new Date(clock().getTime()+10*60_000).toISOString(),
       expectedUpdatedAt:rows[0].updated_at,requiresExactConfirmation};
     switch(args.p_action){
-      case 'pending':return {data:{ok:true,action:'proposal_loaded',pending:Boolean(proposal),...(proposal||{})}};
+      case 'pending':return {data:{ok:true,action:'proposal_loaded',...(proposal||{}),
+        pending:Boolean(proposal&&Date.parse(proposal.expiresAt)>clock().getTime())}};
       case 'prepare':
         assert.equal(args.p_user_message,expectedPrepareMessage);
         assert.match(args.p_request_message_id,/^wamid\.prepare/);
@@ -392,7 +396,7 @@ function lifecycleFixture({rows=[invoiceRow('00000000-0000-4000-8000-00000000001
       default:throw new Error(`unexpected lifecycle action ${args.p_action}`);
     }
   };
-  return {db,pending,calls,get proposal(){return proposal;},get deleted(){return deleted;},rows};
+  return {db,pending,calls,clock,setNow(value){currentTime=new Date(value);},get proposal(){return proposal;},get deleted(){return deleted;},rows};
 }
 
 function modelPlan(toolPlan,finalText){
@@ -406,10 +410,94 @@ function modelPlan(toolPlan,finalText){
 
 function lifecycleHandler(fixture,{plans,answers}={}){
   let turn=0;
-  return createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase:fixture.db,authorize:async()=>true,ownerStoreFactory:()=>ownerReadStore(fixture.rows),
+  return createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase:fixture.db,authorize:async()=>true,clock:fixture.clock,ownerStoreFactory:()=>ownerReadStore(fixture.rows),
     pendingActionStoreFactory:()=>fixture.pending,historyReader:async()=>[],logger:{error(){}},
     providerFactory:()=>modelPlan(plans[turn]||[],answers[turn++]||'I could not complete that request.')});
 }
+
+test('repeating an active simple-yes delete request reuses the same proposal for one later yes',async()=>{
+  const f=lifecycleFixture({requiresExactConfirmation:false});
+  const handler=lifecycleHandler(f,{plans:[
+    [{name:'prepareInvoiceDeletion',args:{target:'INV-17'}}],
+    [{name:'prepareInvoiceDeletion',args:{target:'INV-17'}}],
+    [{name:'confirmInvoiceDeletion'}],
+  ],answers:[
+    'Invoice INV-17 for John Smith totals USD 100.00 and is currently sent. Reply yes to delete it, or cancel.',
+    'Invoice INV-17 for John Smith totals USD 100.00 and is currently sent. Reply yes to delete it, or cancel.',
+    'Invoice INV-17 was deleted. To restore it within 30 days, send RESTORE INV-17.',
+  ]});
+  const first=await handler({...scope,message:'Please delete invoice INV-17',messageId:'wamid.prepare-first'});
+  const proposalId=f.proposal.proposalId;
+  const pendingActionId=f.pending.current.id;
+  const repeated=await handler({...scope,message:'Delete that same invoice INV-17',messageId:'wamid.prepare-repeat'});
+  assert.match(first.answer,/Reply yes/);assert.match(repeated.answer,/Reply yes/);
+  assert.equal(f.proposal.proposalId,proposalId);
+  assert.equal(f.pending.current.id,pendingActionId);
+  assert.equal(f.pending.current.action.proposalId,proposalId);
+  assert.equal(f.calls.filter(call=>call.action==='prepare').length,1);
+  const confirmed=await handler({...scope,message:'yes',messageId:'wamid.confirm'});
+  assert.match(confirmed.answer,/deleted/i);
+  assert.equal(f.calls.filter(call=>call.action==='confirm').length,1);
+  assert.equal(f.deleted,true);
+});
+
+test('a pending delete proposal for another invoice remains a conflict',async()=>{
+  const firstInvoice=invoiceRow('00000000-0000-4000-8000-000000000017');
+  const secondInvoice=invoiceRow('00000000-0000-4000-8000-000000000018','INV-18');
+  const f=lifecycleFixture({rows:[firstInvoice,secondInvoice]});
+  const handler=lifecycleHandler(f,{plans:[
+    [{name:'prepareInvoiceDeletion',args:{target:'INV-17'}}],
+    [{name:'prepareInvoiceDeletion',args:{target:'INV-18'}}],
+  ],answers:[
+    'Invoice INV-17 is ready for deletion. Reply exactly DELETE INV-17 to confirm, or cancel.',
+    messages=>{const toolResult=messages.find(item=>item.role==='tool');assert.match(toolResult.content,/INV-17/);return 'The current proposal is for INV-17. Cancel it before preparing deletion of INV-18.';},
+  ]});
+  await handler({...scope,message:'Please delete invoice INV-17',messageId:'wamid.prepare-first'});
+  const originalProposal=f.proposal.proposalId;
+  const response=await handler({...scope,message:'Please delete invoice INV-18',messageId:'wamid.prepare-other'});
+  assert.match(response.answer,/INV-18/);
+  assert.equal(f.proposal.proposalId,originalProposal);
+  assert.equal(f.calls.filter(call=>call.action==='prepare').length,1);
+  assert.equal(f.calls.filter(call=>call.action==='confirm').length,0);
+});
+
+test('a repeated delete request does not reuse a proposal after the invoice version changes',async()=>{
+  const f=lifecycleFixture({requiresExactConfirmation:false});
+  const handler=lifecycleHandler(f,{plans:[
+    [{name:'prepareInvoiceDeletion',args:{target:'INV-17'}}],
+    [{name:'prepareInvoiceDeletion',args:{target:'INV-17'}}],
+  ],answers:[
+    'Invoice INV-17 for John Smith totals USD 100.00 and is currently sent. Reply yes to delete it, or cancel.',
+    'Invoice INV-17 changed since the deletion proposal was prepared. Review it again before confirming.',
+  ]});
+  await handler({...scope,message:'Please delete invoice INV-17',messageId:'wamid.prepare-first'});
+  const originalProposal=f.proposal.proposalId;
+  f.rows[0].updated_at='2026-10-02T08:01:00.000Z';
+  const response=await handler({...scope,message:'Delete that same invoice INV-17',messageId:'wamid.prepare-repeat'});
+  assert.match(response.answer,/changed since/i);
+  assert.equal(f.proposal.proposalId,originalProposal);
+  assert.equal(f.calls.filter(call=>call.action==='prepare').length,1);
+  assert.equal(f.calls.filter(call=>call.action==='confirm').length,0);
+});
+
+test('a repeated delete request does not reuse an expired proposal',async()=>{
+  const f=lifecycleFixture({requiresExactConfirmation:false});
+  const handler=lifecycleHandler(f,{plans:[
+    [{name:'prepareInvoiceDeletion',args:{target:'INV-17'}}],
+    [{name:'prepareInvoiceDeletion',args:{target:'INV-17'}}],
+  ],answers:[
+    'Invoice INV-17 for John Smith totals USD 100.00 and is currently sent. Reply yes to delete it, or cancel.',
+    'The deletion proposal has expired. Prepare a new proposal before confirming.',
+  ]});
+  await handler({...scope,message:'Please delete invoice INV-17',messageId:'wamid.prepare-first'});
+  const originalProposal=f.proposal.proposalId;
+  f.setNow('2026-10-02T08:11:00.000Z');
+  const response=await handler({...scope,message:'Delete that same invoice INV-17',messageId:'wamid.prepare-repeat'});
+  assert.match(response.answer,/expired/i);
+  assert.equal(f.proposal.proposalId,originalProposal);
+  assert.equal(f.calls.filter(call=>call.action==='prepare').length,1);
+  assert.equal(f.calls.filter(call=>call.action==='confirm').length,0);
+});
 
 test('the model proposes one deletion, ordinary yes cannot confirm strong delete, exact DELETE can, and undo uses lifecycle',async()=>{
   const f=lifecycleFixture();

@@ -4,7 +4,7 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
-import {simulateHeavyOwnerJob} from '../tests/fixtures/owner-job.mjs';
+import {simulateHeavyOwnerJob,simulateLongOwnerJob} from '../tests/fixtures/owner-job.mjs';
 import {
   createOwnerChatDatabase, DEFAULT_NOW, OWNER_CHAT_SCOPE, OTHER_WORKSPACE_ID,
 } from '../tests/fixtures/owner-chat-battery.mjs';
@@ -160,7 +160,8 @@ function draftConfirmedProposal(result) {
 const scenario = (name,run,options={}) => Object.freeze({name,run,...options});
 
 const FAST_SCENARIOS = [
-  scenario('45_second_background_job_acknowledges_then_sends_completed_answer',simulateHeavyOwnerJob),
+  scenario('45_second_background_job_uses_typing_without_progress_message',simulateHeavyOwnerJob),
+  scenario('long_job_sends_progress_only_after_one_minute',simulateLongOwnerJob),
   scenario('meta_slang_one_configuration_tool_round_under_10s',async()=>{
     const message='which model r u usin';
     const harness=makeHandler({script:{[message]:{steps:[toolStep({},'getAIProviderConfiguration')],final:(_request,result)=>replyForResult(result)}}});
@@ -290,6 +291,21 @@ const FAST_SCENARIOS = [
     const invoice=harness.db.tables.invoices.find(row=>row.invoice_number==='INV-004');
     if(!invoice.deleted_at)throw new Error('confirmed deletion did not mark one invoice deleted');
     if(!results[0].answer.includes('INV-004')||!results[0].answer.includes('yes'))throw new Error('proposal omitted the invoice or confirmation instruction');
+    assertNoForeignData(harness.db);
+  }),
+  scenario('repeated_delete_reuses_one_proposal_and_one_yes',async()=>{
+    const request='Delete invoice INV-004.',repeat='Delete that same duplicate, INV-004.',confirm='yes';
+    const deletion=()=>({steps:[toolStep({operation:'delete',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:'INV-004'}]})],
+      final:(_request,result)=>{if(!result.ok)throw Error('repeated delete was blocked: '+result.code);return draftConfirmedProposal(result);}});
+    const harness=makeHandler({script:{[request]:deletion(),[repeat]:deletion(),
+      [confirm]:{steps:[toolStep({operation:'confirm'})],final:(_request,result)=>replyForResult(result,{defaultText:'INV-004 was deleted.'})}}});
+    const results=await exactTurns(harness,[{message:request},{message:repeat},{message:confirm}]);
+    const prepares=harness.db.rpcCalls.filter(call=>call.name==='invoice_lifecycle_action'&&call.args.p_action==='prepare');
+    // The verified-owner fixture wrapper and database both record each RPC.
+    if(new Set(prepares.map(call=>call.args.p_request_message_id)).size!==1
+      ||prepares.some(call=>call.args.p_user_message!==request))throw Error('repeated deletion created another proposal');
+    if(!results[1].answer.includes('yes'))throw Error('repeated request did not show simple approval');
+    if(!harness.db.tables.invoices.find(row=>row.invoice_number==='INV-004').deleted_at)throw Error('one yes did not complete deletion');
     assertNoForeignData(harness.db);
   }),
   scenario('invoice_delete_decline_cancels_without_deleting',async()=>{

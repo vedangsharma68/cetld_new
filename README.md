@@ -75,8 +75,9 @@ npm run check:release
 ```
 
 Owner messages are durably queued before webhook acknowledgement. Verified
-owners receive a short processing acknowledgement using a separate, atomic
-claim bound to the original WhatsApp message. The final answer retains its own
+owners see typing for quick replies. A progress message is sent only when work
+is still running after one minute, using a separate, atomic claim bound to the
+original WhatsApp message. The final answer retains its own
 delivery claim. Background workers have a 240 second work slice under a 300
 second Vercel limit, execute in Mumbai beside Supabase, and persist the agent
 transcript and completed tool results between operations. Expiring a slice

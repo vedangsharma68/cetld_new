@@ -2,11 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {SupabaseInboundInbox,createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
-import {simulateHeavyOwnerJob} from './fixtures/owner-job.mjs';
+import {simulateHeavyOwnerJob,simulateLongOwnerJob} from './fixtures/owner-job.mjs';
 
 const call={id:'write-once',type:'function',function:{name:'workspaceData',arguments:'{"operation":"confirm"}'}};
 const definitions=[{type:'function',function:{name:'workspaceData',description:'Workspace data',parameters:{type:'object'}}}];
-test('a simulated 45 second owner job receives an instant ack and its completed follow-up',simulateHeavyOwnerJob);
+test('a job over a minute sends one progress message and its completed answer',simulateLongOwnerJob);
+
+test('a simulated 45 second owner job sends typing and its answer without progress-message clutter',simulateHeavyOwnerJob);
 
 test('a suspended final answer resumes completed tool results without another write',async()=>{
   let persisted=null,writes=0;

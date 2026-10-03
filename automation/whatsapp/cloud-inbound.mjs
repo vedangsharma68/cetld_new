@@ -352,14 +352,6 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       p_workspace_id:binding.workspaceId,p_customer_id:binding.customerId,p_message_id:event.provider_message_id}),'pause customer follow-ups');
     const handle=owner?runOwnerMessage:onBoundMessage;
     if (handle) {
-      if(owner&&!event.owner_ack_claimed_at&&typeof inbox.checkpoint==='function'){
-        // Transport acknowledgement only. The model still decides all data
-        // operations and the answer; this cannot consume the final reply claim.
-        try{const sender=await getOutbound();await sender.sendServiceReply({workspaceId:binding.workspaceId,to:event.sender_phone,
-          body:"On it. I'll send the answer here when it's ready.",lastInboundAt:event.provider_timestamp||event.received_at,
-          kind:'normal',audience:'owner',phase:'ack',messageId:event.provider_message_id,businessName:binding.businessName||await businessName(binding.workspaceId)});}
-        catch{logger?.warn?.('WhatsApp owner acknowledgement failed',{code:'OWNER_ACK_NOT_ACCEPTED'});}
-      }
       // This UX signal must never affect durable event processing. In
       // particular, Graph failures must not cause the inbound event to retry.
       try {
@@ -371,11 +363,38 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       }
       const media = event.media_ref && !event.media_error ? await inbox.getMedia(event) : null;
       const ownerMediaError=owner&&(event.media_error||Boolean(event.media_ref&&!media))?'The attachment could not be loaded.':null;
-      const response = event.media_error&&!owner ? MEDIA_FETCH_FAILED_REPLY : await handle({ workspaceId: binding.workspaceId, customerId: binding.customerId, ownerId:binding.ownerId,
+      // Quick turns only show typing. Progress text is reserved for work that
+      // is still running after a full minute, never sent ahead of every reply.
+      let progressSend=null;
+      const progressTimer=owner&&!event.owner_ack_claimed_at&&typeof inbox.checkpoint==='function'
+        ?setTimeout(()=>{
+          progressSend=(async()=>{
+            try{const sender=await getOutbound();await sender.sendServiceReply({workspaceId:binding.workspaceId,to:event.sender_phone,
+              body:"I'm still working on this. I'll message you when it's done.",lastInboundAt:event.provider_timestamp||event.received_at,
+              kind:'normal',audience:'owner',phase:'ack',messageId:event.provider_message_id,businessName:binding.businessName||'CETLD'});}
+            catch{logger?.warn?.('WhatsApp owner acknowledgement failed',{code:'OWNER_ACK_NOT_ACCEPTED'});}
+          })();
+        },60_000):null;
+      let typingRefreshInFlight=false;
+      const typingTimer=owner?setInterval(async()=>{
+        if(typingRefreshInFlight)return;
+        typingRefreshInFlight=true;
+        try{const sender=await getOutbound();await sender.sendTypingIndicator({messageId:event.provider_message_id});}
+        catch{logger?.warn?.('WhatsApp typing refresh failed',{code:'TYPING_NOT_ACCEPTED'});}
+        finally{typingRefreshInFlight=false;}
+      },20_000):null;
+      let response;
+      try{
+        response = event.media_error&&!owner ? MEDIA_FETCH_FAILED_REPLY : await handle({ workspaceId: binding.workspaceId, customerId: binding.customerId, ownerId:binding.ownerId,
         phone: event.sender_phone, message: event.message_text, messageId: event.provider_message_id, media,
         mediaError: owner?ownerMediaError:event.media_ref && !media ? 'Stored media unavailable' : null, signal, deadlineAt,
         ...(owner?{verifiedOwnerBinding:binding,allowDeferred:true,checkpoint:event.owner_job_checkpoint||null,
           onCheckpoint:typeof inbox.checkpoint==='function'?checkpoint=>inbox.checkpoint(event,binding.workspaceId,binding.ownerId,checkpoint):null}: {}) });
+      }finally{
+        if(typingTimer!==null)clearInterval(typingTimer);
+        if(progressTimer!==null)clearTimeout(progressTimer);
+        if(progressSend)await progressSend;
+      }
       if(owner&&response?.deferred){
         if(typeof inbox.yieldJob!=='function')throw Object.assign(new Error('Durable continuation is unavailable'),{code:'OWNER_JOB_STORE_UNAVAILABLE'});
         await inbox.yieldJob(event);
