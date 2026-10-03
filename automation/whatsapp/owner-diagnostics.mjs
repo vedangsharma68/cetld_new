@@ -28,7 +28,7 @@ export async function diagnoseOwnerChat({supabase,env=process.env,fetchImpl=fetc
       const definitions=structuredClone(tools.definitions);
       const definition=definitions.find(item=>item.function.name==='workspaceData');
       delete definition.function.parameters.properties.request;
-      definition.function.description='Read workspace data using structured operation, table, columns and filters. This diagnostic is read-only.';
+      definition.function.description+=' Diagnostic: structured reads only.';
       return {...tools,definitions,async execute(name,args,context){
         if(name!=='getAIProviderConfiguration'&&(name!=='workspaceData'||args?.request!==undefined||!['read','describe','pending'].includes(args?.operation)))
           return {ok:false,code:'DENIED',readOnly:true,message:'Live diagnostics permit structured reads only. No changes were made.'};
