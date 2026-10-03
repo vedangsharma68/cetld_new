@@ -274,11 +274,12 @@ test('authentication failures advance once per leg from Space Bunny to LongCat t
   assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL,GEMINI_FALLBACK_MODEL]);
   assert.equal(result.model,GEMINI_FALLBACK_MODEL);
   assert.equal(result.content,'Gemini recovered');
-  assert.deepEqual(logs,[
+  assert.deepEqual(logs.map(({message,details})=>({message,details:Object.fromEntries(Object.entries(details).filter(([key])=>key!=='durationMs'))})),[
     {message:'AI provider leg failed:',details:{provider:'opencode-zen',model:ZEN_PRIMARY_MODEL,status:401,reason:'permission_denied'}},
     {message:'AI provider leg failed:',details:{provider:'opencode-zen',model:ZEN_FALLBACK_MODEL,status:403,reason:'permission_denied'}},
     {message:'AI provider request served:',details:{provider:'google',model:GEMINI_FALLBACK_MODEL}},
   ]);
+  assert.ok(logs.every(({details})=>Number.isFinite(details.durationMs)));
 });
 
 test('provider diagnostics classify schema complexity without retaining adversarial error text',async()=>{
@@ -293,7 +294,10 @@ test('provider diagnostics classify schema complexity without retaining adversar
     assert.doesNotMatch(JSON.stringify(error),/Acme|98,765|hunter2|private invoice/);
     return true;
   });
-  assert.deepEqual(logs,[{message:'AI provider leg failed:',details:{provider:'google',model:DEFAULT_EXTRACTION_MODEL,status:400,reason:'schema_complexity'}}]);
+  assert.equal(logs.length,1);
+  assert.deepEqual(Object.fromEntries(Object.entries(logs[0].details).filter(([key])=>key!=='durationMs')),
+    {provider:'google',model:DEFAULT_EXTRACTION_MODEL,status:400,reason:'schema_complexity'});
+  assert.ok(Number.isFinite(logs[0].details.durationMs));
   assert.doesNotMatch(JSON.stringify(logs),/Acme|98,765|hunter2|private invoice/);
 });
 

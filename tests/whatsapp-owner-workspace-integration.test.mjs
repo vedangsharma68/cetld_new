@@ -18,12 +18,24 @@ function database() {
   };
   return {reads,tables,from(table){
     const filters=[];let columns='*',limit=100;
-    const q={select(value){columns=value;return q;},eq(column,value){filters.push(row=>row[column]===value);reads.push({table,column,value});return q;},
+    const actualValue=(row,column)=>column==='customer.name'
+      ?tables.customers.find(customer=>customer.workspace_id===row.workspace_id&&customer.id===row.customer_id)?.name:row[column];
+    const q={select(value){columns=value;return q;},eq(column,value){filters.push(row=>actualValue(row,column)===value);reads.push({table,column,value});return q;},
       is(column,value){filters.push(row=>(row[column]??null)===value);return q;},in(column,value){filters.push(row=>value.includes(row[column]));return q;},
-      ilike(column,value){const needle=value.replaceAll('%','').toLowerCase();filters.push(row=>String(row[column]||'').toLowerCase().includes(needle));return q;},
+      ilike(column,value){const needle=value.replaceAll('%','').toLowerCase();filters.push(row=>String(actualValue(row,column)||'').toLowerCase().includes(needle));return q;},
       order(){return q;},limit(value){limit=value;return q;},
       maybeSingle:async()=>({data:result()[0]||null}),then(resolve,reject){return Promise.resolve({data:result()}).then(resolve,reject);}};
-    function result(){return (tables[table]||[]).filter(row=>filters.every(filter=>filter(row))).slice(0,limit).map(row=>columns==='*'?{...row}:Object.fromEntries(columns.split(',').map(column=>[column,row[column]])));}
+    function result(){return (tables[table]||[]).filter(row=>filters.every(filter=>filter(row))).slice(0,limit).map(row=>{
+      if(columns==='*')return {...row};
+      const output={};
+      for(const column of columns.split(',')){
+        if(column.startsWith('customer:customers!')){
+          const customer=tables.customers.find(item=>item.workspace_id===row.workspace_id&&item.id===row.customer_id);
+          output.customer=customer?{name:customer.name}:null;
+        } else output[column]=row[column];
+      }
+      return output;
+    });}
     return q;
   },rpc:async()=>({data:{ok:false,code:'FEATURE_UNAVAILABLE'}})};
 }
@@ -88,9 +100,9 @@ test('the whole owner turn is bounded even when loading conversation history han
   const h=createOwnerMessageHandler({supabase:database(),authorize:async()=>true,pendingActionStoreFactory:pendingFactory,
     historyReader:()=>new Promise(()=>{}),providerFactory:()=>({async generate(){modelCalls++;return {content:'Late'};}}),logger:{error(){}}});
   const started=Date.now();
-  const result=await h({...scope,message:'Show invoices',messageId:'hung-setup',deadlineAt:Date.now()+5_040});
+  const result=await h({...scope,message:'Show invoices',messageId:'hung-setup',allowDeferred:true,deadlineAt:Date.now()+5_040});
   assert.ok(Date.now()-started<1_000);assert.equal(modelCalls,0);
-  assert.equal(result.plannerFailure.code,'OWNER_LOOP_TIMEOUT');assert.match(result.answer,/recent conversation.*Nothing was changed/i);
+  assert.equal(result.deferred,true);assert.equal(result.checkpoint,null);assert.equal(result.plannerFailure,undefined);
 });
 
 test('the default single tool preserves invoice delete confirmation and undo end to end',async()=>{

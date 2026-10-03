@@ -4,6 +4,7 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {simulateHeavyOwnerJob} from '../tests/fixtures/owner-job.mjs';
 import {
   createOwnerChatDatabase, DEFAULT_NOW, OWNER_CHAT_SCOPE, OTHER_WORKSPACE_ID,
 } from '../tests/fixtures/owner-chat-battery.mjs';
@@ -112,6 +113,7 @@ function makeHandler({db=createOwnerChatDatabase(),script={},planner={},replySto
 
 function toolStep(args,name='workspaceData',expect) { return {name,args,expect}; }
 function assertAnswer(result,{allowContextualFailure=false}={}) {
+  if(result?.plannerFailure?.code==='OWNER_LOOP_TIMEOUT')throw new Error('OWNER_LOOP_TIMEOUT is forbidden in the conversation battery');
   if(!result||typeof result.answer!=='string'||!result.answer.trim())throw new Error('scenario returned an empty reply');
   if(!allowContextualFailure&&/assistant model service is (?:temporarily )?unavailable|please try again shortly|couldn.t prepare a reply just now/i.test(result.answer))
     throw new Error(`scenario returned a generic fallback reply: ${result.answer}; code=${result.plannerFailure?.code||'none'} diagnostics=${JSON.stringify(result.agentDiagnostics||{})}`);
@@ -158,6 +160,7 @@ function draftConfirmedProposal(result) {
 const scenario = (name,run,options={}) => Object.freeze({name,run,...options});
 
 const FAST_SCENARIOS = [
+  scenario('45_second_background_job_acknowledges_then_sends_completed_answer',simulateHeavyOwnerJob),
   scenario('meta_slang_one_configuration_tool_round_under_10s',async()=>{
     const message='which model r u usin';
     const harness=makeHandler({script:{[message]:{steps:[toolStep({},'getAIProviderConfiguration')],final:(_request,result)=>replyForResult(result)}}});
@@ -634,7 +637,7 @@ const FAST_SCENARIOS = [
       throw new Error('ordinary confirmations left a completed workspace proposal pending');
     assertNoForeignData(harness.db);
   }),
-  scenario('time_budget_timeout_returns_contextual_read_failure',async()=>{
+  scenario('exhausted_worker_slice_preserves_job_without_timeout_reply',async()=>{
     const message='List my invoices.';
     const observed={calls:[],plans:[],firstToolSchemaBytes:null,firstPayloadBytes:null};
     const db=createOwnerChatDatabase();
@@ -647,14 +650,12 @@ const FAST_SCENARIOS = [
     },async generateStructured(){throw new Error('planner should not run after the timed provider call');}});
     const harness=makeHandler({db,script:{},providerFactory});
     const start=Date.now();
-    const result=await harness.handler({...OWNER_CHAT_SCOPE,message,messageId:'wamid.owner-battery-timeout',deadlineAt:start+5_180});
+    const result=await harness.handler({...OWNER_CHAT_SCOPE,message,messageId:'wamid.owner-battery-timeout',deadlineAt:start+5_180,allowDeferred:true});
     const elapsed=Date.now()-start;
-    assertAnswer(result,{allowContextualFailure:true});
-    if(result.plannerFailure?.code!=='OWNER_LOOP_TIMEOUT')throw new Error(`expected contextual timeout code, got ${result.plannerFailure?.code}`);
-    if(!/^I couldn't finish your owner chat reply; nothing changed\./.test(result.answer))throw new Error(`unexpected timeout reply: ${result.answer}`);
+    if(result.deferred!==true||result.answer||result.plannerFailure?.code==='OWNER_LOOP_TIMEOUT')throw new Error('worker did not retain a deferred job without sending a timeout');
     if(elapsed>1_000)throw new Error(`deadline was not enforced promptly (${elapsed}ms)`);
     assertNoForeignData(db);
-    return {elapsedMs:elapsed,code:result.plannerFailure.code};
+    return {elapsedMs:elapsed,deferred:true};
   }),
   scenario('empty_tools_cloudflare_400_does_not_open_breaker',async()=>{
     const success=async()=>new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:'reset'}}]}),{status:200,headers:{'Content-Type':'application/json'}});

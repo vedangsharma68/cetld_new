@@ -208,12 +208,14 @@ test('round logs contain only static tool names, status, and safety codes',async
   return answer('I could not use that tool.');
  }};
  const result=await runOwnerAgent({provider,tools:tools(),message:'private name and phone 5551234',logger:{info:(event,fields)=>entries.push({event,fields})}});
- assert.equal(entries.length,2);
- assert.ok(entries.every(({event,fields})=>event.includes('round')&&Number.isInteger(fields.round)&&Array.isArray(fields.toolNames)));
- assert.equal(entries[0].fields.toolNames[0],'unknown');
- assert.equal(entries[0].fields.outcome,'error');
- assert.deepEqual(entries[0].fields.toolResults,[{toolName:'unknown',outcome:'error',code:'UNKNOWN_TOOL'}]);
- assert.ok(entries[0].fields.safetyIssueCodes.includes('unknown_tool'));
+ const rounds=entries.filter(entry=>entry.event==='WhatsApp owner agent round');
+ assert.equal(rounds.length,2);
+ assert.ok(rounds.every(({fields})=>Number.isInteger(fields.round)&&Array.isArray(fields.toolNames)));
+ assert.equal(rounds[0].fields.toolNames[0],'unknown');
+ assert.equal(rounds[0].fields.outcome,'error');
+ assert.deepEqual(rounds[0].fields.toolResults,[{toolName:'unknown',outcome:'error',code:'UNKNOWN_TOOL'}]);
+ assert.ok(rounds[0].fields.safetyIssueCodes.includes('unknown_tool'));
+ assert.ok(entries.filter(entry=>entry.event==='WhatsApp owner model call').every(entry=>entry.fields.durationMs>=0));
  assert.doesNotMatch(JSON.stringify(entries),/private name|5551234|secret_customer_123/);
  assert.equal(result.agentDiagnostics?.rounds,2);
  assert.deepEqual(result.agentDiagnostics?.safetyRejects,['unknown_tool']);
@@ -229,7 +231,8 @@ test('successful tool logs report only the sanitized status code',async()=>{
  const result=await runOwnerAgent({provider,
   tools:tools(['workspaceData'],async()=>({ok:true,readOnly:true,operation:'read',table:'customers',rows:[{name:'Private Customer',phone:'5551234'}]})),
   message:'Read this customer',logger:{info:(event,fields)=>entries.push({event,fields})}});
- assert.deepEqual(entries[0].fields.toolResults,[{toolName:'workspaceData',outcome:'ok',code:'OK'}]);
+ assert.deepEqual(entries.find(entry=>entry.event==='WhatsApp owner agent round').fields.toolResults,[{toolName:'workspaceData',outcome:'ok',code:'OK'}]);
+ assert.ok(entries.find(entry=>entry.event==='WhatsApp owner tool call').fields.durationMs>=0);
  assert.doesNotMatch(JSON.stringify(entries),/Private Customer|5551234/);
  assert.equal(result.agentDiagnostics?.toolRounds,1);
 });

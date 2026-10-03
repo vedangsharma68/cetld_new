@@ -12,7 +12,7 @@ function staleInboundEvent(event, now) {
   return Number.isFinite(receivedAt) && now - receivedAt > MAX_INBOUND_RETRY_AGE_MS;
 }
 const TIMEOUT_REPLY = 'That took longer than I can handle, so I stopped. Your message was received. Please send it again in a minute.';
-const DEFAULT_PROCESS_BUDGET_MS = 40_000;
+const DEFAULT_PROCESS_BUDGET_MS = 240_000;
 // Leave enough runway for a database lookup and a deterministic reply. Slow
 // planner work may use the first slot, but is never started near the deadline.
 const MIN_EVENT_BUDGET_MS = 5_000;
@@ -110,6 +110,29 @@ export class SupabaseInboundInbox {
     return dataOrThrow(await this.supabase.rpc('whatsapp_claim_inbound_events', { p_limit: limit }), 'claim') || [];
   }
 
+  async checkpoint(event, workspaceId, ownerId, checkpoint) {
+    if(!checkpoint||checkpoint.version!==1||Buffer.byteLength(JSON.stringify(checkpoint))>256*1024)
+      throw Object.assign(new Error('Owner checkpoint exceeds its storage bounds'),{code:'OWNER_JOB_CHECKPOINT_INVALID'});
+    const result=await this.supabase.from('whatsapp_inbound_events').update({owner_job_checkpoint:checkpoint,
+      owner_job_workspace_id:workspaceId,owner_job_owner_id:ownerId})
+      .eq('id',event.id).eq('claim_token',event.claim_token).eq('status','processing').select('id');
+    const rows=dataOrThrow(result,'checkpoint');
+    if(!rows?.length)throw Object.assign(new Error('Owner job lease was lost'),{code:'OWNER_JOB_LEASE_LOST'});
+  }
+
+  async beginOwnerJob(event,workspaceId,ownerId){
+    const rows=dataOrThrow(await this.supabase.from('whatsapp_inbound_events').update({owner_job_workspace_id:workspaceId,owner_job_owner_id:ownerId})
+      .eq('id',event.id).eq('claim_token',event.claim_token).eq('status','processing').select('id'),'begin owner job');
+    if(!rows?.length)throw Object.assign(new Error('Owner job lease was lost'),{code:'OWNER_JOB_LEASE_LOST'});
+  }
+
+  async yieldJob(event) {
+    const rows=dataOrThrow(await this.supabase.from('whatsapp_inbound_events').update({status:'pending',claim_token:null,
+      claimed_at:null,processed_at:null,next_attempt_at:new Date().toISOString(),attempts:Math.max(0,Number(event.attempts||1)-1),
+      error_code:null,error_detail:null}).eq('id',event.id).eq('claim_token',event.claim_token).select('id'),'yield owner job');
+    if(!rows?.length)throw Object.assign(new Error('Owner job lease was lost'),{code:'OWNER_JOB_LEASE_LOST'});
+  }
+
   async markStop(event, { confirmationDue = false, workspaceId = null } = {}) {
     dataOrThrow(await this.supabase.rpc('whatsapp_record_inbound_stop', {
       p_provider_message_id: event.provider_message_id,
@@ -133,6 +156,7 @@ export class SupabaseInboundInbox {
     dataOrThrow(await this.supabase.from('whatsapp_inbound_events')
       .update({ status: retry ? 'pending' : failed && retryable ? 'failed' : 'done', processed_at: retry ? null : new Date().toISOString(),
         claim_token: null, claimed_at: null, next_attempt_at: retry ? next : event.next_attempt_at,
+        ...(!retry?{owner_job_checkpoint:null}:{}),
         error_code: errorCode, error_detail: errorDetail })
       .eq('id', event.id).eq('claim_token', event.claim_token), 'complete');
   }
@@ -141,6 +165,7 @@ export class SupabaseInboundInbox {
     dataOrThrow(await this.supabase.from('whatsapp_inbound_events').update({
       status: 'failed', processed_at: new Date().toISOString(), claim_token: null, claimed_at: null,
       error_code: 'INBOUND_DEAD_LETTER', error_detail: String(errorDetail || event.error_code || 'Stale delivery retry expired.').slice(0, 1000),
+      owner_job_checkpoint:null,
     }).eq('id', event.id).eq('claim_token', event.claim_token), 'dead letter');
   }
 
@@ -192,7 +217,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       const invoiceUpdates = createWhatsAppInvoiceUpdateStore({supabase});
       return createWhatsAppOutbound({env, fetchImpl, supabase, logger, ...invoiceUpdates,
         authorizeInboundReply: async input => input.audience==='owner'
-          ? {allowed:dataOrThrow(await supabase.rpc('whatsapp_claim_owner_reply',{p_provider_message_id:input.messageId,p_sender_phone:input.phone,p_workspace_id:input.workspaceId}),'claim owner reply')===true}
+          ? {allowed:dataOrThrow(await supabase.rpc(input.phase==='ack'?'whatsapp_claim_owner_ack':'whatsapp_claim_owner_reply',{p_provider_message_id:input.messageId,p_sender_phone:input.phone,p_workspace_id:input.workspaceId}),'claim owner reply')===true}
           : inbox.claimReply(input)});
     });
     return outboundPromise;
@@ -275,6 +300,11 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     // words. Those strings can be ordinary owner conversation turns; only a
     // non-owner debtor message installs consent barriers and exits the model.
     const owner=await resolveOwnerBinding({supabase,phone:event.sender_phone});
+    // A resumed owner job cannot be reinterpreted as a debtor message after
+    // unbinding. Validate its persisted scope before STOP/link routing.
+    if((event.owner_job_checkpoint||event.owner_ack_claimed_at||event.owner_job_workspace_id)
+      &&(!owner||event.owner_job_workspace_id!==owner.workspaceId||event.owner_job_owner_id!==owner.ownerId))
+      throw Object.assign(new Error('Owner job binding changed'),{code:'OWNER_JOB_BINDING_CHANGED'});
     if (!owner&&isOptOut(event.message_text)) {
       if (!event.stop_processed_at) {
         await revokeOptOut(event);
@@ -313,6 +343,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     if(bindings.length!==1)return 'verify';
     const binding = bindings[0];
     if (!binding.workspaceId || (!owner && (!binding.customerId || !binding.customer))) throw new Error('Incomplete sender binding');
+    if(owner&&!event.owner_job_workspace_id&&typeof inbox.beginOwnerJob==='function')await inbox.beginOwnerJob(event,binding.workspaceId,binding.ownerId);
     await transcript({workspaceId:binding.workspaceId,customerId:owner?null:binding.customerId,phone:event.sender_phone,
       audience:owner?'owner':'customer',direction:'inbound',body:event.message_text||`[${event.message_type} attachment]`,
       kind:event.message_type,status:'received',providerMessageId:event.provider_message_id,key:`inbound:${event.provider_message_id}`,
@@ -321,6 +352,14 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       p_workspace_id:binding.workspaceId,p_customer_id:binding.customerId,p_message_id:event.provider_message_id}),'pause customer follow-ups');
     const handle=owner?runOwnerMessage:onBoundMessage;
     if (handle) {
+      if(owner&&!event.owner_ack_claimed_at&&typeof inbox.checkpoint==='function'){
+        // Transport acknowledgement only. The model still decides all data
+        // operations and the answer; this cannot consume the final reply claim.
+        try{const sender=await getOutbound();await sender.sendServiceReply({workspaceId:binding.workspaceId,to:event.sender_phone,
+          body:"On it. I'll send the answer here when it's ready.",lastInboundAt:event.provider_timestamp||event.received_at,
+          kind:'normal',audience:'owner',phase:'ack',messageId:event.provider_message_id,businessName:binding.businessName||await businessName(binding.workspaceId)});}
+        catch{logger?.warn?.('WhatsApp owner acknowledgement failed',{code:'OWNER_ACK_NOT_ACCEPTED'});}
+      }
       // This UX signal must never affect durable event processing. In
       // particular, Graph failures must not cause the inbound event to retry.
       try {
@@ -334,7 +373,14 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       const ownerMediaError=owner&&(event.media_error||Boolean(event.media_ref&&!media))?'The attachment could not be loaded.':null;
       const response = event.media_error&&!owner ? MEDIA_FETCH_FAILED_REPLY : await handle({ workspaceId: binding.workspaceId, customerId: binding.customerId, ownerId:binding.ownerId,
         phone: event.sender_phone, message: event.message_text, messageId: event.provider_message_id, media,
-        mediaError: owner?ownerMediaError:event.media_ref && !media ? 'Stored media unavailable' : null, signal, deadlineAt });
+        mediaError: owner?ownerMediaError:event.media_ref && !media ? 'Stored media unavailable' : null, signal, deadlineAt,
+        ...(owner?{verifiedOwnerBinding:binding,allowDeferred:true,checkpoint:event.owner_job_checkpoint||null,
+          onCheckpoint:typeof inbox.checkpoint==='function'?checkpoint=>inbox.checkpoint(event,binding.workspaceId,binding.ownerId,checkpoint):null}: {}) });
+      if(owner&&response?.deferred){
+        if(typeof inbox.yieldJob!=='function')throw Object.assign(new Error('Durable continuation is unavailable'),{code:'OWNER_JOB_STORE_UNAVAILABLE'});
+        await inbox.yieldJob(event);
+        return {deferred:true};
+      }
       active();
       // An accepted reply can outlive its inbox lease. Finish that recovered
       // event without a second Graph send or another claim of the same reply.
@@ -397,6 +443,10 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     return true;
   }
   return {
+    async diagnoseOwnerChat(options){
+      const {diagnoseOwnerChat}=await import('./owner-diagnostics.mjs');
+      return diagnoseOwnerChat({supabase,env,fetchImpl,logger,...options});
+    },
     async enqueue(messages) {
       for (const message of messages) {
         if (!['image','document'].includes(message.message_type)) continue;
@@ -419,7 +469,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     async processPending() {
       const configuredBudget = Number(env.WHATSAPP_PROCESS_BUDGET_MS);
       const budgetMs = Number.isFinite(configuredBudget) && configuredBudget > 0
-        ? configuredBudget : DEFAULT_PROCESS_BUDGET_MS;
+        ? Math.min(configuredBudget,DEFAULT_PROCESS_BUDGET_MS) : DEFAULT_PROCESS_BUDGET_MS;
       const startedAt = clock();
       const deadlineAt = startedAt + budgetMs;
       const controller = new AbortController();
@@ -438,7 +488,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           if (typeof inbox.defer === 'function') await inbox.defer(event);
           break;
         }
-        if (staleInboundEvent(event, clock()) && (event.error_code || event.reply_claimed_at || Number(event.attempts) > 1)) {
+        if (staleInboundEvent(event, clock()) && (event.error_code || event.reply_claimed_at || (!event.owner_job_workspace_id&&!event.owner_job_checkpoint&&Number(event.attempts) > 1))) {
           await deadLetter(event, 'Stale delivery retry expired before reprocessing.');
           completed++;
           continue;
@@ -449,6 +499,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
         }
         try {
           const result = await processEvent(event, {signal: controller.signal, deadlineAt});
+          if(result?.deferred)break;
           if (result?.plannerFailure) {
             const detail = JSON.stringify(result.plannerFailure).slice(0, 1000);
             await inbox.complete(event, 'ASSISTANT_PLANNER_FAILED', detail, false);
@@ -459,6 +510,11 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           const timedOut = controller.signal.aborted || clock() >= deadlineAt;
           logger.error('WhatsApp inbound event failed', { messageId: event.provider_message_id, name: error?.name || 'Error',
             timedOut, message: String(error?.message || '').slice(0, 200) });
+          if(timedOut&&typeof inbox.yieldJob==='function'){
+            await inbox.yieldJob(event);
+            logger?.info?.('WhatsApp background work retained',{code:'OWNER_JOB_CONTINUATION',durationMs:clock()-startedAt});
+            break;
+          }
           if (staleInboundEvent(event, clock())) {
             await deadLetter(event, String(error?.code || 'PROCESSING_FAILED').slice(0, 80));
             completed++;

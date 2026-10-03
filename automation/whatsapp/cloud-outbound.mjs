@@ -253,7 +253,8 @@ export function createWhatsAppOutbound({
     return postMessage({workspaceId,to,key,kind:'invoice_update',payload});
   }
 
-  async function sendServiceReply({workspaceId = null, to, body, lastInboundAt, kind = 'normal', messageId, businessName, audience='customer', ownerLinkResult} = {}) {
+  async function sendServiceReply({workspaceId = null, to, body, lastInboundAt, kind = 'normal', messageId, businessName, audience='customer', ownerLinkResult, phase='answer'} = {}) {
+    if(!['answer','ack'].includes(phase)||(phase==='ack'&&(audience!=='owner'||kind!=='normal')))throw new TypeError('invalid owner delivery phase');
     const blocked = preflight({workspaceId, to, kind});
     if (blocked) return blocked;
     recipient(to);
@@ -302,10 +303,10 @@ export function createWhatsAppOutbound({
       customerId=eligibility.customer?.id||null;
     }
     if(audience!=='owner')text=`${text}\n\n- ${owner}`;
-    const key=`reply:${inboundId}`;
+    const key=`${phase==='ack'?'ack':'reply'}:${inboundId}`;
     const payload=await prepareMessage({workspaceId,to,kind,audience,customerId,key,payload:{type:'text',text:{preview_url:false,body:text}}});
     if(audience!=='owner'&&!payload.text.body.endsWith(`\n\n- ${owner}`))return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed'});
-    const authorization = await authorizeInboundReply({workspaceId, phone: to, kind, messageId: inboundId,...(audience==='owner'?{audience}: {})});
+    const authorization = await authorizeInboundReply({workspaceId, phone: to, kind, messageId: inboundId,...(audience==='owner'?{audience,phase}: {})});
     if (authorization?.allowed !== true) return denyPrepared({workspaceId,to,kind,key,reason:authorization?.reason||'inbound_reply_denied'});
     if(workspaceId&&!await verifiedBusinessName(supabase,workspaceId,owner))
       return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed',claimed:true});

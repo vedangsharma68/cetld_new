@@ -6,6 +6,7 @@ import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
 import {createOwnerSafetyTools as createOwnerAgentTools, runOwnerAgent, ownerReplySafetyIssue} from '../automation/whatsapp/owner-agent.mjs';
 import {AIError,CF_QWEN_MODEL} from '../ai/provider.mjs';
 import {createInvoiceLifecycleService} from '../ai/invoice-lifecycle.mjs';
+import {installVerifiedOwnerRpc} from './fixtures/verified-owner-rpc.mjs';
 
 const workspaceId='00000000-0000-4000-8000-000000000002';
 const ownerId='00000000-0000-4000-8000-000000000001';
@@ -65,7 +66,7 @@ function memorySupabase({models={primary_model:CF_QWEN_MODEL,fallback_model:'gem
     }
     return query;
   }};
-  return supabase;
+  return installVerifiedOwnerRpc(supabase,()=>tables,{expectedPhone:phone});
 }
 
 function pendingStore(){return {async loadPendingAction(){return null;}};}

@@ -61,8 +61,10 @@ test('owner handler rechecks authorization before replay and never calls the mod
     replyStore:{find:async()=>({answer:'Stored reply.'}),save:async()=>{throw Error('Not needed');}},
     providerFactory:()=>{modelCalls++;throw Error('Should not create a model');},logger:{error(){}}});
   const result=await h(scope);
-  assert.equal(result.answer,'Stored reply.');assert.equal(result.replayed,true);assert.equal(modelCalls,0);assert.equal(authCalls,2);
-  const denied=createOwnerMessageHandler({supabase:database([]),authorize:async()=>false,
+  assert.equal(result.answer,'Stored reply.');assert.equal(result.replayed,true);assert.equal(modelCalls,0);assert.equal(authCalls,1);
+  let nextTurnAuthCalls=0;
+  const denied=createOwnerMessageHandler({supabase:database([]),authorize:async()=>{nextTurnAuthCalls++;return false;},
     replyStore:{find:async()=>{throw Error('Do not read a denied reply');}},logger:{error(){}}});
   assert.equal(await denied(scope),'');
+  assert.equal(nextTurnAuthCalls,1,'authorization is reloaded for each new request after revocation');
 });

@@ -83,6 +83,29 @@ test('workspaceData offers one generic tool and scoped reads expose sanitized al
   assert.doesNotMatch(JSON.stringify(result),/api_key|workspace_id|33333333/);
 });
 
+test('invoice customer-name lookup uses one workspace-scoped joined query',async()=>{
+  const calls=[];
+  const supabase={from(table){
+    const call={table,selected:null,filters:[],orders:[],range:null};calls.push(call);
+    const query={select(value){call.selected=value;return query;},eq(column,value){call.filters.push([column,'eq',value]);return query;},
+      is(column,value){call.filters.push([column,'is',value]);return query;},ilike(column,value){call.filters.push([column,'ilike',value]);return query;},
+      order(column,options){call.orders.push([column,options]);return query;},range(from,to){call.range=[from,to];return query;},
+      then(resolve,reject){return Promise.resolve({data:[{workspace_id:scope.workspaceId,customer_id:'33333333-3333-4333-8333-333333333333',
+        invoice_number:'INV-JOHN-1',customer:{name:'John Smith'}}],error:null}).then(resolve,reject);}};
+    return query;
+  }};
+  const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true});
+
+  const result=await tool.execute({operation:'read',table:'invoices',columns:['invoice_number','customer_name'],
+    filters:[{column:'customer_name',operator:'ilike',value:'%John%'}]});
+
+  assert.deepEqual(result.rows,[{invoice_number:'INV-JOHN-1',customer_name:'John Smith'}]);
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].table,'invoices');
+  assert.match(calls[0].selected,/customers!invoices_workspace_id_customer_id_fkey!inner\(name\)/);
+  assert.ok(calls[0].filters.some(([column,operator,value])=>column==='customer.name'&&operator==='ilike'&&value==='%John%'));
+});
+
 test('workspaceData rejects model-supplied workspace, tenant, or owner scope anywhere before database access',async()=>{
   const supabase=fakeSupabase();
   const safety=[];

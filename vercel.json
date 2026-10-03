@@ -1,12 +1,13 @@
 {
   "framework": null,
+  "regions": ["bom1"],
   "outputDirectory": ".",
   "installCommand": "npm ci --include=dev",
   "buildCommand": "npm run check:release",
   "functions": {
     "api/ai.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 60},
-    "api/whatsapp.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 60},
-    "api/whatsapp-process.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 60}
+    "api/whatsapp.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 300},
+    "api/whatsapp-process.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 300}
   },
   "crons": [
     {"path": "/api/whatsapp-process", "schedule": "0 0 * * *"}

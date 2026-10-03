@@ -9,6 +9,7 @@ import {createConversationStore,parseMetaStatuses,conversationCallbackToken} fro
 import {whatsappInbox,mergeWhatsAppMessages} from '../conversations-ui.mjs';
 import {PGlite} from '@electric-sql/pglite';
 import {readFile} from 'node:fs/promises';
+import {installVerifiedOwnerRpc} from './fixtures/verified-owner-rpc.mjs';
 
 const owner='00000000-0000-4000-8000-000000000001',workspace='00000000-0000-4000-8000-000000000002';
 const customer='00000000-0000-4000-8000-000000000003',other='00000000-0000-4000-8000-000000000004';
@@ -21,7 +22,7 @@ function fixture() {
     whatsapp_global_suppressions:[],whatsapp_suppressions:[],whatsapp_consents:[{workspace_id:workspace,phone,customer_id:customer,revoked_at:null,consented_by:owner}],whatsapp_messages:[],
     invoices:[{id:customer,workspace_id:workspace,customer_id:customer,invoice_number:'INV-1'},
       {id:other,workspace_id:other,customer_id:other,invoice_number:'OTHER'}]};
-  const db={tables,rpcs:[],rpc:async(name,args)=>{db.rpcs.push({name,args});return {data:true};},
+  const db={tables,rpcs:[],rpcCalls:[],rpc:async(name,args)=>{db.rpcs.push({name,args});return {data:true};},
     from(table){let rows=tables[table]||[],filters=[],operation=null;
       const q={select(){return q},eq(key,value){filters.push(row=>row[key]===value);return q},
         is(key,value){filters.push(row=>(row[key]??null)===value);return q},
@@ -34,6 +35,7 @@ function fixture() {
         then(resolve,reject){return Promise.resolve({data:operation?operation():rows.filter(row=>filters.every(f=>f(row)))}).then(resolve,reject)}};
       return q;
     }};
+  installVerifiedOwnerRpc(db,()=>tables,{expectedPhone:phone});
   return db;
 }
 
@@ -60,8 +62,11 @@ test('owner lookup refuses an ambiguous phone, an invalid owner membership, or s
   db.tables.workspace_settings.push({...db.tables.workspace_settings[0],workspace_id:other});
   db.tables.whatsapp_owner_verifications.push({workspace_id:other,phone,requested_by:owner,verified_at:'2026-10-02'});
   db.tables.workspaces.push({id:other,owner_id:owner});db.tables.workspace_members.push({workspace_id:other,user_id:owner,role:'owner'});
+  db.tables.customers.push({id:other,workspace_id:other,phone,metadata:{whatsapp_owner:true}});
+  db.tables.whatsapp_consents.push({workspace_id:other,phone,customer_id:other,revoked_at:null,consented_by:owner});
   assert.equal(await resolveOwnerBinding({supabase:db,phone}),null);
-  db.tables.workspace_settings.pop();db.tables.whatsapp_owner_verifications.pop();db.tables.workspaces.pop();db.tables.workspace_members.pop();db.tables.workspace_members[0].role='admin';
+  db.tables.workspace_settings.pop();db.tables.whatsapp_owner_verifications.pop();db.tables.workspaces.pop();db.tables.workspace_members.pop();
+  db.tables.customers.pop();db.tables.whatsapp_consents.pop();db.tables.workspace_members[0].role='admin';
   assert.equal(await resolveOwnerBinding({supabase:db,phone}),null);
   db.tables.workspace_members[0].role='owner';db.tables.whatsapp_global_suppressions.push({phone});
   assert.equal(await resolveOwnerBinding({supabase:db,phone}),null);

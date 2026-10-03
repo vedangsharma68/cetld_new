@@ -74,6 +74,35 @@ npm ci --include=dev
 npm run check:release
 ```
 
+Owner messages are durably queued before webhook acknowledgement. Verified
+owners receive a short processing acknowledgement using a separate, atomic
+claim bound to the original WhatsApp message. The final answer retains its own
+delivery claim. Background workers have a 240 second work slice under a 300
+second Vercel limit, execute in Mumbai beside Supabase, and persist the agent
+transcript and completed tool results between operations. Expiring a slice
+retains the job for the next worker invocation, without sending a timeout reply.
+The production Supabase minute scheduler resumes queued work; the Vercel daily
+cron is an additional recovery path. An interrupted write is never automatically
+repeated or reported as successful. Database confirmation receipts still enforce
+ownership, expiry and idempotency. Checkpoints are internal service data and are
+cleared when the event finishes. This preserves work across invocation limits;
+provider and delivery outages can still delay an answer.
+
+Quota exhaustion is recorded in the service-only `ai_provider_health` table,
+keyed by hashed account and credential identity. Cloudflare's shared daily
+Neuron quota disables all Cloudflare models for that account until reset.
+Subsequent instances consult that record before contacting a provider. Logs
+include model/tool durations and request-local context query counts, with no
+message text or credentials.
+
+For an opt-in deployed timing check, call `/api/whatsapp-process?diagnostic=meta`
+or `?diagnostic=john-invoices&quotaDead=1` with the normal
+`Authorization: Bearer <CRON_SECRET>` header. The latter deliberately skips
+Cloudflare for that probe only. This runs the real owner agent against a verified
+number in the configured test allowlist, permits structured reads only, and
+returns timing/count metadata without invoice facts. It sends no WhatsApp
+message and consumes live provider quota, so it is never part of the build gate.
+
 For a quick conversation check, run `npm run test:owner-chat`. It uses a
 scripted model and fictional workspaces, but exercises the actual owner
 handler, agent loop, scoped data tools, confirmations and saved replies.

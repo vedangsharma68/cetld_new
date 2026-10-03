@@ -59,8 +59,9 @@ test('missing conversation table falls back to empty history and still answers',
 
 test('WhatsApp functions have enough execution time for AI-backed replies', async () => {
   const vercel = JSON.parse(await readFile(new URL('../vercel.json', import.meta.url), 'utf8'));
-  assert.equal(vercel.functions['api/whatsapp.js'].maxDuration, 60);
-  assert.equal(vercel.functions['api/whatsapp-process.js'].maxDuration, 60);
+  assert.equal(vercel.functions['api/whatsapp.js'].maxDuration, 300);
+  assert.equal(vercel.functions['api/whatsapp-process.js'].maxDuration, 300);
+  assert.deepEqual(vercel.regions,['bom1']);
   assert.deepEqual(vercel.crons, [{path:'/api/whatsapp-process',schedule:'0 0 * * *'}]);
 });
 

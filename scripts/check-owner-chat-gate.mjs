@@ -26,9 +26,10 @@ function runCommand(script) {
   });
 }
 async function manifest() {
-  const paths=['ai/provider.mjs','automation/whatsapp/owner-agent.mjs','automation/whatsapp/owner-handler.mjs',
+  const paths=['ai/provider.mjs','ai/provider-health.mjs','automation/whatsapp/owner-agent.mjs','automation/whatsapp/owner-handler.mjs',
     'automation/whatsapp/owner-workspace-tools.mjs','automation/whatsapp/workspace-data.mjs','automation/whatsapp/owner-reply-store.mjs',
-    'automation/whatsapp/cloud-inbound.mjs','scripts/owner-chat-battery.mjs','tests/fixtures/owner-chat-battery.mjs'];
+    'automation/whatsapp/cloud-inbound.mjs','automation/whatsapp/cloud-outbound.mjs','automation/whatsapp/owner-binding.mjs',
+    'automation/whatsapp/owner-diagnostics.mjs','scripts/owner-chat-battery.mjs','tests/fixtures/owner-chat-battery.mjs'];
   const files={};for(const path of paths)files[path]=createHash('sha256').update(await readFile(path)).digest('hex');
   let commit=process.env.VERCEL_GIT_COMMIT_SHA||process.env.GITHUB_SHA;
   if(!commit)try{commit=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();}catch{commit=null;}

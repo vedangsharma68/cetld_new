@@ -1,3 +1,5 @@
+import {providerHealthIdentity} from './provider-health.mjs';
+
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const ZEN_CHAT_COMPLETIONS_URL = 'https://opencode.ai/zen/v1/chat/completions';
@@ -104,20 +106,134 @@ export function sanitizeModelSettings({primaryModel, fallbackModel} = {}) {
 }
 
 function invalidArgument() { return new AIError('INVALID_ARGUMENT', 400); }
-function statusError(status, reason = 'unknown') {
-  if (reason === 'model_unavailable' || status === 404) return Object.assign(new AIError('INVALID_MODEL', status), {providerReason: reason});
-  if (status === 401 || status === 403) return Object.assign(new AIError('AUTH_FAILED', status), {providerReason: reason});
-  if (status === 429) return Object.assign(new AIError('RATE_LIMITED', status), {providerReason: reason});
-  if (status === 408) return Object.assign(new AIError('TIMEOUT', status), {providerReason: reason});
-  if (status >= 500) return Object.assign(new AIError('PROVIDER_UNAVAILABLE', status), {providerReason: reason});
-  return Object.assign(new AIError('PROVIDER_ERROR', status), {providerReason: reason});
+function parsedResetTime(value, now, durationUnit = null) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (durationUnit === 'milliseconds') return now + value;
+    if (durationUnit === 'seconds') return now + value * 1000;
+    return value < 10_000_000_000 ? value * 1000 : value;
+  }
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const text = value.trim();
+  const duration = text.match(/^(\d+(?:\.\d+)?)\s*(ms|s|sec|seconds?|m|min|minutes?|h|hours?|d|days?)$/i);
+  if (duration) {
+    const amount = Number(duration[1]);
+    const unit = duration[2].toLowerCase();
+    const factor = unit === 'ms' ? 1 : ['s','sec','second','seconds'].includes(unit) ? 1000
+      : ['m','min','minute','minutes'].includes(unit) ? 60_000
+        : ['h','hour','hours'].includes(unit) ? 3_600_000 : 86_400_000;
+    return now + amount * factor;
+  }
+  if (durationUnit && /^\d+(?:\.\d+)?$/.test(text)) {
+    const amount = Number(text);
+    return now + amount * (durationUnit === 'milliseconds' ? 1 : 1000);
+  }
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    const numeric = Number(text);
+    return numeric < 10_000_000_000 ? numeric * 1000 : numeric;
+  }
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function quotaResetAt({provider, body, headers, now = Date.now()} = {}) {
+  const headerValue = name => {
+    try { return headers?.get?.(name) ?? headers?.get?.(name.toLowerCase()) ?? null; } catch { return null; }
+  };
+  for (const name of ['x-quota-reset-at', 'x-ratelimit-reset', 'ratelimit-reset', 'retry-after-ms', 'retry-after']) {
+    const value = headerValue(name);
+    if (value == null) continue;
+    const parsed = parsedResetTime(value, now, name === 'retry-after-ms' ? 'milliseconds'
+      : name === 'retry-after' ? 'seconds' : null);
+    if (parsed && parsed > now) return parsed;
+  }
+
+  if (provider === 'google' && isGoogleDailyQuota(body)) return nextLocalMidnight(now, 'America/Los_Angeles');
+
+  const names = /^(?:quota_)?(?:reset(?:_at|_time|at|time)?|resets_at|retry_after_ms|retry_after|retry-after|retrydelay|retry_delay)$/i;
+  const pending = [{value: body, depth: 0}];
+  let visited = 0;
+  while (pending.length && visited++ < 256) {
+    const {value, depth} = pending.shift();
+    if (!value || typeof value !== 'object' || depth > 6) continue;
+    for (const [key, item] of Object.entries(value)) {
+      if (names.test(key)) {
+        const parsed = parsedResetTime(item, now, /retry.*(?:_ms|milliseconds)/i.test(key) ? 'milliseconds'
+          : /retry/i.test(key) ? 'seconds' : null);
+        if (parsed && parsed > now) return parsed;
+      }
+      if (item && typeof item === 'object') pending.push({value: item, depth: depth + 1});
+    }
+  }
+
+  if (provider === 'cloudflare' && isCloudflareDailyAllocation(body)) {
+    const date = new Date(now);
+    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + 1);
+  }
+  if (provider && isQuotaError(body)) return now + 60_000;
+  return null;
+}
+
+function nextLocalMidnight(now, timeZone) {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23',
+  });
+  const current = Object.fromEntries(formatter.formatToParts(new Date(now))
+    .filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)]));
+  const target = new Date(Date.UTC(current.year, current.month - 1, current.day + 1));
+  const targetAsUtc = Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), target.getUTCDate());
+  let candidate = targetAsUtc + 8 * 60 * 60 * 1000;
+  for (let iteration = 0; iteration < 4; iteration++) {
+    const local = Object.fromEntries(formatter.formatToParts(new Date(candidate))
+      .filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)]));
+    const localAsUtc = Date.UTC(local.year, local.month - 1, local.day, local.hour);
+    candidate += targetAsUtc - localAsUtc;
+  }
+  return candidate;
+}
+
+function isQuotaError(body) {
+  return /quota_exceeded|resource_exhausted|quota.{0,40}(exceed|exhaust|limit|daily)|daily.{0,40}quota/i
+    .test(JSON.stringify(body || {}).toLowerCase());
+}
+
+function isGoogleDailyQuota(body) {
+  return /requestsperday|per.?day|daily.{0,50}(quota|limit|request|token)|(?:quota|limit|request|token).{0,50}daily/i
+    .test(JSON.stringify(body || {}).toLowerCase());
+}
+
+function isCloudflareDailyAllocation(body) {
+  const errors = Array.isArray(body?.errors) ? body.errors : [];
+  return errors.some(error => String(error?.code) === '3036')
+    || /daily.{0,40}(allocation|neuron|quota)|used up.{0,40}(daily|quota)|quota.{0,40}daily/i.test(
+      [body?.error?.message, body?.message, ...errors.map(error => error?.message)].filter(Boolean).join(' '));
+}
+
+function statusError(status, reason = 'unknown', metadata = {}) {
+  let error;
+  if (reason === 'model_unavailable' || status === 404) error = new AIError('INVALID_MODEL', status);
+  else if (status === 401 || status === 403) error = new AIError('AUTH_FAILED', status);
+  else if (status === 429) error = new AIError('RATE_LIMITED', status);
+  else if (status === 408) error = new AIError('TIMEOUT', status);
+  else if (status >= 500) error = new AIError('PROVIDER_UNAVAILABLE', status);
+  else error = new AIError('PROVIDER_ERROR', status);
+  error.providerReason = reason;
+  if (reason === 'quota_exceeded') {
+    const resetAt = quotaResetAt(metadata);
+    if (resetAt) error.quotaResetAt = resetAt;
+    if (metadata.provider === 'cloudflare' && isCloudflareDailyAllocation(metadata.body)) error.quotaScope = 'account';
+  }
+  return error;
+}
+
+function responseStatusError(response, body, provider, status = response.status || Number(body?.error?.code) || 502) {
+  return statusError(status, classifyProviderError(body, response.status), {provider, body, headers: response.headers});
 }
 const PROVIDER_REASONS = new Set(['schema_complexity','unsupported_schema_keyword','invalid_generation_config','unsupported_modality','model_unavailable','permission_denied','quota_exceeded','unknown']);
 function classifyProviderError(body, status) {
   const upstreamErrors=Array.isArray(body?.errors)?body.errors:[];
   const code = String(body?.error?.code ?? body?.code ?? '').toLowerCase();
   const text = [body?.error?.message, body?.error?.status, body?.error?.reason,
-    ...(Array.isArray(body?.error?.details) ? body.error.details.map(item => item?.reason || item?.message) : []),
+    ...collectProviderErrorFields(body?.error?.details),
     ...upstreamErrors.flatMap(item=>[item?.code,item?.message])]
     .filter(value => typeof value === 'string'||typeof value === 'number').join(' ').toLowerCase();
   let reason = 'unknown';
@@ -127,8 +243,23 @@ function classifyProviderError(body, status) {
   else if (/unsupported.{0,30}(modality|image|document|mime)|modality.{0,30}(unsupported|not supported)/.test(text)) reason = 'unsupported_modality';
   else if (/model.{0,40}(not found|unavailable|not supported|does not exist)|model_not_found/.test(`${code} ${text}`)) reason = 'model_unavailable';
   else if (status === 401 || status === 403 || /permission_denied|permission denied/.test(`${code} ${text}`)) reason = 'permission_denied';
-  else if (/quota_exceeded|quota.{0,40}(exceed|exhaust|limit|daily)|resource_exhausted|daily.{0,40}(neuron|allocation)|neuron.{0,40}daily|\b3036\b/.test(`${code} ${text}`)) reason = 'quota_exceeded';
+  else if (/quota_exceeded|quota.{0,40}(exceed|exhaust|limit|daily)|resource_exhausted|requests.{0,15}per.?day|per.?day|daily.{0,40}(neuron|allocation)|neuron.{0,40}daily|\b3036\b/.test(`${code} ${text}`)) reason = 'quota_exceeded';
   return PROVIDER_REASONS.has(reason) ? reason : 'unknown';
+}
+function collectProviderErrorFields(value) {
+  const values=[];
+  const pending=[{value,depth:0}];
+  let visited=0;
+  while(pending.length&&visited++<256){
+    const {value:current,depth}=pending.shift();
+    if(!current||typeof current!=='object'||depth>6)continue;
+    for(const [key,item] of Object.entries(current)){
+      if(/^(?:code|status|message|reason|description|quota_?id|quota_?metric)$/i.test(key)
+        &&(typeof item==='string'||typeof item==='number'))values.push(item);
+      if(item&&typeof item==='object')pending.push({value:item,depth:depth+1});
+    }
+  }
+  return values;
 }
 function remainingMs(deadlineAt, fallback) {
   return Number.isFinite(deadlineAt) ? Math.max(0, Math.min(fallback, deadlineAt - Date.now())) : fallback;
@@ -281,6 +412,7 @@ export class AIProvider {
     retryDelayMs = 120,
     sleepImpl = delay => new Promise(resolve => setTimeout(resolve, delay)),
     logger = console,
+    healthStore = null,
   } = {}) {
     assertServerRuntime();
     if (!['chat', 'extraction'].includes(requestPurpose)) throw invalidArgument();
@@ -299,6 +431,8 @@ export class AIProvider {
     this.retryDelayMs = Math.min(500, Math.max(0, Number(retryDelayMs) || 0));
     this.sleepImpl = sleepImpl;
     this.logger = logger;
+    this.healthStore = healthStore && typeof healthStore.getUnavailableUntil === 'function'
+      && typeof healthStore.markUnavailable === 'function' ? healthStore : null;
   }
 
   async generate({messages, maxTokens, tools, toolChoice, ...options} = {}) {
@@ -311,25 +445,33 @@ export class AIProvider {
     } else if (tools !== undefined && !Array.isArray(tools)) throw invalidArgument();
     const candidates = this.#candidates();
     let lastError;
-    let attemptedLegs=0;
+    let consideredLegs=0;
     let quotaLegs=0;
     const quotaProviders=new Set();
     for (const model of candidates) {
-      if (isCfModel(model) && Date.now() < cfBreaker.openUntil) continue;
       assertActive(options.signal, options.deadlineAt);
-      attemptedLegs++;
-      try { return await this.#generateWithModel(model, messages, requestOptions, model !== this.primaryModel); }
+      consideredLegs++;
+      try {
+        const attempt = await this.#runModelLeg(model, messages, requestOptions, model !== this.primaryModel);
+        if (attempt.skipped) {
+          if (attempt.reason === 'quota_exceeded') {
+            quotaLegs++;
+            quotaProviders.add(this.#providerName(model));
+          }
+          continue;
+        }
+        return attempt.result;
+      }
       catch (error) {
         lastError = error;
         if(error instanceof AIError&&error.status===429&&error.providerReason==='quota_exceeded'){
           quotaLegs++;
           quotaProviders.add(this.#providerName(model));
         }
-        this.#logLegFailure(model, error);
         if (!fallbackEligible(error)) throw error;
       }
     }
-    if(attemptedLegs>0&&quotaLegs===attemptedLegs){
+    if(consideredLegs>0&&quotaLegs===consideredLegs){
       throw Object.assign(new AIError('RATE_LIMITED',429),{
         providerReason:'quota_exceeded',quotaExhausted:true,quotaProviders:[...quotaProviders],
       });
@@ -363,7 +505,7 @@ export class AIProvider {
       candidates.push(this.fallbackModel);
       candidates.push(GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL);
     }
-    return [...new Set(candidates)].filter(model=>!isCfModel(model)||Date.now()>=cfBreaker.openUntil);
+    return [...new Set(candidates)];
   }
 
   async generateStructured({messages, schema, name, validate, maxTokens, ...options} = {}) {
@@ -395,21 +537,85 @@ export class AIProvider {
       // so make bounded attempts through the configured fallback chain.
       const {messages: _messages, maxTokens: _maxTokens, ...providerOptions} = requestOptions;
       let lastError = error;
+      let consideredLegs = 0;
+      let quotaLegs = 0;
+      const quotaProviders = new Set();
       for (const fallbackModel of this.#candidates().slice(1)) {
-        if (isCfModel(fallbackModel) && Date.now() < cfBreaker.openUntil) continue;
+        consideredLegs++;
         try {
-          const fallback = await this.#generateWithModel(fallbackModel, messages, {
+          const attempt = await this.#runModelLeg(fallbackModel, messages, {
             ...providerOptions,
             ...(Number.isInteger(maxTokens) ? {max_tokens: maxTokens} : {}),
           }, true);
-          return decode(fallback);
+          if (attempt.skipped) {
+            if (attempt.reason === 'quota_exceeded') {
+              quotaLegs++;
+              quotaProviders.add(this.#providerName(fallbackModel));
+            }
+            continue;
+          }
+          return decode(attempt.result);
         } catch (fallbackError) {
           lastError = fallbackError;
-          this.#logLegFailure(fallbackModel, fallbackError);
+          if (fallbackError instanceof AIError && fallbackError.status === 429 && fallbackError.providerReason === 'quota_exceeded') {
+            quotaLegs++;
+            quotaProviders.add(this.#providerName(fallbackModel));
+          }
           if (!fallbackEligible(fallbackError)) throw fallbackError;
         }
       }
+      if (consideredLegs > 0 && quotaLegs === consideredLegs) {
+        throw Object.assign(new AIError('RATE_LIMITED', 429), {
+          providerReason: 'quota_exceeded', quotaExhausted: true, quotaProviders: [...quotaProviders],
+        });
+      }
       throw lastError;
+    }
+  }
+
+  async #runModelLeg(model, messages, options, usedFallback) {
+    const startedAt = Date.now();
+    const provider = this.#providerName(model);
+    const identity = providerHealthIdentity({
+      provider,
+      model,
+      accountId: provider === 'cloudflare' ? this.#cfAccountId : '',
+      credential: provider === 'cloudflare' ? this.#cfApiToken
+        : provider === 'google' ? this.#geminiApiKey
+          : provider === 'openrouter' ? this.#openRouterApiKey : this.#zenApiKey,
+    });
+    if (identity && this.healthStore) {
+      const identities = provider === 'cloudflare' ? [{...identity, model: '*'}, identity] : [identity];
+      for (const candidateIdentity of identities) {
+        let unavailableUntil;
+        try { unavailableUntil = await this.healthStore.getUnavailableUntil(candidateIdentity); } catch {}
+        const resetAt = parsedResetTime(unavailableUntil, Date.now());
+        if (resetAt && resetAt > Date.now()) {
+          this.#logLegSkipped(model, 'quota_exceeded', Date.now() - startedAt);
+          return {skipped: true, reason: 'quota_exceeded'};
+        }
+      }
+    }
+    if (isCfModel(model) && Date.now() < cfBreaker.openUntil) {
+      this.#logLegSkipped(model, 'circuit_open', Date.now() - startedAt);
+      return {skipped: true, reason: 'circuit_open'};
+    }
+    try {
+      const result = await this.#generateWithModel(model, messages, options, usedFallback);
+      this.#logLegServed(model, Date.now() - startedAt);
+      return {result};
+    } catch (error) {
+      if (identity && this.healthStore && error instanceof AIError
+        && error.status === 429 && error.providerReason === 'quota_exceeded' && error.quotaResetAt > Date.now()) {
+        try {
+          await this.healthStore.markUnavailable(identity, {disabledUntil: error.quotaResetAt, reason: 'quota_exceeded'});
+          if (provider === 'cloudflare' && error.quotaScope === 'account') {
+            await this.healthStore.markUnavailable({...identity, model: '*'}, {disabledUntil: error.quotaResetAt, reason: 'quota_exceeded'});
+          }
+        } catch {}
+      }
+      this.#logLegFailure(model, error, Date.now() - startedAt);
+      throw error;
     }
   }
 
@@ -419,7 +625,6 @@ export class AIProvider {
       assertActive(options.signal, options.deadlineAt);
       try {
         const result = await this.#request(model, messages, options, usedFallback);
-        this.#logLegServed(model);
         return result;
       }
       catch (error) {
@@ -433,14 +638,18 @@ export class AIProvider {
     throw lastError;
   }
 
-  #logLegFailure(model, error) {
+  #logLegFailure(model, error, durationMs) {
     const provider = this.#providerName(model);
     this.logger?.warn?.('AI provider leg failed:', {provider, model, status: error instanceof AIError ? error.status : 502,
-      reason: PROVIDER_REASONS.has(error?.providerReason) ? error.providerReason : 'unknown'});
+      reason: PROVIDER_REASONS.has(error?.providerReason) ? error.providerReason : 'unknown', durationMs: Math.max(0, Math.round(durationMs))});
   }
 
-  #logLegServed(model) {
-    this.logger?.info?.('AI provider request served:', {provider: this.#providerName(model), model});
+  #logLegServed(model, durationMs) {
+    this.logger?.info?.('AI provider request served:', {provider: this.#providerName(model), model, durationMs: Math.max(0, Math.round(durationMs))});
+  }
+
+  #logLegSkipped(model, reason, durationMs) {
+    this.logger?.info?.('AI provider leg skipped:', {provider: this.#providerName(model), model, reason, durationMs: Math.max(0, Math.round(durationMs))});
   }
 
   #providerName(model) {
@@ -463,7 +672,7 @@ export class AIProvider {
           body: safeJsonStringify({...cfWireOptions, model, messages, stream: false}),
         }, async response => {
           const body = await readBoundedJson(response);
-          if (!response.ok || body?.error || body?.success === false) throw statusError(response.status || 502, classifyProviderError(body, response.status));
+          if (!response.ok || body?.error || body?.success === false) throw responseStatusError(response, body, 'cloudflare');
           const choice = body?.choices?.[0];
           const message = choice?.message;
           if (!message) throw new AIError('INVALID_RESPONSE');
@@ -489,7 +698,7 @@ export class AIProvider {
         body: safeJsonStringify({...wireOptions, model, messages, stream: false}),
       }, async response => {
         const body = await readBoundedJson(response);
-        if (!response.ok || body?.error) throw statusError(response.status || Number(body?.error?.code) || 502, classifyProviderError(body, response.status));
+        if (!response.ok || body?.error) throw responseStatusError(response, body, 'opencode-zen');
         const choice = body?.choices?.[0];
         const message = choice?.message;
         if (!message) throw new AIError('INVALID_RESPONSE');
@@ -507,7 +716,7 @@ export class AIProvider {
         body: safeJsonStringify(openRouterRequest(messages, wireOptions)),
       }, async response => {
         const body = await readBoundedJson(response);
-        if (!response.ok || body?.error) throw statusError(response.status || Number(body?.error?.code) || 502, classifyProviderError(body, response.status));
+        if (!response.ok || body?.error) throw responseStatusError(response, body, 'openrouter');
         const choice = body?.choices?.[0];
         const message = choice?.message;
         if (!message) throw new AIError('INVALID_RESPONSE');
@@ -522,7 +731,7 @@ export class AIProvider {
       body: safeJsonStringify(geminiRequest(messages, wireOptions)),
     }, async response => {
       const body = await readBoundedJson(response);
-      if (!response.ok || body?.error) throw statusError(response.status || Number(body?.error?.code) || 502, classifyProviderError(body, response.status));
+      if (!response.ok || body?.error) throw responseStatusError(response, body, 'google');
       const parts = body?.candidates?.[0]?.content?.parts;
       if (!Array.isArray(parts)) throw new AIError('INVALID_RESPONSE');
       const content = parts.filter(part => typeof part?.text === 'string').map(part => part.text).join('');

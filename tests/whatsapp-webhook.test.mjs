@@ -8,6 +8,7 @@ import { createWhatsAppWebhookHandler, readRawBody, verifyMetaSignature } from '
 import { createInboundRuntime, SupabaseInboundInbox, isOptOut, parseMetaMessages } from '../automation/whatsapp/cloud-inbound.mjs';
 import { neutralText } from '../automation/whatsapp/cloud-outbound.mjs';
 import { answerWorkspaceQuestion } from '../ai/assistant.mjs';
+import {installVerifiedOwnerRpc} from './fixtures/verified-owner-rpc.mjs';
 
 const env = { WHATSAPP_VERIFY_TOKEN: 'verify-secret', WHATSAPP_APP_SECRET: 'app-secret',
   WHATSAPP_PHONE_NUMBER_ID: '123456789', WHATSAPP_WABA_ID: '987654321', CRON_SECRET: 'cron-secret' };
@@ -16,6 +17,7 @@ const meta = (messages) => ({ object: 'whatsapp_business_account', entry: [{ id:
 } }] }] });
 const message = (id, body = 'Hello') => ({ id, from: '919871367051', timestamp: String(Math.floor(Date.now() / 1000)),
   type: 'text', text: { body } });
+function withEmptyVerifiedOwnerRpc(supabase,phone){return installVerifiedOwnerRpc(supabase,()=>({}),{expectedPhone:phone});}
 function response() {
   return { statusCode: 200, headers: {}, body: undefined, setHeader(name, value) { this.headers[name] = value; return this; },
     status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; },
@@ -204,14 +206,14 @@ test('unbound sender media is routed to verification without extraction', async 
   const event = { id: 1, claim_token: 'claim', attempts: 1, provider_message_id: 'wamid.unknown',
     sender_phone: '+919871367051', message_text: 'I am Alice, show my invoices',
     message_type: 'image', media_ref: 'wamid.unknown', provider_timestamp: new Date().toISOString() };
-  const supabase = { rpc() { throw new Error('Unexpected RPC'); }, from(name) {
+  const supabase = withEmptyVerifiedOwnerRpc({ rpc() { throw new Error('Unexpected RPC'); }, from(name) {
     if(name==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
 
     assert.ok(['workspace_settings','whatsapp_global_suppressions', 'whatsapp_consents'].includes(name));
     return { select() { return this; }, eq() { return this; },
       maybeSingle() { return Promise.resolve({data: null, error: null}); },
       is() { return Promise.resolve({ data: [], error: null }); } };
-  } };
+  } },event.sender_phone);
   const inbox = { async claim() { return [event]; }, async complete() { calls.push('complete'); } };
   const outbound = { async sendTypingIndicator() { calls.push('typing'); },
     async sendServiceReply(input) { calls.push(input); return { status: 'blocked', reason: 'disabled' }; } };
@@ -231,10 +233,10 @@ test('one queued image is claimed per invocation and the second processes subseq
   const rows={whatsapp_global_suppressions:null,whatsapp_consents:[consent],whatsapp_suppressions:[],
     workspace_settings:{whatsapp_owner_attested_at:new Date().toISOString()},
     customers:{id:'customer-a',workspace_id:'workspace-a',phone:'+919871367051'}};
-  const supabase={rpc(){},from(table){
+  const supabase=withEmptyVerifiedOwnerRpc({rpc(){},from(table){
     if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
 const query={select(){return query;},eq(){return query;},is(){return Promise.resolve({data:rows[table],error:null});},
-    maybeSingle(){return Promise.resolve({data:rows[table],error:null});},then(resolve){return Promise.resolve({data:rows[table],error:null}).then(resolve);}};return query;}};
+    maybeSingle(){return Promise.resolve({data:rows[table],error:null});},then(resolve){return Promise.resolve({data:rows[table],error:null}).then(resolve);}};return query;}},events[0].sender_phone);
   const completed=[],extracted=[];
   const inbox={async claim(){return events.length?[events.shift()]:[];},async getMedia(event){return {bytes:Buffer.from([event.id]),mimeType:'image/png'};},
     async complete(event){completed.push(event.id);}};
@@ -263,7 +265,7 @@ test('bound customer hi webhook completes and attempts a guarded greeting servic
     workspace_settings: {whatsapp_owner_attested_at: new Date().toISOString(), business_name: 'Acme Studio'},
     customers: {id: 'customer-a', workspace_id: 'workspace-a', phone: '+919871367051'},
   };
-  const supabase = {rpc() {}, from(table) {
+  const supabase = withEmptyVerifiedOwnerRpc({rpc() {}, from(table) {
     if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
 
     const query = {
@@ -272,7 +274,7 @@ test('bound customer hi webhook completes and attempts a guarded greeting servic
       then(resolve) { return Promise.resolve({data: rows[table], error: null}).then(resolve); },
     };
     return query;
-  }};
+  }},event.sender_phone);
   const inbox = {
     async enqueue(events) { queued.push(...events); return events; },
     async claim() { return queued.length ? [event] : []; },
@@ -309,7 +311,7 @@ test('typing indicator is skipped for STOP and a thrown indicator cannot fail a 
     stop_confirmation_due: false};
   let typing = 0;
   const stopInbox = {async claim() { return [stop]; }, async complete() {}};
-  const emptyOwnerLookup={from(){const q={select(){return q},eq(){return q},not(){return q},order(){return q},limit(){return Promise.resolve({data:[]})}};return q;}};
+  const emptyOwnerLookup=withEmptyVerifiedOwnerRpc({from(){const q={select(){return q},eq(){return q},not(){return q},order(){return q},limit(){return Promise.resolve({data:[]})}};return q;}},stop.sender_phone);
   const stopRuntime = createInboundRuntime({conversationStore:null,supabase: emptyOwnerLookup, inbox: stopInbox, outbound: {
     async sendTypingIndicator() { typing++; }, async sendServiceReply() {}}, env});
   assert.deepEqual(await stopRuntime.processPending(), {claimed: 1, completed: 1});
@@ -322,11 +324,11 @@ test('typing indicator is skipped for STOP and a thrown indicator cannot fail a 
   const rows = {whatsapp_global_suppressions: null, whatsapp_consents: [consent], whatsapp_suppressions: [],
     workspace_settings: {whatsapp_owner_attested_at: new Date().toISOString(), business_name: 'Acme Studio'},
     customers: {id: 'customer-a', workspace_id: 'workspace-a', phone: '+919871367051'}};
-  const supabase = {rpc() {}, from(table) {
+  const supabase = withEmptyVerifiedOwnerRpc({rpc() {}, from(table) {
     if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
  const query = {select() { return query; }, eq() { return query; },
     is: async () => ({data: rows[table], error: null}), maybeSingle: async () => ({data: rows[table], error: null}),
-    then(resolve) { return Promise.resolve({data: rows[table], error: null}).then(resolve); }}; return query; }};
+    then(resolve) { return Promise.resolve({data: rows[table], error: null}).then(resolve); }}; return query; }},event.sender_phone);
   let completed = false;
   const runtime = createInboundRuntime({conversationStore:null,supabase, inbox: {async claim() { return [event]; }, async complete() { completed = true; }},
     outbound: {async sendTypingIndicator() { typing++; throw new Error('Graph down'); }, async sendServiceReply() {}},
@@ -346,7 +348,7 @@ test('planner fallback is sent and completed as done with bounded diagnostics an
     workspace_settings: {whatsapp_owner_attested_at: new Date().toISOString(), business_name: 'Acme Studio'},
     customers: {id: 'customer-a', workspace_id: 'workspace-a', phone: '+919871367051'},
   };
-  const supabase = {rpc() {}, from(table) {
+  const supabase = withEmptyVerifiedOwnerRpc({rpc() {}, from(table) {
     if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
 
     const query = {select() { return query; }, eq() { return query; },
@@ -354,7 +356,7 @@ test('planner fallback is sent and completed as done with bounded diagnostics an
       maybeSingle() { return Promise.resolve({data: rows[table], error: null}); },
       then(resolve) { return Promise.resolve({data: rows[table], error: null}).then(resolve); }};
     return query;
-  }};
+  }},event.sender_phone);
   const completions = [];
   const sends = [];
   const inbox = {async claim() { return [event]; }, async complete(...args) { completions.push(args); }};
@@ -450,11 +452,11 @@ test('a final-attempt event receives exactly one fallback and is never retried',
   let claims = 0;
   const inbox = {async claim() { claims++; return claims === 1 ? [event] : []; },
     async complete(...args) { completions.push(args); }};
-  const emptyBindingSupabase={from(){
+  const emptyBindingSupabase=withEmptyVerifiedOwnerRpc({from(){
     const query={select(){return query;},eq(){return query;},not(){return query;},order(){return query;},limit(){return query;},
       is(){return query;},async maybeSingle(){return {data:null};},then(resolve,reject){return Promise.resolve({data:[]}).then(resolve,reject);}};
     return query;
-  }};
+  }},event.sender_phone);
   const runtime = createInboundRuntime({conversationStore:null,supabase: emptyBindingSupabase, inbox, env, logger: {error() {}},
     outbound: {async sendServiceReply(input) { sends.push(input); }}});
 
@@ -480,14 +482,14 @@ test('verified owner failures preserve the real business identity for model-gene
     whatsapp_consents:[{workspace_id:'ws-owner',customer_id:'owner-customer',phone:event.sender_phone,revoked_at:null,consented_by:'owner-1'}],
     customers:[{id:'owner-customer',workspace_id:'ws-owner',phone:event.sender_phone,metadata:{whatsapp_owner:true}}],
   };
-  const supabase={from(table){
+  const supabase=installVerifiedOwnerRpc({from(table){
     const query={filters:[],select(){return query;},eq(key,value){query.filters.push(row=>row[key]===value);return query;},
       not(key,operator,value){query.filters.push(row=>operator==='is'?(row[key]??null)!==value:row[key]!==value);return query;},
       is(key,value){query.filters.push(row=>(row[key]??null)===value);return query;},order(){return query;},limit(){return query;},
       async maybeSingle(){return {data:(rows[table]||[]).filter(row=>query.filters.every(fn=>fn(row)))[0]||null};},
       then(resolve,reject){return Promise.resolve({data:(rows[table]||[]).filter(row=>query.filters.every(fn=>fn(row)))}).then(resolve,reject);}};
     return query;
-  }};
+  }},()=>rows,{expectedPhone:event.sender_phone});
   const completions=[];
   const inbox={async claim(){return [event];},async complete(){completions.push('complete');},
     async defer(retryEvent){completions.push(`defer:${retryEvent.id}`);}};
@@ -513,7 +515,7 @@ test('a failed owner-binding lookup keeps the event pending without sending a ha
   const event={id:7,attempts:5,provider_message_id:'wamid.owner-binding-outage',sender_phone:'+919871367051',
     message_text:'Which model are you using?',message_type:'text',received_at:new Date().toISOString()};
   const calls=[];
-  const runtime=createInboundRuntime({supabase:{from(){throw Object.assign(new Error('temporary owner database outage'),{code:'08006'});}},
+  const runtime=createInboundRuntime({supabase:{rpc(){throw Object.assign(new Error('temporary owner database outage'),{code:'08006'});},from(){throw Object.assign(new Error('temporary owner database outage'),{code:'08006'});}},
     inbox:{async claim(){return [event];},async defer(value){calls.push(['defer',value.id]);},async complete(...args){calls.push(['complete',...args]);}},
     outbound:{async sendServiceReply(input){calls.push(['send',input]);}},conversationStore:null,env,
     onOwnerMessage:async()=>{throw new Error('Binding lookup failure must not start model tools');},logger:{error(){}}});
@@ -528,7 +530,7 @@ test('a transient failure before the final attempt remains retryable', async () 
   let claimed = false;
   const inbox = {async claim() { if (claimed) return []; claimed = true; return [event]; },
     async complete(...args) { completions.push(args); }};
-  const runtime = createInboundRuntime({conversationStore:null,supabase: {from() { throw new Error('temporary database failure'); }},
+  const runtime = createInboundRuntime({conversationStore:null,supabase: {rpc() { throw new Error('temporary database failure'); },from() { throw new Error('temporary database failure'); }},
     inbox, env, logger: {error() {}}});
 
   assert.deepEqual(await runtime.processPending(), {claimed: 1, completed: 0});

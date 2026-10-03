@@ -177,7 +177,7 @@ test('Vercel traces OCR assets into both WhatsApp functions', async () => {
   for (const route of ['api/whatsapp.js', 'api/whatsapp-process.js']) {
     assert.match(config.functions[route].includeFiles, /traineddata/);
     assert.match(config.functions[route].includeFiles, /wasm/);
-    assert.equal(config.functions[route].maxDuration, 60);
+    assert.equal(config.functions[route].maxDuration, 300);
   }
 });
 

@@ -1,4 +1,5 @@
 import {CF_BACKUP_MODEL, CF_PRIMARY_MODEL, GEMINI_FALLBACK_MODEL} from '../../ai/provider.mjs';
+import {installVerifiedOwnerRpc} from './verified-owner-rpc.mjs';
 
 export const OWNER_CHAT_SCOPE = Object.freeze({
   workspaceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -20,7 +21,14 @@ export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallba
   const now = DEFAULT_NOW.toISOString();
   const tables = {
     workspace_ai_settings: [{workspace_id:OWNER_CHAT_SCOPE.workspaceId,primary_model:primaryModel,fallback_model:fallbackModel,updated_at:now}],
-    workspace_settings: [{workspace_id:OWNER_CHAT_SCOPE.workspaceId,business_name:'Northstar Studio',default_currency:'INR',
+    workspaces:[{id:OWNER_CHAT_SCOPE.workspaceId,owner_id:OWNER_CHAT_SCOPE.ownerId}],
+    workspace_members:[{workspace_id:OWNER_CHAT_SCOPE.workspaceId,user_id:OWNER_CHAT_SCOPE.ownerId,role:'owner'}],
+    whatsapp_owner_verifications:[{workspace_id:OWNER_CHAT_SCOPE.workspaceId,phone:OWNER_CHAT_SCOPE.phone,
+      requested_by:OWNER_CHAT_SCOPE.ownerId,verified_at:now}],
+    whatsapp_consents:[{workspace_id:OWNER_CHAT_SCOPE.workspaceId,customer_id:OWNER_CHAT_SCOPE.customerId,
+      phone:OWNER_CHAT_SCOPE.phone,consented_by:OWNER_CHAT_SCOPE.ownerId,revoked_at:null}],
+    whatsapp_global_suppressions:[],whatsapp_suppressions:[],
+    workspace_settings: [{workspace_id:OWNER_CHAT_SCOPE.workspaceId,business_name:'Northstar Studio',whatsapp_owner_phone:OWNER_CHAT_SCOPE.phone,default_currency:'INR',
       default_timezone:'Asia/Kolkata',follow_up_preferences:{tone:'gentle',maxReminders:3,cadenceDays:4,firstReminderDays:2,
         contactStart:'09:00',contactEnd:'18:00',pauseOnReply:true,dailySummary:false},updated_at:now}],
     customers: [
@@ -67,6 +75,8 @@ export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallba
       && item.phone === (phone || OWNER_CHAT_SCOPE.phone));
     return row || null;
   };
+  const fieldValue=(table,row,key)=>table==='invoices'&&key==='customer.name'
+    ?tables.customers.find(customer=>customer.workspace_id===row.workspace_id&&customer.id===row.customer_id)?.name:row[key];
   const resultRows = (table, filters, orders, range, limit, columns) => {
     readCalls.push({table, filters: filters.map(filter => filter.label), columns,limit,range:clone(range)});
     let found = (tables[table] || []).filter(row => filters.every(filter => matches(row, filter.fn)));
@@ -78,19 +88,28 @@ export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallba
     else if (limit != null) found = found.slice(0, limit);
     if (columns === '*') return found.map(clone);
     const names = String(columns || '').split(',').map(item => item.trim()).filter(Boolean);
-    return found.map(row => Object.fromEntries(names.filter(name => Object.hasOwn(row, name)).map(name => [name,clone(row[name])])));
+    return found.map(row => {
+      const output={};
+      for(const name of names){
+        if(name.startsWith('customer:customers!')){
+          const customer=tables.customers.find(item=>item.workspace_id===row.workspace_id&&item.id===row.customer_id);
+          output.customer=customer?{name:customer.name}:null;
+        } else if(Object.hasOwn(row,name))output[name]=clone(row[name]);
+      }
+      return output;
+    });
   };
   const from = table => {
     const filters = [], orders = [];
     let range = null, limit = null, columns = '*', operation = null, mutation = null;
     const q = {
       select(value = '*') { columns = value; if (!operation) operation = 'select'; return q; },
-      eq(key,value) { filters.push({label:['eq',key,value],fn:row=>row[key]===value}); return q; },
+      eq(key,value) { filters.push({label:['eq',key,value],fn:row=>fieldValue(table,row,key)===value}); return q; },
       neq(key,value) { filters.push({label:['neq',key,value],fn:row=>row[key]!==value}); return q; },
       is(key,value) { filters.push({label:['is',key,value],fn:row=>(row[key]??null)===value}); return q; },
       not(key,operator,value) { filters.push({label:['not',key,operator,value],fn:row=>operator==='is'?(row[key]??null)!==value:row[key]!==value}); return q; },
       in(key,values) { filters.push({label:['in',key,clone(values)],fn:row=>values.includes(row[key])}); return q; },
-      ilike(key,value) { const needle=String(value).replaceAll('%','').toLocaleLowerCase(); filters.push({label:['ilike',key,value],fn:row=>String(row[key]||'').toLocaleLowerCase().includes(needle)}); return q; },
+      ilike(key,value) { const needle=String(value).replaceAll('%','').toLocaleLowerCase(); filters.push({label:['ilike',key,value],fn:row=>String(fieldValue(table,row,key)||'').toLocaleLowerCase().includes(needle)}); return q; },
       gt(key,value) { filters.push({label:['gt',key,value],fn:row=>row[key]>value}); return q; },
       gte(key,value) { filters.push({label:['gte',key,value],fn:row=>row[key]>=value}); return q; },
       lt(key,value) { filters.push({label:['lt',key,value],fn:row=>row[key]<value}); return q; },
@@ -252,6 +271,7 @@ export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallba
     return {data:{ok:false,code:'FEATURE_UNAVAILABLE'}};
   };
   const supabase={tables,readCalls,rpcCalls,from,rpc};
+  installVerifiedOwnerRpc(supabase,()=>tables,{expectedPhone:OWNER_CHAT_SCOPE.phone});
   return {supabase,tables,readCalls,rpcCalls,scope:OWNER_CHAT_SCOPE,assertScopedReads(){
     for(const call of readCalls.filter(item=>['customers','invoices','payments','workspace_settings','workspace_ai_settings'].includes(item.table))) {
       const workspace=call.filters.find(filter=>filter[0]==='eq'&&filter[1]==='workspace_id');

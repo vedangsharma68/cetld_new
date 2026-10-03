@@ -40,8 +40,10 @@ function database({tables={}}={}) {
     async rpc(name,args) {calls.push({kind:'rpc',name,args});return {data:{ok:true},error:null};},
   };
   function selectRows(call) {
+    const fieldValue=(row,column)=>call.table==='invoices'&&column==='customer.name'
+      ?(tables.customers||[]).find(customer=>customer.workspace_id===row.workspace_id&&customer.id===row.customer_id)?.name:row[column];
     let rows=[...(tables[call.table]||[])].filter(row=>call.filters.every(([column,operator,value])=>{
-      const actual=row[column]??null;
+      const actual=fieldValue(row,column)??null;
       if(operator==='eq')return actual===value;
       if(operator==='neq')return actual!==value;
       if(operator==='is')return actual===value;
@@ -63,7 +65,16 @@ function database({tables={}}={}) {
     }
     if(call.limit!==null)rows=rows.slice(0,call.limit);
     const columns=call.selected?.split(',').map(column=>column.trim())||[];
-    return rows.map(row=>Object.fromEntries(columns.filter(column=>Object.hasOwn(row,column)).map(column=>[column,row[column]])));
+    return rows.map(row=>{
+      const output={};
+      for(const column of columns){
+        if(column.startsWith('customer:customers!')){
+          const customer=(tables.customers||[]).find(item=>item.workspace_id===row.workspace_id&&item.id===row.customer_id);
+          output.customer=customer?{name:customer.name}:null;
+        } else if(Object.hasOwn(row,column))output[column]=row[column];
+      }
+      return output;
+    });
   }
   return supabase;
 }
@@ -87,7 +98,10 @@ test('authorization is rechecked before any database access and all read joins p
   assert.equal(invoice.ok,true);
   const payments=await allowed.execute({operation:'read',table:'payments',columns:['invoice_number','amount']});
   assert.equal(payments.ok,true);
-  assert.ok(db.calls.length>=4,'base and relationship reads should be visible');
+  assert.equal(db.calls.filter(call=>call.kind==='query'&&call.table==='invoices').length,2,
+    'invoice display names come from the invoice join and payment labels use one scoped invoice read');
+  assert.equal(db.calls.filter(call=>call.kind==='query'&&call.table==='customers').length,0,
+    'invoice customer names are included in the joined invoice read');
   for(const call of db.calls.filter(call=>call.kind==='query')) {
     assert.ok(call.filters.some(([column,operator,value])=>column==='workspace_id'&&operator==='eq'&&value===scope.workspaceId),
       'query to '+call.table+' must be pinned to the server-owned workspace');

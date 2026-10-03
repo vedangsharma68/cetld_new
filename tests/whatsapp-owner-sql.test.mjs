@@ -46,6 +46,16 @@ test('complete migration chain verifies ownership, atomically changes existing i
   await db.query("insert into public.whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,status) values('owner-claim','123456',$1,'text','processing')",[phone]);
   assert.equal((await db.query("select public.whatsapp_claim_owner_reply('owner-claim',$1,$2) as claimed",[phone,ws])).rows[0].claimed,true);
   assert.equal((await db.query("select public.whatsapp_claim_owner_reply('owner-claim',$1,$2) as claimed",[phone,ws])).rows[0].claimed,false);
+  await db.query("insert into public.whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,status) values('owner-job','123456',$1,'text','processing')",[phone]);
+  assert.equal((await db.query("select public.whatsapp_claim_owner_ack('owner-job',$1,$2) as claimed",[phone,stranger])).rows[0].claimed,false,'foreign workspace cannot claim acknowledgement');
+  assert.equal((await db.query("select public.whatsapp_claim_owner_ack('owner-job',$1,$2) as claimed",[phone,ws])).rows[0].claimed,true);
+  assert.equal((await db.query("select public.whatsapp_claim_owner_ack('owner-job',$1,$2) as claimed",[phone,ws])).rows[0].claimed,false,'one acknowledgement per inbound message');
+  assert.equal((await db.query("select public.whatsapp_claim_owner_reply('owner-job',$1,$2) as claimed",[phone,ws])).rows[0].claimed,true,'ack leaves final reply claim available');
+  await db.exec(`reset role;set role authenticated;set request.jwt.claim.sub='${owner}'`);
+  await assert.rejects(db.query("select public.whatsapp_claim_owner_ack('owner-job',$1,$2)",[phone,ws]),/permission denied/i);
+  await assert.rejects(db.query('select * from public.ai_provider_health'),/permission denied/i);
+  await assert.rejects(db.query('select owner_job_checkpoint from public.whatsapp_inbound_events'),/permission denied/i);
+  await db.exec("reset role;set request.jwt.claim.sub='';set role service_role");
   const createAction=async(changes,type='owner_invoice_update',stamp=invoice.updated_at)=>{
    const state=(await db.query('select * from public.whatsapp_load_pending_action_state($1,$2,$3)',[ws,binding.customer_id,phone])).rows[0];
    const action={type,invoiceId:invoice.id,expectedUpdatedAt:stamp,changes,expiresAt:new Date(Date.now()+600000).toISOString()};

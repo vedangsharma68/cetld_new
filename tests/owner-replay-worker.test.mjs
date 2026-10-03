@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
+import {installVerifiedOwnerRpc} from './fixtures/verified-owner-rpc.mjs';
 
 const phone='+919871367051';
 function ownerDatabase(){
@@ -9,13 +10,14 @@ function ownerDatabase(){
     workspace_settings:[{workspace_id:'ws-owner',business_name:'Test Business',whatsapp_owner_phone:phone}],
     whatsapp_consents:[{workspace_id:'ws-owner',customer_id:'owner-customer',phone,revoked_at:null,consented_by:'owner-1'}],
     customers:[{id:'owner-customer',workspace_id:'ws-owner',phone,metadata:{whatsapp_owner:true}}]};
-  return {from(table){const predicates=[];
+  const db={tables:rows,from(table){const predicates=[];
     const result=()=>({data:(rows[table]||[]).filter(r=>predicates.every(f=>f(r)))});
     const q={select(){return q;},eq(k,v){predicates.push(r=>r[k]===v);return q;},
       not(k,op,v){predicates.push(r=>op==='is'?(r[k]??null)!==v:r[k]!==v);return q;},
       is(k,v){predicates.push(r=>(r[k]??null)===v);return q;},order(){return q;},limit(){return q;},
       maybeSingle:async()=>({data:result().data[0]||null}),then(resolve,reject){return Promise.resolve(result()).then(resolve,reject);}};return q;
   }};
+  return installVerifiedOwnerRpc(db,()=>rows,{expectedPhone:phone});
 }
 for(const [description,replayId,status,expectedSends] of [
   ['an accepted reply to the same wamid closes the recovered event','wamid.current','accepted',0],

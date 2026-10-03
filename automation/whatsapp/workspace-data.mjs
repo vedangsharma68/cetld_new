@@ -87,7 +87,7 @@ function definition() {
   // The server validates the full catalog. Do not send that catalog on every
   // model request; describe exposes it when the model needs unfamiliar fields.
   return {type:'function',function:{name:'workspaceData',
-    description:'Read or propose workspace changes. Use request text alone, or structured fields. Customers use name/email/phone; invoices use customer_name/invoice_number/total_amount/status. Settings use primary_model/fallback_model/follow_up_preferences. describe lists fields; pending reads existing proposals; confirm/cancel decide them.',
+    description:'Read or propose workspace changes. Prefer structured fields; request text is available for unfamiliar operations. Customers use name/email/phone; invoices use customer_name/invoice_number/total_amount/status. Settings use primary_model/fallback_model/follow_up_preferences. describe lists fields; pending reads existing proposals; confirm/cancel decide them.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         request:{type:'string',minLength:1,maxLength:1200},
@@ -356,7 +356,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
   let replyRequirement=null;
   let writeAttempted=false;
   let attemptedOperation=null;
-  const readScoped=async ({table,columns,filters,limit,offset,order},internalColumns=[],ctx)=>{
+  const readScoped=async ({table,columns,filters,limit,offset,order},internalColumns=[],ctx,{customerName=false,customerFilter=null}={})=>{
     const spec=TABLES[table];
     const selected=columns||spec.defaults;
     const actual=selected.filter(column=>column!=='customer_name'
@@ -364,10 +364,13 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     const selectedWithInternals=[...new Set([...actual,...internalColumns])];
     if(!selectedWithInternals.length)throw new TypeError('empty selected fields');
     await ctx?.assertAuthorized?.();
-    let query=supabase.from(table).select(selectedWithInternals.join(','));
+    const joinCustomer=table==='invoices'&&(customerName||customerFilter);
+    const joinName=joinCustomer?`,customer:customers!invoices_workspace_id_customer_id_fkey${customerFilter?'!inner':''}(name)`:'';
+    let query=supabase.from(table).select(selectedWithInternals.join(',')+joinName);
     query=query.eq('workspace_id',scope.workspaceId);
     if(table==='invoices')query=query.is('deleted_at',null);
     for(const filter of filters)query=applyFilter(query,filter);
+    if(customerFilter)query=applyFilter(query,{...customerFilter,column:'customer.name'});
     if(order)query=query.order(order.column,{ascending:order.direction==='asc'});
     else if(['customers','invoices','payments','invoice_files'].includes(table))query=query.order('created_at',{ascending:false});
     if(['customers','invoices','payments','invoice_files'].includes(table))query=query.order('id',{ascending:false});
@@ -402,14 +405,8 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     if(relationFilters.length) {
       const rf=relationFilters[0];
       if(table==='invoices') {
-        await ctx.assertAuthorized();
-        let q=supabase.from('customers').select('id,name').eq('workspace_id',scope.workspaceId);
-        q=applyFilter(q,{...rf,column:'name'});const rel=await q.limit(MAX_LIMIT+1);await ctx.assertAuthorized();ctx.assertLive();
-        if(rel?.error)throw rel.error;
-        if((rel?.data||[]).length>MAX_LIMIT){await ctx.assertAuthorized();return {ok:true,rows:[],truncated:true,note:'The related customer filter matches too many records. Narrow it before continuing.'};}
-        const ids=(rel?.data||[]).map(row=>row.id).filter(value=>UUID.test(value)).slice(0,MAX_LIMIT);
-        if(!ids.length){await ctx.assertAuthorized();return {ok:true,rows:[],truncated:false};}
-        filters=[...filters,{column:'customer_id',operator:'in',value:ids}];
+        // The FK join below keeps customer-name filtering and invoice loading
+        // in one workspace-scoped round trip, including the display name.
       } else {
         await ctx.assertAuthorized();
         let q=supabase.from('invoices').select('id').eq('workspace_id',scope.workspaceId).is('deleted_at',null);
@@ -422,18 +419,13 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       }
     }
     const internal=[];
-    if(table==='invoices'&&requested.includes('customer_name'))internal.push('customer_id');
     if(['payments','invoice_files'].includes(table))internal.push('invoice_id');
-    if(table==='invoices'&&relationFilters.length)internal.push('customer_id');
     if(['payments','invoice_files'].includes(table)&&relationFilters.length)internal.push('invoice_id');
     if(table==='customers'&&params.operation!=='read')internal.push('id','updated_at');
-    rows=await readScoped({...params,filters},internal,ctx);
+    rows=await readScoped({...params,filters},internal,ctx,{customerName:requested.includes('customer_name'),
+      customerFilter:relationFilters[0]&&table==='invoices'?relationFilters[0]:null});
     const rawPageCount=rows.length;
     let labels=new Map();
-    if(table==='invoices'&&internal.includes('customer_id')) {
-      const ids=[...new Set(rows.map(row=>row.customer_id).filter(value=>UUID.test(value||'')))];
-      if(ids.length){const customers=await findRelatedRows('customers','id',ids,'id,name',ctx);labels=new Map(customers.map(row=>[row.id,row.name]));}
-    }
     if(['payments','invoice_files'].includes(table)&&internal.includes('invoice_id')) {
       const ids=[...new Set(rows.map(row=>row.invoice_id).filter(value=>UUID.test(value||'')))];
       if(ids.length){const invoices=await findRelatedRows('invoices','id',ids,'id,invoice_number',ctx);labels=new Map(invoices.map(row=>[row.id,row.invoice_number]));}
@@ -444,7 +436,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     const output=rows.map(row=>{
       const safe=Object.fromEntries(finalColumns.filter(column=>Object.hasOwn(row,column)&&!INTERNAL_KEY.test(column)).map(column=>[column,
         column==='follow_up_preferences'?safeFollowupPreferences(row[column]):row[column]]));
-      if(requested.includes('customer_name'))safe.customer_name=labels.get(row.customer_id)||null;
+      if(requested.includes('customer_name'))safe.customer_name=row.customer?.name||row.customer?.[0]?.name||null;
       if(requested.includes('invoice_number')&&['payments','invoice_files'].includes(table))safe.invoice_number=labels.get(row.invoice_id)||null;
       return safe;
     });

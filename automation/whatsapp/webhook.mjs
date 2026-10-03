@@ -66,6 +66,11 @@ export function createWhatsAppWebhookHandler({ env = process.env, fetchImpl = gl
     if (request.method === 'GET' && params.process === '1') {
       if (!safeEqualToken(header(request, 'authorization'), `Bearer ${env.CRON_SECRET || ''}`) || !env.CRON_SECRET) return response.status(401).json({ error: 'Unauthorized' });
       try {
+        if(params.diagnostic){
+          if(!['john-invoices','meta'].includes(params.diagnostic))return response.status(400).json({error:'Unsupported diagnostic'});
+          const result=await run().diagnoseOwnerChat({scenario:params.diagnostic,forceCloudflareUnavailable:params.quotaDead==='1'});
+          return response.status(200).json(result);
+        }
         const result = await run().processPending();
         return response.status(200).json(result);
       } catch (error) {
