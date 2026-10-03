@@ -10,6 +10,7 @@ const scope={workspaceId,ownerId:'dddddddd-dddd-4ddd-8ddd-dddddddddddd',phone:'+
 function database() {
   const reads=[];
   const tables={
+    workspace_settings:[{workspace_id:workspaceId,owner_bot_preferences:{confirmationMode:'buttons'}}],
     workspace_ai_settings:[{workspace_id:workspaceId,primary_model:CF_QWEN_MODEL,fallback_model:GEMINI_FALLBACK_MODEL}],
     customers:[{workspace_id:workspaceId,id:customerId,name:'John Smith',company_name:'John Smith'},
       {workspace_id:otherWorkspace,id:'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',name:'John Other Business'}],
@@ -165,7 +166,7 @@ test('model selection is proposed through workspaceData, confirmed later, and us
       generation++;return {data:{ok:true,expiresAt:new Date(Date.now()+600_000).toISOString()}};
     }
     assert.equal(name,'whatsapp_workspace_data_confirm');assert.equal(args.p_confirmation_message_id,'model-2');
-    modelSettings.primary_model=CF_PRIMARY_MODEL;proposal=null;generation++;return {data:{ok:true,completed:true}};
+    modelSettings.primary_model=CF_PRIMARY_MODEL;proposal=null;generation++;return {data:{ok:true,actionType:'owner_workspace_data_confirmed',table:'workspace_ai_settings',operation:'update'}};
   };
   const configured=[];
   const plans=[{operation:'update',table:'workspace_ai_settings',values:{primary_model:CF_PRIMARY_MODEL}},

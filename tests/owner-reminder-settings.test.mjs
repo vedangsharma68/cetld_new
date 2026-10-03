@@ -12,7 +12,7 @@ import {readFile} from 'node:fs/promises';
 import {installVerifiedOwnerRpc} from './fixtures/verified-owner-rpc.mjs';
 
 const owner='00000000-0000-4000-8000-000000000001',workspace='00000000-0000-4000-8000-000000000002';
-const customer='00000000-0000-4000-8000-000000000003',other='00000000-0000-4000-8000-000000000004';
+const customer='00000000-0000-4000-8000-000000000003',other='00000000-0000-4000-8000-000000000004',factsInvoice='00000000-0000-4000-8000-000000000005';
 const phone='+919871367051';
 function fixture() {
   const tables={workspace_settings:[{workspace_id:workspace,whatsapp_owner_phone:phone,business_name:'Vedang Test Business'}],
@@ -45,6 +45,14 @@ test('reminder copy requires the configured business and honors each tone', () =
     assert.match(reminderBody({invoice_number:'INV-1'},settings),/Vedang Test Business/);
   }
   assert.throws(()=>reminderBody({invoice_number:'INV-1'},normalizeFollowUpPreferences({})),/business name/i);
+});
+
+test('custom reminder template is rendered into the branded owner-review draft',()=>{
+  const settings=normalizeFollowUpPreferences({businessName:'Vedang Test Business',reminderTemplate:
+    'Hello {{customer_name}}, invoice {{invoice_number}} has {{balance}} due {{due_date}}.'},'UTC');
+  assert.equal(reminderBody({invoice_number:'INV-7',client:'Ada',balance:'₹2,500.00',due_date:'12 Oct 2026'},settings),
+    'Hello Ada, invoice INV-7 has ₹2,500.00 due 12 Oct 2026.\n\nVedang Test Business');
+  assert.throws(()=>normalizeFollowUpPreferences({businessName:'Business',reminderTemplate:'{{customer_phone}}'}),/placeholder/i);
 });
 
 test('configured owner is recognized from verified phone possession and changes revoke workspace reads',async()=>{
@@ -123,7 +131,7 @@ test('database validates settings, isolates history, and keeps delivery statuses
       create table public.workspace_settings(workspace_id uuid primary key,business_name text,default_timezone text default 'UTC',follow_up_preferences jsonb default '{}',updated_at timestamptz default now());
       create table public.customers(id uuid primary key,workspace_id uuid,phone text);
       create table public.invoices(id uuid primary key,workspace_id uuid,customer_id uuid,invoice_number text,issue_date date,due_date date,
-        total_amount numeric,amount_paid numeric default 0,status text default 'draft',metadata jsonb default '{}');
+        currency text default 'INR',total_amount numeric,amount_paid numeric default 0,status text default 'draft',metadata jsonb default '{}');
       create table public.whatsapp_global_suppressions(phone text primary key,source_message_id text);
       create table public.whatsapp_suppressions(phone text,workspace_id uuid);
       create table public.whatsapp_invoice_update_claims(workspace_id uuid,invoice_id uuid,idempotency_key text,unique(workspace_id,invoice_id,idempotency_key));
@@ -140,14 +148,50 @@ test('database validates settings, isolates history, and keeps delivery statuses
     await db.exec(await readFile(new URL('../supabase/migrations/20260927140000_core_followup_pipeline.sql',import.meta.url),'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/20260927110000_whatsapp_inbound_events.sql',import.meta.url),'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/20261002020102_owner_followup_conversations.sql',import.meta.url),'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/20261003140200_followup_message_template.sql',import.meta.url),'utf8'));
+    await db.exec(`update public.workspace_settings set follow_up_preferences=jsonb_build_object('reminderTemplate',E'Hello\\r\\n{{customer_name}}\\t{{business_name}}') where workspace_id='${workspace}'`);
+    assert.equal((await db.query(`select follow_up_preferences->>'reminderTemplate' as template from public.workspace_settings where workspace_id='${workspace}'`)).rows[0].template,
+      'Hello\n{{customer_name}} {{business_name}}');
+    await db.exec(`update public.workspace_settings set follow_up_preferences=jsonb_build_object('reminderTemplate','A — B') where workspace_id='${workspace}'`);
+    assert.equal((await db.query(`select follow_up_preferences->>'reminderTemplate' as template from public.workspace_settings where workspace_id='${workspace}'`)).rows[0].template,'A, B');
+    await assert.rejects(db.exec(`update public.workspace_settings set follow_up_preferences=jsonb_build_object('reminderTemplate','{{account_number}}') where workspace_id='${workspace}'`),/placeholder/i);
+    await assert.rejects(db.exec(`update public.workspace_settings set follow_up_preferences=jsonb_build_object('reminderTemplate',repeat('x',1001)) where workspace_id='${workspace}'`),/1,000 characters/i);
+    await assert.rejects(db.exec(`update public.workspace_settings set follow_up_preferences=jsonb_build_object('reminderTemplate','line'||chr(1)) where workspace_id='${workspace}'`),/control character/i);
+    await db.exec(`select set_config('request.jwt.claim.sub','${owner}',false);
+      update public.workspace_settings set follow_up_preferences=jsonb_build_object('reminderTemplate','Owner template {{invoice_number}}') where workspace_id='${workspace}';
+      select set_config('request.jwt.claim.sub','',false)`);
+    assert.equal((await db.query(`select follow_up_preferences->>'reminderTemplate' as template from public.workspace_settings where workspace_id='${workspace}'`)).rows[0].template,
+      'Owner template {{invoice_number}}');
     await db.exec(`update public.workspace_settings set whatsapp_owner_phone='${phone}' where workspace_id='${workspace}'`);
+    await db.exec(`insert into public.invoices(id,workspace_id,customer_id,total_amount,due_date,status,metadata)
+      values('${factsInvoice}','${workspace}','${customer}',100,current_date+5,'sent',jsonb_build_object(
+        'invoice_direction','receivable','followup_state','approved','reminder_text','Old rendered draft',
+        'approved_reminder_text','Old approved draft'||chr(10)||chr(10)||'Vedang Test Business',
+        'approved_preferences_updated_at',now()))`);
+    await db.exec(`update public.invoices set total_amount=125,due_date=due_date+2,
+      metadata=jsonb_set(metadata,'{client_name}',to_jsonb('New customer'::text),true)
+      where id='${factsInvoice}'`);
+    const invalidatedFacts=(await db.query(`select followup_state,next_follow_up_at,total_amount,
+      metadata->>'client_name' as client_name,metadata->>'reminder_text' as draft,
+      metadata->>'approved_reminder_text' as approved,
+      metadata->>'approved_preferences_updated_at' as approved_preferences_updated_at
+      from public.invoices where id='${factsInvoice}'`)).rows[0];
+    assert.equal(invalidatedFacts.followup_state,'draft');
+    assert.equal(invalidatedFacts.next_follow_up_at,null);
+    assert.equal(Number(invalidatedFacts.total_amount),125);
+    assert.equal(invalidatedFacts.client_name,'New customer');
+    assert.equal(invalidatedFacts.draft,null);
+    assert.equal(invalidatedFacts.approved,null);
+    assert.equal(invalidatedFacts.approved_preferences_updated_at,null);
     // Exercise approval, reply policy, and business changes through real triggers.
     await db.exec(`insert into public.invoices(id,workspace_id,customer_id,total_amount,due_date,status,metadata)
       values('${customer}','${workspace}','${customer}',100,current_date+1,'sent','{"invoice_direction":"receivable"}')`);
     await assert.rejects(db.exec(`update public.invoices set metadata=metadata||'{"followup_state":"approved","approved_reminder_text":"Unsigned"}'
       where id='${customer}'`),/business name/i);
+    await assert.rejects(db.exec(`update public.invoices set metadata=metadata||jsonb_build_object('followup_state','approved',
+      'approved_reminder_text','Reminder'||chr(10)||chr(10)||'— Vedang Test Business') where id='${customer}'`),/business name/i);
     const approve=()=>db.exec(`update public.invoices set metadata=metadata||jsonb_build_object('followup_state','approved',
-      'approved_reminder_text','Reminder'||chr(10)||chr(10)||'— Vedang Test Business') where id='${customer}'`);
+      'approved_reminder_text','Reminder'||chr(10)||chr(10)||'Vedang Test Business') where id='${customer}'`);
     await db.exec(`update public.workspace_settings set follow_up_preferences='{"pauseOnReply":false}' where workspace_id='${workspace}'`);
     await approve();
     await db.exec(`select public.whatsapp_pause_customer_followups('${workspace}','${customer}','reply-no-pause')`);
@@ -161,6 +205,11 @@ test('database validates settings, isolates history, and keeps delivery statuses
     await db.exec(`update public.workspace_settings set business_name='CETLD test' where workspace_id='${workspace}'`);
     assert.equal((await db.query(`select followup_state from public.invoices where id='${customer}'`)).rows[0].followup_state,'paused');
     await db.exec(`update public.workspace_settings set business_name='Vedang Test Business' where workspace_id='${workspace}'`);
+    await approve();
+    await db.exec(`update public.invoices set metadata=metadata||'{"reminder_text":"Old wording"}' where id='${customer}'`);
+    await db.exec(`update public.workspace_settings set follow_up_preferences=follow_up_preferences||jsonb_build_object('reminderTemplate','Hi {{customer_name}} {{invoice_number}} {{balance}} {{due_date}}') where workspace_id='${workspace}'`);
+    const changedTemplate=(await db.query(`select followup_state,metadata->>'approved_reminder_text' as approved,metadata->>'reminder_text' as draft from public.invoices where id='${customer}'`)).rows[0];
+    assert.deepEqual(changedTemplate,{followup_state:'paused',approved:null,draft:null});
     await db.exec(`update public.invoices set amount_paid=100 where id='${customer}'`);await approve();
     assert.equal((await db.query(`select followup_state from public.invoices where id='${customer}'`)).rows[0].followup_state,'cancelled');
     await db.exec(`insert into public.whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,status)
@@ -198,6 +247,7 @@ test('database validates settings, isolates history, and keeps delivery statuses
     assert.equal((await db.query("select status from public.whatsapp_messages where idempotency_key='template:stale-template'")).rows[0].status,'blocked');
     assert.equal((await db.query("select status from public.whatsapp_messages where idempotency_key='template:claimed-template'")).rows[0].status,'pending');
     await db.exec(`select set_config('request.jwt.claim.sub','${other}',false)`);
+    await assert.rejects(db.exec(`update public.workspace_settings set follow_up_preferences=follow_up_preferences||jsonb_build_object('reminderTemplate','Unauthorized') where workspace_id='${workspace}'`),/owner/i);
     await assert.rejects(db.exec(`update public.workspace_settings set whatsapp_owner_phone=null where workspace_id='${workspace}'`),/owner/i);
     await db.exec(`select set_config('request.jwt.claim.sub','',false)`);
     await db.exec(`select public.whatsapp_pause_customer_followups('${workspace}','${customer}','incoming-summary');
@@ -261,7 +311,7 @@ test('a suppressed owner STOP remains in permanent history without authorizing a
 
 test('retrying a saved owner response after rebinding as a customer cannot expose owner data',async()=>{
   const db=fixture(),store=createConversationStore(db);let claims=0,sends=0;
-  await store.record({workspaceId:workspace,phone,direction:'outbound',audience:'owner',body:'Owner-only ledger answer.\n\n— Vedang Test Business',
+  await store.record({workspaceId:workspace,phone,direction:'outbound',audience:'owner',body:'Owner-only ledger answer.\n\nVedang Test Business',
     kind:'normal',status:'pending',key:'reply:retry-history'});
   db.tables.workspace_settings[0].whatsapp_owner_phone=null;
   db.tables.workspace_settings[0].whatsapp_owner_attested_at=new Date().toISOString();

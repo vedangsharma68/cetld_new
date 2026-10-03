@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
 import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs';
+import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {VERIFIED_MODEL_CATALOG} from '../ai/provider.mjs';
 
 const scope = Object.freeze({
@@ -140,6 +141,10 @@ test('natural-language planning receives the safe catalog and never receives ver
   assert.deepEqual(seen.catalog.tables.invoices.writeValueConstraints.update.status,['paid']);
   assert.ok(seen.catalog.tables.workspace_settings.writeFields.update.includes('business_name'));
   assert.ok(seen.catalog.tables.workspace_settings.writeFields.update.includes('follow_up_preferences'));
+  const preferences=seen.catalog.tables.workspace_settings.writeValueConstraints.update;
+  assert.deepEqual(preferences.owner_bot_preferences.tone,['concise','friendly','formal']);
+  assert.ok(preferences.owner_bot_preferences.language.includes('Hindi'));
+  assert.match(preferences.follow_up_preferences.reminderTemplate,/\{\{invoice_number\}\}/);
   assert.doesNotMatch(JSON.stringify(seen.catalog),/workspaceId|ownerId|customerId|workspace_id|owner_id/);
   assert.deepEqual(supabase.calls[0].filters,[['workspace_id','eq',scope.workspaceId]]);
 });
@@ -287,6 +292,112 @@ test('partial AI model changes merge against the sanitized active runtime pair',
   assert.equal(proposal.args.p_values.primary_model,primary);
   assert.equal(proposal.args.p_values.fallback_model,runtimeFallback);
   assert.equal(proposal.args.p_expected_updated_at,null);
+});
+
+test('workspace settings reads expose the scoped preference columns, and a tone patch preserves the saved bot style',async()=>{
+  const original={assistantName:'Mira',tone:'friendly',language:'English',replyLength:'short',
+    confirmationMode:'buttons',serviceReplySignature:'CETLD',customInstruction:'Use concise replies'};
+  const updatedAt='2026-10-02T12:00:00Z';
+  const supabase=fakeSupabase({rows:{workspace_settings:[{
+    workspace_id:scope.workspaceId,business_name:'Northstar',default_currency:'INR',default_timezone:'Asia/Kolkata',
+    follow_up_preferences:{tone:'professional',cadenceDays:7},owner_bot_preferences:original,updated_at:updatedAt,
+  }]},rpcResult:{ok:true,proposalId:'99999999-9999-4999-8999-999999999999',expires_at:'2026-10-03T12:00:00Z'}});
+  const pending={async loadPendingActionState(){return {generation:9,id:null,version:null};}};
+  const readTool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true});
+  const read=await readTool.execute({operation:'read',table:'workspace_settings'});
+  assert.deepEqual(read.rows,[{
+    business_name:'Northstar',default_currency:'INR',default_timezone:'Asia/Kolkata',
+    follow_up_preferences:{tone:'professional',cadenceDays:7},owner_bot_preferences:original,
+  }]);
+
+  const writeTool=createWorkspaceDataTool({supabase,scope,message:'Make the assistant formal',messageId:'wamid.settings-tone',
+    pending,authorize:async()=>true,confirmationMode:'buttons'});
+  const staged=await writeTool.execute({operation:'update',table:'workspace_settings',values:{owner_bot_preferences:{tone:'formal'}}});
+  assert.equal(staged.ok,true);
+  assert.equal(staged.requiresConfirmation,true);
+  assert.equal(writeTool.getReplyRequirement()?.confirmationText,'yes');
+  const proposal=supabase.calls.find(call=>call.name==='whatsapp_workspace_data_propose');
+  assert.ok(proposal,'the partial preference update should use the generic pending-proposal RPC');
+  assert.equal(proposal.args.p_table,'workspace_settings');
+  assert.equal(proposal.args.p_target_id,scope.workspaceId);
+  assert.equal(proposal.args.p_expected_updated_at,updatedAt);
+  assert.deepEqual(proposal.args.p_values.owner_bot_preferences,{...original,tone:'formal'});
+  assert.equal(proposal.args.p_values.follow_up_preferences,undefined);
+});
+
+test('a reminder-template edit in buttons mode becomes a generic scoped settings proposal',async()=>{
+  const currentFollowups={tone:'gentle',cadenceDays:5,reminderTemplate:'Old template'};
+  const supabase=fakeSupabase({rows:{workspace_settings:[{
+    workspace_id:scope.workspaceId,business_name:'Northstar',default_currency:'INR',default_timezone:'Asia/Kolkata',
+    follow_up_preferences:currentFollowups,owner_bot_preferences:{tone:'friendly'},updated_at:'2026-10-02T12:00:00Z',
+  }]},rpcResult:{ok:true,proposalId:'99999999-9999-4999-8999-999999999999',expires_at:'2026-10-03T12:00:00Z'}});
+  const pending={async loadPendingActionState(){return {generation:3,id:null,version:null};}};
+  const tool=createWorkspaceDataTool({supabase,scope,message:'Update the reminder template',messageId:'wamid.template',pending,
+    authorize:async()=>true,confirmationMode:'buttons'});
+  const staged=await tool.execute({operation:'update',table:'workspace_settings',values:{
+    follow_up_preferences:{reminderTemplate:'Hello {{customer_name}} — invoice {{invoice_number}} is due.'},
+  }});
+
+  assert.equal(staged.ok,true);
+  assert.equal(staged.requiresConfirmation,true);
+  const proposal=supabase.calls.find(call=>call.name==='whatsapp_workspace_data_propose');
+  assert.ok(proposal,'template edits must be staged in the same atomic generic proposal flow');
+  assert.equal(proposal.args.p_workspace_id,scope.workspaceId);
+  assert.equal(proposal.args.p_customer_id,scope.customerId);
+  assert.equal(proposal.args.p_phone,scope.phone);
+  assert.equal(proposal.args.p_request_message_id,'wamid.template');
+  assert.equal(proposal.args.p_table,'workspace_settings');
+  assert.deepEqual(proposal.args.p_values.follow_up_preferences,{reminderTemplate:'Hello {{customer_name}}, invoice {{invoice_number}} is due.'});
+  assert.equal(proposal.args.p_expected_updated_at,'2026-10-02T12:00:00Z');
+});
+
+test('malformed reminder placeholders fail before any settings query or proposal RPC',async()=>{
+  const supabase=fakeSupabase({rows:{workspace_settings:[{
+    workspace_id:scope.workspaceId,business_name:'Northstar',default_currency:'INR',default_timezone:'Asia/Kolkata',
+    follow_up_preferences:{},owner_bot_preferences:{},updated_at:'2026-10-02T12:00:00Z',
+  }]}});
+  const pending={async loadPendingActionState(){return {generation:1,id:null,version:null};}};
+  const tool=createWorkspaceDataTool({supabase,scope,message:'Use an unsupported reminder placeholder',messageId:'wamid.bad-template',pending,
+    authorize:async()=>true,confirmationMode:'buttons'});
+  const result=await tool.execute({operation:'update',table:'workspace_settings',values:{
+    follow_up_preferences:{reminderTemplate:'Pay using {{bank_account_secret}}'},
+  }});
+
+  assert.equal(result.ok,false);
+  assert.equal(result.code,'INVALID');
+  assert.deepEqual(supabase.calls,[],'invalid template input should be rejected before even reading settings');
+});
+
+test('direct workspace writes quote the actual owner message and use only the verified owner scope',async()=>{
+  const customerId='33333333-3333-4333-8333-333333333333';
+  const message='Rename Northstar to Northstar LLC';
+  const supabase=fakeSupabase({rows:{customers:[{
+    id:customerId,workspace_id:scope.workspaceId,name:'Northstar',company_name:null,email:null,phone:null,
+    updated_at:'2026-10-02T12:00:00Z',
+  }]}});
+  let adapterInput;
+  const tools=createOwnerWorkspaceTools({supabase,scope,ownerStore:{async query(){return []; }},message,messageId:'wamid.direct-owner',authorize:async candidate=>candidate===scope,
+    botPreferences:{confirmationMode:'direct'},directWriteAdapter:{
+      async apply(input){adapterInput=input;return {ok:true,completed:true,action:'customer.updated',entityType:'customer',entityId:customerId};},
+      async lookupCompleted(){return {ok:false,code:'NO_RECEIPT'};},
+    }});
+  const result=await tools.execute('workspaceData',{operation:'update',table:'customers',
+    filters:[{column:'name',operator:'eq',value:'Northstar'}],values:{name:'Northstar LLC'}});
+
+  assert.equal(result.ok,true);
+  assert.equal(adapterInput.workspaceId,scope.workspaceId);
+  assert.equal(adapterInput.ownerId,scope.ownerId);
+  assert.equal(adapterInput.phone,scope.phone);
+  assert.equal(adapterInput.providerMessageId,'wamid.direct-owner');
+  assert.deepEqual(adapterInput.authorization,{kind:'instruction',quote:message});
+  assert.equal(adapterInput.targetId,customerId);
+  assert.ok(supabase.calls.find(call=>call.kind==='query'&&call.table==='customers').filters
+    .some(([column,operator,value])=>column==='workspace_id'&&operator==='eq'&&value===scope.workspaceId));
+
+  const denied=await tools.execute('workspaceData',{operation:'update',table:'customers',
+    filters:[{column:'name',operator:'eq',value:'Northstar'}],values:{name:'Northstar LLC',workspace_id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'}});
+  assert.equal(denied.ok,false);
+  assert.equal(adapterInput.providerMessageId,'wamid.direct-owner','forged scope fields must not reach the write adapter');
 });
 
 test('workspaceData SQL migration scopes proposals, applies a confirmed customer write once, and replays its receipt',async()=>{

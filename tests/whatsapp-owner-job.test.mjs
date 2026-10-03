@@ -35,7 +35,8 @@ test('an interrupted write is never executed again after a worker restart',async
 test('resumed final validation preserves saved undo instructions over fresh tool defaults',async()=>{
   let calls=0;
   const result=await runOwnerAgent({allowDeferred:true,message:'yes',
-    checkpoint:{version:1,phase:'final',transcript:[{role:'user',content:'yes'}],toolCache:[],
+    checkpoint:{version:1,phase:'final',transcript:[{role:'user',content:'yes'},
+      {role:'tool',name:'workspaceData',tool_call_id:'delete',content:JSON.stringify({ok:true,completed:true,action:'deleted',invoiceNumber:'INV-001'})}],toolCache:[],
       replyRequirement:{maxLength:3790,confirmationAlternatives:['UNDO DELETE INV-001'],requiredFacts:{invoiceNumber:'INV-001'}}},
     tools:{definitions,getReplyRequirement:()=>({maxLength:3790}),async execute(){throw Error('final stage cannot run tools');}},
     provider:{async generate(request){calls++;assert.match(JSON.stringify(request.messages),/UNDO DELETE INV-001/);

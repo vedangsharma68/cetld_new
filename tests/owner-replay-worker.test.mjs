@@ -34,6 +34,20 @@ for(const [description,replayId,status,expectedSends] of [
   assert.equal(sends,expectedSends);assert.equal(completed,1);assert.equal(deferred,0);
 });
 
+test('worker forwards the verified owner-action fallback reference to the reply transport',async()=>{
+  const event={id:20,attempts:1,provider_message_id:'wamid.fallback',sender_phone:phone,message_text:'Tap confirm',
+    message_type:'interactive',received_at:new Date().toISOString()};
+  const reference={pendingId:73,pendingVersion:4};let captured=null;
+  const runtime=createInboundRuntime({supabase:ownerDatabase(),conversationStore:null,
+    inbox:{claim:async()=>[event],complete:async()=>{},defer:async()=>{}},
+    outbound:{sendTypingIndicator:async()=>{},sendServiceReply:async(args)=>{captured=args;return {status:'accepted'};}},
+    onOwnerMessage:async()=>({answer:'I couldn’t restore those approval choices. Please send the change again and I’ll check the current details.',
+      ownerActionFallback:reference}),logger:{error(){}}});
+  assert.deepEqual(await runtime.processPending(),{claimed:1,completed:1});
+  assert.deepEqual(captured.ownerActionFallback,reference);
+  assert.equal(captured.body,'I couldn’t restore those approval choices. Please send the change again and I’ll check the current details.');
+});
+
 for (const prior of [{error_code:'OWNER_REPLY_NOT_ACCEPTED'}, {reply_claimed_at:'2026-10-02T12:00:00Z'}, {attempts:2}])
 test('stale previously attempted inbound event is dead-lettered without another model call: '+JSON.stringify(prior),async()=>{
   const now=Date.parse('2026-10-03T12:00:00Z');

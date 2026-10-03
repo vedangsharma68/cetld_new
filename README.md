@@ -138,3 +138,49 @@ to both modes. Keep induced transport failures explicitly labeled as simulated.
 suite. Use live mode selectively when a real provider check is needed; it spends
 provider quota.
 
+
+### Owner assistant behavior and recovery
+
+The owner assistant uses the dashboard's verified workspace and the same database
+rows. `workspaceData` is its scoped business-data interface; live model identity
+comes from `getAIProviderConfiguration`. Model text cannot supply a workspace ID,
+service credential, permission, or confirmation receipt.
+
+Clear owner write instructions use a server-only transaction in direct mode.
+The database verifies the current owner/phone binding, stored inbound message,
+allowed operation and fields, target workspace, and current row version. Invoice
+deletes are soft deletes, with a 30-day restore window. Receipt replay prevents a
+restarted worker from repeating a completed mutation. The adapter re-reads the
+persisted row before returning a completed result; failures cannot become success
+claims. Conversation history supplies references, not proof of current balances
+or completed changes. Repeating a question under a new WhatsApp message ID reads
+fresh state; only redelivery of the exact message reuses the original reply.
+
+Owners can choose reply buttons instead of direct changes in Settings > WhatsApp
+& assistant. Buttons are signed, bound to the owner workspace/phone and exact
+pending action version, and expire with that action. A stale or forged button
+cannot approve a different change. Clear direct instructions do not need another
+confirmation. Ambiguous targets still require a choice rather than a guessed
+mutation. Preferences also control assistant name, tone, language, reply length,
+signature, and style guidance. These never grant additional database privileges.
+
+The release gate stays entirely offline. `tests/direct-owner-write-sql.test.mjs`
+executes the migration chain and mutation safeguards in PGlite;
+`tests/owner-database-grounding.test.mjs` exercises invented-success rejection.
+Button transport, stale references, replay, and preference isolation are covered
+by the WhatsApp and owner preference tests in `npm run check:release`.
+
+Customer reminder templates live in **Settings > Follow-up**. Supported tokens
+are `{{business_name}}`, `{{customer_name}}`, `{{invoice_number}}`,
+`{{balance}}`, and `{{due_date}}`; the dashboard resolves them into the editable
+owner-review draft and adds the configured business name as its plain signature.
+Changing a template or invoice facts clears saved draft and approval text, so the
+current values must be previewed and approved again. Saving a template does not
+enable customer messaging, provision or approve a Meta template, or change
+consent and delivery controls. Meta's approved-template rules still apply.
+
+Automatic recovery covers worker resumption, provider failover/quota cooldown,
+and idempotent delivery. It does not rewrite production code, override customer
+consent, approve Meta templates, or replace expired external credentials. Live
+provider quality and phone delivery require separate checks and are not claimed
+by the offline suite.

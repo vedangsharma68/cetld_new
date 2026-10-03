@@ -17,7 +17,7 @@ const prefs = {
 
 function setup(overrides = {}) {
   const store = new MemoryAutomationStore({ now: () => now });
-  const approval = { invoice_direction: 'receivable', approved_reminder_text: 'Invoice INV-1 remains outstanding. Please arrange payment or contact us with an update.\n\n— Test Business', approved_preferences_updated_at: 'v1' };
+  const approval = { invoice_direction: 'receivable', approved_reminder_text: 'Invoice INV-1 remains outstanding. Please arrange payment or contact us with an update.\n\nTest Business', approved_preferences_updated_at: 'v1' };
   store.seedInvoice({
     id: scope.invoiceId, ...scope, total_amount: '10.00', amountMinor: 1000,
     paidMinor: 0, status: 'open', due_date: '2026-09-21',

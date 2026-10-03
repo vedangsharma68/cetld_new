@@ -57,10 +57,11 @@ function fakeSupabase({suppressed = false, globallySuppressed = false, consented
   };
 }
 
-function harness({env = baseEnv, supabase = fakeSupabase(), currentInvoice = invoice, authorizeInboundReply = async () => ({allowed: true}), claimInvoiceUpdate = async () => ({claimed: true})} = {}) {
+function harness({env = baseEnv, supabase = fakeSupabase(), currentInvoice = invoice, conversationStore = null,
+  authorizeInboundReply = async () => ({allowed: true}), claimInvoiceUpdate = async () => ({claimed: true})} = {}) {
   const calls = [];
   const logs = [];
-  const outbound = createWhatsAppOutbound({conversationStore:null,
+  const outbound = createWhatsAppOutbound({conversationStore,
     env, supabase,
     invoiceStore: {async getCurrentInvoice() { return currentInvoice; }},
     authorizeInboundReply,
@@ -240,6 +241,93 @@ test('service replies require an open 24-hour window and atomic inbound authoriz
   assert.equal(JSON.parse(accepted.calls[0].options.body).text.body, args.body+'\n\n- Acme Studio');
   const unix = harness();
   assert.equal((await unix.outbound.sendServiceReply({...args, lastInboundAt: String(Date.parse(NOW) / 1000)})).status, 'accepted');
+});
+
+test('owner quick reply buttons use Meta interactive payloads and retain the text transcript', async () => {
+  const supabase = fakeSupabase();
+  supabase.rpc = async () => ({data:[{workspace_id:'workspace-a',owner_id:'owner-1',customer_id:'owner-customer',business_name:'Acme Studio'}],error:null});
+  const {outbound,calls} = harness({supabase});
+  const buttons = [{id:'oab1.confirm.signature',title:'Confirm'},{id:'oab1.cancel.signature',title:'Cancel'}];
+  const args = {workspaceId:'workspace-a',to:PHONE,body:'Apply the invoice update?',buttons,businessName:'Acme Studio',
+    kind:'normal',audience:'owner',messageId:'owner-button-1',lastInboundAt:NOW};
+  assert.equal((await outbound.sendServiceReply(args)).status,'accepted');
+  const payload = JSON.parse(calls[0].options.body);
+  assert.equal(payload.type,'interactive');
+  assert.deepEqual(payload.interactive,{type:'button',body:{text:'Apply the invoice update?'},
+    action:{buttons:[{type:'reply',reply:{id:buttons[0].id,title:'Confirm'}},
+      {type:'reply',reply:{id:buttons[1].id,title:'Cancel'}}]}});
+});
+
+test('interactive owner buttons reject malformed lists and are unavailable to customer replies', async () => {
+  for (const [audience,buttons] of [
+    ['owner',Array.from({length:4},(_,index)=>({id:`id-${index}`,title:`Choice ${index}`}))],
+    ['owner',[{id:'valid',title:'A title that exceeds twenty characters'}]],
+    ['customer',[{id:'valid',title:'Confirm'}]],
+  ]) {
+    const supabase = fakeSupabase();
+    supabase.rpc = async () => ({data:[{workspace_id:'workspace-a',owner_id:'owner-1',customer_id:'owner-customer',business_name:'Acme Studio'}],error:null});
+    const {outbound,calls} = harness({supabase});
+    await assert.rejects(() => outbound.sendServiceReply({workspaceId:'workspace-a',to:PHONE,body:'Review this change.',buttons,
+      businessName:'Acme Studio',kind:'normal',audience,messageId:`invalid-buttons-${audience}-${buttons.length}`,lastInboundAt:NOW}), TypeError);
+    assert.equal(calls.length,0);
+  }
+});
+
+test('long owner replies with buttons are rejected because interactive body copy is capped', async () => {
+  const supabase = fakeSupabase();
+  supabase.rpc = async () => ({data:[{workspace_id:'workspace-a',owner_id:'owner-1',customer_id:'owner-customer',business_name:'Acme Studio'}],error:null});
+  const {outbound,calls} = harness({supabase});
+  const body = 'x'.repeat(1100);
+  await assert.rejects(() => outbound.sendServiceReply({workspaceId:'workspace-a',to:PHONE,body,
+    buttons:[{id:'oab1.confirm.signature',title:'Confirm'}],businessName:'Acme Studio',kind:'normal',audience:'owner',
+    messageId:'owner-button-long-body',lastInboundAt:NOW}),/exceeds the WhatsApp limit/);
+  assert.equal(calls.length,0);
+});
+
+test('owner action fallback sends only the fixed recovery text for its matching pending receipt', async () => {
+  const supabase = fakeSupabase();
+  supabase.rpc = async () => ({data:[{workspace_id:'workspace-a',owner_id:'owner-1',customer_id:'owner-customer',business_name:'Acme Studio'}],error:null});
+  const unavailable='I couldn’t restore those approval choices. Please send the change again and I’ll check the current details.';
+  for (const status of ['pending','failed']) {
+    const receipts=[];
+    const conversationStore={
+      async record(value) {
+        receipts.push(value);
+        return {workspace_id:value.workspaceId,phone:value.phone,audience:value.audience,kind:value.kind,
+          customer_id:value.customerId,invoice_id:value.invoiceId,status,body:'Tap Confirm to apply the invoice update.',
+          owner_action_ref:{pendingId:73,pendingVersion:4}};
+      },
+      async finish(value) { receipts.push(value); },
+    };
+    const {outbound,calls}=harness({supabase,conversationStore});
+    const result=await outbound.sendServiceReply({workspaceId:'workspace-a',to:PHONE,body:unavailable,
+      ownerActionFallback:{pendingId:73,pendingVersion:4},businessName:'Acme Studio',kind:'normal',audience:'owner',
+      messageId:`owner-fallback-${status}`,lastInboundAt:NOW});
+    assert.equal(result.status,'accepted');
+    assert.equal(receipts[0].body,unavailable);
+    const graphBody=JSON.parse(calls[0].options.body);
+    assert.equal(graphBody.type,'text');
+    assert.equal(graphBody.text.body,unavailable);
+    assert.equal(graphBody.interactive,undefined);
+  }
+});
+
+test('owner action fallback cannot replace another pending reference or an accepted receipt', async () => {
+  const supabase = fakeSupabase();
+  supabase.rpc = async () => ({data:[{workspace_id:'workspace-a',owner_id:'owner-1',customer_id:'owner-customer',business_name:'Acme Studio'}],error:null});
+  const unavailable='I couldn’t restore those approval choices. Please send the change again and I’ll check the current details.';
+  for (const receipt of [
+    {status:'pending',owner_action_ref:{pendingId:73,pendingVersion:5}},
+    {status:'accepted',owner_action_ref:{pendingId:73,pendingVersion:4}},
+  ]) {
+    const conversationStore={async record(value) {return {workspace_id:value.workspaceId,phone:value.phone,audience:value.audience,
+      kind:value.kind,customer_id:value.customerId,invoice_id:value.invoiceId,body:'Original proposal with buttons.',...receipt};}};
+    const {outbound,calls}=harness({supabase,conversationStore});
+    await assert.rejects(() => outbound.sendServiceReply({workspaceId:'workspace-a',to:PHONE,body:unavailable,
+      ownerActionFallback:{pendingId:73,pendingVersion:4},businessName:'Acme Studio',kind:'normal',audience:'owner',
+      messageId:`owner-fallback-reject-${receipt.status}`,lastInboundAt:NOW}),/no longer matches/);
+    assert.equal(calls.length,0);
+  }
 });
 
 test('session replies send factual invoice terms and replace pressure phrases with a safe fallback', async () => {

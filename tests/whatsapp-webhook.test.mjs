@@ -7,6 +7,8 @@ import { PGlite } from '@electric-sql/pglite';
 import { createWhatsAppWebhookHandler, readRawBody, verifyMetaSignature } from '../automation/whatsapp/webhook.mjs';
 import { createInboundRuntime, SupabaseInboundInbox, isOptOut, parseMetaMessages } from '../automation/whatsapp/cloud-inbound.mjs';
 import { neutralText } from '../automation/whatsapp/cloud-outbound.mjs';
+import {createOwnerReplyStore} from '../automation/whatsapp/owner-reply-store.mjs';
+import {createOwnerActionButtons} from '../automation/whatsapp/owner-action-buttons.mjs';
 import { answerWorkspaceQuestion } from '../ai/assistant.mjs';
 import {installVerifiedOwnerRpc} from './fixtures/verified-owner-rpc.mjs';
 
@@ -198,6 +200,148 @@ test('Meta parsing ignores status callbacks and other phone IDs; it never reads 
   assert.equal(isOptOut('Please stop sending me messages.'), true);
   assert.equal(isOptOut('I no longer want these updates.'), true);
   assert.equal(isOptOut('I do not want to pay'), false);
+});
+
+test('Meta parsing preserves signed quick reply IDs separately from their visible titles', () => {
+  const selected = {id:'wamid.button',from:'919871367051',timestamp:String(Math.floor(Date.now()/1000)),type:'interactive',
+    interactive:{type:'button_reply',button_reply:{id:'oab1.payload.signature',title:'Confirm'}}};
+  const parsed = parseMetaMessages(meta([selected]), env.WHATSAPP_PHONE_NUMBER_ID, env.WHATSAPP_WABA_ID);
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0].message_type, 'interactive');
+  assert.equal(parsed[0].message_text, 'Confirm');
+  assert.equal(parsed[0].interactionId, 'oab1.payload.signature');
+  const invalid = structuredClone(selected);
+  invalid.interactive.button_reply.id = '';
+  assert.deepEqual(parseMetaMessages(meta([invalid]), env.WHATSAPP_PHONE_NUMBER_ID, env.WHATSAPP_WABA_ID), []);
+});
+
+test('durable inbox maps camel-case button IDs to the bounded interaction_id column', async () => {
+  let upsert;
+  const inbox = new SupabaseInboundInbox({ from(table) {
+    assert.equal(table, 'whatsapp_inbound_events');
+    return { upsert(rows, options) { upsert = { rows, options }; return { select: async () => ({data:rows,error:null})}; } };
+  }});
+  const input = {provider_message_id:'wamid.button',phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID,
+    sender_phone:'+919871367051',message_type:'interactive',message_text:'Confirm',interactionId:'oab1.payload.signature'};
+  await inbox.enqueue([input]);
+  assert.deepEqual(upsert.rows, [{provider_message_id:input.provider_message_id,phone_number_id:input.phone_number_id,
+    sender_phone:input.sender_phone,message_type:'interactive',message_text:'Confirm',interaction_id:'oab1.payload.signature'}]);
+  assert.deepEqual(upsert.options, {onConflict:'provider_message_id',ignoreDuplicates:true});
+});
+
+test('owner button references reach the owner handler separately from visible message text', async () => {
+  const phone = '+919871367051';
+  const event = {id:17,claim_token:'claim',attempts:1,provider_message_id:'wamid.owner-button',sender_phone:phone,
+    message_type:'interactive',message_text:'Confirm',interaction_id:'oab1.payload.signature',provider_timestamp:new Date().toISOString()};
+  const tables = {
+    whatsapp_owner_verifications:[{workspace_id:'ws-owner',requested_by:'owner-1',verified_at:'2026-10-01T00:00:00Z',
+      created_at:'2026-10-01T00:00:00Z',phone}],
+    workspaces:[{id:'ws-owner',owner_id:'owner-1'}],
+    workspace_members:[{workspace_id:'ws-owner',user_id:'owner-1',role:'owner'}],
+    workspace_settings:[{workspace_id:'ws-owner',business_name:'Acme Studio',whatsapp_owner_phone:phone}],
+    whatsapp_consents:[{workspace_id:'ws-owner',customer_id:'owner-customer',phone,revoked_at:null,consented_by:'owner-1'}],
+    customers:[{id:'owner-customer',workspace_id:'ws-owner',phone,metadata:{whatsapp_owner:true}}],
+    whatsapp_global_suppressions:[],whatsapp_suppressions:[],
+  };
+  const supabase = installVerifiedOwnerRpc({from(){throw new Error('No database read expected for an empty owner reply');}},()=>tables,{expectedPhone:phone});
+  let received;
+  const runtime = createInboundRuntime({supabase,conversationStore:null,env,
+    inbox:{async claim(){return [event];},async complete(){}},
+    outbound:{async sendTypingIndicator(){return {status:'accepted'};},async sendServiceReply(){throw new Error('No empty owner answer is sent');}},
+    onOwnerMessage:async input=>{received=input;return {answer:''};}});
+  assert.deepEqual(await runtime.processPending(),{claimed:1,completed:1});
+  assert.equal(received.message,'Confirm');
+  assert.equal(received.interactionId,'oab1.payload.signature');
+});
+
+test('owner worker forwards signed buttons and remints the same live choice on retry without persisting a token',async()=>{
+  const phone='+919871367051';
+  const event={id:18,claim_token:'claim',attempts:1,provider_message_id:'wamid.owner-proposal',sender_phone:phone,
+    message_type:'text',message_text:'Delete invoice INV-JOHN-1',provider_timestamp:new Date().toISOString()};
+  const action={id:73,version:4,workspace_id:'ws-owner',phone,consumed_at:null,
+    action:{type:'owner_invoice_delete_proposal',proposalId:'77777777-7777-4777-8777-777777777777',
+      expectedUpdatedAt:'2026-10-02T10:00:00Z',invoiceNumber:'INV-JOHN-1',expiresAt:new Date(Date.now()+600_000).toISOString()}};
+  const tables={
+    whatsapp_owner_verifications:[{workspace_id:'ws-owner',requested_by:'owner-1',verified_at:'2026-10-01T00:00:00Z',created_at:'2026-10-01T00:00:00Z',phone}],
+    workspaces:[{id:'ws-owner',owner_id:'owner-1'}],workspace_members:[{workspace_id:'ws-owner',user_id:'owner-1',role:'owner'}],
+    workspace_settings:[{workspace_id:'ws-owner',business_name:'Acme Studio',whatsapp_owner_phone:phone}],
+    whatsapp_consents:[{workspace_id:'ws-owner',customer_id:'owner-customer',phone,revoked_at:null,consented_by:'owner-1'}],
+    customers:[{id:'owner-customer',workspace_id:'ws-owner',phone,metadata:{whatsapp_owner:true}}],
+    whatsapp_global_suppressions:[],whatsapp_suppressions:[],
+  };
+  const messages=[];const pendingRows=[action];
+  const supabase={rpc:async()=>({data:null,error:null}),from(table){
+    const source=table==='whatsapp_messages'?messages:table==='whatsapp_pending_actions'?pendingRows:tables[table]||[];
+    const filters=[];let limit=100;
+    const q={select(){return q;},eq(key,value){filters.push(row=>row[key]===value);return q;},is(key,value){filters.push(row=>(row[key]??null)===value);return q;},
+      order(){return q;},limit(value){limit=value;return q;},
+      upsert(value){if(!source.some(row=>row.workspace_id===value.workspace_id&&row.idempotency_key===value.idempotency_key))source.unshift(structuredClone(value));return q;},
+      maybeSingle:async()=>({data:result()[0]||null}),
+      then(resolve,reject){return Promise.resolve({data:result()}).then(resolve,reject);}};
+    const result=()=>source.filter(row=>filters.every(filter=>filter(row))).slice(0,limit);
+    return q;
+  }};
+  installVerifiedOwnerRpc(supabase,()=>tables,{expectedPhone:phone});
+  const ownerReplyStore=createOwnerReplyStore({supabase,env,clock:()=>new Date()});
+  let generated=0,deliveries=0,claims=0,deferred=0,completed=0,eventDone=false;
+  const sent=[];
+  const outbound={
+    async sendTypingIndicator(){return {status:'accepted'};},
+    async sendServiceReply(input){
+      sent.push(structuredClone(input));deliveries++;
+      if(deliveries===2){const row=messages.find(item=>item.idempotency_key===`reply:${event.provider_message_id}`);if(row)row.status='accepted';return {status:'accepted'};}
+      return {status:'unknown',reason:'mocked graph uncertainty'};
+    },
+  };
+  const runtime=createInboundRuntime({supabase,conversationStore:null,env,outbound,clock:()=>Date.now(),
+    inbox:{async claim(){if(eventDone)return [];claims++;return [{...event,attempts:claims}];},async defer(){deferred++;},async complete(_event,error){if(!error){completed++;eventDone=true;}}},
+    onOwnerMessage:async input=>{
+      const saved=await ownerReplyStore.find(input);
+      if(saved)return {...saved,replayed:true};
+      generated++;
+      const buttons=createOwnerActionButtons({scope:{workspaceId:input.workspaceId,phone:input.phone},action,env,clock:()=>new Date()});
+      return ownerReplyStore.save(input,{answer:'Delete invoice INV-JOHN-1?',buttons,ownerActionRef:{pendingId:action.id,pendingVersion:action.version}});
+    },logger:{info(){},warn(){},error(){}}});
+
+  await runtime.processPending();
+  assert.deepEqual(sent[0].buttons.map(({title})=>title),['Delete','Keep invoice']);
+  assert.ok(deferred>0,'uncertain initial delivery leaves the owner event retryable');
+  assert.deepEqual(messages[0].owner_action_ref,{pendingId:73,pendingVersion:4});
+  assert.ok(!JSON.stringify(messages[0].owner_action_ref).includes(sent[0].buttons[0].id));
+
+  await runtime.processPending();
+  assert.equal(sent.length,2);
+  assert.deepEqual(sent[1].buttons,sent[0].buttons,'replay remints the same ID only while the pending row is current');
+  assert.equal(generated,1,'the saved owner reply is reused without rerunning the model/action');
+  assert.equal(completed,1);
+
+  await runtime.processPending();
+  assert.equal(sent.length,2,'accepted replay completes the inbox event without a second outbound message');
+  assert.equal(completed,1);
+});
+
+test('inbound interaction IDs are nullable and bounded in the durable event schema', async () => {
+  const migrationPath = new URL('../supabase/migrations/20261003140000_whatsapp_inbound_interaction_id.sql', import.meta.url);
+  let migration = null;
+  try { migration = await readFile(migrationPath, 'utf8'); } catch {}
+  assert.equal(typeof migration, 'string', 'the inbox needs a migration for the verified button reference');
+  const db = new PGlite();
+  try {
+    await db.exec(`create role anon; create role authenticated; create role service_role bypassrls;
+      create table public.workspaces(id uuid primary key);
+      create table public.whatsapp_suppressions(workspace_id uuid, phone text, primary key(workspace_id,phone));
+      create table public.whatsapp_global_suppressions(phone text primary key, source_message_id text);`);
+    await db.exec(await readFile(new URL('../supabase/migrations/20260927110000_whatsapp_inbound_events.sql', import.meta.url), 'utf8'));
+    await db.exec(migration);
+    const base = {provider_message_id:'wamid.bound-button',phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID,
+      sender_phone:'+919871367051',message_type:'interactive',message_text:'Confirm'};
+    await db.query('insert into public.whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text) values ($1,$2,$3,$4,$5)',
+      [base.provider_message_id,base.phone_number_id,base.sender_phone,base.message_type,base.message_text]);
+    await db.query('insert into public.whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,interaction_id) values ($1,$2,$3,$4,$5,$6)',
+      ['wamid.bound-button-2',base.phone_number_id,base.sender_phone,base.message_type,base.message_text,'oab1.payload.signature']);
+    await assert.rejects(db.query('insert into public.whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,interaction_id) values ($1,$2,$3,$4,$5,$6)',
+      ['wamid.bound-button-3',base.phone_number_id,base.sender_phone,base.message_type,base.message_text,'x'.repeat(257)]), /whatsapp_inbound_events_interaction_id_check/);
+  } finally { await db.close(); }
 });
 
 test('unbound sender media is routed to verification without extraction', async () => {

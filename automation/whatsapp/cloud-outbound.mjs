@@ -1,6 +1,8 @@
 import {authorizeOwnerPhone} from './owner-binding.mjs';
 import {createConversationStore,conversationCallbackToken} from './conversation-store.mjs';
 import {getSendEligibility} from './consent.mjs';
+import {normalizeOwnerActionButtons} from './owner-action-buttons.mjs';
+import {OWNER_ACTION_CHOICES_UNAVAILABLE_REPLY,normalizeOwnerActionRef} from './owner-reply-store.mjs';
 
 const APPROVED_QA_RECIPIENTS = new Set(['+919871367051', '+919818685252']);
 const E164 = /^\+[1-9]\d{6,14}$/;
@@ -110,8 +112,11 @@ export function createWhatsAppOutbound({
     return null;
   }
 
-  async function prepareMessage({workspaceId,to,kind,payload,key,customerId=null,invoiceId=null,audience='customer'}) {
-    const body=payload.type==='template'?`Hi, this is ${payload.template.components[0].parameters[0].text}. Invoice ${payload.template.components[0].parameters[1].text} has an update. Reply STOP anytime.`:payload.text?.body||payload.image?.caption||payload.document?.caption||'[Attachment]';
+  async function prepareMessage({workspaceId,to,kind,payload,key,customerId=null,invoiceId=null,audience='customer',ownerActionFallback=null}) {
+    const body=payload.type==='template'?`Hi, this is ${payload.template.components[0].parameters[0].text}. Invoice ${payload.template.components[0].parameters[1].text} has an update. Reply STOP anytime.`:payload.text?.body||payload.interactive?.body?.text||payload.image?.caption||payload.document?.caption||'[Attachment]';
+    const fallbackRef=ownerActionFallback==null?null:normalizeOwnerActionRef(ownerActionFallback);
+    if(ownerActionFallback!=null&&(!fallbackRef||audience!=='owner'||kind!=='normal'||body!==OWNER_ACTION_CHOICES_UNAVAILABLE_REPLY
+      ||payload.type!=='text'||!payload.text||payload.interactive))throw new TypeError('invalid owner action fallback');
     if(workspaceId&&conversationStore){
       const stored=await conversationStore.record({workspaceId,customerId,invoiceId,phone:to,direction:'outbound',audience,body,kind,status:'pending',key});
       if(!stored?.body)throw Error('Outbound message intent missing');
@@ -121,11 +126,21 @@ export function createWhatsAppOutbound({
       if(stored.status==='blocked')throw Error('Outbound message was blocked');
       // A retry before the atomic claim must send the exact first saved text.
       if(payload.type==='template'&&stored.body!==body)throw Error('Reviewed template intent changed');
-      if(payload.text)payload.text.body=stored.body;
+      if(fallbackRef){
+        const storedRef=normalizeOwnerActionRef(stored.owner_action_ref);
+        if(!['pending','failed'].includes(stored.status)||!storedRef
+          ||storedRef.pendingId!==fallbackRef.pendingId||storedRef.pendingVersion!==fallbackRef.pendingVersion)
+          throw Error('Owner action fallback no longer matches the pending receipt');
+        // This is a fixed recovery sentence, permitted only for the same
+        // pending owner-action receipt. Never let a caller replace ordinary
+        // saved replies through retry metadata.
+        payload.text.body=OWNER_ACTION_CHOICES_UNAVAILABLE_REPLY;
+      }else if(payload.text)payload.text.body=stored.body;
+      if(payload.interactive)payload.interactive.body.text=stored.body;
       if(payload.image)payload.image.caption=stored.body;
       if(payload.document)payload.document.caption=stored.body;
       payload.biz_opaque_callback_data=conversationCallbackToken(workspaceId,key);
-    }
+    }else if(fallbackRef)throw Error('Owner action fallback requires a durable receipt');
     return payload;
   }
 
@@ -253,7 +268,7 @@ export function createWhatsAppOutbound({
     return postMessage({workspaceId,to,key,kind:'invoice_update',payload});
   }
 
-  async function sendServiceReply({workspaceId = null, to, body, lastInboundAt, kind = 'normal', messageId, businessName, audience='customer', ownerLinkResult, phase='answer'} = {}) {
+  async function sendServiceReply({workspaceId = null, to, body, buttons, ownerActionFallback, lastInboundAt, kind = 'normal', messageId, businessName, audience='customer', ownerLinkResult, phase='answer'} = {}) {
     if(!['answer','ack'].includes(phase)||(phase==='ack'&&(audience!=='owner'||kind!=='normal')))throw new TypeError('invalid owner delivery phase');
     const blocked = preflight({workspaceId, to, kind});
     if (blocked) return blocked;
@@ -262,6 +277,13 @@ export function createWhatsAppOutbound({
     if (!withinServiceWindow(lastInboundAt, clock)) return block(logger, 'service_window_closed', {workspaceId, to, kind});
     if (typeof authorizeInboundReply !== 'function') return block(logger, 'missing_inbound_authorizer', {workspaceId, to, kind});
     const inboundId = nonempty(messageId, 'messageId');
+    const ownerButtons=normalizeOwnerActionButtons(buttons);
+    if(ownerButtons.length&&(audience!=='owner'||kind!=='normal'))throw new TypeError('interactive buttons are owner-only');
+    const fallbackRef=ownerActionFallback==null?null:normalizeOwnerActionRef(ownerActionFallback);
+    if(ownerActionFallback!=null&&(!fallbackRef||audience!=='owner'||kind!=='normal'||ownerButtons.length
+      ||body!==OWNER_ACTION_CHOICES_UNAVAILABLE_REPLY))throw new TypeError('invalid owner action fallback');
+    if(ownerButtons.length&&Array.from(String(body??'')).length>1024)
+      throw new TypeError('interactive owner button body exceeds the WhatsApp limit');
     if (kind === 'normal') nonempty(workspaceId, 'workspaceId');
     if (kind === 'verification' && workspaceId !== null) return block(logger, 'verification_must_be_unbound', {workspaceId, to, kind});
     const owner = nonempty(businessName, 'businessName', 200);
@@ -304,7 +326,10 @@ export function createWhatsAppOutbound({
     }
     if(audience!=='owner')text=`${text}\n\n- ${owner}`;
     const key=`${phase==='ack'?'ack':'reply'}:${inboundId}`;
-    const payload=await prepareMessage({workspaceId,to,kind,audience,customerId,key,payload:{type:'text',text:{preview_url:false,body:text}}});
+    const replyPayload=ownerButtons.length?{type:'interactive',interactive:{type:'button',body:{text},
+      action:{buttons:ownerButtons.map(({id,title})=>({type:'reply',reply:{id,title}}))}}}
+      :{type:'text',text:{preview_url:false,body:text}};
+    const payload=await prepareMessage({workspaceId,to,kind,audience,customerId,key,payload:replyPayload,ownerActionFallback:fallbackRef});
     if(audience!=='owner'&&!payload.text.body.endsWith(`\n\n- ${owner}`))return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed'});
     const authorization = await authorizeInboundReply({workspaceId, phone: to, kind, messageId: inboundId,...(audience==='owner'?{audience,phase}: {})});
     if (authorization?.allowed !== true) return denyPrepared({workspaceId,to,kind,key,reason:authorization?.reason||'inbound_reply_denied'});

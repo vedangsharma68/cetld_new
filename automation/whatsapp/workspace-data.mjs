@@ -1,3 +1,5 @@
+import {sanitizeReminderTemplate} from '../preferences.mjs';
+import {sanitizeOwnerBotPreferences,mergeOwnerBotPreferences,OWNER_BOT_LANGUAGE_OPTIONS} from './bot-preferences.mjs';
 import {
   CF_PRIMARY_MODEL,
   GEMINI_FALLBACK_MODEL,
@@ -22,10 +24,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const TABLES = Object.freeze({
   workspace_settings: {
     label:'Business settings', scope:'workspace',
-    columns:['business_name','default_currency','default_timezone','follow_up_preferences','created_at','updated_at'],
-    defaults:['business_name','default_currency','default_timezone','follow_up_preferences'],
+    columns:['business_name','default_currency','default_timezone','follow_up_preferences','owner_bot_preferences','created_at','updated_at'],
+    defaults:['business_name','default_currency','default_timezone','follow_up_preferences','owner_bot_preferences'],
     filters:['business_name','default_currency','default_timezone'],
-    writeColumns:['business_name','default_currency','default_timezone','follow_up_preferences'],
+    writeColumns:['business_name','default_currency','default_timezone','follow_up_preferences','owner_bot_preferences'],
   },
   workspace_ai_settings: {
     label:'AI model settings', scope:'workspace',
@@ -80,14 +82,14 @@ const WRITE_SCHEMA = Object.freeze({
     update:['invoice_number','issue_date','due_date','currency','total_amount','notes','status'],
     reviewAttachment:['invoice_number','customer_name','issue_date','due_date','total_amount','currency','invoice_direction'],
   },
-  workspace_settings:{update:['business_name','follow_up_preferences','default_currency','default_timezone']},
+  workspace_settings:{update:['business_name','follow_up_preferences','default_currency','default_timezone','owner_bot_preferences']},
 });
 
 function definition() {
   // The server validates the full catalog. Do not send that catalog on every
   // model request; describe exposes it when the model needs unfamiliar fields.
   return {type:'function',function:{name:'workspaceData',
-    description:'Read or propose workspace changes. Prefer structured fields; request text handles unfamiliar operations. Omit columns for defaults. Customers use name/email/phone; invoices use customer_name (joined name; ilike for partial names), invoice_number/total_amount/status. Settings use primary_model/fallback_model/follow_up_preferences. describe lists fields; pending reads proposals; confirm/cancel decide them.',
+    description:'Read or change workspace data. Clear owner instructions execute directly when allowed; otherwise a proposal needs a decision. Prefer structured fields; request text handles unfamiliar operations. Omit columns for defaults. Customers use name/email/phone; invoices use customer_name (joined name; ilike for partial names), invoice_number/total_amount/status. Settings use primary_model/fallback_model/follow_up_preferences. describe lists fields; pending reads proposals; confirm/cancel decide them.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         request:{type:'string',minLength:1,maxLength:1200},
@@ -115,7 +117,10 @@ function catalog(table=null) {
       label:spec.label,columns:spec.columns,filters:spec.filters,
       writeFields:WRITE_SCHEMA[name]||{},
       ...(name==='invoices'?{writeValueConstraints:{update:{status:['paid']}}}:{}),
-      ...(name==='workspace_settings'?{writeValueConstraints:{update:{follow_up_preferences:{tone:['gentle','professional','firm']}}}}:{}),
+      ...(name==='workspace_settings'?{writeValueConstraints:{update:{
+        owner_bot_preferences:{description:'Owner assistant style; partial fields merge with saved preferences.',assistantName:'text, 1-50 characters',tone:['concise','friendly','formal'],language:OWNER_BOT_LANGUAGE_OPTIONS.map(item=>item.value),replyLength:['short','balanced','detailed'],confirmationMode:['direct','buttons'],serviceReplySignature:'text, up to 120 characters',customInstruction:'style text, up to 500 characters'},
+        follow_up_preferences:{description:'Customer reminder settings; partial fields merge with saved preferences.',tone:['gentle','professional','firm'],reminderTemplate:'up to 1000 characters; tokens {{business_name}}, {{customer_name}}, {{invoice_number}}, {{balance}}, {{due_date}}',allowedWeekdays:'array of weekday numbers 0-6',escalation:['pause','manual_review'],stopOnPayment:true}
+      }}}:{}),
       ...(name==='workspace_ai_settings'?{writeValueConstraints:{update:{primary_model:VERIFIED_MODEL_CATALOG.filter(entry=>entry.roles.includes('primary')).map(entry=>entry.id),fallback_model:[null,...VERIFIED_MODEL_CATALOG.filter(entry=>entry.roles.includes('fallback')).map(entry=>entry.id)]}}}:{}),
       operations:name==='invoices'?['read','create','update','delete','restore','reviewAttachment']
         :name==='customers'?['read','create','update','delete']
@@ -144,6 +149,7 @@ function safeFollowupPreferences(value) {
   if(['pause','manual_review'].includes(value.escalation))out.escalation=value.escalation;
   for(const key of ['pauseOnReply','dailySummary'])if(typeof value[key]==='boolean')out[key]=value[key];
   if(value.stopOnPayment===true)out.stopOnPayment=true;
+  if(value.reminderTemplate!==undefined)try{out.reminderTemplate=sanitizeReminderTemplate(value.reminderTemplate);}catch{}
   if(typeof value.businessName==='string'&&value.businessName.length<=200)out.businessName=value.businessName;
   if(typeof value.timezone==='string'&&value.timezone.length<=100)try{new Intl.DateTimeFormat('en',{timeZone:value.timezone});out.timezone=value.timezone;}catch{}
   return out;
@@ -286,6 +292,13 @@ function validateValues(table,operation,values,current={}) {
   if(!Object.keys(values).length&&!(table==='customers'&&operation==='delete'))throw new TypeError('empty write');
   const clean={};
   for(const [key,value] of Object.entries(values)) {
+    if(key==='follow_up_preferences'){
+      if(!ownObject(value)||!exactKeys(value,['tone','firstReminderDays','cadenceDays','maxReminders','contactStart','contactEnd','allowedWeekdays','escalation','pauseOnReply','stopOnPayment','dailySummary','reminderTemplate'])||JSON.stringify(value).length>8192)throw new TypeError('invalid follow-up preferences');
+      clean[key]={...value};
+      if(value.reminderTemplate!==undefined)clean[key].reminderTemplate=sanitizeReminderTemplate(value.reminderTemplate);
+      continue;
+    }
+    if(key==='owner_bot_preferences'){clean[key]=sanitizeOwnerBotPreferences(value);continue;}
     if(value===null&&['company_name','email','phone','fallback_model'].includes(key)){clean[key]=null;continue;}
     if(typeof value==='string') {
       const text=value.trim();
@@ -351,7 +364,7 @@ function validateAdapterSettingsValues(values) {
 }
 
 export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,getRuntimeConfig,planRequest,authorize,
-  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt}={}) {
+  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,confirmationMode='buttons'}={}) {
   if(!supabase?.from||typeof scope?.workspaceId!=='string')throw new TypeError('Supabase and verified workspace scope required');
   let replyRequirement=null;
   let writeAttempted=false;
@@ -510,7 +523,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     } else if(table==='workspace_settings') {
       if(filters.length)throw Object.assign(new Error('workspace settings are already scoped'),{code:'INVALID'});
       await ctx.assertAuthorized();
-      let query=supabase.from(table).select('business_name,default_currency,default_timezone,updated_at').eq('workspace_id',scope.workspaceId);
+      let query=supabase.from(table).select('business_name,default_currency,default_timezone,follow_up_preferences,owner_bot_preferences,updated_at').eq('workspace_id',scope.workspaceId);
       const found=await query.maybeSingle();
       await ctx.assertAuthorized();
       ctx.assertLive();
@@ -518,6 +531,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       row=found?.data||null;
       if(!row)throw Object.assign(new Error('workspace settings unavailable'),{code:'NOT_FOUND'});
       targetId=scope.workspaceId;expectedUpdatedAt=row.updated_at;
+      if(values.owner_bot_preferences)clean.owner_bot_preferences=mergeOwnerBotPreferences(row.owner_bot_preferences,values.owner_bot_preferences);
       summary=Object.entries(clean).map(([key,value])=>`${displayField(key)}: ${row[key]??'not set'} → ${value}`).join('; ');
     } else if(table==='workspace_ai_settings') {
       if(filters.length)throw Object.assign(new Error('AI settings are already scoped'),{code:'INVALID'});
@@ -553,7 +567,8 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     if(!['customers','workspace_settings','workspace_ai_settings'].includes(params.table))
       return typeof executeSafetyOperation==='function'?delegate(params,ctx):fail();
     if(params.table==='workspace_settings'&&params.operation==='update'
-      &&Object.keys(params.values).some(key=>['business_name','follow_up_preferences'].includes(key))) {
+      &&Object.keys(params.values).every(key=>['business_name','follow_up_preferences'].includes(key))
+      &&Object.keys(params.values.follow_up_preferences||{}).every(key=>['tone','maxReminders','cadenceDays','firstReminderDays','contactStart','contactEnd','pauseOnReply','dailySummary'].includes(key))) {
       validateAdapterSettingsValues(params.values);
       return delegate(params,ctx);
     }
@@ -668,6 +683,11 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         return params.operation==='pending'?readResult(result):result;
       }
       if(params.operation==='read')return readResult(await read(params,ctx));
+      if(['create','update','delete','restore'].includes(params.operation)&&confirmationMode==='direct'&&typeof executeDirectOperation==='function'){
+        ctx.assertLive();await ctx.assertAuthorized();writeAttempted=true;
+        const result=await executeDirectOperation(params,ctx);
+        return {...sanitise(result,scope),operation:params.operation,table:params.table,writeAttempted:true};
+      }
       if(params.operation==='create'||params.operation==='update'||params.operation==='delete')return await propose(params,ctx);
       if(['restore','analyzeAttachment','saveAttachment','reviewAttachment','sendFile'].includes(params.operation)) {
         if(typeof executeSafetyOperation!=='function')return fail();
@@ -683,3 +703,5 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
   return Object.freeze({definition:definition(),execute,getReplyRequirement:()=>replyRequirement?{...replyRequirement}:null,
     getWriteAttempted:()=>writeAttempted,getAttemptedOperation:()=>attemptedOperation});
 }
+
+export {sanitise as sanitizeWorkspaceToolResult};

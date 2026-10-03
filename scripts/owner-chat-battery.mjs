@@ -737,7 +737,7 @@ const FAST_SCENARIOS = [
     assertNoForeignData(db);
     return {elapsedMs:elapsed,providerLegs:requests,diagnostics:result.agentDiagnostics};
   }),
-  scenario('same_wamid_and_same_sender_text_reuses_saved_reply_within_two_minutes',async()=>{
+  scenario('same_wamid_replays_but_new_message_reads_fresh_state',async()=>{
     const message='which model r u usin';
     const harness=makeHandler({script:{[message]:{steps:[toolStep({},'getAIProviderConfiguration')],final:(_request,result)=>replyForResult(result)}}});
     const original={message,messageId:'wamid.owner-repeat-1'};
@@ -751,9 +751,9 @@ const FAST_SCENARIOS = [
       phone:OWNER_CHAT_SCOPE.phone,audience:'owner',direction:'inbound',body:message,status:'received',kind:'text',
       provider_message_id:'wamid.owner-repeat-2',idempotency_key:null,created_at:DEFAULT_NOW.toISOString()});
     const repeated=await harness.handler({...OWNER_CHAT_SCOPE,message,messageId:'wamid.owner-repeat-2'});
-    if(!repeated.replayed)throw new Error('same sender text within two minutes did not reuse the prior reply');
+    if(repeated.replayed)throw new Error('new message ID reused stale text reply');
     if(repeated.answer!==first.answer)throw new Error('same-text replay changed the canonical answer');
-    if(harness.observed.calls.length!==2)throw new Error('duplicate sender text entered the model loop');
+    if(harness.observed.calls.length!==4)throw new Error('repeated question did not read fresh configuration');
     assertNoForeignData(harness.db);
   }),
 ];
@@ -1039,7 +1039,7 @@ export async function runLiveBattery({env=process.env,scenarioNames,onScenario,o
   return {mode:'live',scenarioCount:results.length,scenarios:results,
     fastOnlyScenarios:['repeated_tool_call_uses_cached_result_and_executes_once','unknown_tool_recovers_to_workspace_data_in_same_conversation',
       'read_only_tool_rounds_leave_final_answer_reserve','time_budget_timeout_returns_contextual_read_failure',
-      'empty_tools_cloudflare_400_does_not_open_breaker','same_wamid_and_same_sender_text_reuses_saved_reply_within_two_minutes'],
+      'empty_tools_cloudflare_400_does_not_open_breaker','same_wamid_replays_but_new_message_reads_fresh_state'],
     proof:'every real provider response came from the saved Cloudflare primary'};
 }
 

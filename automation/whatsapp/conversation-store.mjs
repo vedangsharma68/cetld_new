@@ -3,21 +3,32 @@ import {createHash} from 'node:crypto';
 export const conversationCallbackToken=(workspaceId,key)=>createHash('sha256').update(JSON.stringify([workspaceId,key])).digest('hex');
 
 const check=result=>{if(result?.error)throw result.error;return result?.data;};
+function ownerActionReference(value,audience,direction){
+  if(value==null)return null;
+  if(audience!=='owner'||direction!=='outbound'||!value||typeof value!=='object'||Array.isArray(value))
+    throw new TypeError('Owner action reference is only valid on an owner reply.');
+  const pendingId=Number(value.pendingId),pendingVersion=Number(value.pendingVersion);
+  if(!Number.isSafeInteger(pendingId)||pendingId<1||!Number.isSafeInteger(pendingVersion)||pendingVersion<1)
+    throw new TypeError('Invalid owner action reference.');
+  return {pendingId,pendingVersion};
+}
 
 /** Permanent dashboard history is separate from the bot's bounded context. */
 export function createConversationStore(supabase) {
   return {
     async record({workspaceId,customerId=null,invoiceId=null,phone,direction,body,kind='text',
-      audience='customer',status,providerMessageId=null,key,createdAt}) {
+      audience='customer',status,providerMessageId=null,key,createdAt,ownerActionRef=null}) {
       if(!workspaceId)return;
+      const actionRef=ownerActionReference(ownerActionRef,audience,direction);
       check(await supabase.from('whatsapp_messages').upsert({
         workspace_id:workspaceId,customer_id:customerId,invoice_id:invoiceId,phone,direction,
         body:String(body||'').slice(0,4000),kind,audience,status,
         provider_message_id:providerMessageId,idempotency_key:key,
+        ...(actionRef?{owner_action_ref:actionRef}:{}),
         ...(direction==='outbound'?{callback_token:conversationCallbackToken(workspaceId,key)}:{}),
         ...(createdAt?{created_at:createdAt}:{}),
       },{onConflict:'workspace_id,idempotency_key',ignoreDuplicates:true}));
-      if(direction==='outbound')return check(await supabase.from('whatsapp_messages').select('body,audience,phone,customer_id,invoice_id,kind,status')
+      if(direction==='outbound')return check(await supabase.from('whatsapp_messages').select('body,audience,phone,customer_id,invoice_id,kind,status,owner_action_ref')
         .eq('workspace_id',workspaceId).eq('idempotency_key',key).maybeSingle());
     },
     async status({messageId,phone,status,callbackToken=null}) {

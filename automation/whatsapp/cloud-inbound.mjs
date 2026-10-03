@@ -7,6 +7,7 @@ import {writeConversationTurn} from './conversation-memory.mjs';
 
 const MAX_MESSAGES = 100;
 const MAX_INBOUND_RETRY_AGE_MS = 60 * 60_000;
+const MAX_INTERACTION_ID_LENGTH = 256;
 function staleInboundEvent(event, now) {
   const receivedAt = Date.parse(event.received_at || event.created_at || event.provider_timestamp || '');
   return Number.isFinite(receivedAt) && now - receivedAt > MAX_INBOUND_RETRY_AGE_MS;
@@ -43,11 +44,19 @@ export function parseMetaMessages(payload, expectedPhoneNumberId, expectedWabaId
       const phone = sender.startsWith('+') ? sender : `+${sender}`;
       const type = String(message?.type || '');
       const media = type === 'image' || type === 'document' ? message?.[type] : null;
-      const body = type === 'text' ? message?.text?.body : type === 'button' ? message?.button?.text : type === 'interactive' ? (message?.interactive?.button_reply?.title || message?.interactive?.list_reply?.title) : media?.caption || '';
+      const buttonReply = type === 'interactive' ? message?.interactive?.button_reply : null;
+      const listReply = type === 'interactive' ? message?.interactive?.list_reply : null;
+      const interactionId = buttonReply ? buttonReply.id : listReply?.id;
+      // Never reinterpret a provider's visible reply title when its opaque
+      // selection reference is absent or malformed.
+      if ((buttonReply || listReply) && (typeof interactionId !== 'string'
+          || !interactionId.trim() || Buffer.byteLength(interactionId, 'utf8') > MAX_INTERACTION_ID_LENGTH)) continue;
+      const body = type === 'text' ? message?.text?.body : type === 'button' ? message?.button?.text : type === 'interactive' ? (buttonReply?.title || listReply?.title) : media?.caption || '';
       if (!id || id.length > 256 || !E164.test(phone) || !type || type.length > 64 || typeof body !== 'string' || body.length > 4000) continue;
       const seconds = Number(message?.timestamp);
       const timestamp = Number.isSafeInteger(seconds) && seconds > 0 ? new Date(seconds * 1000).toISOString() : null;
       found.push({ provider_message_id: id, phone_number_id: String(expectedPhoneNumberId), sender_phone: phone, message_type: type, message_text: body, provider_timestamp: timestamp,
+        ...(interactionId ? {interactionId} : {}),
         ...(media ? {media_id: String(media.id || ''), media_mime_type: String(media.mime_type || ''), media_caption: String(media.caption || '')} : {}) });
     }
   }
@@ -65,8 +74,17 @@ export class SupabaseInboundInbox {
 
   async enqueue(messages) {
     if (!messages.length) return [];
+    const rows = messages.map(({interactionId, ...message}) => {
+      const storedInteractionId = interactionId ?? message.interaction_id;
+      if (storedInteractionId === undefined) return message;
+      if (typeof storedInteractionId !== 'string' || !storedInteractionId.trim()
+          || Buffer.byteLength(storedInteractionId, 'utf8') > MAX_INTERACTION_ID_LENGTH) {
+        throw new TypeError('Invalid WhatsApp interaction ID');
+      }
+      return {...message, interaction_id: storedInteractionId};
+    });
     const inserted = dataOrThrow(await this.supabase.from('whatsapp_inbound_events')
-      .upsert(messages, { onConflict: 'provider_message_id', ignoreDuplicates: true })
+      .upsert(rows, { onConflict: 'provider_message_id', ignoreDuplicates: true })
       .select('*'), 'enqueue') || [];
     const stopIds=[];
     for(const message of messages.filter(item=>isOptOut(item.message_text))){
@@ -296,6 +314,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       if (signal?.aborted || (Number.isFinite(deadlineAt) && clock() >= deadlineAt)) throw Object.assign(new Error('Inbound processing deadline expired'), {name: 'AbortError'});
     };
     active();
+    const interactionId = event.interaction_id ?? event.interactionId;
     // Resolve the verified owner before interpreting STOP/CANCEL or onboarding
     // words. Those strings can be ordinary owner conversation turns; only a
     // non-owner debtor message installs consent barriers and exits the model.
@@ -387,6 +406,8 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       try{
         response = event.media_error&&!owner ? MEDIA_FETCH_FAILED_REPLY : await handle({ workspaceId: binding.workspaceId, customerId: binding.customerId, ownerId:binding.ownerId,
         phone: event.sender_phone, message: event.message_text, messageId: event.provider_message_id, media,
+        ...(owner&&typeof interactionId==='string'&&Buffer.byteLength(interactionId,'utf8')<=MAX_INTERACTION_ID_LENGTH
+          ?{interactionId}:{}),
         mediaError: owner?ownerMediaError:event.media_ref && !media ? 'Stored media unavailable' : null, signal, deadlineAt,
         ...(owner?{verifiedOwnerBinding:binding,allowDeferred:true,checkpoint:event.owner_job_checkpoint||null,
           onCheckpoint:typeof inbox.checkpoint==='function'?checkpoint=>inbox.checkpoint(event,binding.workspaceId,binding.ownerId,checkpoint):null}: {}) });
@@ -411,6 +432,8 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
         const send = response?.media && typeof sender.sendServiceMedia === 'function' ? sender.sendServiceMedia.bind(sender) : sender.sendServiceReply.bind(sender);
         const sent = await send({ workspaceId: binding.workspaceId, to: event.sender_phone, body: answer, caption: answer,
           ...(response?.media ? {media: response.media} : {}),
+          ...(owner&&Array.isArray(response?.buttons)?{buttons:response.buttons}:{}),
+          ...(owner&&response?.ownerActionFallback?{ownerActionFallback:response.ownerActionFallback}:{}),
           lastInboundAt: event.provider_timestamp || event.received_at, kind: 'normal', audience:owner?'owner':'customer', messageId: event.provider_message_id,
           businessName: await businessName(binding.workspaceId) });
         if(owner&&sent?.status!=='accepted')throw Object.assign(new Error('Owner reply was not accepted for delivery.'),{code:'OWNER_REPLY_NOT_ACCEPTED'});

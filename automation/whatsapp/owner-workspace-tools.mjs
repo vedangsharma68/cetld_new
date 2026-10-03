@@ -1,3 +1,5 @@
+import {sanitizeWorkspaceToolResult} from './workspace-data.mjs';
+import {createOwnerDirectRuntime} from './owner-direct-runtime.mjs';
 import {createOwnerSafetyTools} from './owner-agent.mjs';
 import {createWorkspaceDataTool} from './workspace-data.mjs';
 
@@ -10,6 +12,7 @@ export function createOwnerWorkspaceTools(options = {}) {
   else options.signal?.addEventListener('abort',abort,{once:true});
   let writeAttempted = false;
   let lastTool = null;
+  const direct=createOwnerDirectRuntime({...options,adapter:options.directWriteAdapter});
   const safety = createOwnerSafetyTools({...options,signal:controller.signal});
   const invoke = (name, args = {}) => safety.execute(name, args);
   const target = params => {
@@ -18,6 +21,8 @@ export function createOwnerWorkspaceTools(options = {}) {
     return filters[0].value;
   };
   const tool = createWorkspaceDataTool({...options,signal:controller.signal,
+    confirmationMode:options.botPreferences?.confirmationMode||'buttons',
+    executeDirectOperation:(params)=>direct.execute(params),
     getRuntimeConfig: () => invoke('getAIProviderConfiguration'),
     async executeSafetyOperation(params) {
       if(params.signal?.aborted || (Number.isFinite(params.deadlineAt) && Date.now()>=params.deadlineAt)) throw Object.assign(new Error(),{code:'OWNER_LOOP_TIMEOUT'});
@@ -80,6 +85,15 @@ export function createOwnerWorkspaceTools(options = {}) {
     getAttachmentIngested: safety.getAttachmentIngested,
     getWriteAttempted: () => writeAttempted || tool.getWriteAttempted?.() || false,
     getAttemptedOperation: () => lastTool==='getAIProviderConfiguration'?lastTool:tool.getAttemptedOperation?.(),
-    getReplyRequirement() {return tool.getReplyRequirement?.() || safety.getReplyRequirement();},
+    getReplyRequirement() {
+      const requirement=tool.getReplyRequirement?.()||safety.getReplyRequirement();
+      const operation=tool.getAttemptedOperation?.()?.operation;
+      const attachmentReview=['saveAttachment','reviewAttachment'].includes(operation)
+        ||(['pending','confirm'].includes(operation)&&options.pendingAtStart?.action?.type==='invoice_review_draft');
+      return options.interactiveAvailable&&!attachmentReview&&requirement?.confirmationText?{...requirement,maxLength:Math.min(requirement.maxLength||900,900),confirmationText:null,requiresCancel:false,requiresReplyCue:false,buttonsAvailable:true}:requirement;
+    },
+    decideButton:async input=>sanitizeWorkspaceToolResult(await direct.decideButton(input),options.scope),
+    lookupCompleted:async()=>sanitizeWorkspaceToolResult(await direct.lookupCompleted(),options.scope),
+    async getPendingActionForButtons(){return options.pending?.loadPendingAction?.({...options.scope});},
   };
 }

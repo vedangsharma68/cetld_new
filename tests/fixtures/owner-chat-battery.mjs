@@ -28,7 +28,7 @@ export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallba
     whatsapp_consents:[{workspace_id:OWNER_CHAT_SCOPE.workspaceId,customer_id:OWNER_CHAT_SCOPE.customerId,
       phone:OWNER_CHAT_SCOPE.phone,consented_by:OWNER_CHAT_SCOPE.ownerId,revoked_at:null}],
     whatsapp_global_suppressions:[],whatsapp_suppressions:[],
-    workspace_settings: [{workspace_id:OWNER_CHAT_SCOPE.workspaceId,business_name:'Northstar Studio',whatsapp_owner_phone:OWNER_CHAT_SCOPE.phone,default_currency:'INR',
+    workspace_settings: [{workspace_id:OWNER_CHAT_SCOPE.workspaceId,business_name:'Northstar Studio',owner_bot_preferences:{confirmationMode:'buttons'},whatsapp_owner_phone:OWNER_CHAT_SCOPE.phone,default_currency:'INR',
       default_timezone:'Asia/Kolkata',follow_up_preferences:{tone:'gentle',maxReminders:3,cadenceDays:4,firstReminderDays:2,
         contactStart:'09:00',contactEnd:'18:00',pauseOnReply:true,dailySummary:false},updated_at:now}],
     customers: [
@@ -291,9 +291,7 @@ export function createOwnerReplyStore() {
     async find(scope) {
       const saved=replies.get(key(scope));
       if(saved)return clone(saved);
-      const previous=[...history].reverse().find(item=>item.workspaceId===scope.workspaceId&&item.phone===scope.phone
-        &&item.messageId!==scope.messageId&&item.message===scope.message&&Date.now()-item.at<=120_000);
-      return previous?clone(previous.result):null;
+      return null;
     },
     async save(scope,result) {
       const canonical=clone(result);

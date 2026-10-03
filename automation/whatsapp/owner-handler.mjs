@@ -1,3 +1,5 @@
+import {normalizeOwnerBotPreferences,normalizeOwnerServiceReplyText} from './bot-preferences.mjs';
+import {createOwnerActionButtons,verifyOwnerActionButton} from './owner-action-buttons.mjs';
 import {AIProvider, CF_PRIMARY_MODEL, GEMINI_FALLBACK_MODEL, sanitizeModelSettings} from '../../ai/provider.mjs';
 import {createInvoiceLifecycleService} from '../../ai/invoice-lifecycle.mjs';
 import {createOwnerScopedStore} from '../../ai/whatsapp-channel.mjs';
@@ -58,7 +60,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
   agentFactory=runOwnerAgent,
   toolsFactory=createOwnerWorkspaceTools,
   lifecycleFactory=rpc=>createInvoiceLifecycleService({rpc}),
-  clock=()=>new Date(),logger=console,replyStore=createOwnerReplyStore({supabase,clock})}={}){
+  clock=()=>new Date(),logger=console,replyStore=createOwnerReplyStore({supabase,clock,env})}={}){
   if(!supabase?.from)throw new TypeError('A server-side Supabase client is required');
   const processTurn=async(scope,onToolsReady=()=>{},onProgress=()=>{},authorizeTurn=authorize)=>{
     const {workspaceId,ownerId,phone,messageId,media,mediaError,signal,deadlineAt}=scope;
@@ -82,6 +84,13 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         logger?.error?.('WhatsApp owner model settings read failed',{code:String(error?.code||'SETTINGS_UNAVAILABLE').slice(0,60)});
         return {settings:{},available:false};
       }
+    };
+    const loadBotPreferences=async()=>{
+      try{
+        const row=dataOrThrow(await timedContextRead(logger,'bot_preferences',()=>supabase.from('workspace_settings')
+          .select('owner_bot_preferences').eq('workspace_id',workspaceId).maybeSingle()));
+        return normalizeOwnerBotPreferences(row?.owner_bot_preferences);
+      }catch{return normalizeOwnerBotPreferences({confirmationMode:'buttons'});}
     };
     const loadPending=async()=>{
       let pendingAtStart=null,pendingInitialState=null,available=pendingStoreAvailable;
@@ -131,8 +140,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         return {workspaceId,userId:ownerId,role:'owner',async query(){throw Object.assign(new Error(),{code:'UNAVAILABLE'});}};
       }
     };
-    const [settingsState,pendingState,historyState,lifecycleState,ownerStoreState]=await Promise.all([
-      loadSettings(),loadPending(),loadHistory(),loadLifecycle(),loadOwnerStore(),
+    const [settingsState,pendingState,historyState,lifecycleState,ownerStoreState,botPreferences]=await Promise.all([
+      loadSettings(),loadPending(),loadHistory(),loadLifecycle(),loadOwnerStore(),loadBotPreferences(),
     ]);
     const {settings,available:settingsAvailable}=settingsState;
     const {pendingAtStart,pendingInitialState,available:pendingStateAvailable}=pendingState;
@@ -152,7 +161,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     const invoiceStore=scopeInput=>invoiceStoreFactory({...scope,...scopeInput,authorize:reauthorize});
     let tools,toolSetupIssue=null;
     onProgress('tools');
-    try{tools=toolsFactory({supabase,scope:{...scope,workspaceId,ownerId,phone},ownerStore,pending,pendingAtStart,pendingInitialState,
+    try{tools=toolsFactory({supabase,botPreferences,interactiveAvailable:Boolean(env.WHATSAPP_APP_SECRET||env.CRON_SECRET),scope:{...scope,workspaceId,ownerId,phone},ownerStore,pending,pendingAtStart,pendingInitialState,
       lifecyclePending,invoiceStoreFactory:invoiceStore,settingsStore:createOwnerSettingsStore(supabase),config,signal,deadlineAt,ownerHistory:history,
       sourceMediaReader:input=>readOwnerSourceMedia({supabase,...input}),
       configurationAvailable:settingsAvailable,configurationSource,historyAvailable,ownerStoreAvailable,lifecycleAvailable,
@@ -175,8 +184,23 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         async execute(){return {ok:false,code:'UNAVAILABLE',message:'Workspace tools are temporarily unavailable.'};},setServedModel(){},getMedia(){return null;}};
     }
     onToolsReady(tools);
+    let initialToolResults=[];
+    const recovered=await tools.lookupCompleted?.();
+    if(recovered?.ok&&recovered.completed)initialToolResults=[{name:'workspaceData',args:{operation:'verifiedReceipt'},result:recovered}];
+    if(scope.interactionId){
+      // Recover a committed click after a worker interruption before looking for
+      // the pending row that the successful transaction already consumed.
+      if(recovered?.ok&&recovered.completed){
+        initialToolResults=[{name:'workspaceData',args:{operation:'verifiedReceipt'},result:recovered}];
+      }else{
+        const choice=verifyOwnerActionButton({id:scope.interactionId,scope:{workspaceId,phone},action:pendingAtStart,env,clock});
+        if(!choice.valid||typeof tools.decideButton!=='function')return {answer:'That choice has expired or changed. Send the change you want to make and I will check the current details.'};
+        const result=await tools.decideButton({interactionId:scope.interactionId,decision:choice.decision,pending:pendingAtStart});
+        initialToolResults=[{name:'workspaceData',args:{operation:choice.decision},result}];
+      }
+    }
     onProgress('agent');
-    const response=await agentFactory({provider,config,store:ownerStore,tools,history,message,signal,deadlineAt,clock,logger,traceId:messageId,
+    const response=await agentFactory({provider,config,store:ownerStore,tools,history,message,signal,deadlineAt,clock,logger,traceId:messageId,botPreferences,initialToolResults,
       checkpoint:scope.checkpoint||null,onCheckpoint:scope.onCheckpoint,allowDeferred:scope.allowDeferred===true,budgetMs:scope.budgetMs,
       attachmentDescriptor:media?{available:true,mimeType:String(media.mimeType||media.mime_type||'application/octet-stream').slice(0,80)}
         :mediaError?{available:false,errorCode:'ATTACHMENT_UNAVAILABLE'}:{available:false},
@@ -185,7 +209,20 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     if(!await authorizeTurn(scope))return '';
     if(response?.deferred===true)return {deferred:true,checkpoint:response.checkpoint||scope.checkpoint||null,
       ...(response.agentDiagnostics?{agentDiagnostics:response.agentDiagnostics}:{})};
-    return {answer:response?.answer||'',...(response?.media?{media:response.media}:{}),
+    let buttons=[],ownerActionRef=null;
+    if(!response?.plannerFailure&&tools.getReplyRequirement?.()?.buttonsAvailable){
+      try{
+        const action=await tools.getPendingActionForButtons?.();
+        buttons=createOwnerActionButtons({scope:{workspaceId,phone},action,env,clock,...(/delete/.test(action?.action?.type||'')?{confirmTitle:'Delete',cancelTitle:'Keep invoice'}:{})});
+        if(buttons.length)ownerActionRef={pendingId:action.id,pendingVersion:action.version};
+      }catch{logger?.warn?.('WhatsApp choices unavailable',{code:'OWNER_CHOICES_UNAVAILABLE'});}
+    }
+    if(!response?.plannerFailure&&tools.getReplyRequirement?.()?.buttonsAvailable&&!buttons.length)
+      return {answer:'The change is waiting for approval, but I could not create its button. Nothing was changed.',plannerFailure:{code:'OWNER_CHOICES_UNAVAILABLE'}};
+    let answer=normalizeOwnerServiceReplyText(response?.answer||'');
+    const signature=normalizeOwnerServiceReplyText(botPreferences.serviceReplySignature);
+    if(answer&&signature&&!answer.endsWith(signature))answer+='\n\n'+signature;
+    return {answer,...(buttons.length?{buttons,ownerActionRef}:{}),...(response?.media?{media:response.media}:{}),
       ...(response?.plannerFailure?{plannerFailure:response.plannerFailure}:{}),
       ...(response?.agentDiagnostics?{agentDiagnostics:response.agentDiagnostics}:{}),
       ...(response?.model?{servedModel:response.model}:{}),...(response?.servedProvider?{servedProvider:response.servedProvider}:{})};
