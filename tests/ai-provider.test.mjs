@@ -210,15 +210,31 @@ test('oversized upstream responses are rejected with a safe bounded error',async
   await assert.rejects(ai.generate({messages:[{role:'user',content:'Hi'}]}),error=>error.code==='INVALID_RESPONSE'&&!/xxxx/.test(error.message));
 });
 
-test('bounded retries preserve explicit rate limits and hide upstream response bodies',async()=>{
+test('quota exhaustion skips each same-leg retry and aggregates exhausted providers safely',async()=>{
   const calls=[],waits=[];
-  const ai=provider(async url=>{calls.push(String(url).includes('generativelanguage')?'gemini':'openrouter');return gemini('',{status:429});},{sleepImpl:async ms=>waits.push(ms)});
+  const ai=provider(async (url,init)=>{
+    calls.push(String(url).includes('generativelanguage')?GEMINI_FALLBACK_MODEL:JSON.parse(init.body).model);
+    return jsonResponse({error:{code:'RESOURCE_EXHAUSTED',status:'RESOURCE_EXHAUSTED',message:'Quota exceeded for requests per day'}},429);
+  },{sleepImpl:async ms=>waits.push(ms)});
   await assert.rejects(ai.generate({messages:[{role:'user',content:'Hi'}]}),error=>{
     assert.ok(error instanceof AIError);assert.equal(error.code,'RATE_LIMITED');assert.equal(error.status,429);
+    assert.equal(error.providerReason,'quota_exceeded');assert.equal(error.quotaExhausted,true);
+    assert.deepEqual(error.quotaProviders,['opencode-zen','google']);
     assert.match(error.message,/temporarily rate limited/);assert.doesNotMatch(error.message,/private upstream/);return true;
   });
-  assert.deepEqual(calls,['openrouter','openrouter','openrouter','openrouter','gemini','gemini']);
-  assert.deepEqual(waits,[1,1,1]);
+  assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL,GEMINI_FALLBACK_MODEL]);
+  assert.deepEqual(waits,[]);
+});
+
+test('a transient non-quota 429 can retry its current model leg',async()=>{
+  let calls=0;
+  const ai=provider(async()=>{
+    calls++;
+    return calls===1?jsonResponse({error:{message:'Too many requests'}},429):openRouter('Recovered on retry');
+  },{fallbackModel:null});
+  const result=await ai.generate({messages:[{role:'user',content:'Hi'}]});
+  assert.equal(calls,2);
+  assert.equal(result.content,'Recovered on retry');
 });
 
 test('fails over in order from Space Bunny to LongCat to Gemini on 429 and 5xx',async()=>{

@@ -34,7 +34,10 @@ The webhook callback path is `/api/whatsapp` (GET verification and signed POST
 events). Set `SUPABASE_SERVICE_ROLE_KEY` for the server-only webhook's
 workspace-scoped consent and event queries, and `CRON_SECRET` for its protected
 inbound-event processor at `/api/whatsapp-process`. Never expose either key to
-the browser.
+the browser. Inbound events older than one hour that fail delivery are logged
+and marked terminal with `status=failed` and `error_code=INBOUND_DEAD_LETTER`; the
+worker will not reprocess them. No migration is needed. Do not requeue stale
+confirmed actions; ask the owner to send a fresh WhatsApp message.
 
 Keep `WHATSAPP_OUTBOUND_ENABLED=false` while Meta reviews the proposed use.
 `WHATSAPP_TEST_ALLOWLIST` is required and accepts only comma-separated E.164
@@ -77,20 +80,23 @@ handler, agent loop, scoped data tools, confirmations and saved replies.
 It does not connect to WhatsApp, Supabase or Vercel and cannot message a customer.
 The existing isolation tests also run in the full test suite.
 
-Run `npm run test:owner-chat:live` to check the conversations with the real
-Cloudflare and Gemini provider chain. Supply server-only `CLOUDFLARE_ACCOUNT_ID` and
-`CLOUDFLARE_API_TOKEN` in your process environment. Live mode still uses
-fictional workspace data and never sends WhatsApp messages. Do not paste
-provider credentials into this repository or a chat.
+Run `npm run test:owner-chat:live` manually when you want to spend quota on
+real provider calls. The battery passes only when each reply came from the
+saved Cloudflare primary; a Gemini fallback response does not count as live
+proof. Supply server-only `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` in
+your process environment. Live mode uses fictional workspace data and never
+sends WhatsApp messages. A provider HTTP 429 prints `SKIP` and stops the live
+run without failing it; other provider and scenario failures still return a
+failing exit code. Do not paste provider credentials into this repository or a
+chat.
 
 GitHub Actions runs the fast battery, TypeScript checks and full test suite
-on every push and pull request. Vercel runs the same release gate as its build
-command, then runs the live battery for production builds using its existing
-provider credentials. Any failing check stops that build before publication,
-so a failed GitHub check cannot race an automatic production deployment.
-The generated `owner-chat-build.json` identifies the checked commit and source
-hashes, contains no customer data or secrets, and is generated only after the
-gate passes.
+on every push and pull request. Vercel runs that same fast release gate as its
+build command; it never runs the live battery during a deployment. Any failing
+fast check stops that build before publication, so a failed GitHub check cannot
+race an automatic production deployment. The generated `owner-chat-build.json`
+identifies the checked commit and source hashes, contains no customer data or
+secrets, and is generated only after the gate passes.
 
 Add scenarios in `scripts/owner-chat-battery.mjs`; seeded records and the
 strict workspace query fixture live in `tests/fixtures/owner-chat-battery.mjs`.
@@ -99,5 +105,6 @@ within the deadline, verify the expected records or confirmation, and check
 that no foreign workspace was read or changed. Add normal conversation cases
 to both modes. Keep induced transport failures explicitly labeled as simulated.
 `tests/owner-chat-battery.test.mjs` runs the fast scenarios in the normal test
-suite. Run both modes when changing model prompts, tools or provider routing.
+suite. Use live mode selectively when a real provider check is needed; it spends
+provider quota.
 

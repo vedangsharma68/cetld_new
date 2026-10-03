@@ -114,10 +114,12 @@ function statusError(status, reason = 'unknown') {
 }
 const PROVIDER_REASONS = new Set(['schema_complexity','unsupported_schema_keyword','invalid_generation_config','unsupported_modality','model_unavailable','permission_denied','quota_exceeded','unknown']);
 function classifyProviderError(body, status) {
-  const code = typeof body?.error?.code === 'string' ? body.error.code.toLowerCase() : '';
+  const upstreamErrors=Array.isArray(body?.errors)?body.errors:[];
+  const code = String(body?.error?.code ?? body?.code ?? '').toLowerCase();
   const text = [body?.error?.message, body?.error?.status, body?.error?.reason,
-    ...(Array.isArray(body?.error?.details) ? body.error.details.map(item => item?.reason || item?.message) : [])]
-    .filter(value => typeof value === 'string').join(' ').toLowerCase();
+    ...(Array.isArray(body?.error?.details) ? body.error.details.map(item => item?.reason || item?.message) : []),
+    ...upstreamErrors.flatMap(item=>[item?.code,item?.message])]
+    .filter(value => typeof value === 'string'||typeof value === 'number').join(' ').toLowerCase();
   let reason = 'unknown';
   if (/schema.{0,40}(too complex|complexity|nesting|depth|size|limit)/.test(text)) reason = 'schema_complexity';
   else if (/(unsupported|unknown|not supported).{0,40}(schema|keyword)|(schema|keyword).{0,40}(unsupported|not supported)/.test(text)) reason = 'unsupported_schema_keyword';
@@ -125,7 +127,7 @@ function classifyProviderError(body, status) {
   else if (/unsupported.{0,30}(modality|image|document|mime)|modality.{0,30}(unsupported|not supported)/.test(text)) reason = 'unsupported_modality';
   else if (/model.{0,40}(not found|unavailable|not supported|does not exist)|model_not_found/.test(`${code} ${text}`)) reason = 'model_unavailable';
   else if (status === 401 || status === 403 || /permission_denied|permission denied/.test(`${code} ${text}`)) reason = 'permission_denied';
-  else if (status === 429 || /quota_exceeded|quota exceeded|resource_exhausted/.test(`${code} ${text}`)) reason = 'quota_exceeded';
+  else if (/quota_exceeded|quota.{0,40}(exceed|exhaust|limit|daily)|resource_exhausted|daily.{0,40}(neuron|allocation)|neuron.{0,40}daily|\b3036\b/.test(`${code} ${text}`)) reason = 'quota_exceeded';
   return PROVIDER_REASONS.has(reason) ? reason : 'unknown';
 }
 function remainingMs(deadlineAt, fallback) {
@@ -135,10 +137,11 @@ function assertActive(signal, deadlineAt) {
   if (signal?.aborted || remainingMs(deadlineAt, 1) <= 0) throw new AIError('TIMEOUT', 504);
 }
 function retryable(error) {
+  if (error instanceof AIError && error.providerReason === 'quota_exceeded') return false;
   return error instanceof AIError && ['TIMEOUT','NETWORK_ERROR','RATE_LIMITED','PROVIDER_UNAVAILABLE'].includes(error.code);
 }
 function fallbackEligible(error) {
-  return retryable(error) || error instanceof AIError && ['INVALID_MODEL','API_KEY_MISSING','AUTH_FAILED','PROVIDER_ERROR','INVALID_RESPONSE'].includes(error.code);
+  return retryable(error) || error instanceof AIError && ['RATE_LIMITED','INVALID_MODEL','API_KEY_MISSING','AUTH_FAILED','PROVIDER_ERROR','INVALID_RESPONSE'].includes(error.code);
 }
 function safeJsonStringify(value) {
   try { return JSON.stringify(value); } catch { throw invalidArgument(); }
@@ -308,15 +311,28 @@ export class AIProvider {
     } else if (tools !== undefined && !Array.isArray(tools)) throw invalidArgument();
     const candidates = this.#candidates();
     let lastError;
+    let attemptedLegs=0;
+    let quotaLegs=0;
+    const quotaProviders=new Set();
     for (const model of candidates) {
       if (isCfModel(model) && Date.now() < cfBreaker.openUntil) continue;
       assertActive(options.signal, options.deadlineAt);
+      attemptedLegs++;
       try { return await this.#generateWithModel(model, messages, requestOptions, model !== this.primaryModel); }
       catch (error) {
         lastError = error;
+        if(error instanceof AIError&&error.status===429&&error.providerReason==='quota_exceeded'){
+          quotaLegs++;
+          quotaProviders.add(this.#providerName(model));
+        }
         this.#logLegFailure(model, error);
         if (!fallbackEligible(error)) throw error;
       }
+    }
+    if(attemptedLegs>0&&quotaLegs===attemptedLegs){
+      throw Object.assign(new AIError('RATE_LIMITED',429),{
+        providerReason:'quota_exceeded',quotaExhausted:true,quotaProviders:[...quotaProviders],
+      });
     }
     throw lastError || new AIError('PROVIDER_UNAVAILABLE', 503);
   }

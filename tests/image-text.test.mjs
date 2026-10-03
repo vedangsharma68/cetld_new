@@ -104,11 +104,12 @@ test('hung OCR worker is terminated and cannot poison later queued jobs', async 
 });
 
 test('OCR queue wait and preprocessing share the deadline and clean up on cancellation', async () => {
-  let releaseRecognition;
+  let releaseRecognition, markRecognitionStarted;
+  const recognitionStarted = new Promise(resolve => { markRecognitionStarted = resolve; });
   const first = extractInvoiceFromImage({bytes: tinyPng, mimeType: 'image/png', preprocessor: async bytes => bytes,
-    workerFactory: async () => ({recognize: async () => new Promise(resolve => { releaseRecognition = resolve; }), terminate: async () => {}}),
-    timeoutMs: 50});
-  await new Promise(resolve => setTimeout(resolve, 2));
+    workerFactory: async () => ({recognize: async () => new Promise(resolve => { releaseRecognition = resolve; markRecognitionStarted(); }), terminate: async () => {}}),
+    timeoutMs: 5_000});
+  await recognitionStarted;
   let secondStarted = false;
   await assert.rejects(extractInvoiceFromImage({bytes: tinyPng, mimeType: 'image/png', preprocessor: async bytes => bytes,
     workerFactory: async () => { secondStarted = true; return {}; }, timeoutMs: 5}), /execution limit|deadline/);
@@ -117,11 +118,15 @@ test('OCR queue wait and preprocessing share the deadline and clean up on cancel
   await first;
 
   const controller = new AbortController();
-  let cleaned = false, workerStarted = false;
-  const preprocessing = extractInvoiceFromImage({bytes: tinyPng, mimeType: 'image/png', signal: controller.signal, timeoutMs: 30,
-    preprocessor: (_bytes,{signal}) => new Promise((_resolve,reject) => signal.addEventListener('abort',()=>{cleaned=true;reject(new Error('cleaned'));},{once:true})),
+  let cleaned = false, workerStarted = false, markPreprocessingStarted;
+  const preprocessingStarted = new Promise(resolve => { markPreprocessingStarted = resolve; });
+  const preprocessing = extractInvoiceFromImage({bytes: tinyPng, mimeType: 'image/png', signal: controller.signal, timeoutMs: 5_000,
+    preprocessor: (_bytes,{signal}) => new Promise((_resolve,reject) => {
+      signal.addEventListener('abort',()=>{cleaned=true;reject(new Error('cleaned'));},{once:true});
+      markPreprocessingStarted();
+    }),
     workerFactory: async () => { workerStarted=true; return {}; }});
-  await new Promise(resolve => setImmediate(resolve));
+  await preprocessingStarted;
   controller.abort();
   await assert.rejects(preprocessing, /aborted|cleaned/);
   assert.equal(cleaned, true);

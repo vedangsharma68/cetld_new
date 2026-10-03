@@ -8,13 +8,20 @@ test('failed owner chat battery stops the release gate before any later build ch
   await assert.rejects(runReleaseGate({live:true,run:async name=>{calls.push(name);throw Error('Broken owner conversation');}}),/Broken owner conversation/);
   assert.deepEqual(calls,['test:owner-chat']);
 });
-test('production releases require the live battery and fail closed if it fails',async()=>{
-  const calls=[];
-  await assert.rejects(runReleaseGate({live:true,run:async name=>{calls.push(name);if(name==='test:owner-chat:live')throw Error('Live model failed');}}),/Live model failed/);
-  assert.deepEqual(calls,['test:owner-chat','typecheck','test','test:owner-chat:live']);
+test('production releases never run the live battery, even when requested',async()=>{
+  const previous=process.env.VERCEL_ENV;
+  process.env.VERCEL_ENV='production';
+  try {
+    const calls=[];
+    await runReleaseGate({live:true,run:async name=>calls.push(name)});
+    assert.deepEqual(calls,['test:owner-chat','typecheck','test']);
+  } finally {
+    if(previous===undefined)delete process.env.VERCEL_ENV;
+    else process.env.VERCEL_ENV=previous;
+  }
 });
-test('preview and local release gates run the cheap battery, type check and complete test suite',async()=>{
-  const calls=[];await runReleaseGate({live:false,run:async name=>calls.push(name)});
+test('preview and local release gates run the fast battery, type check and complete test suite',async()=>{
+  const calls=[];await runReleaseGate({run:async name=>calls.push(name)});
   assert.deepEqual(calls,['test:owner-chat','typecheck','test']);
 });
 test('Vercel and GitHub run the same mandatory release gate',async()=>{

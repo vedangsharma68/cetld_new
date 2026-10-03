@@ -1005,6 +1005,7 @@ const OWNER_AGENT_MAX_TOOL_ROUNDS = 6;
 const OWNER_AGENT_READ_ONLY_TABLES = new Set([
   'workspace_settings','workspace_ai_settings','invoices','customers','payments','invoice_files',
 ]);
+const QUOTA_PROVIDER_NAMES = new Set(['cloudflare','google','openrouter','opencode-zen']);
 const OWNER_AGENT_LOG_CODES = new Set([
   ...Object.keys(SAFE_ERRORS),'UNKNOWN_TOOL','OK','OWNER_LOOP_TIMEOUT','OWNER_AGENT_TOOL_FAILED',
 ]);
@@ -1062,9 +1063,24 @@ function operationDescriptionFrom(value, toolName = null) {
   return null;
 }
 
-export function ownerAgentFailureReply(code, {writeAttempted = false, attemptedOperation = null} = {}) {
+export function ownerAgentFailureReply(code, {writeAttempted = false, attemptedOperation = null, quotaProviders = []} = {}) {
   const operation = operationDescriptionFrom(attemptedOperation,attemptedOperation?.toolName);
   const completed=attemptedOperation?.completed===true;
+  if(code==='OWNER_AI_QUOTA_EXHAUSTED'){
+    const providers=[...new Set((Array.isArray(quotaProviders)?quotaProviders:[]).filter(provider=>QUOTA_PROVIDER_NAMES.has(provider)))];
+    const resetFacts=[];
+    if(providers.includes('cloudflare'))resetFacts.push('Cloudflare daily quota resets at 5:30am IST');
+    if(providers.includes('google'))resetFacts.push('Gemini request-per-day quotas reset at midnight Pacific time');
+    const unknownQuota=providers.some(provider=>!['cloudflare','google'].includes(provider));
+    const resetText=resetFacts.length?resetFacts.join('; '):'I do not have a confirmed reset time for that provider quota';
+    const unknownText=unknownQuota&&resetFacts.length?'; I do not have a confirmed reset time for the other provider quota':'';
+    const reply=providers.length===1&&providers[0]==='cloudflare'
+      ?'My AI brain is out of juice for today, it resets at 5:30am IST.'
+      :`My AI brain is out of juice for today. ${resetText}${unknownText}.`;
+    return writeAttempted
+      ?`${reply} I could not confirm whether the ${operation||'workspace action'} completed, so check your workspace before trying it again.`
+      :reply;
+  }
   if (['OWNER_AGENT_TIMEOUT', 'OWNER_LOOP_TIMEOUT', 'TIMEOUT'].includes(code)) {
     if (writeAttempted && operation) {
       return `The ${operation} request may still be processing, and I could not confirm the result. Please check your workspace before trying it again.`;
@@ -1224,6 +1240,10 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     }catch(error){
       const phaseDeadline=phase==='final'?loopDeadlineAt:workDeadlineAt;
       if(['OWNER_AGENT_TIMEOUT','OWNER_LOOP_TIMEOUT'].includes(error?.code)||phaseController.signal.aborted||controller.signal.aborted||Date.now()>=phaseDeadline)throw ownerAgentTimeoutError();
+      if(error?.quotaExhausted===true&&error?.providerReason==='quota_exceeded')throw Object.assign(new Error('Owner AI quota is exhausted'),{
+        code:'OWNER_AI_QUOTA_EXHAUSTED',quotaProviders:(Array.isArray(error.quotaProviders)?error.quotaProviders:[])
+          .filter(provider=>QUOTA_PROVIDER_NAMES.has(provider)),
+      });
       throw Object.assign(new Error(kind==='tool'?'Owner workspace tool failed':'Owner provider failed'),{
         code:kind==='tool'?'OWNER_AGENT_TOOL_FAILED':'OWNER_AGENT_PROVIDER_FAILED',
       });
@@ -1387,7 +1407,8 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     }
   }catch(error){
     const timedOut=error?.code==='OWNER_AGENT_TIMEOUT'||error?.code==='OWNER_LOOP_TIMEOUT'||controller.signal.aborted||Date.now()>=loopDeadlineAt;
-    const code=timedOut?'OWNER_LOOP_TIMEOUT':error?.code==='OWNER_AGENT_TOOL_FAILED'?'OWNER_AGENT_TOOL_FAILED':error?.code==='OWNER_REPLY_REPAIR_FAILED'?'OWNER_REPLY_REPAIR_FAILED':'OWNER_AGENT_PROVIDER_FAILED';
+    const code=timedOut?'OWNER_LOOP_TIMEOUT':error?.code==='OWNER_AI_QUOTA_EXHAUSTED'?'OWNER_AI_QUOTA_EXHAUSTED'
+      :error?.code==='OWNER_AGENT_TOOL_FAILED'?'OWNER_AGENT_TOOL_FAILED':error?.code==='OWNER_REPLY_REPAIR_FAILED'?'OWNER_REPLY_REPAIR_FAILED':'OWNER_AGENT_PROVIDER_FAILED';
     const workTimedOut=timedOut&&workController.signal.aborted&&!controller.signal.aborted&&Date.now()<loopDeadlineAt;
     const inFlightWrite=inFlightTool&&(inFlightTool.writeRisk
       ||(!inFlightTool.writeAttemptedBefore&&writeMayHaveBeenAttempted()));
@@ -1426,14 +1447,16 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
       try{return await finalAnswer({prompt});}
       catch(finalError){
         if(activeRound){activeRound.outcome='error';emitRound(activeRound);activeRound=null;}
-        const finalCode=finalError?.code==='OWNER_REPLY_REPAIR_FAILED'?'OWNER_REPLY_REPAIR_FAILED'
+        const finalCode=finalError?.code==='OWNER_AI_QUOTA_EXHAUSTED'?'OWNER_AI_QUOTA_EXHAUSTED'
+          :finalError?.code==='OWNER_REPLY_REPAIR_FAILED'?'OWNER_REPLY_REPAIR_FAILED'
           :finalError?.code==='OWNER_AGENT_TOOL_FAILED'?'OWNER_AGENT_TOOL_FAILED'
           :finalError?.code==='OWNER_AGENT_PROVIDER_FAILED'?'OWNER_AGENT_PROVIDER_FAILED':'OWNER_LOOP_TIMEOUT';
         const operation=failureOperation();
         if(operation&&typeof operation==='object'&&lastCompletedOperation&&lastAttemptedToolName===null){
           operation.completed=true;
         }
-        return {answer:ownerAgentFailureReply(finalCode,{writeAttempted:writeMayHaveBeenAttempted(),attemptedOperation:operation}),
+        return {answer:ownerAgentFailureReply(finalCode,{writeAttempted:writeMayHaveBeenAttempted(),attemptedOperation:operation,
+            quotaProviders:finalError?.quotaProviders}),
           plannerFailure:{code:finalCode},agentDiagnostics:diagnosticSnapshot()};
       }
     }
@@ -1449,7 +1472,8 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
       activeRound.outcome='error';
       emitRound(activeRound);activeRound=null;
     }
-    return {answer:ownerAgentFailureReply(code,{writeAttempted:writeMayHaveBeenAttempted(),attemptedOperation:failureOperation()}),
+    return {answer:ownerAgentFailureReply(code,{writeAttempted:writeMayHaveBeenAttempted(),attemptedOperation:failureOperation(),
+        quotaProviders:error?.quotaProviders}),
       plannerFailure:{code},agentDiagnostics:diagnosticSnapshot()};
   }finally{
     clearTimeout(deadlineTimer);clearTimeout(workDeadlineTimer);

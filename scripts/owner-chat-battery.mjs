@@ -680,6 +680,46 @@ const FAST_SCENARIOS = [
     if(breaker.open||breaker.failures!==0)throw new Error('a Cloudflare configuration 400 changed breaker state');
     return {requests:requests.length,servedModel:result.model,breakerOpen:breaker.open};
   }),
+  scenario('all_provider_quotas_return_specific_reply_without_retry_or_workspace_writes_under_3s',async()=>{
+    const requests=[];
+    const fetchImpl=async(url,init)=>{
+      const urlText=String(url);
+      const provider=urlText.includes('generativelanguage.googleapis.com')?'google':'cloudflare';
+      const model=provider==='google'?decodeURIComponent(urlText.match(/\/models\/([^:?/]+)/)?.[1]||'unknown')
+        :JSON.parse(init.body).model;
+      requests.push({provider,model});
+      const body=provider==='google'
+        ?{error:{code:429,status:'RESOURCE_EXHAUSTED',message:'Daily request quota exceeded'}}
+        :{success:false,error:{code:'quota_exceeded',message:'Daily neuron quota exceeded'}};
+      return new Response(JSON.stringify(body),{status:429,headers:{'Content-Type':'application/json'}});
+    };
+    const db=createOwnerChatDatabase();
+    const protectedTables=['invoices','customers','payments','workspace_settings','workspace_ai_settings','whatsapp_pending_actions'];
+    const before=Object.fromEntries(protectedTables.map(table=>[table,structuredClone(db.tables[table])]));
+    const logger={error(){},warn(){},info(){}};
+    const harness=makeHandler({db,env:{CLOUDFLARE_ACCOUNT_ID:'fixture-account',CLOUDFLARE_API_TOKEN:'fixture-token',GEMINI_API_KEY:'fixture-gemini-key'},
+      providerFactory:options=>new AIProvider({...options,fetchImpl,retryDelayMs:0,logger}),logger});
+    const message='Hello';
+    const messageId='wamid.owner-battery-quota-exhaustion';
+    db.tables.whatsapp_messages.push({id:`in-${messageId}`,workspace_id:OWNER_CHAT_SCOPE.workspaceId,phone:OWNER_CHAT_SCOPE.phone,
+      audience:'owner',direction:'inbound',body:message,status:'received',kind:'text',provider_message_id:messageId,idempotency_key:null,
+      created_at:DEFAULT_NOW.toISOString()});
+    const started=Date.now();
+    const result=await harness.handler({...OWNER_CHAT_SCOPE,message,messageId,createdAt:DEFAULT_NOW.toISOString()});
+    const elapsed=Date.now()-started;
+    const expected='My AI brain is out of juice for today. Cloudflare daily quota resets at 5:30am IST; Gemini request-per-day quotas reset at midnight Pacific time.';
+    if(result.answer!==expected)throw new Error(`quota failure returned the wrong owner reply: ${JSON.stringify(result.answer)}`);
+    if(result.plannerFailure?.code!=='OWNER_AI_QUOTA_EXHAUSTED')throw new Error(`quota reply had unexpected failure code: ${result.plannerFailure?.code}`);
+    if(elapsed>=3_000)throw new Error(`all-provider quota response exceeded 3 seconds (${elapsed}ms)`);
+    if(!requests.some(item=>item.provider==='cloudflare')||!requests.some(item=>item.provider==='google'))
+      throw new Error(`quota simulation did not exercise both Cloudflare and Gemini: ${JSON.stringify(requests)}`);
+    const legs=requests.map(item=>`${item.provider}:${item.model}`);
+    if(new Set(legs).size!==legs.length)throw new Error(`a quota-dead provider leg was retried in the same turn: ${JSON.stringify(requests)}`);
+    if(JSON.stringify(before)!==JSON.stringify(Object.fromEntries(protectedTables.map(table=>[table,db.tables[table]]))))
+      throw new Error('quota reply changed workspace business data or pending actions');
+    assertNoForeignData(db);
+    return {elapsedMs:elapsed,providerLegs:requests,diagnostics:result.agentDiagnostics};
+  }),
   scenario('same_wamid_and_same_sender_text_reuses_saved_reply_within_two_minutes',async()=>{
     const message='which model r u usin';
     const harness=makeHandler({script:{[message]:{steps:[toolStep({},'getAIProviderConfiguration')],final:(_request,result)=>replyForResult(result)}}});
@@ -944,15 +984,16 @@ const LIVE_SCENARIOS = [
 ];
 export const OWNER_CHAT_LIVE_SCENARIO_NAMES=Object.freeze(LIVE_SCENARIOS.map(item=>item.name));
 
-async function runLiveBattery({env=process.env,scenarioNames,onScenario,onFailure}={}) {
+export async function runLiveBattery({env=process.env,scenarioNames,onScenario,onFailure,
+  scenarios=LIVE_SCENARIOS,createConversation=createLiveConversation}={}) {
   assertLiveCredentials(env);
   const results=[];
   const failures=[];
-  const selected=scenarioNames?LIVE_SCENARIOS.filter(item=>scenarioNames.includes(item.name)):LIVE_SCENARIOS;
+  const selected=scenarioNames?scenarios.filter(item=>scenarioNames.includes(item.name)):scenarios;
   if(scenarioNames&&selected.length!==scenarioNames.length)throw new Error('one or more named live owner-chat scenarios were not found');
   for(let index=0;index<selected.length;index++) {
     const item=selected[index];
-    const ctx=createLiveConversation({env,name:item.name,index:index+1,primaryModel:item.primaryModel,fallbackModel:item.fallbackModel});
+    const ctx=createConversation({env,name:item.name,index:index+1,primaryModel:item.primaryModel,fallbackModel:item.fallbackModel});
     const started=Date.now();
     try {
       const detail=await item.run(ctx);
@@ -961,14 +1002,20 @@ async function runLiveBattery({env=process.env,scenarioNames,onScenario,onFailur
       results.push(outcome);
       onScenario?.(outcome);
     } catch(error) {
-      error.message=`${item.name}: ${error?.message||String(error)}${ctx.observed.providerIssues.length?' Provider legs: '+JSON.stringify(ctx.observed.providerIssues.slice(-3)):''}`
+      const providerIssues=ctx.observed?.providerIssues||[];
+      if(providerIssues.some(issue=>Number(issue.status)===429)) {
+        if(failures.length)throw new Error(`${failures.length} of ${selected.length} live scenarios failed: ${failures.join('; ')}`);
+        return {mode:'live',skipped:true,skipReason:'provider_429',skippedScenario:item.name,
+          scenarioCount:results.length,scenarios:results};
+      }
+      error.message=`${item.name}: ${error?.message||String(error)}${providerIssues.length?' Provider legs: '+JSON.stringify(providerIssues.slice(-3)):''}`
         +` Fictional conversation: ${JSON.stringify({reply:ctx.observed.lastReply,tools:ctx.observed.operations.slice(-4),drafts:ctx.observed.drafts.slice(-2)})}`;
       failures.push(error.message);
       onFailure?.(error.message);
       // Stop on an outage or denied credentials instead of charging for many
       // requests that cannot possibly verify the primary provider. Independent
       // conversation failures are collected so one run exposes all regressions.
-      if(ctx.observed.providerIssues.some(issue=>[401,403,429].includes(issue.status)||issue.status>=500))throw error;
+      if(providerIssues.some(issue=>[401,403].includes(Number(issue.status))||Number(issue.status)>=500))throw error;
     }
   }
   if(failures.length)throw new Error(`${failures.length} of ${selected.length} live scenarios failed: ${failures.join('; ')}`);
@@ -1006,6 +1053,10 @@ async function cli() {
   try {
     const result=await runBattery({mode,onScenario:item=>process.stdout.write(`PASS ${item.name} (${item.elapsedMs}ms)\n`),
       onFailure:message=>process.stdout.write(`FAIL ${message}\n`)});
+    if(result.skipped) {
+      process.stdout.write(`\nSKIP live owner-chat battery: provider returned HTTP 429 during ${result.skippedScenario}; stopped after ${result.scenarioCount} scenario(s).\n`);
+      return;
+    }
     process.stdout.write(`\n${result.mode} owner-chat battery passed: ${result.scenarioCount} scenario(s).\n`);
     if(result.mode==='live')process.stdout.write(`Live proof: ${result.proof}.\n`);
     if(result.mode==='live')process.stdout.write(`Fast-only deterministic scenarios: ${result.fastOnlyScenarios.join(', ')}.\n`);

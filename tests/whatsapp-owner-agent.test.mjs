@@ -4,7 +4,7 @@ import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mj
 import {reviewDraft} from '../automation/whatsapp/assistant-handler.mjs';
 import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
 import {createOwnerSafetyTools as createOwnerAgentTools, runOwnerAgent, ownerReplySafetyIssue} from '../automation/whatsapp/owner-agent.mjs';
-import {CF_QWEN_MODEL} from '../ai/provider.mjs';
+import {AIError,CF_QWEN_MODEL} from '../ai/provider.mjs';
 import {createInvoiceLifecycleService} from '../ai/invoice-lifecycle.mjs';
 
 const workspaceId='00000000-0000-4000-8000-000000000002';
@@ -796,6 +796,19 @@ test('owner interruption status remains available when the model service is down
   assert.match(reply,/too long/i);
   assert.match(reply,/check your workspace/i);
   assert.doesNotMatch(reply,/PRIVATE_DATABASE_SECRET|PGRST/);
+});
+
+test('quota exhaustion survives the provider wrapper and returns provider-specific reset times',async()=>{
+  const tools={definitions:[],async execute(){return {};}};
+  const provider={async generate(){
+    throw Object.assign(new AIError('RATE_LIMITED',429),{providerReason:'quota_exceeded',quotaExhausted:true,
+      quotaProviders:['cloudflare','google']});
+  }};
+  const startedAt=Date.now();
+  const result=await runOwnerAgent({provider,tools,message:'Hi'});
+  assert.equal(result.answer,'My AI brain is out of juice for today. Cloudflare daily quota resets at 5:30am IST; Gemini request-per-day quotas reset at midnight Pacific time.');
+  assert.equal(result.plannerFailure.code,'OWNER_AI_QUOTA_EXHAUSTED');
+  assert.ok(Date.now()-startedAt<3000);
 });
 
 test('a payable or uncertain attachment draft cannot become a receivable without explicit owner direction',async()=>{

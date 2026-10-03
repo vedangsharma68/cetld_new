@@ -6,6 +6,11 @@ import {createWhatsAppInvoiceUpdateStore} from './invoice-update-store.mjs';
 import {writeConversationTurn} from './conversation-memory.mjs';
 
 const MAX_MESSAGES = 100;
+const MAX_INBOUND_RETRY_AGE_MS = 60 * 60_000;
+function staleInboundEvent(event, now) {
+  const receivedAt = Date.parse(event.received_at || event.created_at || event.provider_timestamp || '');
+  return Number.isFinite(receivedAt) && now - receivedAt > MAX_INBOUND_RETRY_AGE_MS;
+}
 const TIMEOUT_REPLY = 'That took longer than I can handle, so I stopped. Your message was received. Please send it again in a minute.';
 const DEFAULT_PROCESS_BUDGET_MS = 40_000;
 // Leave enough runway for a database lookup and a deterministic reply. Slow
@@ -122,6 +127,7 @@ export class SupabaseInboundInbox {
 
   async complete(event, errorCode = null, errorDetail = null, retryable = true) {
     const failed = Boolean(errorCode);
+    if (failed && retryable && staleInboundEvent(event, Date.now())) return this.deadLetter(event, errorDetail || errorCode);
     const retry = failed && retryable && event.attempts < 5;
     const next = new Date(Date.now() + Math.min(60_000 * 2 ** Math.max(0, event.attempts - 1), 60 * 60_000)).toISOString();
     dataOrThrow(await this.supabase.from('whatsapp_inbound_events')
@@ -131,14 +137,23 @@ export class SupabaseInboundInbox {
       .eq('id', event.id).eq('claim_token', event.claim_token), 'complete');
   }
 
-  async defer(event) {
+  async deadLetter(event, errorDetail = null) {
+    dataOrThrow(await this.supabase.from('whatsapp_inbound_events').update({
+      status: 'failed', processed_at: new Date().toISOString(), claim_token: null, claimed_at: null,
+      error_code: 'INBOUND_DEAD_LETTER', error_detail: String(errorDetail || event.error_code || 'Stale delivery retry expired.').slice(0, 1000),
+    }).eq('id', event.id).eq('claim_token', event.claim_token), 'dead letter');
+  }
+
+  async defer(event, errorCode = null, errorDetail = null) {
+    if (errorCode && staleInboundEvent(event, Date.now())) return this.deadLetter(event, errorDetail || errorCode);
     const receivedAt=Date.parse(event.received_at||event.created_at||'');
     const retryAgeSteps=Number.isFinite(receivedAt)
       ?Math.floor(Math.max(0,Date.now()-receivedAt)/60_000):Math.max(0,Number(event.attempts||1)-1);
     const delayMs=Math.min(60_000*2**retryAgeSteps,60*60_000);
     dataOrThrow(await this.supabase.from('whatsapp_inbound_events').update({status: 'pending', processed_at: null,
       claim_token: null, claimed_at: null, next_attempt_at: new Date(Date.now()+delayMs).toISOString(),
-      attempts: Math.max(0, Number(event.attempts || 1) - 1)})
+      attempts: Math.max(0, Number(event.attempts || 1) - 1),
+      ...(errorCode ? {error_code: errorCode, error_detail: String(errorDetail || '').slice(0, 1000)} : {})})
       .eq('id', event.id).eq('claim_token', event.claim_token), 'defer');
   }
 }
@@ -348,12 +363,20 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     }
     return 'bound';
   }
+  async function deadLetter(event, reason) {
+    if (typeof inbox.deadLetter === 'function') await inbox.deadLetter(event, reason);
+    else await inbox.complete(event, 'INBOUND_DEAD_LETTER', reason, false);
+    logger?.warn?.('WhatsApp inbound event dead-lettered', {messageId: event.provider_message_id,
+      code: 'INBOUND_DEAD_LETTER', reason, receivedAt: event.received_at || event.created_at || event.provider_timestamp || null});
+    return true;
+  }
   async function failFinalAttempt(event) {
+    if (staleInboundEvent(event, clock())) return deadLetter(event, 'Stale event exhausted delivery attempts.');
     let failedOwner=null;
     try {
       failedOwner=await ownerFailureContext(event);
       if(failedOwner.bindingUnavailable||(failedOwner.verifiedOwner&&!failedOwner.reply)){
-        if(typeof inbox.defer==='function'){await inbox.defer(event);return false;}
+        if(typeof inbox.defer==='function'){await inbox.defer(event, 'OWNER_REPLY_NOT_ACCEPTED');return false;}
         throw new Error('Owner message must remain queued until an AI reply can be generated.');
       }
       const sender = await getOutbound();
@@ -361,14 +384,14 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
         const sent=await sender.sendServiceReply({workspaceId:failedOwner.binding.workspaceId,to:event.sender_phone,
           body:failedOwner.reply,lastInboundAt:event.provider_timestamp||event.received_at,kind:'normal',audience:'owner',
           messageId:event.provider_message_id,businessName:await businessName(failedOwner.binding.workspaceId)});
-        if(sent?.status!=='accepted'){await inbox.defer(event);return false;}
+        if(sent?.status!=='accepted'){await inbox.defer(event, 'OWNER_REPLY_NOT_ACCEPTED');return false;}
       }else await sender.sendServiceReply({ workspaceId: null, to: event.sender_phone, body: SAFE_FALLBACK_REPLY,
         lastInboundAt: event.provider_timestamp || event.received_at, kind: 'verification',
         messageId: event.provider_message_id, businessName: 'CETLD' });
     } catch (error) {
       logger.error('WhatsApp final-attempt fallback failed', { messageId: event.provider_message_id,
         message: String(error?.message || '').slice(0, 200) });
-      if(failedOwner?.verifiedOwner||failedOwner?.bindingUnavailable){await inbox.defer(event);return false;}
+      if(failedOwner?.verifiedOwner||failedOwner?.bindingUnavailable){await inbox.defer(event, 'OWNER_REPLY_NOT_ACCEPTED');return false;}
     }
     await inbox.complete(event, 'PROCESSING_FAILED', null, false);
     return true;
@@ -415,6 +438,11 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           if (typeof inbox.defer === 'function') await inbox.defer(event);
           break;
         }
+        if (staleInboundEvent(event, clock()) && (event.error_code || event.reply_claimed_at || Number(event.attempts) > 1)) {
+          await deadLetter(event, 'Stale delivery retry expired before reprocessing.');
+          completed++;
+          continue;
+        }
         if (event.attempts >= 5) {
           if(await failFinalAttempt(event))completed++;
           continue;
@@ -431,6 +459,12 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           const timedOut = controller.signal.aborted || clock() >= deadlineAt;
           logger.error('WhatsApp inbound event failed', { messageId: event.provider_message_id, name: error?.name || 'Error',
             timedOut, message: String(error?.message || '').slice(0, 200) });
+          if (staleInboundEvent(event, clock())) {
+            await deadLetter(event, String(error?.code || 'PROCESSING_FAILED').slice(0, 80));
+            completed++;
+            if (timedOut) break;
+            continue;
+          }
           // Never leave the sender in silence: say what happened, then close the event.
           let failedOwner=null;
           let ownerReplyAccepted=false;
@@ -453,7 +487,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
               message: String(replyError?.message || '').slice(0, 200) });
           }
           if((failedOwner?.verifiedOwner&&!ownerReplyAccepted)||failedOwner?.bindingUnavailable){
-            if(typeof inbox.defer==='function')await inbox.defer(event);
+            if(typeof inbox.defer==='function')await inbox.defer(event, failedOwner?.bindingUnavailable ? 'OWNER_BINDING_UNAVAILABLE' : 'OWNER_REPLY_NOT_ACCEPTED', String(error?.message || '').slice(0, 1000));
             else await inbox.complete(event,timedOut?'PROCESSING_TIMEOUT':'PROCESSING_FAILED',
               String(error?.message||'').slice(0,1000));
             if(timedOut)break;

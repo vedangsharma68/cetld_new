@@ -632,6 +632,8 @@ test('Postgres inbox claims are atomic and verification replies are one-time', a
     assert.equal((await db.query('select * from public.whatsapp_claim_inbound_events(10)')).rows.length, 0);
     assert.equal((await db.query(`select public.whatsapp_claim_inbound_reply('wamid.sql','+919871367051','verification',null) as allowed`)).rows[0].allowed, true);
     assert.equal((await db.query(`select public.whatsapp_claim_inbound_reply('wamid.sql','+919871367051','verification',null) as allowed`)).rows[0].allowed, false);
+    await db.query(`update public.whatsapp_inbound_events set status='failed',error_code='INBOUND_DEAD_LETTER',claimed_at=null,claim_token=null,received_at=now()-interval '2 hours',next_attempt_at=now()-interval '1 hour' where provider_message_id='wamid.sql'`);
+    assert.equal((await db.query('select * from public.whatsapp_claim_inbound_events(10)')).rows.length, 0, 'terminal dead letters must not be claimed even after backoff expires');
     await db.exec('reset role; set role anon');
     await assert.rejects(db.query('select * from public.whatsapp_inbound_events'), /permission denied/);
   } finally { await db.close(); }
@@ -654,4 +656,38 @@ test('Postgres inbox claims newest events first', async () => {
     const claimed = (await db.query('select * from public.whatsapp_claim_inbound_events(1)')).rows;
     assert.equal(claimed[0].provider_message_id, 'wamid.new');
   } finally { await db.close(); }
+});
+
+
+test('dead-letter state uses the existing terminal failed status and lease-scoped update',async()=>{
+  let update;const predicates=[];
+  const supabase={from(table){assert.equal(table,'whatsapp_inbound_events');return {update(value){update=value;return this;},
+    eq(key,value){predicates.push([key,value]);return this;},then(resolve){return Promise.resolve({data:null,error:null}).then(resolve);}};}};
+  const inbox=new SupabaseInboundInbox(supabase);
+  await inbox.deadLetter({id:45,claim_token:'current-lease'},'OWNER_REPLY_NOT_ACCEPTED');
+  assert.equal(update.status,'failed');assert.equal(update.error_code,'INBOUND_DEAD_LETTER');
+  assert.equal(update.error_detail,'OWNER_REPLY_NOT_ACCEPTED');assert.ok(update.processed_at);
+  assert.equal(update.claim_token,null);assert.equal(update.claimed_at,null);
+  assert.deepEqual(predicates,[['id',45],['claim_token','current-lease']]);
+});
+
+test('deferring a stale failed delivery becomes terminal rather than extending its backoff',async()=>{
+  let update;
+  const supabase={from(){return {update(value){update=value;return this;},eq(){return this;},
+    then(resolve){return Promise.resolve({data:null,error:null}).then(resolve);}};}};
+  await new SupabaseInboundInbox(supabase).defer({id:46,claim_token:'lease',attempts:1,
+    received_at:new Date(Date.now()-3_600_001).toISOString()},'OWNER_REPLY_NOT_ACCEPTED');
+  assert.equal(update.status,'failed');assert.equal(update.error_code,'INBOUND_DEAD_LETTER');
+  assert.equal(update.next_attempt_at,undefined);
+});
+
+
+test('fresh failed delivery records its reason so an aged retry can expire before another model call',async()=>{
+  let update;
+  const supabase={from(){return {update(value){update=value;return this;},eq(){return this;},
+    then(resolve){return Promise.resolve({data:null,error:null}).then(resolve);}};}};
+  await new SupabaseInboundInbox(supabase).defer({id:47,claim_token:'lease',attempts:1,
+    received_at:new Date().toISOString()},'OWNER_REPLY_NOT_ACCEPTED','Delivery was blocked.');
+  assert.equal(update.status,'pending');assert.equal(update.error_code,'OWNER_REPLY_NOT_ACCEPTED');
+  assert.equal(update.error_detail,'Delivery was blocked.');
 });
