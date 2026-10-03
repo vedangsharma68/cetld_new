@@ -11,6 +11,7 @@ import {runOwnerAgent, ownerAgentFailureReply} from './owner-agent.mjs';
 import {createOwnerWorkspaceTools} from './owner-workspace-tools.mjs';
 import {createOwnerReplyStore} from './owner-reply-store.mjs';
 import {createProviderHealthStore} from '../../ai/provider-health.mjs';
+import {ownerButtonClaimIssue} from './owner-grounding.mjs';
 
 const dataOrThrow = result => {if(result?.error)throw result.error;return result?.data;};
 async function timedContextRead(logger,query,operation){
@@ -222,6 +223,9 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     let answer=normalizeOwnerServiceReplyText(response?.answer||'');
     const signature=normalizeOwnerServiceReplyText(botPreferences.serviceReplySignature);
     if(answer&&signature&&!answer.endsWith(signature))answer+='\n\n'+signature;
+    if(ownerButtonClaimIssue(answer,{buttonsAvailable:buttons.length>0}))return {
+      answer:'I could not attach approval buttons to this reply. No action was confirmed by this message.',
+      plannerFailure:{code:'OWNER_CHOICES_UNAVAILABLE'}};
     return {answer,...(buttons.length?{buttons,ownerActionRef}:{}),...(response?.media?{media:response.media}:{}),
       ...(response?.plannerFailure?{plannerFailure:response.plannerFailure}:{}),
       ...(response?.agentDiagnostics?{agentDiagnostics:response.agentDiagnostics}:{}),

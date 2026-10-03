@@ -81,6 +81,14 @@ const sendInvoice = (outbound, overrides = {}) => outbound.sendInvoiceUpdateTemp
   businessName: 'Acme Studio', expectedUpdatedAt: NOW, idempotencyKey: 'invoice-a:event-1', ...overrides,
 });
 
+test('owner messages cannot advertise buttons missing from the Graph payload',async()=>{
+  const {outbound,calls}=harness();
+  await assert.rejects(()=>outbound.sendServiceReply({workspaceId:'workspace-a',to:PHONE,audience:'owner',
+    businessName:'Acme Studio',messageId:'missing-button',lastInboundAt:NOW,
+    body:'Please tap the button to confirm the deletion.'}),/button/i);
+  assert.equal(calls.length,0);
+});
+
 test('outbound is disabled by default and makes no network call', async () => {
   const {outbound, calls} = harness({env: {...baseEnv, WHATSAPP_OUTBOUND_ENABLED: undefined}});
   assert.deepEqual(await sendInvoice(outbound), {status: 'blocked', reason: 'disabled'});

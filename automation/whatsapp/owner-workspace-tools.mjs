@@ -2,6 +2,7 @@ import {sanitizeWorkspaceToolResult} from './workspace-data.mjs';
 import {createOwnerDirectRuntime} from './owner-direct-runtime.mjs';
 import {createOwnerSafetyTools} from './owner-agent.mjs';
 import {createWorkspaceDataTool} from './workspace-data.mjs';
+import {createOwnerActionButtons} from './owner-action-buttons.mjs';
 
 // These adapters retain atomic invoice/payment/attachment safeguards. They are
 // private server operations, never additional functions offered to the model.
@@ -12,6 +13,8 @@ export function createOwnerWorkspaceTools(options = {}) {
   else options.signal?.addEventListener('abort',abort,{once:true});
   let writeAttempted = false;
   let lastTool = null;
+  let buttonAction=null;
+  let pendingWasRead=false;
   const direct=createOwnerDirectRuntime({...options,adapter:options.directWriteAdapter});
   const safety = createOwnerSafetyTools({...options,signal:controller.signal});
   const invoke = (name, args = {}) => safety.execute(name, args);
@@ -76,7 +79,18 @@ export function createOwnerWorkspaceTools(options = {}) {
           const result=await invoke(name,args);
           return {...result,ok:result?.ok!==false,readOnly:true,operation:'configuration'};
         }
-        return await tool.execute(args,context);
+        const result=await tool.execute(args,context);
+        if(args?.operation==='pending')pendingWasRead=result?.ok!==false&&result?.pending===true;
+        // Advertise choices only after the server can actually sign them for a
+        // current proposal. A model statement is never evidence of a button.
+        buttonAction=null;
+        if(options.interactiveAvailable&&(pendingWasRead||tool.getReplyRequirement?.()?.confirmationText||safety.getReplyRequirement()?.confirmationText)){
+          try{
+            const action=await options.pending?.loadPendingAction?.({...options.scope});
+            if(createOwnerActionButtons({scope:options.scope,action,env:options.env,clock:options.clock}).length)buttonAction=action;
+          }catch{}
+        }
+        return result;
       }
       finally{context?.signal?.removeEventListener('abort',abort);}
     },
@@ -90,7 +104,7 @@ export function createOwnerWorkspaceTools(options = {}) {
       const operation=tool.getAttemptedOperation?.()?.operation;
       const attachmentReview=['saveAttachment','reviewAttachment'].includes(operation)
         ||(['pending','confirm'].includes(operation)&&options.pendingAtStart?.action?.type==='invoice_review_draft');
-      return options.interactiveAvailable&&!attachmentReview&&requirement?.confirmationText?{...requirement,maxLength:Math.min(requirement.maxLength||900,900),confirmationText:null,requiresCancel:false,requiresReplyCue:false,buttonsAvailable:true}:requirement;
+      return buttonAction&&!attachmentReview?{...requirement,maxLength:Math.min(requirement?.maxLength||900,900),confirmationText:null,requiresCancel:false,requiresReplyCue:false,buttonsAvailable:true}:requirement;
     },
     decideButton:async input=>sanitizeWorkspaceToolResult(await direct.decideButton(input),options.scope),
     lookupCompleted:async()=>sanitizeWorkspaceToolResult(await direct.lookupCompleted(),options.scope),

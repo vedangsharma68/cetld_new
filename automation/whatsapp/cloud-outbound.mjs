@@ -2,6 +2,7 @@ import {authorizeOwnerPhone} from './owner-binding.mjs';
 import {createConversationStore,conversationCallbackToken} from './conversation-store.mjs';
 import {getSendEligibility} from './consent.mjs';
 import {normalizeOwnerActionButtons} from './owner-action-buttons.mjs';
+import {ownerButtonClaimIssue} from './owner-grounding.mjs';
 import {OWNER_ACTION_CHOICES_UNAVAILABLE_REPLY,normalizeOwnerActionRef} from './owner-reply-store.mjs';
 
 const APPROVED_QA_RECIPIENTS = new Set(['+919871367051', '+919818685252']);
@@ -278,6 +279,7 @@ export function createWhatsAppOutbound({
     if (typeof authorizeInboundReply !== 'function') return block(logger, 'missing_inbound_authorizer', {workspaceId, to, kind});
     const inboundId = nonempty(messageId, 'messageId');
     const ownerButtons=normalizeOwnerActionButtons(buttons);
+    if(audience==='owner'&&ownerButtonClaimIssue(body,{buttonsAvailable:ownerButtons.length>0}))throw new TypeError('owner reply advertises missing buttons');
     if(ownerButtons.length&&(audience!=='owner'||kind!=='normal'))throw new TypeError('interactive buttons are owner-only');
     const fallbackRef=ownerActionFallback==null?null:normalizeOwnerActionRef(ownerActionFallback);
     if(ownerActionFallback!=null&&(!fallbackRef||audience!=='owner'||kind!=='normal'||ownerButtons.length
@@ -330,6 +332,7 @@ export function createWhatsAppOutbound({
       action:{buttons:ownerButtons.map(({id,title})=>({type:'reply',reply:{id,title}}))}}}
       :{type:'text',text:{preview_url:false,body:text}};
     const payload=await prepareMessage({workspaceId,to,kind,audience,customerId,key,payload:replyPayload,ownerActionFallback:fallbackRef});
+    if(audience==='owner'&&ownerButtonClaimIssue(payload.text?.body||payload.interactive?.body?.text,{buttonsAvailable:Boolean(payload.interactive?.action?.buttons?.length)}))throw new TypeError('stored owner reply advertises missing buttons');
     if(audience!=='owner'&&!payload.text.body.endsWith(`\n\n- ${owner}`))return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed'});
     const authorization = await authorizeInboundReply({workspaceId, phone: to, kind, messageId: inboundId,...(audience==='owner'?{audience,phase}: {})});
     if (authorization?.allowed !== true) return denyPrepared({workspaceId,to,kind,key,reason:authorization?.reason||'inbound_reply_denied'});

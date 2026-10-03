@@ -95,6 +95,54 @@ function makeHandler(db,{pending=null,providerFactory,agentFactory,authorize=asy
 const workspaceCall=args=>({id:'workspace-call',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(args)}});
 const signedButtons=action=>createOwnerActionButtons({scope:{workspaceId,phone},action,env,clock:()=>new Date(now)});
 
+test('reading an existing live proposal attaches real choices to the reply',async()=>{
+  const pending=pendingRecord();
+  const db=database({pendingAction:pending,ownerPreferences:preferences({confirmationMode:'buttons'})});
+  let calls=0;
+  const handler=makeHandler(db,{pending,providerFactory:()=>({async generate(){
+    calls++;
+    return calls===1?{toolCalls:[workspaceCall({operation:'pending'})]}:
+      {content:'Please tap the button to confirm the deletion of invoice INV-JOHN-1.'};
+  }})});
+  const result=await handler({workspaceId,ownerId,phone,messageId:'existing-proposal',message:'What needs my approval?'});
+  assert.equal(result.buttons?.length,2);
+  assert.equal(result.ownerActionRef?.pendingId,pending.id);
+  assert.match(result.answer,/tap the button/);
+});
+
+test('unsupported legacy pending state cannot become a fictional submission or button',async()=>{
+  const pending={...pendingRecord(),action:{type:'owner_invoice_request',changes:{dueDate:'2026-01-01'}}};
+  const db=database({pendingAction:pending});
+  let calls=0;
+  const handler=makeHandler(db,{pending,providerFactory:()=>({async generate(){calls++;
+    return calls===1?{toolCalls:[workspaceCall({operation:'pending'})]}:
+      {content:'I have submitted the request to delete the invoice. Please tap the button to confirm.'};
+  }})});
+  const result=await handler({workspaceId,ownerId,phone,messageId:'legacy-proposal',message:'Delete the duplicate invoice.'});
+  assert.doesNotMatch(result.answer,/submitted|tap the button/i);
+  assert.equal(result.buttons,undefined);
+});
+
+test('handler does not persist a button claim introduced after agent validation',async()=>{
+  const handler=makeHandler(database({ownerPreferences:preferences({serviceReplySignature:'Tap the button below.'})}),{
+    agentFactory:async()=>({answer:'Hello.'}),providerFactory:()=>({})});
+  const result=await handler({workspaceId,ownerId,phone,messageId:'signature-no-buttons',message:'Hello'});
+  assert.doesNotMatch(result.answer,/tap the button/i);
+  assert.equal(result.plannerFailure?.code,'OWNER_CHOICES_UNAVAILABLE');
+});
+
+test('expired proposals cannot advertise or attach confirmation buttons',async()=>{
+  const pending=pendingRecord({expiresAt:new Date(now-1).toISOString()});
+  let calls=0;
+  const handler=makeHandler(database({pendingAction:pending}),{pending,providerFactory:()=>({async generate(){
+    calls++;return calls===1?{toolCalls:[workspaceCall({operation:'pending'})]}:
+      {content:'Please tap the button below to confirm.'};
+  }})});
+  const result=await handler({workspaceId,ownerId,phone,messageId:'expired-proposal',message:'What needs approval?'});
+  assert.equal(result.buttons,undefined);
+  assert.doesNotMatch(result.answer,/tap the button/i);
+});
+
 test('direct owner command sends the exact inbound quote to the write RPC and returns a concise result-grounded reply with saved style preferences',async()=>{
   const db=database({ownerPreferences:preferences({confirmationMode:'direct'})});
   const message='Change invoice INV-JOHN-1 total to USD 130, please.';

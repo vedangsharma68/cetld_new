@@ -49,8 +49,24 @@ export function ownerEvidence(transcript=[],requirement=null){
   if(requirement?.requiredFacts&&Object.keys(requirement.requiredFacts).length)evidence.push({ok:true,readOnly:true,details:requirement.requiredFacts});
   return evidence;
 }
-export function ownerGroundingIssue(reply,results=[],message=''){
+// This capability comes from the outgoing payload, never a model tool result.
+export function ownerButtonClaimIssue(reply,{buttonsAvailable=false}={}){
+  if(buttonsAvailable)return null;
+  const clauses=normalize(reply).split(/[.!?\n]+/);
+  return clauses.some(clause=>/\bbuttons?\b/i.test(clause)
+    && !/\b(?:no|not|cannot|can't|couldn't|unavailable|missing|without)\b/i.test(clause)
+    && /\b(?:tap|press|click|select|choose|use|attached|below|provided|created|added)\b/i.test(clause))
+    ?'unverified_buttons':null;
+}
+export function ownerGroundingIssue(reply,results=[],message='',capabilities={}){
   const text=normalize(reply);
+  const buttonIssue=ownerButtonClaimIssue(text,capabilities);
+  if(buttonIssue)return buttonIssue;
+  const proposalClaims=text.split(/[.!?\n]+/).filter(clause=>
+    /\b(?:submitted|created|prepared|proposed)\b[^.!?]{0,65}\b(?:request|proposal|deletion|change)\b/i.test(clause)
+    || /\b(?:confirm|approve|cancel|review)\b[^.!?]{0,40}\bpending (?:action|proposal|change|request)\b/i.test(clause));
+  if(proposalClaims.some(clause=>!/\b(?:not|cannot|can't|couldn't|failed|unable|no)\b/i.test(clause))
+    && !results.some(result=>result.ok!==false&&(result.pending===true||result.proposal===true||result.requiresConfirmation===true)))return 'unverified_proposal';
   const completed=results.filter(completedOwnerResult);
   if(!completed.length&&(/^(?:done|all done|completed|all set)[.!\s]*$/i.test(text)
     ||/\b(?:the|your|requested) (?:change|deletion|update|payment|action) (?:is|was|has been) (?:now )?(?:complete|completed|confirmed|successful)\b/i.test(text)

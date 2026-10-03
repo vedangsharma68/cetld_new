@@ -3,6 +3,34 @@ import assert from 'node:assert/strict';
 import {ownerGroundingIssue,ownerEvidence} from '../automation/whatsapp/owner-grounding.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 
+test('button instructions require transport-backed choices, never model or history claims',()=>{
+  const reply='Please tap the button to confirm the deletion of invoice INV-002.';
+  assert.equal(ownerGroundingIssue(reply,[{ok:false,code:'INVALID'}],'INV-002'),'unverified_buttons');
+  assert.equal(ownerGroundingIssue(reply,[{ok:true,pending:true,invoiceNumber:'INV-002'}]),'unverified_buttons');
+  assert.equal(ownerGroundingIssue(reply,[{ok:true,pending:true,invoiceNumber:'INV-002'}],'',{buttonsAvailable:true}),null);
+  assert.equal(ownerGroundingIssue('There are no buttons available. Please send the change again.',[]),null);
+});
+
+test('submission and pending-action claims require a real current proposal',()=>{
+  for(const reply of ["I have submitted the request to delete John's duplicate invoice.",
+    'Please confirm the pending action to complete the deletion.',
+    'I created a proposal to delete the invoice.']){
+    assert.equal(ownerGroundingIssue(reply,[{ok:false,code:'INVALID'}]),'unverified_proposal');
+    assert.equal(ownerGroundingIssue(reply,[{ok:true,pending:true,actionType:'owner_invoice_delete_proposal'}]),null);
+  }
+});
+
+test('failed tools cannot turn into fictional buttons in the full agent loop',async()=>{
+  let calls=0;
+  const result=await runOwnerAgent({message:'yeah, confirmed. Delete INV-002.',
+    tools:{definitions:[{type:'function',function:{name:'workspaceData',parameters:{type:'object'}}}],
+      async execute(){return {ok:false,code:'INVALID'};}},
+    provider:{async generate(){calls++;return calls===1?{toolCalls:[{id:'bad',type:'function',function:{name:'workspaceData',arguments:'{"operation":"confirm"}'}}]}:
+      {content:'Please tap the button to confirm the deletion of invoice INV-002.'};}}});
+  assert.doesNotMatch(result.answer,/tap the button/i);
+  assert.equal(result.plannerFailure?.code,'OWNER_REPLY_REPAIR_FAILED');
+});
+
 test('a deletion claim requires a completed database result, not a proposal or failed confirmation',()=>{
   for(const results of [[],[{ok:true,proposal:true,invoiceNumber:'INV-002'}],[{ok:false,code:'PENDING'}]])
     assert.equal(ownerGroundingIssue('I have deleted INV-002.',results),'unverified_action_result');
