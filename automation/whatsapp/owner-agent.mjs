@@ -1296,9 +1296,10 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
       const round={number:++diagnostics.rounds,toolNames:[],toolResults:[],outcome:'ok',safetyIssueCodes:[],logged:false};
       activeRound=round;
       const modelStartedAt=Date.now();
-      const result=await bounded(()=>provider.generate({messages,...toolOptions,maxTokens,temperature,
-        signal:phase==='final'?controller.signal:workController.signal,deadlineAt:phase==='final'?loopDeadlineAt:workDeadlineAt}),'provider',phase);
-      logger?.info?.('WhatsApp owner model call',{traceId:scopedTrace,round:round.number,durationMs:Date.now()-modelStartedAt,phase});
+      let result;
+      try{result=await bounded(()=>provider.generate({messages,...toolOptions,maxTokens,temperature,
+        signal:phase==='final'?controller.signal:workController.signal,deadlineAt:phase==='final'?loopDeadlineAt:workDeadlineAt}),'provider',phase);}
+      finally{try{logger?.info?.('WhatsApp owner model call',{traceId:scopedTrace,round:round.number,durationMs:Date.now()-modelStartedAt,phase,outcome:result?'ok':'error'});}catch{}}
       lastServedModel=result?.model||lastServedModel;
       tools.setServedModel?.(lastServedModel);
       const calls=Array.isArray(result?.toolCalls)?result.toolCalls:[];
@@ -1420,8 +1421,8 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
           await saveCheckpoint();
           executedTool=true;
           const toolStartedAt=Date.now();
-          output=await bounded(()=>tools.execute(name,args,{signal:workController.signal,deadlineAt:workDeadlineAt}),'tool','work');
-          logger?.info?.('WhatsApp owner tool call',{traceId:scopedTrace,toolName:safeToolName(name),durationMs:Date.now()-toolStartedAt,code:logToolCode(output)});
+          try{output=await bounded(()=>tools.execute(name,args,{signal:workController.signal,deadlineAt:workDeadlineAt}),'tool','work');}
+          finally{try{logger?.info?.('WhatsApp owner tool call',{traceId:scopedTrace,toolName:safeToolName(name),durationMs:Date.now()-toolStartedAt,code:logToolCode(output)});}catch{}}
           inFlightTool=null;
           uncertainWrite=null;
           if(output?.writeAttempted===true)observedWriteAttempted=true;

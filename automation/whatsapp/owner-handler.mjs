@@ -19,11 +19,13 @@ async function timedContextRead(logger,query,operation){
   finally{try{logger?.info?.('WhatsApp owner context read',{query,queryCount:1,durationMs:Date.now()-startedAt,outcome});}catch{}}
 }
 async function permanentHistory({supabase,workspaceId,phone}){
-  const result=await supabase.from('whatsapp_messages').select('direction,body,status,created_at,id,provider_message_id').eq('workspace_id',workspaceId)
+  const result=await supabase.from('whatsapp_messages').select('direction,body,status,created_at,id,provider_message_id,idempotency_key').eq('workspace_id',workspaceId)
     .eq('phone',phone).eq('audience','owner').in('status',['received','accepted','sent','delivered','read'])
-    .order('created_at',{ascending:false}).order('id',{ascending:false}).limit(8);
+    .order('created_at',{ascending:false}).order('id',{ascending:false}).limit(16);
   if(result?.error)throw result.error;
-  return (result?.data||[]).reverse().map(row=>({role:row.direction==='inbound'?'user':'assistant',content:row.body,
+  // Delivery acknowledgements are transport state, not conversational turns.
+  // Overfetch once so they cannot crowd John out of the eight-turn history.
+  return (result?.data||[]).filter(row=>!String(row.idempotency_key||'').startsWith('ack:')).slice(0,8).reverse().map(row=>({role:row.direction==='inbound'?'user':'assistant',content:row.body,
     createdAt:row.created_at||null,providerMessageId:row.direction==='inbound'?row.provider_message_id:null}));
 }
 async function readOwnerSourceMedia({supabase,providerMessageId,phone}){

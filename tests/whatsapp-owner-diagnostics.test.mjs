@@ -20,7 +20,8 @@ test('live diagnostic runs the owner data loop read-only and returns timings wit
   assert.equal(result.ok,true);assert.ok(result.invoiceRows>0);assert.ok(result.groundedInvoiceNumbers>0);
   assert.ok(result.modelDurationsMs.length===2);assert.equal(result.authorization.queryCount,0);
   assert.ok(result.contextReads.every(read=>read.queryCount===1));
-  assert.doesNotMatch(JSON.stringify(result),/John Smith|INV-001|450|phone|ownerId|workspaceId/);
+  assert.doesNotMatch(JSON.stringify(result),/John Smith|INV-001|phone|ownerId|workspaceId/);
+  assert.equal(Object.hasOwn(result,'answer'),false);assert.equal(Object.hasOwn(result,'rows'),false);
   db.assertScopedReads();
 });
 test('live diagnostic refuses model writes and natural-language planner requests before any mutation',async()=>{
