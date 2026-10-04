@@ -6,6 +6,7 @@ import {readFile,readdir} from 'node:fs/promises';
 import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
+import {createOwnerWorkspacePlanner} from '../automation/whatsapp/owner-handler.mjs';
 
 const owner='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const stranger='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -43,24 +44,28 @@ test('real provider, catalog, resolver and PostgreSQL repair a targeted update a
         return {data:(await db.query('select public.whatsapp_apply_direct_owner_write($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb) as value',params)).rows[0].value,error:null};
       },
     };
+    let provider;
     const makeTools=(message,messageId)=>createOwnerWorkspaceTools({supabase,scope,message,messageId,authorize:async()=>true,ownerStore:{async query(){throw Error('Legacy tools must not run');}},
+      planRequest:(...args)=>createOwnerWorkspacePlanner({provider,message,history:[],timezone:'Asia/Kolkata'})(...args),
       botPreferences:{confirmationMode:'direct'},pendingStoreAvailable:false});
     const read=await makeTools('Show '+name,'qa-read').execute('workspaceData',{operation:'read',table:'business_records',filters:[{column:'name',operator:'eq',value:name}]});
     assert.equal(read.rows.length,1);assert.equal(read.rows[0].custom_fields.check_count,1);
     const message='For '+name+', set check_count to 2 and qa_status to archived.';
     await addInbound(db,'qa-update',message);const tools=makeTools(message,'qa-update');let calls=0;
-    const provider=new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,
+    provider=new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,
       logger:{info(){},warn(){},error(){}},fetchImpl:async(_url,init)=>{
         const wire=JSON.parse(init.body);calls++;let content;
-        if(calls===1){assert(wire.tools.find(tool=>tool.function.name==='workspaceData').function.parameters.properties.filters);content=JSON.stringify({name:'workspaceData',parameters:{operation:'update',table:'business_records',values:{custom_fields:{check_count:2,qa_status:'archived'}}}});}
-        else if(calls===2){assert.equal(dispatches,0);const rejection=JSON.parse(wire.messages.find(row=>row.role==='tool').content);
-          assert.equal(rejection.validationCode,'TARGET_REQUIRED');assert(rejection.catalog.tables.business_records.writeTargetConstraints.filtersRequired);
-          content=JSON.stringify({name:'workspaceData',parameters:{operation:'update',table:'business_records',filters:[{field:'name',op:'equals',value:name}],values:{custom_fields:{check_count:2,qa_status:'archived'}}}});}
+        if(calls===1){assert(wire.tools.find(tool=>tool.function.name==='workspaceData').function.parameters.properties.filters);content=JSON.stringify({name:'workspaceData',parameters:{operation:'update',table:'business_records',request:message}});}
+        else if(calls===2){assert.equal(dispatches,0);assert.equal(wire.response_format.type,'json_schema');assert.equal(wire.messages.at(-1).content,message);
+          content=JSON.stringify({operation:'update',table:'business_records',filters:[],values:{custom_fields:{check_count:2,qa_status:'archived'}}});}
+        else if(calls===3){assert.equal(dispatches,0);assert.equal(wire.response_format.type,'json_schema');assert(wire.response_format.json_schema.schema.required.includes('filters'));
+          assert(wire.messages.some(row=>row.content.includes('TARGET_REQUIRED')&&row.content.includes('validationShape')));
+          content=JSON.stringify({operation:'update',table:'business_records',filters:[{column:'name',operator:'eq',value:name}],values:{custom_fields:{check_count:2,qa_status:'archived'}}});}
         else{assert.equal(dispatches,1);content='Updated '+name+': check_count is 2 and qa_status is archived.';}
         return {ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({choices:[{message:{content},finish_reason:'stop'}]})};
       }});
     const result=await runOwnerAgent({provider,message,tools,history:[{role:'assistant',content:JSON.stringify(read.rows)}]});
-    assert.equal(result.plannerFailure,undefined);assert.match(result.answer,/check_count is 2/);assert.equal(calls,3);assert.equal(dispatches,1);
+    assert.equal(result.plannerFailure,undefined);assert.match(result.answer,/check_count is 2/);assert.equal(calls,4);assert.equal(dispatches,1);
     const persisted=(await db.query('select to_jsonb(b) as row from public.business_records b where workspace_id=$1 and id=$2',[workspaceId,created.entityId])).rows[0].row;
     assert.deepEqual(persisted.custom_fields,{check_note:'temporary assistant test',check_count:2,qa_status:'archived'});
     assert.equal((await db.query('select count(*)::int as n from public.business_records where workspace_id=$1 and name=$2',[workspaceId,name])).rows[0].n,1);

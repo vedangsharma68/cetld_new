@@ -132,6 +132,24 @@ test('record target validation and filter aliases never dispatch missing, broad 
   assert.equal(updated.ok,true);assert.equal(writes,1);
 });
 
+test('natural-language planner correction is bounded, redacted and never retries a dispatched write',async()=>{
+  const row={id:'33333333-3333-4333-8333-333333333333',workspace_id:scope.workspaceId,name:'Private record',record_type:'qa_check',updated_at:'2026-10-04T15:16:06Z'};
+  let plans=0,writes=0,feedback;
+  const bad={operation:'update',table:'business_records',filters:[{column:'record_type',operator:'ilike',value:'private-filter-value'}],values:{custom_fields:{qa_status:'private-field-value'}}};
+  const tool=createWorkspaceDataTool({supabase:fakeSupabase({rows:{business_records:[row]}}),scope,authorize:async()=>true,message:'Update Private record',messageId:'bounded-plan',confirmationMode:'direct',
+    planRequest:async(_request,options)=>{plans++;feedback=options.validationFeedback;return bad;},executeDirectOperation:async()=>{writes++;throw Error('Must not dispatch');}});
+  const rejected=await tool.execute({request:'Update Private record',operation:'update',table:'business_records'});
+  assert.equal(plans,2);assert.equal(writes,0);assert.equal(tool.getWriteAttempted(),false);assert.equal(feedback.validationCode,'TARGET_REQUIRED');
+  assert.deepEqual(rejected.validationShape.filters,[{column:'record_type',operator:'ilike',valueType:'string'}]);
+  assert.equal(JSON.stringify({feedback,rejected}).includes('private-filter-value'),false);
+  assert.equal(JSON.stringify({feedback,rejected}).includes('private-field-value'),false);
+  plans=0;
+  const dispatched=createWorkspaceDataTool({supabase:fakeSupabase({rows:{business_records:[row]}}),scope,authorize:async()=>true,message:'Update Private record',messageId:'dispatched-plan',confirmationMode:'direct',
+    planRequest:async()=>{plans++;return {...bad,filters:[{column:'name',operator:'eq',value:row.name}]};},executeDirectOperation:async()=>{writes++;return {ok:false,code:'INVALID'};}});
+  const result=await dispatched.execute({request:'Update Private record',operation:'update',table:'business_records'});
+  assert.equal(result.ok,false);assert.equal(plans,1);assert.equal(writes,1);assert.equal(dispatched.getWriteAttempted(),true);
+});
+
 function fakeSupabase({rows={}, rpcResult={ok:true}, rpcError=null}={}) {
   const calls=[];
   return {
