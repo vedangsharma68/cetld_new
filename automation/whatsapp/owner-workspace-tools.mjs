@@ -20,12 +20,12 @@ export function createOwnerWorkspaceTools(options = {}) {
   const invoke = (name, args = {}) => safety.execute(name, args);
   const target = params => {
     const filters = Array.isArray(params.filters) ? params.filters : [];
-    if(filters.length !== 1 || !['invoice_number','id'].includes(filters[0].column) || filters[0].operator !== 'eq') return undefined;
+    if(filters.length !== 1 || !['invoice_number','id','customer_name'].includes(filters[0].column) || filters[0].operator !== 'eq') return undefined;
     return filters[0].value;
   };
   const tool = createWorkspaceDataTool({...options,signal:controller.signal,
     confirmationMode:options.botPreferences?.confirmationMode||'buttons',
-    executeDirectOperation:(params)=>direct.execute(params),
+    executeDirectOperation:(params,ctx)=>direct.execute(params,ctx),
     getRuntimeConfig: () => invoke('getAIProviderConfiguration'),
     async executeSafetyOperation(params) {
       if(params.signal?.aborted || (Number.isFinite(params.deadlineAt) && Date.now()>=params.deadlineAt)) throw Object.assign(new Error(),{code:'OWNER_LOOP_TIMEOUT'});

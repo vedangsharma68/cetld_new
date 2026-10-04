@@ -3,12 +3,14 @@ import {createHash} from 'node:crypto';
 const OPERATIONS=new Set([
   'invoice.create','invoice.update','invoice.delete','invoice.restore',
   'customer.create','customer.update','customer.delete',
+  'business_record.create','business_record.update',
   'settings.update','ai_settings.update','pending.decide',
 ]);
 
 const TABLES=Object.freeze({
-  invoice:{table:'invoices',select:'id,workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata,created_at,updated_at,deleted_at,deleted_by'},
-  customer:{table:'customers',select:'id,workspace_id,name,company_name,email,phone,metadata,created_at,updated_at'},
+  business_record:{table:'business_records',select:'id,workspace_id,record_type,name,custom_fields,created_at,updated_at'},
+  invoice:{table:'invoices',select:'id,workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,custom_fields,metadata,created_at,updated_at,deleted_at,deleted_by'},
+  customer:{table:'customers',select:'id,workspace_id,name,company_name,email,phone,custom_fields,metadata,created_at,updated_at'},
   settings:{table:'workspace_settings',select:'workspace_id,business_name,default_currency,default_timezone,follow_up_preferences,owner_bot_preferences,updated_at'},
   ai_settings:{table:'workspace_ai_settings',select:'workspace_id,primary_model,fallback_model,updated_at'},
   pending:{table:'whatsapp_pending_actions',select:'id,workspace_id,customer_id,phone,action,consumed_at,version,generation'},

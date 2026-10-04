@@ -8,6 +8,93 @@ const owner='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const stranger='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const phone='+919871367051';
 
+test('owner-defined business categories support atomic create/edit, button decisions, replay and negative tenant access',async()=>{
+  const {db,workspaceId}=await boot();
+  try{
+    await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+    await addInbound(db,'supplier-create','Add supplier Acme Metals with city Mumbai');
+    const created=await write(db,{workspaceId,providerMessageId:'supplier-create',quote:'Add supplier Acme Metals with city Mumbai',operation:'business_record.create',
+      payload:{record_type:'supplier',name:'Acme Metals',custom_fields:{city:'Mumbai',lead_days:7}}});
+    assert.equal(created.ok,true);assert.equal(created.entityType,'business_record');
+    const replay=await write(db,{workspaceId,providerMessageId:'supplier-create',quote:'Add supplier Acme Metals with city Mumbai',operation:'business_record.create',
+      payload:{record_type:'supplier',name:'Acme Metals',custom_fields:{city:'Mumbai',lead_days:7}}});
+    assert.equal(replay.replayed,true);assert.equal(replay.entityId,created.entityId);
+    await setConfirmationMode(db,workspaceId,'buttons');
+    await addInbound(db,'supplier-proposal','Set Acme Metals lead days to 5');
+    const proposal=await proposeWorkspaceChange(db,workspaceId,{operation:'update',table:'business_records',targetId:created.entityId,
+      expectedUpdatedAt:created.updatedAt,values:{custom_fields:{lead_days:5}},requestMessageId:'supplier-proposal',summary:'Change lead days'});
+    assert.equal(proposal.result.ok,true);
+    const contact=await verifiedCustomerId(db);
+    await asService(db);
+    const pending=(await db.query('select * from public.whatsapp_load_pending_action_state($1,$2,$3)',[workspaceId,contact,phone])).rows[0];
+    await addInbound(db,'supplier-button','Confirm','oab1.supplier');
+    const confirmed=await write(db,{workspaceId,providerMessageId:'supplier-button',operation:'pending.decide',authorizationKind:'button',
+      interactionId:'oab1.supplier',buttonDecision:'confirm',pendingId:pending.id,pendingVersion:pending.version});
+    assert.equal(confirmed.ok,true);assert.deepEqual(confirmed.record.custom_fields,{city:'Mumbai',lead_days:5});
+    await asOwner(db);
+    assert.deepEqual((await db.query('select custom_fields from public.business_records where id=$1',[created.entityId])).rows[0].custom_fields,confirmed.record.custom_fields);
+    await asOwner(db,stranger);
+    assert.equal((await db.query('select * from public.business_records where id=$1',[created.entityId])).rows.length,0);
+    await assert.rejects(db.query("update public.business_records set name='stolen' where id=$1",[created.entityId]));
+    await asService(db);await addInbound(db,'supplier-forbidden','Set credentials');await setConfirmationMode(db,workspaceId,'direct');
+    const denied=await write(db,{workspaceId,providerMessageId:'supplier-forbidden',quote:'Set credentials',operation:'business_record.update',
+      targetId:created.entityId,expectedUpdatedAt:confirmed.updatedAt,payload:{custom_fields:{api_key:'x'}}});
+    assert.equal(denied.ok,false);
+  }finally{await db.close();}
+});
+
+test('business custom fields persist and merge through direct and button writes without crossing tenants or changing payments',async()=>{
+  const {db,workspaceId}=await boot();
+  try{
+    await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+    const quote='Add John Smith with delivery zone West';
+    await addInbound(db,'custom-create',quote);
+    const created=await write(db,{workspaceId,providerMessageId:'custom-create',quote,operation:'customer.create',
+      payload:{name:'John Smith',custom_fields:{delivery_zone:'West',credit_days:30}}});
+    assert.equal(created.ok,true);
+    assert.deepEqual(created.record.custom_fields,{delivery_zone:'West',credit_days:30});
+    const replay=await write(db,{workspaceId,providerMessageId:'custom-create',quote,operation:'customer.create',
+      payload:{name:'John Smith',custom_fields:{delivery_zone:'West',credit_days:30}}});
+    assert.equal(replay.replayed,true);assert.equal(replay.entityId,created.entityId);
+    await addInbound(db,'custom-update','Set John priority high');
+    const changed=await write(db,{workspaceId,providerMessageId:'custom-update',quote:'Set John priority high',operation:'customer.update',
+      targetId:created.entityId,expectedUpdatedAt:created.updatedAt,payload:{phone:'+12025550123',custom_fields:{priority:'high'}}});
+    assert.equal(changed.ok,true);
+    assert.equal(changed.record.phone,'+12025550123');
+    assert.deepEqual(changed.record.custom_fields,{delivery_zone:'West',credit_days:30,priority:'high'});
+    await addInbound(db,'custom-forbidden','Set system fields');
+    const forbidden=await write(db,{workspaceId,providerMessageId:'custom-forbidden',quote:'Set system fields',operation:'customer.update',
+      targetId:created.entityId,expectedUpdatedAt:changed.updatedAt,payload:{custom_fields:{amount_paid:0}}});
+    assert.equal(forbidden.ok,false);
+
+    await asOwner(db,stranger);
+    assert.equal((await db.query('select * from public.customers where id=$1',[created.entityId])).rows.length,0);
+    assert.equal((await db.query("update public.customers set custom_fields='{\"priority\":\"stolen\"}' where id=$1 returning id",[created.entityId])).rows.length,0);
+    await asOwner(db);
+    assert.equal((await db.query('select phone from public.customers where id=$1',[created.entityId])).rows[0].phone,'+12025550123');
+    const invoice=(await db.query("insert into public.invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,total_amount,currency) values($1,$2,'INV-CUSTOM','2026-10-01','2026-10-06',100,'USD') returning *",[workspaceId,created.entityId])).rows[0];
+    await asService(db);await addInbound(db,'invoice-custom','Set invoice project code ABC');
+    const invoiceChanged=await write(db,{workspaceId,providerMessageId:'invoice-custom',quote:'Set invoice project code ABC',operation:'invoice.update',
+      targetId:invoice.id,expectedUpdatedAt:invoice.updated_at.toISOString(),payload:{custom_fields:{project_code:'ABC'}}});
+    assert.equal(invoiceChanged.ok,true);assert.equal(invoiceChanged.record.custom_fields.project_code,'ABC');
+    assert.equal(Number(invoiceChanged.record.amount_paid),0);
+    await setConfirmationMode(db,workspaceId,'buttons');
+    await addInbound(db,'custom-proposal','Add purchase order');
+    const proposal=await proposeWorkspaceChange(db,workspaceId,{operation:'update',table:'invoices',targetId:invoice.id,
+      expectedUpdatedAt:invoiceChanged.updatedAt,values:{custom_fields:{purchase_order:'PO-7'}},requestMessageId:'custom-proposal',summary:'Add purchase order'});
+    assert.equal(proposal.result.ok,true);
+    const pending=(await db.query('select * from public.whatsapp_load_pending_action_state($1,$2,$3)',[workspaceId,await verifiedCustomerId(db),phone])).rows[0];
+    await addInbound(db,'custom-button','Confirm','oab1.custom');
+    const confirmed=await write(db,{workspaceId,providerMessageId:'custom-button',operation:'pending.decide',authorizationKind:'button',
+      interactionId:'oab1.custom',buttonDecision:'confirm',pendingId:pending.id,pendingVersion:pending.version});
+    assert.equal(confirmed.ok,true);
+    assert.deepEqual(confirmed.record.custom_fields,{project_code:'ABC',purchase_order:'PO-7'});
+    await asOwner(db);
+    assert.deepEqual((await db.query('select custom_fields from public.invoices where id=$1',[invoice.id])).rows[0].custom_fields,confirmed.record.custom_fields);
+    assert.equal((await db.query('select count(*)::int n from public.payments where invoice_id=$1',[invoice.id])).rows[0].n,0);
+  }finally{await db.close();}
+});
+
 async function boot({crlfLegacyWorkspaceData=false}={}){
   const db=new PGlite();
   await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;

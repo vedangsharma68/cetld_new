@@ -7,6 +7,21 @@ const call=(name,args={},id='call-1')=>({id,type:'function',function:{name,argum
 const tools=(names=['workspaceData'],execute=async()=>({ok:true,result:'done'}))=>({definitions:names.map(toolDefinition),execute});
 const answer=(content='I can help with that.')=>({content,model:'@cf/qwen/qwen3-30b-a3b-fp8',toolCalls:[]});
 
+test('reference follow-up retains John invoice context and exposes owner-local tomorrow to the model',async()=>{
+ let called=false;
+ const history=[{role:'user',content:"What is John Smith's invoice due date?"},{role:'assistant',content:'INV-JOHN-1 is due 2019-02-26.'}];
+ const result=await runOwnerAgent({history,message:'set it to tomorrows date',timezone:'Asia/Kolkata',clock:()=>new Date('2026-10-04T20:00:00Z'),
+   tools:tools(['workspaceData'],async args=>({ok:true})),provider:{async generate({messages}){
+     const context=JSON.parse(messages.filter(m=>m.role==='system')[1].content);
+     assert.equal(context.calendar.tomorrow,'2026-10-06');
+     assert.ok(messages.some(m=>m.content===history[0].content));
+     assert.ok(messages.some(m=>m.content===history[1].content));
+     assert.ok(messages.some(m=>m.role==='system'&&/latest unambiguous customer or invoice/.test(m.content)));
+     called=true;return answer('Which invoice should I update?');
+   }}});
+ assert.equal(called,true);assert.match(result.answer,/Which invoice/);
+});
+
 test('unknown tools get a corrective result and the model recovers in the same loop',async()=>{
  let calls=0,executionCount=0;
  const provider={async generate(request){
@@ -44,7 +59,7 @@ test('the system prompt stays short and describes workspaceData generically',asy
  assert.doesNotMatch(systemPrompt,/invoice|payment|delete|undo|attachment|confirmation/i);
  assert.deepEqual(historyContents.slice(0,8),history.slice(-8).map(turn=>turn.content));
  assert.equal(historyContents.at(-1),'');
- assert.deepEqual(context,{currentDate:'2026-10-02',attachment:{available:true,mimeType:'image/jpeg'},historyAvailable:false,settingsAvailable:false,toolsAvailable:true});
+ assert.deepEqual(context,{currentDate:'2026-10-02',calendar:{timezone:'UTC',currentDate:'2026-10-02',tomorrow:'2026-10-03',yesterday:'2026-10-01'},attachment:{available:true,mimeType:'image/jpeg'},historyAvailable:false,settingsAvailable:false,toolsAvailable:true});
  const unavailable=await runOwnerAgent({provider:{async generate(request){
   const missingContext=JSON.parse(request.messages.filter(item=>item.role==='system')[1].content);
   assert.deepEqual(missingContext.attachment,{available:false,errorCode:'ATTACHMENT_UNAVAILABLE'});
