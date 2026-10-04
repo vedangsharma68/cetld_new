@@ -8,6 +8,23 @@ const owner='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const stranger='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const phone='+919871367051';
 
+test('the requested QA business record persists typed custom fields once and stays private',async()=>{
+  const {db,workspaceId}=await boot();
+  try{
+    await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+    const quote="Create a qa_check business record named CETLD QA 20261004 1442 with custom fields check_note 'temporary assistant test', check_count 1 and qa_status 'active'.";
+    const payload={record_type:'qa_check',name:'CETLD QA 20261004 1442',custom_fields:{check_note:'temporary assistant test',check_count:1,qa_status:'active'}};
+    await addInbound(db,'qa-create-regression',quote);
+    const input={workspaceId,providerMessageId:'qa-create-regression',quote,operation:'business_record.create',payload};
+    const created=await write(db,input);assert.equal(created.ok,true);assert.deepEqual(created.record.custom_fields,payload.custom_fields);
+    const replay=await write(db,input);assert.equal(replay.replayed,true);assert.equal(replay.entityId,created.entityId);
+    await asOwner(db);
+    const rows=(await db.query('select name,record_type,custom_fields from public.business_records where id=$1',[created.entityId])).rows;
+    assert.deepEqual(rows,[payload]);
+    await asOwner(db,stranger);assert.equal((await db.query('select * from public.business_records where id=$1',[created.entityId])).rows.length,0);
+  }finally{await db.close();}
+});
+
 test('business record grants override inherited Supabase service privileges',async()=>{
   const {db}=await boot({supabaseDefaultGrants:true});
   try {
