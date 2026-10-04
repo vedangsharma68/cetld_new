@@ -1,3 +1,4 @@
+import {invoiceBusinessFields} from '../invoice/business-fields.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -66,8 +67,8 @@ test('live metadata write preserves existing fields and stores the invoice excep
 });
 
 test('invoice detail date uses the stored issue date even with stale metadata',()=>{
-  const fromRow=extract('const invoiceFromRow=(row,customers)=>','const paymentFromRow=',{
-    terminalInvoice,toMinor:value=>Math.round(Number(value)*100),
+  const fromRow=extract('const invoiceFromRow=','const paymentFromRow=',{
+    invoiceBusinessFields,terminalInvoice,toMinor:value=>Math.round(Number(value)*100),
   },'invoiceFromRow');
   const invoice=fromRow({
     id:'invoice-4',customer_id:'customer-1',invoice_number:'INV-4',issue_date:'2026-09-15',
