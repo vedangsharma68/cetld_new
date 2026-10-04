@@ -61,6 +61,16 @@ test('serialized Gemini, real SDK and SQL persist invoice corrections, resolve J
   const viewed=await read.execute('workspaceData',{operation:'read',table:'invoices',filters:target,columns:['subtotal','tax','discount','line_items','invoice_direction','seller_name','buyer_name','payment_information','custom_fields']});
   assert.equal(viewed.ok,true,JSON.stringify(viewed));assert.equal(Number(viewed.rows[0].tax),25);
   assert.equal(viewed.rows[0].custom_fields.purchase_order,'PO-1');assert.equal(viewed.rows[0].line_items[0].amount,80);assert(!Object.hasOwn(viewed.rows[0],'metadata'));
+  const instructionsMessage='Set FIELD-1 payment instructions to use bank transfer reference FIELD-1.';
+  const instructions=await tools(instructionsMessage,'fields-payment-information');let instructionCalls=0;
+  const instructionProvider=new AIProvider({primaryModel:'gemini-3.5-flash-lite',fallbackModel:null,geminiApiKey:'isolated-fixture',maxAttempts:1,logger,
+   fetchImpl:async()=>Response.json({candidates:[{content:{parts:++instructionCalls===1
+    ?[{functionCall:{name:'workspaceData',args:{operation:'update',table:'invoices',filters:target,values:{payment_information:'Use bank transfer reference FIELD-1'}}}}]
+    :[{text:'Updated FIELD-1 payment instructions.'}]},finishReason:'STOP'}]})});
+  const instructionAnswer=await runOwnerAgent({provider:instructionProvider,message:instructionsMessage,tools:instructions,history:[],logger});
+  assert.equal(instructionAnswer.answer,'Updated FIELD-1 payment instructions.');assert.equal(instructionCalls,2);
+  assert.equal((await db.query('select metadata->>\'payment_information\' value from invoices where id=$1',[invoice.id])).rows[0].value,'Use bank transfer reference FIELD-1');
+  assert.equal((await db.query('select count(*)::int n from payments where workspace_id=$1',[workspaceId])).rows[0].n,0);
   const edit=await tools('Set FIELD-1 notes to persisted before interruption','fields-interrupted'),rpc=supabase.rpc.bind(supabase);let writes=0;
   supabase.rpc=async(name,args)=>{const outcome=await rpc(name,args);if(name==='whatsapp_correct_owner_invoice'){writes++;throw Error('Isolated lost response after commit');}return outcome;};
   const interrupted=await edit.execute('workspaceData',{operation:'update',table:'invoices',filters:target,values:{notes:'Persisted before interruption'}});
