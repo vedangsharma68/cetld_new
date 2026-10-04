@@ -110,7 +110,7 @@ export async function planOwnerNextActions({supabase,scope,context,pending=false
   const row=rows[0],choices=[];
   if(table==='invoices') {
     const file=data(await supabase.from('invoice_files').select('id').eq('workspace_id',scope.workspaceId).eq('invoice_id',row.id).limit(1).maybeSingle());
-    if(file)choices.push(choice(row,'view_file','View file'));
+    if(file)choices.push(choice(row,'view_file',cleanLabel('View '+row.invoice_number)));
   }
   if(table==='customers'&&row.id!==scope.customerId&&row.metadata?.whatsapp_owner!==true||table==='invoices'&&['draft','sent','overdue'].includes(row.status)&&Number(row.total_amount)>Number(row.amount_paid))choices.push(choice(row,'edit_details','Edit details'));
   if(table==='invoices'&&['draft','sent','overdue'].includes(row.status)&&Number(row.total_amount)>Number(row.amount_paid))choices.push(choice(row,'record_payment','Record payment'));

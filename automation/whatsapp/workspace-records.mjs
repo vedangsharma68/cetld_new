@@ -54,7 +54,7 @@ export async function resolveWorkspaceRecord({supabase,scope,table,filters,selec
   return rows.length===1?{ok:true,row:rows[0]}:{ok:false,code:rows.length?'AMBIGUOUS':'NOT_FOUND'};
 }
 
-const protectedKey=/^(?:id|.*_id|name|company_name|email|phone|invoice_number|issue_date|due_date|status|amount_paid|total_amount|subtotal|tax|currency|notes|invoice_direction|business_name|default_currency|default_timezone|follow_up_preferences|owner_bot_preferences|primary_model|fallback_model|followup_state|next_follow_up_at|metadata|custom_fields|created_at|updated_at|deleted_at|deleted_by|role|permissions|whatsapp_owner|workspace|tenant|owner|user)$/i;
+const protectedKey=/^(?:id|.*_id|name|company_name|email|phone|invoice_number|issue_date|due_date|status|amount_paid|reversed_amount|net_amount|reversed_at|payment_history|cash_refund|total_amount|subtotal|tax|currency|notes|invoice_direction|business_name|default_currency|default_timezone|follow_up_preferences|owner_bot_preferences|primary_model|fallback_model|followup_state|next_follow_up_at|metadata|custom_fields|created_at|updated_at|deleted_at|deleted_by|role|permissions|whatsapp_owner|workspace|tenant|owner|user)$/i;
 const secretKey=/(?:token|secret|password|api.?key|credential|authorization|cookie|storage.?path|code.?hash|private.?key)/i;
 export function validateCustomFields(value) {
   if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length>50||Buffer.byteLength(JSON.stringify(value),'utf8')>8192)

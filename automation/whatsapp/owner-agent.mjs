@@ -302,6 +302,14 @@ function missingRequiredConfirmationFact(reply,facts={}) {
   if(facts.invoiceNumber&& !reply.toLocaleLowerCase().includes(String(facts.invoiceNumber).toLocaleLowerCase()))return 'confirmation_invoice_number';
   if(facts.customerName&& !reply.toLocaleLowerCase().includes(String(facts.customerName).toLocaleLowerCase()))return 'confirmation_customer';
   if(facts.totalAmount!==undefined&&!containsAmount(reply,facts.totalAmount))return 'confirmation_amount';
+  if(facts.reversalAmount!==undefined&&!containsAmount(reply,facts.reversalAmount))return 'confirmation_reversal_amount';
+  if(facts.balanceAfter!==undefined&&!containsAmount(reply,facts.balanceAfter))return 'confirmation_balance';
+  if(facts.financialReopening===true){
+    if(!/\b(?:original|existing)\b[^.!?]{0,55}\b(?:payments?|receipts?|history)\b[^.!?]{0,55}\b(?:remain|retain|preserv|keep)/i.test(reply)
+      &&!/\b(?:keep|retain|preserv)[^.!?]{0,55}\b(?:original|existing)\b[^.!?]{0,35}\b(?:payments?|receipts?|history)\b/i.test(reply))return 'confirmation_payment_history';
+    if(!/\b(?:no|not|never|without|doesn't|does not|won't|will not)\b[^.!?]{0,35}\brefund/i.test(reply))return 'confirmation_no_refund';
+    if(!/\breminders?\b[^.!?]{0,35}\bpause|\bpause[^.!?]{0,35}\breminders?\b/i.test(reply))return 'confirmation_reminders';
+  }
   if(facts.currency&&!new RegExp(`\\b${String(facts.currency).replace(/[.*+?^${}()|[\\]\\\\]/g,'\\$&')}\\b`,'i').test(reply))return 'confirmation_currency';
   if(facts.status&&!new RegExp(`\\b${String(facts.status).replace(/[.*+?^${}()|[\\]\\\\]/g,'\\$&')}\\b`,'i').test(reply))return 'confirmation_status';
   return null;
