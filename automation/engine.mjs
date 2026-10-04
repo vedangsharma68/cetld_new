@@ -124,7 +124,7 @@ export class FollowUpEngine {
     if (!authorization.authorized) return {status:'skipped',reason:authorization.reason};
     // No asynchronous work may be inserted between this gate and provider dispatch.
     let result;
-    try { result=await this.provider.sendReminder({workspaceId,invoiceId,customerId:invoice.customer_contact_id || invoiceId,to,body,idempotencyKey:key}); }
+    try { result=await this.provider.sendReminder({workspaceId,invoiceId,customerId:invoice.customer_id || invoice.customer_contact_id || invoiceId,to,body,idempotencyKey:key}); }
     catch { result={status:'unknown'}; }
     if (result?.status !== 'accepted' || !result.providerMessageId) {
       const unknown=result?.status !== 'failed';
@@ -132,8 +132,15 @@ export class FollowUpEngine {
       await this.event(scope,'needs_attention',{reason:unknown?'delivery_uncertain':'provider_rejected',claimId:claim.id});
       return {status:unknown?'quarantined':'failed'};
     }
-    const recorded=await this.store.markDeliverySent({...scope,claimId:claim.id,token:authorization.token,providerMessageId:result.providerMessageId});
-    if (!recorded.ok) return {status:'quarantined',reason:'receipt_not_committed'};
+    let recorded;
+    try{recorded=await this.store.markDeliverySent({...scope,claimId:claim.id,token:authorization.token,providerMessageId:result.providerMessageId});}catch{}
+    if (recorded?.ok!==true) {
+      // The provider accepted the request. A lost database receipt is uncertain,
+      // never a retryable provider rejection. Preserve any already-sent receipt.
+      try{await this.store.markDeliveryFailed({...scope,claimId:claim.id,token:authorization.token,unknown:true,error:'receipt_not_committed'});}catch{}
+      try{await this.event(scope,'needs_attention',{reason:'receipt_not_committed',claimId:claim.id,providerMessageId:result.providerMessageId});}catch{}
+      return {status:'quarantined',reason:'receipt_not_committed'};
+    }
     const needsAttention=count+1>=limit;
     // CAS preserves a pause/payment/reply that arrived while provider HTTP was in flight.
     const committed=await this.store.updateInvoice({...scope,expectedVersion:version(invoice),reminderCount:count+1,lastFollowUpAt:this.clock().toISOString(),followupState:needsAttention?'paused':'approved',nextFollowUpAt:needsAttention?null:scheduleNextFollowUp(this.clock(),settings,timezone).toISOString()});
