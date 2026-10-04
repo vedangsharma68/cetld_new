@@ -11,7 +11,7 @@ import {
 const DATA_ACTION = 'owner_workspace_data_change';
 const MAX_LIMIT = 50;
 const OPERATIONS = Object.freeze([
-  'read','create','update','delete','restore','pending','confirm','cancel','describe',
+  'read','create','update','batch','delete','restore','pending','confirm','cancel','describe',
   'analyzeAttachment','saveAttachment','reviewAttachment','sendFile',
 ]);
 const FILTER_OPERATORS = Object.freeze(['eq','neq','gt','gte','lt','lte','ilike','in','is']);
@@ -98,7 +98,7 @@ function definition() {
   // model request; describe exposes it when the model needs unfamiliar fields.
   const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA)},filters:{type:'array',items:{type:'object'}},values:{type:'object'}},required:['operation','table','values']};
   return {type:'function',function:{name:'workspaceData',
-    description:'Read/change owner data. Prefer structured fields; request plans operations. describe lists fields. business_records create needs record_type/name; updates need filters. custom_fields: flat snake_case keys, text/number/boolean/null; merged on update. Customers: name/email/phone. Invoices: invoice_number/customer_name/total_amount/status. Filters: column/operator/value. pending reads proposals; confirm/cancel decide.',
+    description:'Read/change owner data. Structured fields or request text; describe lists fields. business_records create needs record_type/name; updates need filters. custom_fields: flat snake_case keys, text/number/boolean/null; merged on update. Customers: name/email/phone. Invoices: invoice_number/customer_name/total_amount/status. Filters: column/operator/value. pending reads proposals; confirm/cancel decide.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic create/update batch. Read targets; use unique concrete numbers from scoped examples. No status changes/deletes. One patch per target; filters have column/operator/value.'},
@@ -123,6 +123,7 @@ function definition() {
 function catalog(table=null) {
   return {
     operations:OPERATIONS,
+    atomicBatch:{argument:'operations',minItems:2,maxItems:10,itemFields:['operation','table','filters','values'],operations:['create','update'],oneUnambiguousRecordPerItem:true,allCommitOrAllRollback:true,customFields:'Nest additional business facts in each item values.custom_fields.',excluded:['status changes','deletes','confirmations']},
     attachmentOperations:{analyzeAttachment:'Read the current attachment and retain its source facts in a durable review without saving an invoice.',
       saveAttachment:'Save the current attachment or this owner\'s current retained attachment review. Reuse its known facts; do not recreate it from chat text.',
       reviewAttachment:'Supply missing owner-evidenced facts or acknowledge unchanged known fields. Existing extracted fields cannot be overwritten by this operation.'},
@@ -268,12 +269,20 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
   function normalizeStructured(args) {
     if(!ownObject(args)||containsForbiddenIdentity(args,scope)||Object.keys(args).some(key=>!ALLOWED_ARGS.has(key)))throw new TypeError('invalid planned operation');
     if(args.operations!==undefined){
-      if(Object.keys(args).length!==1||!Array.isArray(args.operations)||args.operations.length<2||args.operations.length>10)throw new TypeError('invalid batch');
-      const operations=args.operations.map(item=>{
+      if(Object.keys(args).some(key=>!['operations','operation','table'].includes(key))||args.operation!==undefined&&args.operation!=='batch'||args.table!==undefined&&!Object.hasOwn(TABLES,args.table)||!Array.isArray(args.operations)||args.operations.length<2||args.operations.length>10)throw new TypeError('invalid batch');
+      const operations=args.operations.map(rawItem=>{
+        const item=ownObject(rawItem)?{...(args.table?{table:args.table}:{}),...rawItem}:rawItem;
         if(!ownObject(item)||item.operations!==undefined||!['create','update'].includes(item.operation)||!WRITE_SCHEMA[item.table]?.[item.operation]||Object.hasOwn(item.values||{},'status'))throw new TypeError('invalid batch');
         return normalizeStructured(item);
       });
       return {operation:'batch',operations};
+    }
+    if(args.operation==='batch')throw new TypeError('invalid batch');
+    // An explicit finite target set has atomic semantics, never an unrestricted bulk update.
+    if(args.operation==='update'&&Array.isArray(args.filters)&&args.filters.length===1&&args.filters[0]?.operator==='in'){
+      const filter=args.filters[0],targets=filter.value;
+      if(!['name','id','invoice_number'].includes(filter.column)||!Array.isArray(targets)||targets.length<2||targets.length>10||targets.some(value=>typeof value!=='string'||!value.trim())||new Set(targets).size!==targets.length)throw new TypeError('invalid batch');
+      return normalizeStructured({operations:targets.map(value=>({...args,filters:[{...filter,operator:'eq',value}]}))});
     }
     const operation=args.operation;
     if(!OPERATIONS.includes(operation))throw new TypeError('unknown operation');
@@ -318,6 +327,7 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
 }
 
 function validationShape(params) {
+  if(Array.isArray(params?.operations))return {operation:'batch',items:params.operations.slice(0,10).map(item=>validationShape({...item,operations:undefined}))};
   const fields=new Set(Object.values(TABLES).flatMap(table=>table.filters));
   const valueFields=new Set(Object.values(WRITE_SCHEMA).flatMap(operations=>Object.values(operations).flat()));
   const type=value=>value===null?'null':Array.isArray(value)?'array':typeof value;
@@ -854,6 +864,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     } catch(error) {
       if(!(error instanceof TypeError))return safeError(error);
       const errors={
+        'invalid batch':['BATCH_SHAPE','Atomic batches support 2–10 create/update items in operations, each with table, filters and values. One unambiguous record per item; all commit or all roll back. Nest custom business fields in values.custom_fields. Status changes and deletes are separate operations. No write was attempted.'],
         'invoice action requires exactly one canonical target':['TARGET_REQUIRED','Which invoice do you mean? Send its invoice number or customer name. If that customer has several invoices, I will ask you to choose. No change was made.'],
         'invalid invoice fields':['INVALID_FIELDS','Those invoice fields are not supported. Use status paid or unpaid separately. Reopening preserves original payments and requires explicit confirmation. No change was made.'],
         'invalid request':['REQUEST_SHAPE','The assistant combined two request formats. It should send either a description or structured fields. No change was made.'],
@@ -876,9 +887,11 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     // The model may repeat the same natural-language tool call. Repair its
     // rejected plan once here, before the outer loop caches the final result.
     // Only a server-validated preflight rejection with no dispatch qualifies.
-    if(typeof raw?.request==='string'&&result?.code==='INVALID'&&result.validationCode&&result.writeAttempted===false&&!writeAttempted){
+    const structuredBatch=Array.isArray(raw?.operations)||raw?.operation==='batch'||raw?.operation==='update'&&raw?.filters?.some(filter=>filter?.operator==='in');
+    const repairRequest=typeof raw?.request==='string'?raw:structuredBatch&&typeof planRequest==='function'&&String(message).trim()?{request:String(message).slice(0,1200)}:null;
+    if(repairRequest&&result?.code==='INVALID'&&result.validationCode&&result.writeAttempted===false&&!writeAttempted){
       const rejection={validationCode:result.validationCode,validationShape:result.validationShape,message:result.message};
-      result={...await executeRequest(raw,options,rejection),planningRepair:{validationCode:rejection.validationCode,validationShape:rejection.validationShape}};
+      result={...await executeRequest(repairRequest,options,rejection),planningRepair:{validationCode:rejection.validationCode,validationShape:rejection.validationShape}};
     }
     nextActionResult=result;
     return result?.code==='INVALID'?{...result,...(!result.validationCode?{message:'Use request text alone, or the structured fields in this catalog. Do not combine request with filters, values or columns. pending/confirm/cancel take no table or values.'}:{}),catalog:catalog(typeof raw?.table==='string'&&Object.hasOwn(TABLES,raw.table)?raw.table:null)}:result;
