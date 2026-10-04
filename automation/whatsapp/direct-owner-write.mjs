@@ -94,6 +94,18 @@ export function createDirectOwnerWriteAdapter({supabase}={}){
       if(receipt.workspace_id!==workspaceId||receipt.owner_id!==ownerId||receipt.phone!==phone
         ||receipt.provider_message_id!==providerMessageId)return failure('DENIED');
       const outcome=receipt.result;
+      if(outcome?.ok===true&&outcome.action==='batch.completed'){
+        if(outcome.entityId!==workspaceId||!Array.isArray(outcome.results)||outcome.results.length<2||outcome.results.length>10)return failure('WRITE_UNCONFIRMED');
+        const results=[];
+        for(const child of outcome.results){
+          if(child?.ok!==true||child.completed!==true||!TABLES[child.entityType]||child.entityType==='pending')return failure('WRITE_UNCONFIRMED');
+          let record;
+          try{record=await readPersistedRecord({supabase,workspaceId,entityType:child.entityType,entityId:child.entityId,outcome:child});}catch{return failure('WRITE_UNCONFIRMED');}
+          if(!record||record.workspace_id!==workspaceId||child.updatedAt&&record.updated_at!==child.updatedAt)return failure('WRITE_UNCONFIRMED');
+          results.push({...child,record});
+        }
+        return {ok:true,completed:true,action:'batch.completed',results,replayed:true};
+      }
       if(outcome?.ok!==true||typeof outcome.entityType!=='string'||typeof outcome.entityId!=='string')return failure('NO_RECEIPT');
       let record;
       try{record=await readPersistedRecord({supabase,workspaceId,entityType:outcome.entityType,
@@ -120,6 +132,21 @@ export function createDirectOwnerWriteAdapter({supabase}={}){
       return {ok:true,completed:true,action:outcome.action,entityType:outcome.entityType,
         entityId:outcome.entityId,record,replayed:true,...(outcome.action==='invoice.reopened'?{invoiceNumber:outcome.invoiceNumber,currency:outcome.currency,
           reversedAmount:outcome.reversedAmount,balanceAfter:outcome.balanceAfter,paymentCount:outcome.paymentCount,paymentHistoryPreserved:true,cashRefund:false}: {})};
+    },
+    async applyBatch({workspaceId,ownerId,phone,providerMessageId,authorization,operations}={}){
+      if(!validUuid(workspaceId)||!validUuid(ownerId)||!validPhone(phone)||typeof providerMessageId!=='string'||providerMessageId.length<1||providerMessageId.length>256
+        ||authorization?.kind!=='instruction'||typeof authorization.quote!=='string'||!authorization.quote||authorization.quote.length>4000
+        ||!Array.isArray(operations)||operations.length<2||operations.length>10)return failure('INVALID');
+      for(const item of operations)if(!OPERATIONS.has(item?.operation)||!['create','update'].includes(item.operation.split('.').at(-1))
+        ||item.payload?.status!==undefined||!item.payload||typeof item.payload!=='object'||Array.isArray(item.payload)
+        ||item.targetId!==null&&!validUuid(item.targetId)||item.expectedUpdatedAt!==null&&!Number.isFinite(Date.parse(item.expectedUpdatedAt)))return failure('INVALID');
+      let result;
+      try{result=await supabase.rpc('whatsapp_apply_owner_batch',{p_workspace_id:workspaceId,p_owner_id:ownerId,p_phone:phone,p_provider_message_id:providerMessageId,
+        p_authorization_quote:authorization.quote,p_operations:operations});}catch{return failure('WRITE_UNCONFIRMED');}
+      if(result?.error)return failure('WRITE_UNCONFIRMED');
+      const outcome=valueOf(result);
+      if(outcome?.ok!==true)return {...failure(outcome?.code),...(outcome?.rolledBack===true?{rolledBack:true,failedOperation:outcome.failedOperation}:{})};
+      return this.lookupCompleted({workspaceId,ownerId,phone,providerMessageId});
     },
     async apply(input={}){
       const {workspaceId,ownerId,phone,providerMessageId,interactionId=null,authorization,operation,

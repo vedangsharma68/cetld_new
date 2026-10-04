@@ -839,3 +839,44 @@ test('button AI settings, cancel, expiry, and invoice delete use the stored prop
     assert.ok((await db.query('select consumed_at from public.whatsapp_pending_actions where id=$1',[expiredPending.id])).rows[0].consumed_at);
   }finally{await db.close();}
 });
+
+test('atomic owner batch persists all records, rolls back collisions and stale targets, rejects foreign scope, and replays one receipt',async()=>{
+  const {db,workspaceId}=await boot();
+  try{
+    await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+    const first=await createDirectInvoice(db,workspaceId,{messageId:'batch-first',invoiceNumber:'123113',customerName:'MineralTree'});
+    const second=await createDirectInvoice(db,workspaceId,{messageId:'batch-second',invoiceNumber:'GST-3425-26',customerName:'Shiv Engineering'});
+    const operations=[first,second].map((row,index)=>({operation:'invoice.update',targetId:row.entityId,expectedUpdatedAt:row.updatedAt,payload:{invoice_number:`INV-2026-000${index+3}`,custom_fields:{batch_note:'isolated fixture'}}}));
+    const batch=async(id,items=operations,actor=owner)=>{
+      await asService(db);await addInbound(db,id,'Renumber both invoices like John');
+      return (await db.query('select public.whatsapp_apply_owner_batch($1,$2,$3,$4,$5,$6::jsonb) value',[workspaceId,actor,phone,id,'Renumber both invoices like John',JSON.stringify(items)])).rows[0].value;
+    };
+    assert.equal((await batch('batch-foreign',operations,stranger)).code,'DENIED');
+    await asOwner(db,stranger);
+    const foreignWorkspace=(await db.query("select (public.create_workspace('Foreign batch fixture','foreign-batch')).id")).rows[0].id;
+    const foreignCustomer=(await db.query("insert into public.customers(workspace_id,name) values($1,'Foreign customer') returning id",[foreignWorkspace])).rows[0].id;
+    const foreignInvoice=(await db.query("insert into public.invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,total_amount,currency) values($1,$2,'FOREIGN-17','2026-10-01','2026-10-31',50,'USD') returning id,updated_at,invoice_number",[foreignWorkspace,foreignCustomer])).rows[0];
+    const crossTenant=structuredClone(operations);crossTenant[1].targetId=foreignInvoice.id;crossTenant[1].expectedUpdatedAt=foreignInvoice.updated_at.toISOString();
+    const crossResult=await batch('batch-cross-tenant',crossTenant);assert.equal(crossResult.ok,false);assert.equal(crossResult.rolledBack,true);
+    await asOwner(db,stranger);assert.equal((await db.query('select invoice_number from public.invoices where id=$1',[foreignInvoice.id])).rows[0].invoice_number,foreignInvoice.invoice_number);
+    await asService(db);
+    const collision=structuredClone(operations);collision[1].payload.invoice_number=collision[0].payload.invoice_number;
+    const failed=await batch('batch-collision',collision);assert.equal(failed.ok,false,JSON.stringify(failed));assert.equal(failed.rolledBack,true);
+    assert.equal((await db.query('select invoice_number from public.invoices where id=$1',[first.entityId])).rows[0].invoice_number,first.record.invoice_number);
+    assert.equal((await db.query('select count(*)::int n from public.whatsapp_direct_write_receipts where provider_message_id=$1',['batch-collision'])).rows[0].n,0);
+    const stale=structuredClone(operations);stale[1].expectedUpdatedAt='2000-01-01T00:00:00Z';
+    const staleResult=await batch('batch-stale',stale);assert.equal(staleResult.code,'STALE');assert.equal(staleResult.rolledBack,true);
+    assert.equal((await db.query('select invoice_number from public.invoices where id=$1',[first.entityId])).rows[0].invoice_number,first.record.invoice_number);
+    const denied=structuredClone(operations);denied[1].targetId=randomUUID();assert.equal((await batch('batch-wrong-target',denied)).ok,false);
+    const status=structuredClone(operations);status[1].payload.status='unpaid';assert.equal((await batch('batch-financial',status)).code,'INVALID');
+    const result=await batch('batch-success');assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.completed,true);assert.equal(result.results.length,2);
+    assert.equal((await batch('batch-success')).replayed,true);
+    const mismatch=structuredClone(operations);mismatch[0].payload.invoice_number='INV-2026-0009';assert.equal((await batch('batch-success',mismatch)).code,'REPLAY_MISMATCH');
+    assert.equal((await db.query('select count(*)::int n from public.whatsapp_direct_write_receipts where provider_message_id=$1',['batch-success'])).rows[0].n,1);
+    await asOwner(db);assert.deepEqual((await db.query('select invoice_number,custom_fields from public.invoices where id=any($1::uuid[]) order by invoice_number',[[first.entityId,second.entityId]])).rows.map(row=>row.invoice_number),['INV-2026-0003','INV-2026-0004']);
+    await assert.rejects(db.query('select public.whatsapp_apply_owner_batch($1,$2,$3,$4,$5,$6)',[workspaceId,owner,phone,'batch-success','Renumber both invoices like John',JSON.stringify(operations)]));
+    await assert.rejects(db.query('select app.whatsapp_apply_owner_batch_operation($1,$2,$3,$4,null,$5,$6,$7,$8,$9,$10,null,null,null,$11)',[workspaceId,owner,phone,'batch-success','ownerwrite_private','invoice.update',first.entityId,first.updatedAt,'instruction','Renumber both invoices like John','{}']));
+    await asOwner(db,stranger);assert.equal((await db.query('select * from public.invoices where workspace_id=$1',[workspaceId])).rows.length,0);
+  }finally{await db.close();}
+});
+

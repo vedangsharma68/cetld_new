@@ -9,6 +9,8 @@ function actionMatches(clause, result) {
   const entity=String(result.entityType||result.table||action);
   const identifiers=[...clause.matchAll(/\bINV[-/][A-Z0-9][A-Z0-9/-]*/gi)].map(match=>match[0].toLowerCase());
   if(identifiers.some(id=>!JSON.stringify(result).toLowerCase().includes(id)))return false;
+  if(result.action==='batch.completed'&&Array.isArray(result.results))return result.results.length>=2
+    &&result.results.every(child=>completedOwnerResult(child)&&actionMatches(clause.replace(/\bINV[-/][A-Z0-9][A-Z0-9/-]*/gi,''),child));
   if(/\bcustomer\b/i.test(clause)&&!/\b(?:invoice|payment)\b/i.test(clause)&&!/customer/.test(entity))return false;
   if(/\bcustomer (?:record|details|update|change)\b/i.test(clause)&&!/customer/.test(entity))return false;
   if(/\binvoice (?:record|details|update|change|deletion|payment)\b/i.test(clause)&&!/invoice|review/.test(entity))return false;
@@ -60,7 +62,11 @@ export function ownerButtonClaimIssue(reply,{buttonsAvailable=false}={}){
     ?'unverified_buttons':null;
 }
 export function ownerGroundingIssue(reply,results=[],message='',capabilities={}){
+  results=results.flatMap(result=>result?.ok===true&&result.completed===true&&result.action==='batch.completed'&&Array.isArray(result.results)
+    &&result.results.every(child=>child?.ok===true&&child.completed===true)?[result,...result.results]:[result]);
   const text=normalize(reply);
+  if(/\b(?:i(?:'m| am) still (?:working|processing)|i(?:'ll| will) (?:message|notify|let you know)|working on (?:it|that|this) now)\b/i.test(text)
+    &&!results.some(result=>result?.ok===true&&result.durableJob===true&&result.queued===true))return 'unverified_background_job';
   if(results.some(result=>result.cashRefund===false)&&text.split(/[.!?\n]+/).some(clause=>/\b(?:refunded|sent[^.!?]{0,25}refund|refund[^.!?]{0,25}(?:sent|processed|issued))\b/i.test(clause)&&!NEGATIVE.test(clause)&&!/\bno\b/i.test(clause)))return 'unverified_refund';
   const buttonIssue=ownerButtonClaimIssue(text,capabilities);
   if(buttonIssue)return buttonIssue;
