@@ -58,11 +58,11 @@ test('mixed proposal history and adversarial serialized Gemini plans remain scop
   const oldFacts=async()=>(await db.query(`select jsonb_build_object('invoice',(select to_jsonb(i) from invoices i where id=$1),'proposals',(select jsonb_agg(to_jsonb(q) order by id) from invoice_reopening_proposals q),'pending',(select jsonb_agg(to_jsonb(p) order by id) from whatsapp_pending_actions p)) value`,[oldPaid.id])).rows[0].value;
   const initial=await facts();
   const initialOld=await oldFacts();
-  async function turn(message,args,answer,{abort=false}={}){
+  async function turn(message,args,answer,{abort=false,turnHistory=history}={}){
    const id='mixed-'+(++sequence),controller=new AbortController();
    await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'123456',$2,'text',$3,'processing')",[id,phone,message]);
    const tools=createOwnerWorkspaceTools({supabase,scope,message,messageId:id,authorize:async()=>true,clock,timezone:'Asia/Kolkata',signal:controller.signal,
-    botPreferences:{confirmationMode:'direct'},pending,pendingAtStart,ownerHistory:history,logger,ownerStore:{async query(){throw Error('Legacy command path must not run');}}});
+    botPreferences:{confirmationMode:'direct'},pending,pendingAtStart,ownerHistory:turnHistory,logger,ownerStore:{async query(){throw Error('Legacy command path must not run');}}});
    let calls=0,wire,evidence;
    const provider=new AIProvider({primaryModel:'gemini-3.5-flash-lite',fallbackModel:null,geminiApiKey:'isolated-fixture',maxAttempts:1,logger,
     fetchImpl:async(_url,init)=>{
@@ -71,7 +71,7 @@ test('mixed proposal history and adversarial serialized Gemini plans remain scop
      evidence=wire.contents.flatMap(row=>row.parts).flatMap(part=>{try{return [JSON.parse(part.text)];}catch{return [];}}).filter(row=>row.operation||row.code).at(-1);
      return Response.json({candidates:[{content:{parts:[{text:answer}]},finishReason:'STOP'}]});
     }});
-   const result=await runOwnerAgent({provider,message,tools,history,clock,timezone:'Asia/Kolkata',signal:controller.signal});
+   const result=await runOwnerAgent({provider,message,tools,history:turnHistory,clock,timezone:'Asia/Kolkata',signal:controller.signal});
    return {result,evidence,tools,calls,wire};
   }
   await t.test('current JohnSmith read ignores old confirmation and foreign same-name contact',async()=>{
@@ -105,6 +105,19 @@ test('mixed proposal history and adversarial serialized Gemini plans remain scop
    assert.equal(output.evidence.completed,true,JSON.stringify(output.result));assert.equal(output.evidence.record.due_date,'2026-10-06');assert(!Object.hasOwn(output.evidence.record,'metadata'));
    const current=await facts();assert.equal(current.ownInvoice.due_date,'2026-10-06');assert.equal(current.ownInvoice.metadata.source_file,source.source_file);assert.deepEqual(current.ownInvoice.metadata.extraction_raw,source.extraction_raw);
    assert.equal(current.auditCount,1);assert.equal(current.receiptCount,1);assert.deepEqual(current.foreignInvoice,initial.foreignInvoice);assert.deepEqual(current.foreignCustomer,initial.foreignCustomer);assert.deepEqual(current.payments,initial.payments);assert.deepEqual(current.reversals,initial.reversals);
+  });
+  await t.test('listed John contact supports a pronoun phone edit, normalized reread and persisted replay without foreign changes',async()=>{
+   const listed=await turn('List my customers.',{operation:'read',table:'customers',columns:['name','phone']},"John Smith's phone is +919822222222.");
+   assert(listed.evidence.rows.some(row=>row.name==='John Smith'&&row.phone==='+919822222222'));
+   const turnHistory=[...history,{role:'user',content:'List my customers.'},{role:'assistant',content:listed.result.answer}];
+   const changed=await turn('Set his phone number to +919844444444.',{operation:'update',table:'customers',filters:[{column:'name',operator:'eq',value:'John'}],values:{phone:'+919844444444'}},"Updated John Smith's phone to +919844444444.",{turnHistory});
+   assert.equal(changed.evidence.completed,true,JSON.stringify(changed.result));
+   assert.equal(changed.evidence.record.name,'John Smith');assert.equal(changed.evidence.record.phone,'+919844444444');
+   assert.equal((await changed.tools.lookupCompleted()).completed,true);assert.equal((await changed.tools.lookupCompleted()).completed,true);
+   assert.equal((await db.query('select phone from customers where id=$1',[john.id])).rows[0].phone,'+919844444444');
+   const reread=await turn("What is JohnSmith's phone now?",{operation:'read',table:'customers',filters:[{column:'name',operator:'eq',value:'JohnSmith'}],columns:['name','phone']},"John Smith's phone is +919844444444.");
+   assert.equal(reread.evidence.rows[0].phone,'+919844444444');assert(!/confirm|awaiting/i.test(changed.result.answer));
+   const current=await facts();assert.deepEqual(current.foreignCustomer,initial.foreignCustomer);assert.deepEqual(current.foreignInvoice,initial.foreignInvoice);assert.deepEqual(current.payments,initial.payments);assert.deepEqual(current.reversals,initial.reversals);
   });
   await t.test('own ambiguity and caller cancellation stop writes before dispatch',async()=>{
    await db.query("insert into customers(workspace_id,name) values($1,'John Jones')",[workspaceId]);
