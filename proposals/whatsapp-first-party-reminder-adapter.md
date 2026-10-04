@@ -141,3 +141,64 @@ worker route with authenticated owner/workspace configuration. The current
 `vercel.json` daily WhatsApp inbox cron is not a reminder tick scheduler. No cron,
 provider setting, account scope, billing setting, consent or persistent activation
 was changed during this QA work.
+# Implemented disabled local candidate
+
+Approved server snapshots additionally require a concrete immutable approval
+revision and exact configured WABA/phone-number account binding. Missing WABA
+configuration, revision or mismatched account blocks dispatch. These metadata
+assertions still require the future approved-template registry gate; they are
+not a claim that a fixture template has Meta account approval. Eligibility is
+deliberately restricted to `sent` receivable invoices. The `overdue` enum and
+other statuses are unsupported by this candidate until separately reviewed.
+
+`automation/whatsapp/cloud-reminders.mjs` now exports
+`createFirstPartyReminderProvider`. It is intentionally absent from the provider
+factory and runtime selection. All three outbound/reminder flags must be true;
+the existing fixed QA contacts intersect the configured test allowlist. No
+configuration or credentials were installed. Server construction fixes the owner,
+workspace and immutable template snapshot. Only `UTILITY`, `APPROVED`,
+`first_party_invoice_reminder` snapshots qualify. The six supported parameters
+are current business name, customer name, saved invoice number, remaining amount,
+currency and due date. The rendered body must exactly equal both the caller's
+body and persisted owner-reviewed body. No arbitrary text transport is exposed.
+
+The candidate requires **new** RPC `cetld_core_authorize_first_party_reminder`
+with `p_owner_id`, `p_workspace_id`, `p_claim_id`, `p_snapshot` (JSONB), and
+`p_snapshot_hash` (SHA256 of JSON serialization). Snapshot fields bind invoice,
+customer, phone, reviewed body, invoice version/update timestamp, preferences
+timestamp, consent ID/creation timestamp, and template name/language/body/ordered
+parameters. An authorization receipt must return `authorized:true`, the exact
+`snapshot_hash`, and a durable opaque 64-hex `callback_token`. Missing RPC,
+database error, denial, or mismatched receipt blocks HTTP. This RPC is absent in
+all deployed migrations; no fallback to existing consent or core authorization
+is allowed. The existing core gate remains necessary and the new gate must
+require its scoped, unexpired `sending` claim/token and invoice version.
+
+Future production DDL must atomically lock and validate owner/workspace ownership,
+claim/lease/version, invoice eligibility/payment/deletion/pause, exact reviewed
+body/preferences, current customer phone, recipient opt-in/category and global
+and workspace suppression. It must validate the configured approved template
+against a durable server registry, verify/recompute the fingerprint, reserve one
+dispatch per claim/key, and persist the opaque callback correlation. STOP and
+gate acquisition need one documented lock protocol so no unprotected sequential
+read can authorize a suppressed recipient. Already dispatched HTTP cannot be
+recalled; a later STOP blocks future attempts. Only dispatch HTTP follows a
+successful final gate, with no intervening asynchronous work.
+
+`tests/fixtures/proposed-reminder-gate.sql` is an **offline-only contract fixture**,
+not a migration or proof of production atomicity. It tests deployed rows/stores
+and durable one-dispatch reservation under mocked HTTP. It deliberately lacks
+deployment role grants, the production global lock protocol, template registry,
+fingerprint recomputation, STOP schedule cancellation, lease sweeping and receipt
+reconciliation. No fixture SQL should be applied to production.
+
+2xx with a valid provider message ID means accepted, not delivered. HTTP 5xx/408,
+lost responses and malformed success receipts are unknown. Confirmed other
+non-2xx responses are rejected. Every reserved attempt, including a rejection,
+stays nonreplayable until a future durable reconciliation policy explicitly
+permits a new attempt. Current engine quarantines uncertainty and retains accepted
+receipt/count handling; signed delivery callbacks do not yet reconcile core
+claims. The production runtime also currently requires a linked accounting
+record/provider to check payment; local-invoice production checks need separate
+reviewed implementation. Tests use the existing nonproduction mock payment-check
+path with actual core stores and SQL, not production accounting calls.
