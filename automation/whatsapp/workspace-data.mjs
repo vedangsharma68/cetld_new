@@ -88,7 +88,7 @@ const WRITE_SCHEMA = Object.freeze({
   invoices:{
     create:['invoice_number','customer_name','customer_id','customer_email','customer_phone','issue_date','due_date','currency','total_amount','subtotal','tax','notes','custom_fields'],
     update:['invoice_number','issue_date','due_date','currency','total_amount','notes','status','custom_fields'],
-    reviewAttachment:['invoice_number','customer_name','issue_date','due_date','total_amount','currency','invoice_direction'],
+    reviewAttachment:['invoice_number','customer_name','issue_date','due_date','total_amount','currency','invoice_direction','subtotal','tax','notes','line_items','customer_email','customer_phone'],
   },
   workspace_settings:{update:['business_name','follow_up_preferences','default_currency','default_timezone','owner_bot_preferences']},
 });
@@ -123,6 +123,9 @@ function definition() {
 function catalog(table=null) {
   return {
     operations:OPERATIONS,
+    attachmentOperations:{analyzeAttachment:'Read the current attachment and retain its source facts in a durable review without saving an invoice.',
+      saveAttachment:'Save the current attachment or this owner\'s current retained attachment review. Reuse its known facts; do not recreate it from chat text.',
+      reviewAttachment:'Supply missing owner-evidenced facts or acknowledge unchanged known fields. Existing extracted fields cannot be overwritten by this operation.'},
     tables:Object.fromEntries(Object.entries(TABLES).filter(([name])=>!table||name===table).map(([name,spec])=>[name,{
       label:spec.label,columns:spec.columns,filters:spec.filters,
       writeFields:WRITE_SCHEMA[name]||{},
