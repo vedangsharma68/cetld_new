@@ -47,20 +47,20 @@ function handler(db,provider,history=[]) {
     ownerStoreFactory:()=>({query:async()=>[]}),historyReader:async()=>history,providerFactory:()=>provider,logger:{error(){}}});
 }
 
-test('default owner handler exposes compact workspace and configuration tools and answers meta in one tool round',async()=>{
+test('default owner handler exposes compact workspace and configuration tools and answers meta with a scoped tool result and model-written summary',async()=>{
   const db=database();let calls=0;
   const h=handler(db,{async generate({tools,messages}){
     calls++;if(tools){assert.deepEqual(tools.map(tool=>tool.function.name),['getAIProviderConfiguration','workspaceData']);assert.ok(JSON.stringify(tools).length<2600);}
     const results=messages.filter(message=>message.role==='tool');
     if(!results.length)return {model:CF_QWEN_MODEL,toolCalls:[{id:'config-call',type:'function',function:{name:'getAIProviderConfiguration',arguments:'{}'}}]};
-    assert.equal(tools,undefined);
+    assert.ok(tools?.length);
     const runtime=JSON.parse(results.at(-1).content);
     assert.ok(JSON.stringify(runtime).includes(CF_QWEN_MODEL));
     assert.ok(JSON.stringify(runtime).includes(GEMINI_FALLBACK_MODEL));
     return {model:CF_QWEN_MODEL,content:`Your primary model is ${CF_QWEN_MODEL}. Your fallback is ${GEMINI_FALLBACK_MODEL}.`};
   }});
   const result=await h({...scope,message:'Which model are you using?',messageId:'meta-1'});
-  assert.equal(calls,1);assert.match(result.answer,/qwen3/);assert.ok(result.answer.includes(GEMINI_FALLBACK_MODEL));assert.doesNotMatch(result.answer,/invoice|OTHER-BUSINESS/);
+  assert.equal(calls,2);assert.match(result.answer,/qwen3/);assert.ok(result.answer.includes(GEMINI_FALLBACK_MODEL));assert.doesNotMatch(result.answer,/invoice|OTHER-BUSINESS/);
   assert.equal(result.agentDiagnostics.toolRounds,1);
 });
 

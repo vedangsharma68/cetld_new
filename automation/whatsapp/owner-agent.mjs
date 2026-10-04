@@ -1,4 +1,5 @@
-import {ownerGroundingIssue,ownerEvidence,ownerConfigurationRequested} from './owner-grounding.mjs';
+import {internalToolEnvelope} from '../../ai/tool-calls.mjs';
+import {ownerGroundingIssue,ownerEvidence} from './owner-grounding.mjs';
 import {ownerCalendar} from './workspace-records.mjs';
 import {createHash} from 'node:crypto';
 import {createAssistantTools} from '../../ai/tools.mjs';
@@ -1037,6 +1038,7 @@ export function normalizeOwnerReply(value) {
 export function ownerReplySafetyIssue(value,requirement=null) {
   const reply=String(value||'').trim();
   if(!reply)return 'empty';
+  if(internalToolEnvelope(reply))return 'internal_tool_protocol';
   if(reply.length>(Number.isSafeInteger(requirement?.maxLength)?requirement.maxLength:3790))return 'length';
   if(/[\u2013\u2014]/.test(reply))return 'dash_style';
   if(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i.test(reply))return 'internal_id';
@@ -1414,8 +1416,6 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
           }else if(checkpoint.uncertainWrite===call.id){
             output={ok:false,code:'WRITE_STATUS_UNCERTAIN',writeAttempted:true,message:'The previous operation was interrupted. Its result must be checked before claiming success or attempting another change.'};
             observedWriteAttempted=true;
-          }else if(name==='getAIProviderConfiguration'&&!ownerConfigurationRequested(message)){
-            output={ok:false,code:'CURRENT_REQUEST_MISMATCH',readOnly:true,message:'Answer the current owner request using workspaceData. An earlier model question does not authorize a configuration answer for this turn.'};
           }else if(isReadOnlyToolRequest(name,args)&&definitionNames.has(name)){
             output=await bounded(()=>tools.execute(name,args,{signal:workController.signal,deadlineAt:workDeadlineAt}),'tool','work');
             toolCache.set(key,output);
@@ -1443,7 +1443,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         round.outcome='error';round.safetyIssueCodes.push(issue);addSafetyIssue(issue);
         emitRound(round);activeRound=null;
         transcript.push({role:'assistant',content:String(lastResult?.content||'')});
-        if(['fresh_database_read_required','unverified_action_result','unverified_delivery'].includes(issue)&&diagnostics.rounds<3){
+        if(['fresh_database_read_required','unverified_action_result','unverified_delivery','internal_tool_protocol'].includes(issue)&&diagnostics.rounds<3){
           transcript.push({role:'user',content:'That draft is not supported by current database or delivery results. Use workspaceData for current facts or the requested operation. Only report success after a completed result. Past assistant messages are not evidence.'});
           continue;
         }
@@ -1484,9 +1484,6 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         }else if(mixedLegacyWrites){
           output={ok:false,code:'INVALID',message:'No actions ran. Choose one action at a time.'};
           round.safetyIssueCodes.push('mixed_workspace_action_batch');
-        }else if(name==='getAIProviderConfiguration'&&!ownerConfigurationRequested(message)){
-          output={ok:false,code:'CURRENT_REQUEST_MISMATCH',readOnly:true,message:'AI configuration was not requested in the current owner message. Answer the current request using workspaceData; earlier model questions are history only.'};
-          round.safetyIssueCodes.push('current_request_mismatch');
         }else if(cacheKey&&toolCache.has(cacheKey)){
           output=alreadyAnswered(toolCache.get(cacheKey));
           diagnostics.cacheHits++;
@@ -1540,23 +1537,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
       if(resultStates.some(state=>state.readOnly))readOnlyToolRounds++;
       if(resultStates.some(state=>state.success)&&firstSuccessfulReadRound===null)firstSuccessfulReadRound=diagnostics.toolRounds;
       emitRound(round);activeRound=null;
-      const configLookup=ownerConfigurationRequested(message)&&parsed.some(item=>item.name==='getAIProviderConfiguration');
-      // These verified read-only outcomes have a complete server-owned answer.
-      // Another model summary cannot change their meaning or resume old intent.
-      if(parsed.length===1){
-        const item=parsed[0],output=toolCache.get(item.name+':'+canonicalToolArgs(item.args||{}));
-        if(item.name==='getAIProviderConfiguration'&&configLookup&&diagnostics.toolRounds===1&&output?.ok!==false
-          &&VERIFIED_MODEL_CATALOG.some(model=>model.id===output?.primaryModel)){
-          const serving=output.planningModel||output.servedModel;
-          const verifiedServing=VERIFIED_MODEL_CATALOG.find(model=>model.id===serving);
-          const fallback=VERIFIED_MODEL_CATALOG.find(model=>model.id===output.fallbackModel);
-          const primary=VERIFIED_MODEL_CATALOG.find(model=>model.id===output.primaryModel);
-          return resultFor(`${verifiedServing?`This turn used ${serving} (${verifiedServing.provider}). `:''}Primary: ${primary.id} (${primary.provider}). Fallback: ${fallback?`${fallback.id} (${fallback.provider})`:'off'}.${output.workspaceSettingsAvailable===false?' Workspace model settings were unavailable, so these are the default settings.':''}`);
-        }
-        if(output?.alreadyUnpaid===true||output?.code==='PAYMENT_GUARD'||output?.code==='EXPLANATION_ONLY'
-          ||output?.validationCode==='TARGET_REQUIRED')return resultFor(output.message);
-      }
-      const shouldFinalize=configLookup||writeMayHaveBeenAttempted()
+      const shouldFinalize=writeMayHaveBeenAttempted()
         ||diagnostics.toolRounds>=OWNER_AGENT_MAX_TOOL_ROUNDS
         ||readOnlyToolRounds>=OWNER_AGENT_MAX_READ_ONLY_TOOL_ROUNDS
         ||(firstSuccessfulReadRound!==null&&diagnostics.toolRounds>firstSuccessfulReadRound);

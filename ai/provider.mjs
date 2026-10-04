@@ -1,4 +1,5 @@
 import {providerHealthIdentity} from './provider-health.mjs';
+import {normalizeProviderToolCalls} from './tool-calls.mjs';
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -625,7 +626,7 @@ export class AIProvider {
       assertActive(options.signal, options.deadlineAt);
       try {
         const result = await this.#request(model, messages, options, usedFallback);
-        return result;
+        return normalizeProviderToolCalls(result,options);
       }
       catch (error) {
         lastError = error;

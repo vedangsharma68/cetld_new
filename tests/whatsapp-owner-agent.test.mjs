@@ -71,7 +71,7 @@ function memorySupabase({models={primary_model:CF_QWEN_MODEL,fallback_model:'gem
 
 function pendingStore(){return {async loadPendingAction(){return null;}};}
 
-test('each verified owner message, including greeting, meta, thanks, yes and media, enters the tool-enabled model loop',async()=>{
+test('standalone greeting skips inference while meta, thanks, yes and media enter the model loop',async()=>{
   const supabase=memorySupabase();let calls=0,metaToolResult,analysisResult,lastResponse;
   const providerFactory=()=>({async generate(request){
     calls++;
@@ -112,7 +112,7 @@ test('each verified owner message, including greeting, meta, thanks, yes and med
   for(let index=0;index<messages.length;index++){
     lastResponse=await handler({...scope,...messages[index],messageId:`wamid.owner-${index}`});
   }
-  assert.equal(calls,7,'every turn enters the model loop; verified configuration needs no second summary call');
+  assert.equal(calls,7,'greeting uses zero calls; configuration uses a tool call and model-written summary');
   assert.equal(lastResponse.answer,'The attachment shows invoice INV-1 for INR 500.');
   assert.equal(analysisResult.analysisOnly,true);assert.equal(analysisResult.fields.invoiceNumber,'INV-1');
   assert.equal(analysisResult.fields.total,500);assert.match(analysisResult.note,/not saved or changed/);
@@ -278,10 +278,10 @@ test('provider metadata identifies configured routes and the planning model with
   const provider={async generate(){
     calls++;
     if(calls===1)return {model:CF_QWEN_MODEL,content:'',toolCalls:[{id:'configuration',type:'function',function:{name:'getAIProviderConfiguration',arguments:'{}'}}]};
-    throw Error('Verified configuration must not need another model summary');
+    return {model:'gemini-3.5-flash-lite',content:`The planning model is ${configuration.planningModel}; the configured fallback is ${configuration.fallbackModel}.`};
   }};
   const result=await runOwnerAgent({provider,tools,message:'Which model is answering?'});
-  assert.equal(calls,1);
+  assert.equal(calls,2);
   assert.equal(configuration.primaryModel,CF_QWEN_MODEL);
   assert.equal(configuration.primaryProvider,'cloudflare');
   assert.equal(configuration.fallbackModel,'gemini-3.5-flash-lite');
@@ -289,8 +289,8 @@ test('provider metadata identifies configured routes and the planning model with
   assert.equal(configuration.planningModel,CF_QWEN_MODEL);
   assert.equal(configuration.planningProvider,'cloudflare');
   assert.match(result.answer,/gemini-3.5-flash-lite/);
-  assert.equal(result.model,CF_QWEN_MODEL);
-  assert.equal(result.servedProvider,'cloudflare');
+  assert.equal(result.model,'gemini-3.5-flash-lite');
+  assert.equal(result.servedProvider,'google');
 });
 
 test('owner can search safe customer contacts even when the customer has no invoice',async()=>{
