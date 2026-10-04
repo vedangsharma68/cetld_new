@@ -96,7 +96,7 @@ function definition() {
   // The server validates the full catalog. Do not send that catalog on every
   // model request; describe exposes it when the model needs unfamiliar fields.
   return {type:'function',function:{name:'workspaceData',
-    description:'Read or change workspace data. Clear owner instructions execute directly when allowed; otherwise a proposal needs a decision. Prefer structured fields; request text handles unfamiliar operations. Omit columns for defaults. business_records create values require record_type and name; extra fields go inside custom_fields. Customers use name/email/phone; invoices use customer_name (joined name; ilike for partial names), invoice_number/total_amount/status. Settings use primary_model/fallback_model/follow_up_preferences. custom_fields stores extra business facts as a flat object of snake_case keys and text/number/boolean/null values, with a merge on update; describe lists fields; pending reads proposals; confirm/cancel decide them.',
+    description:'Read or change workspace data. Clear owner instructions execute directly when allowed; otherwise a proposal needs a decision. Prefer structured fields; request text handles unfamiliar operations. Omit columns for defaults. business_records create needs record_type and name; updates need filters identifying one record (name eq). Extra facts go in custom_fields. Customers use name/email/phone; invoices use customer_name (joined name; ilike for partial names), invoice_number/total_amount/status. Settings use primary_model/fallback_model/follow_up_preferences. custom_fields is a flat object of snake_case keys and text/number/boolean/null values, merged on update; describe lists fields; pending reads proposals; confirm/cancel decide them.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         request:{type:'string',minLength:1,maxLength:1200},
@@ -123,6 +123,7 @@ function catalog(table=null) {
     tables:Object.fromEntries(Object.entries(TABLES).filter(([name])=>!table||name===table).map(([name,spec])=>[name,{
       label:spec.label,columns:spec.columns,filters:spec.filters,
       writeFields:WRITE_SCHEMA[name]||{},
+      ...(['business_records','customers'].includes(name)?{writeTargetConstraints:{requiredFor:['update',...(name==='customers'?['delete']:[])],filtersRequired:true,operators:{eq:spec.filters,ilike:spec.filters.filter(field=>['name','company_name'].includes(field))},oneUnambiguousRecord:true}}:{}),
       ...(name==='business_records'?{writeValueConstraints:{create:{required:['record_type','name'],record_type:'lowercase category: one letter followed by up to 63 lowercase letters, digits or underscores',name:'nonempty text, up to 200 characters',custom_fields:'flat object of snake_case business keys and text/number/boolean/null values; extra fields must be nested here'},update:{record_type:'same category format',name:'nonempty text, up to 200 characters',custom_fields:'merges with existing fields'}}}:{}),
       ...(name==='invoices'?{writeValueConstraints:{update:{status:['paid','unpaid'],unpaid:'Checks current payment facts. Never removes or reverses payments.'}}}:{}),
       ...(name==='workspace_settings'?{writeValueConstraints:{update:{
@@ -215,6 +216,13 @@ function scalarSafe(value) {
   return false;
 }
 function validateFilter(filter,table) {
+  // Bounded structural aliases preserve the chosen field/value and comparison.
+  // They never choose an operation, target or tenant on the model's behalf.
+  if(ownObject(filter)&&exactKeys(filter,['column','field','operator','op','value'])){
+    if(filter.column!==undefined&&filter.field!==undefined||filter.operator!==undefined&&filter.op!==undefined)throw new TypeError('invalid filter');
+    const operator=filter.operator??filter.op;
+    filter={column:filter.column??filter.field,operator:['=','equals'].includes(operator)?'eq':operator,value:filter.value};
+  }
   const spec=TABLES[table];
   if(!exactKeys(filter,['column','operator','value'])||!spec.filters.includes(filter.column)
       ||!FILTER_OPERATORS.includes(filter.operator))throw new TypeError('invalid filter');
@@ -743,6 +751,19 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       // can then be corrected from the catalog without a database write attempt.
       if(['business_records','customers'].includes(params.table)&&['create','update'].includes(params.operation))
         params.values=validateValues(params.table,params.operation,params.values);
+      if(['business_records','customers'].includes(params.table)&&['update','delete'].includes(params.operation)){
+        const allowed=TABLES[params.table].filters;
+        if(!params.filters.length||params.filters.some(filter=>!allowed.includes(filter.column)
+          ||!['eq','ilike'].includes(filter.operator)||filter.operator==='ilike'&&!['name','company_name'].includes(filter.column)
+          ||typeof filter.value!=='string'||!filter.value.trim()||filter.column==='id'&&!UUID.test(filter.value)))
+          throw new TypeError('record action requires identifying filters');
+        if(confirmationMode==='direct'&&typeof executeDirectOperation==='function'){
+          const found=await resolveWorkspaceRecord({supabase,scope,table:params.table,filters:params.filters,operation:params.operation,
+            select:'id,name,updated_at',assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
+          if(!found.ok)return safeError(found);
+          params.filters=[{column:'id',operator:'eq',value:found.row.id}];
+        }
+      }
       if(['create','update','delete','restore'].includes(params.operation)&&confirmationMode==='direct'&&typeof executeDirectOperation==='function'){
         ctx.assertLive();await ctx.assertAuthorized();writeAttempted=true;
         const result=await executeDirectOperation(params,ctx);
@@ -761,6 +782,8 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         'invoice action requires exactly one canonical target':['TARGET_REQUIRED','Which invoice do you mean? Send its invoice number or customer name. If that customer has several invoices, I will ask you to choose. No change was made.'],
         'invalid invoice fields':['INVALID_FIELDS','Those invoice fields are not supported. Use status paid or unpaid for a payment-status check; unpaid never removes recorded payments. No change was made.'],
         'invalid request':['REQUEST_SHAPE','The assistant combined two request formats. It should send either a description or structured fields. No change was made.'],
+        'record action requires identifying filters':['TARGET_REQUIRED','Updates and deletes require filters identifying one existing record, for example name eq with the record name already supplied by the owner. Keep changes in values.custom_fields. Correct the arguments using this catalog and current owner message; no database write was attempted.'],
+        'invalid filter':['FILTER_SHAPE','Each filter requires column, operator and value from this catalog. Updates need one unambiguous record, using eq (or ilike for names). Correct the arguments from the owner message; no database write was attempted.'],
         'invalid write fields':['INVALID_FIELDS','Use the supported write fields in this catalog. Additional business facts must be nested inside custom_fields. Correct the tool arguments using the owner message already supplied; no database write was attempted.'],
         'record name required':['REQUIRED_FIELDS','Creating this record requires a nonempty name. Business records also require record_type. Use the owner message already supplied and the returned catalog; no database write was attempted.'],
         'invalid record category':['INVALID_CATEGORY','Business records require record_type as a lowercase category with letters, digits or underscores. Use the owner category already supplied; no database write was attempted.'],
