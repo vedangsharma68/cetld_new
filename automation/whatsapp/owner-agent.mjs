@@ -1468,6 +1468,20 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         }
         return await finalAnswer({prompt:replyRepairInstruction(issue,requirement),repairLimit:1});
       }
+      // Coalesce ordinary structured writes before recording a checkpoint.
+      // Every target remains independently resolved and one database RPC owns
+      // all mutations; resuming cannot execute a partially saved call list.
+      if(calls.length>=2&&calls.length<=10){
+        try{
+          const operations=calls.map(call=>{
+            if(call?.function?.name!=='workspaceData')throw new Error();
+            const args=JSON.parse(call.function.arguments);
+            if(!['create','update'].includes(args?.operation)||args.request!==undefined||args.operations!==undefined||Object.hasOwn(args.values||{},'status'))throw new Error();
+            return args;
+          });
+          const first=calls[0];calls.splice(0,calls.length,{...first,function:{...first.function,arguments:JSON.stringify({operations})}});
+        }catch{}
+      }
       transcript.push({role:'assistant',content:String(lastResult?.content||''),tool_calls:calls});
       const parsed=[];
       for(const call of calls){

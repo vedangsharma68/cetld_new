@@ -28,6 +28,7 @@ export function createOwnerWorkspaceTools(options = {}) {
   const tool = createWorkspaceDataTool({...options,signal:controller.signal,
     confirmationMode:options.botPreferences?.confirmationMode||'buttons',
     executeDirectOperation:(params,ctx)=>direct.execute(params,ctx),
+    executeBatchOperation:(params,ctx)=>direct.executeBatch(params,ctx),
     executeInvoiceReopening:(params,ctx)=>reopening.prepare(params,ctx),
     executeReopeningDecision:(params,ctx)=>reopening.decide(params,ctx),
     getRuntimeConfig: () => invoke('getAIProviderConfiguration'),

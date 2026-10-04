@@ -15,7 +15,7 @@ const OPERATIONS = Object.freeze([
   'analyzeAttachment','saveAttachment','reviewAttachment','sendFile',
 ]);
 const FILTER_OPERATORS = Object.freeze(['eq','neq','gt','gte','lt','lte','ilike','in','is']);
-const ALLOWED_ARGS = new Set(['request','operation','table','columns','filters','values','limit','offset','order']);
+const ALLOWED_ARGS = new Set(['request','operations','operation','table','columns','filters','values','limit','offset','order']);
 const FORBIDDEN_KEY = /^(?:workspace|tenant|owner)(?:id|_id)$/i;
 const SECRET_KEY = /(?:token|secret|password|api.?key|credential|authorization|cookie|storage.?path|code.?hash|private.?key)/i;
 const INTERNAL_KEY = /^(?:id|workspace_id|owner_id|tenant_id|user_id|customer_id|invoice_id)$/i;
@@ -96,10 +96,12 @@ const WRITE_SCHEMA = Object.freeze({
 function definition() {
   // The server validates the full catalog. Do not send that catalog on every
   // model request; describe exposes it when the model needs unfamiliar fields.
+  const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA)},filters:{type:'array',maxItems:8,items:{type:'object',properties:{column:{type:'string'},operator:{type:'string',enum:FILTER_OPERATORS},value:{}},required:['column','operator','value'],additionalProperties:false}},values:{type:'object'}},required:['operation','table','values']};
   return {type:'function',function:{name:'workspaceData',
     description:'Read or change workspace data. Clear owner instructions execute directly when allowed; otherwise a proposal needs a decision. Prefer structured fields; request text handles unfamiliar operations. Omit columns for defaults. business_records create needs record_type and name; updates need filters identifying one record (name eq). Extra facts go in custom_fields. Customers use name/email/phone; invoices use customer_name (joined name; ilike for partial names), invoice_number/total_amount/status. Settings use primary_model/fallback_model/follow_up_preferences. custom_fields is a flat object of snake_case keys and text/number/boolean/null values, merged on update; describe lists fields; pending reads proposals; confirm/cancel decide them.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
+        operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic ordered create/update operations. Read all targets first. For numbering use unique concrete numbers inferred from current scoped records; never a literal placeholder. No financial status changes or deletes in a batch. Combine patches for each target into one item.'},
         request:{type:'string',minLength:1,maxLength:1200},
         operation:{type:'string',enum:OPERATIONS},
         table:{type:'string',enum:Object.keys(TABLES)},
@@ -262,6 +264,14 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
   return Promise.resolve(normalizeStructured(raw));
   function normalizeStructured(args) {
     if(!ownObject(args)||containsForbiddenIdentity(args,scope)||Object.keys(args).some(key=>!ALLOWED_ARGS.has(key)))throw new TypeError('invalid planned operation');
+    if(args.operations!==undefined){
+      if(Object.keys(args).length!==1||!Array.isArray(args.operations)||args.operations.length<2||args.operations.length>10)throw new TypeError('invalid batch');
+      const operations=args.operations.map(item=>{
+        if(!ownObject(item)||item.operations!==undefined||!['create','update'].includes(item.operation)||!WRITE_SCHEMA[item.table]?.[item.operation]||Object.hasOwn(item.values||{},'status'))throw new TypeError('invalid batch');
+        return normalizeStructured(item);
+      });
+      return {operation:'batch',operations};
+    }
     const operation=args.operation;
     if(!OPERATIONS.includes(operation))throw new TypeError('unknown operation');
     const table=args.table||null;
@@ -393,7 +403,7 @@ function validateAdapterSettingsValues(values) {
   }
 }
 
-export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,getRuntimeConfig,planRequest,authorize,
+export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,getRuntimeConfig,planRequest,authorize,executeBatchOperation,
   message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,executeInvoiceReopening=null,executeReopeningDecision=null,confirmationMode='buttons',timezone='UTC'}={}) {
   if(!supabase?.from||typeof scope?.workspaceId!=='string')throw new TypeError('Supabase and verified workspace scope required');
   let replyRequirement=null;
@@ -745,6 +755,21 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       try { await ctx.assertAuthorized(); }
       catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
       const params=await normalizeRequest(raw,scope,planRequest,ctx,validationFeedback);
+      if(params.operation==='batch'){
+        attemptedOperation={operation:'batch'};
+        if(confirmationMode!=='direct'||typeof executeBatchOperation!=='function')return fail('INVALID','Atomic batches require direct owner instructions.');
+        for(const item of params.operations){
+          if(item.values.custom_fields!==undefined)validateCustomFields(item.values.custom_fields);
+          if(['customers','business_records','workspace_settings','workspace_ai_settings'].includes(item.table))item.values=validateValues(item.table,item.operation,item.values);
+          if(item.table==='invoices')for(const field of ['issue_date','due_date']){
+            const relative=String(item.values[field]||'').toLowerCase().replace(/['’]/g,'').replace(/s? date$/,'').trim();
+            if(['today','tomorrow','yesterday'].includes(relative)){const calendar=ownerCalendar(clock,timezone);item.values[field]=relative==='today'?calendar.currentDate:calendar[relative];}
+          }
+        }
+        const result=await executeBatchOperation(params,{...ctx,markWriteAttempted(){writeAttempted=true;}});
+        await ctx.assertAuthorized();ctx.assertLive();
+        return {...sanitise(result,scope),operation:'batch',writeAttempted};
+      }
       shape=validationShape(params);
       nextActionParams=structuredClone(params);
       if(params.values?.custom_fields!==undefined)validateCustomFields(params.values.custom_fields);
