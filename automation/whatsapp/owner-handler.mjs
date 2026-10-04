@@ -1,5 +1,6 @@
 import {normalizeOwnerBotPreferences,normalizeOwnerServiceReplyText} from './bot-preferences.mjs';
 import {ownerCalendar} from './workspace-records.mjs';
+import {isOwnerNextButton,runOwnerNextAction,planOwnerNextActions,createOwnerNextButtons} from './owner-next-actions.mjs';
 import {createOwnerActionButtons,verifyOwnerActionButton} from './owner-action-buttons.mjs';
 import {AIProvider, CF_PRIMARY_MODEL, GEMINI_FALLBACK_MODEL, sanitizeModelSettings} from '../../ai/provider.mjs';
 import {createInvoiceLifecycleService} from '../../ai/invoice-lifecycle.mjs';
@@ -158,7 +159,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     const config=configurationSource==='workspace'
       ?sanitizeModelSettings({primaryModel:settings.primary_model,fallbackModel:settings.fallback_model})
       :sanitizeModelSettings({primaryModel:CF_PRIMARY_MODEL,fallbackModel:GEMINI_FALLBACK_MODEL});
-    const provider=providerFactory({...config,geminiApiKey:env.GEMINI_API_KEY,openRouterApiKey:env.OPENROUTER_API_KEY,
+    const provider=isOwnerNextButton(scope.interactionId)?null:providerFactory({...config,geminiApiKey:env.GEMINI_API_KEY,openRouterApiKey:env.OPENROUTER_API_KEY,
       zenApiKey:env.OPENCODE_ZEN_API_KEY,cfAccountId:env.CLOUDFLARE_ACCOUNT_ID,cfApiToken:env.CLOUDFLARE_API_TOKEN,
       fetchImpl,timeoutMs:15000,maxAttempts:2,healthStore});
     const reauthorize=async input=>authorizeTurn(input);
@@ -188,6 +189,18 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         async execute(){return {ok:false,code:'UNAVAILABLE',message:'Workspace tools are temporarily unavailable.'};},setServedModel(){},getMedia(){return null;}};
     }
     onToolsReady(tools);
+    if(isOwnerNextButton(scope.interactionId)){
+      const blocked=Boolean(pendingAtStart||lifecyclePending?.pending)||!pendingStoreAvailable||!lifecycleAvailable;
+      const result=await runOwnerNextAction({supabase,scope,env,clock,authorize,tools,pending:blocked});
+      if(!result.media&&Array.from(result.answer||'').length<=1024&&replyStore&&!blocked){
+        try{
+          const ownerNextActionRef=await planOwnerNextActions({supabase,scope,context:tools.getNextActionContext?.(),clock,authorize});
+          const buttons=createOwnerNextButtons({scope,reference:ownerNextActionRef,env,clock});
+          if(buttons.length)return {...result,buttons,ownerNextActionRef};
+        }catch{}
+      }
+      return result;
+    }
     let initialToolResults=[];
     const recovered=await tools.lookupCompleted?.();
     if(recovered?.ok&&recovered.completed)initialToolResults=[{name:'workspaceData',args:{operation:'verifiedReceipt'},result:recovered}];
@@ -213,7 +226,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     if(!await authorizeTurn(scope))return '';
     if(response?.deferred===true)return {deferred:true,checkpoint:response.checkpoint||scope.checkpoint||null,
       ...(response.agentDiagnostics?{agentDiagnostics:response.agentDiagnostics}:{})};
-    let buttons=[],ownerActionRef=null;
+    let buttons=[],ownerActionRef=null,ownerNextActionRef=null;
     if(!response?.plannerFailure&&tools.getReplyRequirement?.()?.buttonsAvailable){
       try{
         const action=await tools.getPendingActionForButtons?.();
@@ -229,7 +242,15 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     if(ownerButtonClaimIssue(answer,{buttonsAvailable:buttons.length>0}))return {
       answer:'I could not attach approval buttons to this reply. No action was confirmed by this message.',
       plannerFailure:{code:'OWNER_CHOICES_UNAVAILABLE'}};
-    return {answer,...(buttons.length?{buttons,ownerActionRef}:{}),...(response?.media?{media:response.media}:{}),
+    if(!buttons.length&&!response?.plannerFailure&&!response?.media&&Array.from(answer).length<=1024&&scope.messageId&&replyStore){
+      try{
+        ownerNextActionRef=await planOwnerNextActions({supabase,scope,context:tools.getNextActionContext?.(),clock,authorize,
+          pending:Boolean(pendingAtStart||lifecyclePending?.pending)||!pendingStoreAvailable||!lifecycleAvailable});
+        buttons=createOwnerNextButtons({scope,reference:ownerNextActionRef,env,clock});
+        if(!buttons.length)ownerNextActionRef=null;
+      }catch{ownerNextActionRef=null;logger?.warn?.('WhatsApp next actions unavailable',{code:'OWNER_NEXT_ACTIONS_UNAVAILABLE'});}
+    }
+    return {answer,...(buttons.length?{buttons,...(ownerActionRef?{ownerActionRef}:{ownerNextActionRef})}:{}),...(response?.media?{media:response.media}:{}),
       ...(response?.plannerFailure?{plannerFailure:response.plannerFailure}:{}),
       ...(response?.agentDiagnostics?{agentDiagnostics:response.agentDiagnostics}:{}),
       ...(response?.model?{servedModel:response.model}:{}),...(response?.servedProvider?{servedProvider:response.servedProvider}:{})};
@@ -291,7 +312,10 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         if(result?.checkpoint)latestCheckpoint=result.checkpoint;
         if(replyStore&&result?.answer&&!result?.deferred&&await authorizeRequest(boundedScope)){
           try{return await replyStore.save(boundedScope,result);}
-          catch{logger?.warn?.('WhatsApp owner reply receipt save failed',{code:'OWNER_REPLY_STORE_FAILED'});}
+          catch{
+            logger?.warn?.('WhatsApp owner reply receipt save failed',{code:'OWNER_REPLY_STORE_FAILED'});
+            if(result.ownerNextActionRef){const {buttons,ownerNextActionRef,...textOnly}=result;return textOnly;}
+          }
         }
         return result;
       }),timeout]);

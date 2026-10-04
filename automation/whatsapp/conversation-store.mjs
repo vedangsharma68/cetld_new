@@ -1,6 +1,13 @@
 import {createHash} from 'node:crypto';
+import {normalizeOwnerNextActionRef} from './owner-next-actions.mjs';
 
 export const conversationCallbackToken=(workspaceId,key)=>createHash('sha256').update(JSON.stringify([workspaceId,key])).digest('hex');
+export function normalizeOwnerReplyMediaRef(value){
+  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['invoiceId','invoiceUpdatedAt','fileId'].includes(k))
+    ||!uuid.test(value.invoiceId||'')||!uuid.test(value.fileId||'')||!Number.isFinite(Date.parse(value.invoiceUpdatedAt)))return null;
+  return {invoiceId:value.invoiceId,invoiceUpdatedAt:value.invoiceUpdatedAt,fileId:value.fileId};
+}
 
 const check=result=>{if(result?.error)throw result.error;return result?.data;};
 function ownerActionReference(value,audience,direction){
@@ -17,18 +24,25 @@ function ownerActionReference(value,audience,direction){
 export function createConversationStore(supabase) {
   return {
     async record({workspaceId,customerId=null,invoiceId=null,phone,direction,body,kind='text',
-      audience='customer',status,providerMessageId=null,key,createdAt,ownerActionRef=null}) {
+      audience='customer',status,providerMessageId=null,key,createdAt,ownerActionRef=null,ownerNextActionRef=null,ownerReplyMediaRef=null}) {
       if(!workspaceId)return;
       const actionRef=ownerActionReference(ownerActionRef,audience,direction);
+      const nextRef=normalizeOwnerNextActionRef(ownerNextActionRef);
+      const mediaRef=normalizeOwnerReplyMediaRef(ownerReplyMediaRef);
+      if(ownerReplyMediaRef!=null&&(!mediaRef||audience!=='owner'||direction!=='outbound'||kind!=='normal'||actionRef||nextRef))throw new TypeError('Invalid owner file receipt.');
+      if(ownerNextActionRef!=null&&(!nextRef||audience!=='owner'||direction!=='outbound'||kind!=='normal'||actionRef))
+        throw new TypeError('Invalid owner next-action reference.');
       check(await supabase.from('whatsapp_messages').upsert({
         workspace_id:workspaceId,customer_id:customerId,invoice_id:invoiceId,phone,direction,
         body:String(body||'').slice(0,4000),kind,audience,status,
         provider_message_id:providerMessageId,idempotency_key:key,
         ...(actionRef?{owner_action_ref:actionRef}:{}),
+        ...(nextRef?{owner_next_action_ref:nextRef}:{}),
+        ...(mediaRef?{owner_reply_media_ref:mediaRef}:{}),
         ...(direction==='outbound'?{callback_token:conversationCallbackToken(workspaceId,key)}:{}),
         ...(createdAt?{created_at:createdAt}:{}),
       },{onConflict:'workspace_id,idempotency_key',ignoreDuplicates:true}));
-      if(direction==='outbound')return check(await supabase.from('whatsapp_messages').select('body,audience,phone,customer_id,invoice_id,kind,status,owner_action_ref')
+      if(direction==='outbound')return check(await supabase.from('whatsapp_messages').select('body,audience,phone,customer_id,invoice_id,kind,status,owner_action_ref,owner_next_action_ref,owner_reply_media_ref')
         .eq('workspace_id',workspaceId).eq('idempotency_key',key).maybeSingle());
     },
     async status({messageId,phone,status,callbackToken=null}) {

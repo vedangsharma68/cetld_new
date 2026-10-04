@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {createWhatsAppOutbound, neutralText} from '../automation/whatsapp/cloud-outbound.mjs';
 import {createWhatsAppAssistantChannel, createCustomerScopedStore} from '../ai/whatsapp-channel.mjs';
 import {IDENTITY_ANSWER, SCOPE_ANSWER} from '../ai/assistant.mjs';
+import {createOwnerNextButtons} from '../automation/whatsapp/owner-next-actions.mjs';
 
 const PHONE = '+919871367051';
 const DAD_PHONE = '+919818685252';
@@ -264,6 +265,27 @@ test('owner quick reply buttons use Meta interactive payloads and retain the tex
   assert.deepEqual(payload.interactive,{type:'button',body:{text:'Apply the invoice update?'},
     action:{buttons:[{type:'reply',reply:{id:buttons[0].id,title:'Confirm'}},
       {type:'reply',reply:{id:buttons[1].id,title:'Cancel'}}]}});
+});
+
+test('contextual next actions use native reply buttons with the same session and duplicate guards',async()=>{
+  const supabase=fakeSupabase();
+  supabase.rpc=async()=>({data:[{workspace_id:'workspace-a',owner_id:'owner-1',customer_id:'owner-customer',business_name:'Acme Studio'}]});
+  const reference={v:1,key:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',expiresAt:'2026-09-27T12:30:00.000Z',choices:[
+    {action:'unpaid_invoices',title:'Unpaid invoices'},{action:'recent_invoices',title:'Recent invoices'},{action:'find_invoice',title:'Find invoice'}]};
+  const buttons=createOwnerNextButtons({scope:{workspaceId:'workspace-a',phone:PHONE},reference,env:{WHATSAPP_APP_SECRET:'isolated-signing-key'},clock:()=>new Date(NOW)});
+  const args={workspaceId:'workspace-a',to:PHONE,body:'Your business summary.',buttons,businessName:'Acme Studio',kind:'normal',audience:'owner',messageId:'owner-next-1',lastInboundAt:NOW};
+  const accepted=harness({supabase});assert.equal((await accepted.outbound.sendServiceReply(args)).status,'accepted');
+  const payload=JSON.parse(accepted.calls[0].options.body);assert.equal(payload.type,'interactive');assert.deepEqual(payload.interactive.action.buttons.map(b=>b.reply),buttons);
+  const closed=harness({supabase});assert.equal((await closed.outbound.sendServiceReply({...args,lastInboundAt:'2026-09-26T11:59:59Z'})).reason,'service_window_closed');assert.equal(closed.calls.length,0);
+  const duplicate=harness({supabase,authorizeInboundReply:async()=>({allowed:false,reason:'duplicate'})});assert.equal((await duplicate.outbound.sendServiceReply(args)).reason,'duplicate');assert.equal(duplicate.calls.length,0);
+});
+
+test('an interrupted file receipt cannot become a false text-only file reply',async()=>{
+  const supabase=fakeSupabase();supabase.rpc=async()=>({data:[{workspace_id:'workspace-a',owner_id:'owner-1',customer_id:'owner-customer',business_name:'Acme Studio'}]});
+  const conversationStore={record:async()=>({body:'File for INV-1.',audience:'owner',phone:PHONE,kind:'normal',status:'pending',customer_id:null,invoice_id:null,owner_reply_media_ref:{invoiceId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'}})};
+  const attempted=harness({supabase,conversationStore});
+  await assert.rejects(attempted.outbound.sendServiceReply({workspaceId:'workspace-a',to:PHONE,body:'The file is unavailable.',businessName:'Acme Studio',kind:'normal',audience:'owner',messageId:'file-click',lastInboundAt:NOW}),/cannot become a text-only claim/);
+  assert.equal(attempted.calls.length,0);
 });
 
 test('interactive owner buttons reject malformed lists and are unavailable to customer replies', async () => {

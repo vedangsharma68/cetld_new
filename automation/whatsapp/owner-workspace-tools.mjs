@@ -96,6 +96,7 @@ export function createOwnerWorkspaceTools(options = {}) {
     },
     setServedModel: safety.setServedModel,
     getMedia: safety.getMedia,
+    getNextActionContext:tool.getNextActionContext,
     getAttachmentIngested: safety.getAttachmentIngested,
     getWriteAttempted: () => writeAttempted || tool.getWriteAttempted?.() || false,
     getAttemptedOperation: () => lastTool==='getAIProviderConfiguration'?lastTool:tool.getAttemptedOperation?.(),

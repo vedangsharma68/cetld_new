@@ -125,6 +125,7 @@ export function createWhatsAppOutbound({
         ||(stored.customer_id??null)!==customerId||(stored.invoice_id??null)!==invoiceId)
         throw Error('Outbound intent recipient scope changed');
       if(stored.status==='blocked')throw Error('Outbound message was blocked');
+      if(stored.owner_reply_media_ref&&payload.type==='text')throw Error('Stored invoice file receipt cannot become a text-only claim');
       // A retry before the atomic claim must send the exact first saved text.
       if(payload.type==='template'&&stored.body!==body)throw Error('Reviewed template intent changed');
       if(fallbackRef){

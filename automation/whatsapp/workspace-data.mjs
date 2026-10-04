@@ -378,6 +378,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
   let replyRequirement=null;
   let writeAttempted=false;
   let attemptedOperation=null;
+  let nextActionParams=null,nextActionResult=null,nextActionRecords=null;
   const readScoped=async ({table,columns,filters,limit,offset,order},internalColumns=[],ctx,{customerName=false,customerFilter=null}={})=>{
     const spec=TABLES[table];
     const selected=columns||spec.defaults;
@@ -441,6 +442,8 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       }
     }
     const internal=[];
+    if(table==='invoices')internal.push('id','invoice_number','updated_at','status','total_amount','amount_paid');
+    if(table==='customers')internal.push('id','name','updated_at','metadata');
     if(['payments','invoice_files'].includes(table))internal.push('invoice_id');
     if(['payments','invoice_files'].includes(table)&&relationFilters.length)internal.push('invoice_id');
     if(table==='customers'&&params.operation!=='read')internal.push('id','updated_at');
@@ -471,6 +474,8 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     });
     const truncated=rawPageCount>params.limit;
     await ctx.assertAuthorized();
+    if(['customers','invoices'].includes(table))nextActionRecords=rows.slice(0,params.limit).map(row=>Object.fromEntries(
+      internal.filter(key=>Object.hasOwn(row,key)).map(key=>[key,structuredClone(row[key])])));
     return sanitise({ok:true,rows:output.slice(0,params.limit),truncated,
       ...(truncated?{nextOffset:params.offset+params.limit}:{})},scope);
   };
@@ -693,6 +698,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       try { await ctx.assertAuthorized(); }
       catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
       const params=await normalizeRequest(raw,scope,planRequest,ctx);
+      nextActionParams=structuredClone(params);
       if(params.values?.custom_fields!==undefined)validateCustomFields(params.values.custom_fields);
       const dateFields=['due_date','issue_date'].filter(field=>Object.hasOwn(params.values||{},field));
       const ownerRelative=params.operation==='update'&&dateFields.length===1&&!/\b\d{4}-\d{2}-\d{2}\b/.test(message)
@@ -740,10 +746,13 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     } catch(error) {return error instanceof TypeError?fail():safeError(error);}
   };
   const execute=async(raw,options)=>{
+    nextActionParams=null;nextActionResult=null;nextActionRecords=null;
     const result=await executeRequest(raw,options);
+    nextActionResult=result;
     return result?.code==='INVALID'?{...result,message:'Use request text alone, or the structured fields in this catalog. Do not combine request with filters, values or columns. pending/confirm/cancel take no table or values.',catalog:catalog(typeof raw?.table==='string'&&Object.hasOwn(TABLES,raw.table)?raw.table:null)}:result;
   };
   return Object.freeze({definition:definition(),execute,getReplyRequirement:()=>replyRequirement?{...replyRequirement}:null,
+    getNextActionContext:()=>nextActionParams&&nextActionResult?{params:nextActionParams,result:nextActionResult,records:nextActionRecords}:null,
     getWriteAttempted:()=>writeAttempted,getAttemptedOperation:()=>attemptedOperation});
 }
 
