@@ -110,7 +110,7 @@ begin
    if jsonb_typeof(m->'line_items')<>'array' then return jsonb_build_object('ok',false,'code','INVALID');end if;
    item_sum:=app.invoice_correction_line_sum(m->'line_items');
   end if;
-  if p_values?'line_items' and not p_values?'subtotal' then m:=m||jsonb_build_object('subtotal',item_sum);end if;
+  if p_values?'line_items' and jsonb_array_length(p_values->'line_items')>0 and not p_values?'subtotal' then m:=m||jsonb_build_object('subtotal',item_sum);end if;
   if m->>'subtotal' is null and m->>'subtotal_minor' is not null and (m->>'subtotal_minor')::numeric<>trunc((m->>'subtotal_minor')::numeric)
     or m->>'tax' is null and m->>'tax_minor' is not null and (m->>'tax_minor')::numeric<>trunc((m->>'tax_minor')::numeric)
     or m->>'discount' is null and m->>'discount_minor' is not null and (m->>'discount_minor')::numeric<>trunc((m->>'discount_minor')::numeric) then return jsonb_build_object('ok',false,'code','INVALID_TOTAL');end if;
