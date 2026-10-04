@@ -30,6 +30,11 @@ test('invoice correction math preserves legacy minor components and refuses scal
   assert.equal(repaired.ok,true,JSON.stringify(repaired));assert.equal(repaired.record.metadata.line_items[0].confidence,null);
   invoice=repaired.record;
   for(const [suffix,values] of [['seller-length',{seller_name:'x'.repeat(256)}],['payment-length',{payment_information:'x'.repeat(2001)}],['seller-control',{buyer_name:'Name\tInjected'}],['large-payload',{line_items:Array.from({length:70},()=>({description:'x'.repeat(500),amount:1}))}]])assert.equal((await correctInvoice(db,{workspaceId,invoice,messageId:`legacy-${suffix}`,values})).ok,false);
+  await db.exec('reset role');await db.query("update public.invoices set metadata=(metadata-'subtotal')||$2::jsonb where id=$1",[made.entityId,JSON.stringify({subtotal_minor:10000,line_items:[]})]);
+  invoice=(await db.query('select * from public.invoices where id=$1',[made.entityId])).rows[0];
+  assert.equal((await correctInvoice(db,{workspaceId,invoice,messageId:'legacy-subtotal-minor-inconsistent',values:{total_amount:120}})).code,'INVALID_TOTAL');
+  const subtotalCorrection=await correctInvoice(db,{workspaceId,invoice,messageId:'legacy-subtotal-minor-override',values:{subtotal:110,total_amount:120}});
+  assert.equal(subtotalCorrection.ok,true,JSON.stringify(subtotalCorrection));assert.equal(subtotalCorrection.record.metadata.subtotal_minor,10000);assert.equal(subtotalCorrection.record.metadata.subtotal,110);
   await db.exec('reset role');assert.equal((await db.query('select count(*)::int n from public.payments where invoice_id=$1',[made.entityId])).rows[0].n,0);
  }finally{await db.close();}
 });
@@ -81,6 +86,10 @@ test('invoice corrections persist typed fields, preserve source, audit immutable
   assert.equal(result.record.next_follow_up_at,null);assert.equal(result.record.metadata.approved_reminder_text??null,null);
   const audit=(await db.query('select * from public.invoice_correction_audits where id=$1',[result.correctionAuditId])).rows[0];
   assert.equal(audit.source_kind,'whatsapp');assert.equal(audit.before_snapshot.invoice_number,before.invoice_number);assert.deepEqual(audit.after_snapshot,result.record);
+  await asOwner(db);assert.equal((await db.query('select count(*)::int n from public.invoice_correction_audits where id=$1',[audit.id])).rows[0].n,1);
+  await assert.rejects(db.query('update public.invoice_correction_audits set values=$2::jsonb where id=$1',[audit.id,'{}']),/permission denied/);
+  await asOwner(db,stranger);assert.equal((await db.query('select count(*)::int n from public.invoice_correction_audits where id=$1',[audit.id])).rows[0].n,0);
+  await db.exec("reset role;set request.jwt.claim.role='anon';set request.jwt.claim.sub='';set role anon");await assert.rejects(db.query('select * from public.invoice_correction_audits'),/permission denied/);
   const replay=await correctInvoice(db,{workspaceId,invoice:before,messageId:'correction-all',values});assert.equal(replay.replayed,true);assert.equal(replay.correctionAuditId,result.correctionAuditId);
   assert.equal((await correctInvoice(db,{workspaceId,invoice:before,messageId:'correction-all',values:{notes:'Different'}})).code,'REPLAY_MISMATCH');
   await db.exec('reset role');await assert.rejects(db.query('delete from public.invoice_correction_audits where id=$1',[audit.id]),/immutable/);

@@ -13,6 +13,11 @@ alter table public.invoice_correction_audits enable row level security;
 alter table public.invoice_correction_audits force row level security;
 revoke all on public.invoice_correction_audits from public,anon,authenticated,service_role;
 grant select on public.invoice_correction_audits to service_role;
+grant select on public.invoice_correction_audits to authenticated;
+create policy invoice_correction_owner_read on public.invoice_correction_audits
+for select to authenticated using (
+ owner_id=(select auth.uid()) and exists(select 1 from public.workspaces w where w.id=workspace_id and w.owner_id=(select auth.uid()))
+);
 create function app.guard_invoice_correction_audit() returns trigger language plpgsql set search_path='' as $$
 begin raise exception 'invoice correction history is immutable' using errcode='42501'; end; $$;
 revoke all on function app.guard_invoice_correction_audit() from public,anon,authenticated,service_role;
@@ -106,11 +111,12 @@ begin
    item_sum:=app.invoice_correction_line_sum(m->'line_items');
   end if;
   if p_values?'line_items' and not p_values?'subtotal' then m:=m||jsonb_build_object('subtotal',item_sum);end if;
-  if m->>'tax' is null and m->>'tax_minor' is not null and (m->>'tax_minor')::numeric<>trunc((m->>'tax_minor')::numeric)
+  if m->>'subtotal' is null and m->>'subtotal_minor' is not null and (m->>'subtotal_minor')::numeric<>trunc((m->>'subtotal_minor')::numeric)
+    or m->>'tax' is null and m->>'tax_minor' is not null and (m->>'tax_minor')::numeric<>trunc((m->>'tax_minor')::numeric)
     or m->>'discount' is null and m->>'discount_minor' is not null and (m->>'discount_minor')::numeric<>trunc((m->>'discount_minor')::numeric) then return jsonb_build_object('ok',false,'code','INVALID_TOTAL');end if;
   tax:=coalesce((m->>'tax')::numeric,round((m->>'tax_minor')::numeric/100,2),0);
   discount:=coalesce((m->>'discount')::numeric,round((m->>'discount_minor')::numeric/100,2),0);
-  subtotal:=coalesce((m->>'subtotal')::numeric,case when m?'line_items' and jsonb_array_length(m->'line_items')>0 then item_sum else total-tax+discount end);
+  subtotal:=coalesce((m->>'subtotal')::numeric,round((m->>'subtotal_minor')::numeric/100,2),case when m?'line_items' and jsonb_array_length(m->'line_items')>0 then item_sum else total-tax+discount end);
   if subtotal<0 or tax<0 or discount<0 or subtotal>=10000000000000000 or tax>=10000000000000000 or discount>=10000000000000000 or scale(subtotal)>2 or scale(tax)>2 or scale(discount)>2
     or subtotal+tax-discount<>total
     or (m?'line_items' and jsonb_array_length(m->'line_items')>0 and item_sum<>subtotal) then return jsonb_build_object('ok',false,'code','INVALID_TOTAL');end if;
