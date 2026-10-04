@@ -64,6 +64,25 @@ async function currentRecord({supabase,scope,choice,authorize}) {
 function refFor(choices,clock) {
   return normalizeOwnerNextActionRef({v:1,key:randomUUID(),expiresAt:new Date(now(clock)+30*60*1000).toISOString(),choices});
 }
+function explicitlyMentionedRecords(records,table,message){
+  const words=value=>String(value||'').normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu)||[];
+  const request=words(message);
+  // Compare whole token spans, including compact names such as JohnSmith.
+  // The owner message supplies the target; a model's answer cannot choose it.
+  return records.filter(row=>{
+    const label=words(table==='invoices'?row.invoice_number:row.name).join('');
+    if(!label)return false;
+    for(let start=0;start<request.length;start++){
+      let span='';
+      for(let end=start;end<request.length;end++){
+        span+=request[end];
+        if(span===label)return true;
+        if(span.length>=label.length)break;
+      }
+    }
+    return false;
+  });
+}
 export async function planOwnerNextActions({supabase,scope,context,pending=false,authorize,clock=()=>new Date()}={}) {
   if(pending||!context||!await authorize(scope))return null;
   const {params,result}=context;
@@ -73,14 +92,16 @@ export async function planOwnerNextActions({supabase,scope,context,pending=false
     {action:'unpaid_invoices',title:'Unpaid invoices'},{action:'recent_invoices',title:'Recent invoices'},{action:'find_invoice',title:'Find invoice'}],clock);
   if(!['invoices','customers'].includes(table)||!['read','update','delete'].includes(params.operation))return null;
   let filters=params.filters||[];
+  const mentioned=!filters.length&&params.operation==='read'&&result.readOnly&&result.truncated!==true&&Array.isArray(context.records)
+    ?explicitlyMentionedRecords(context.records,table,scope.message):[];
   if(result.rows?.length===1) {
     const row=result.rows[0];
     const label=table==='invoices'?row.invoice_number:row.name;
     if(label)filters=[{column:table==='invoices'?'invoice_number':'name',operator:'eq',value:label}];
   }
-  if(!filters.length)return table==='invoices'&&result.readOnly?refFor([
+  if(!filters.length&&!mentioned.length)return table==='invoices'&&result.readOnly?refFor([
     {action:'unpaid_invoices',title:'Unpaid invoices'},{action:'recent_invoices',title:'Recent invoices'},{action:'find_invoice',title:'Find invoice'}],clock):null;
-  const found=Array.isArray(context.records)?{ok:true,rows:context.records}:await resolveWorkspaceRecord({supabase,scope,table,filters,operation:'read',select:table==='invoices'?'id,invoice_number,updated_at,status,total_amount,amount_paid':'id,name,updated_at,metadata',assertAuthorized:async()=>{if(!await authorize(scope))throw Error('DENIED');}});
+  const found=Array.isArray(context.records)?{ok:true,rows:mentioned.length?mentioned:context.records}:await resolveWorkspaceRecord({supabase,scope,table,filters,operation:'read',select:table==='invoices'?'id,invoice_number,updated_at,status,total_amount,amount_paid':'id,name,updated_at,metadata',assertAuthorized:async()=>{if(!await authorize(scope))throw Error('DENIED');}});
   if(!found.ok||!found.rows?.length||!await authorize(scope))return null;
   const rows=found.rows.filter(r=>UUID.test(r.id||'')&&Number.isFinite(new Date(r.updated_at).getTime()));
   if(rows.length!==found.rows.length)return null;

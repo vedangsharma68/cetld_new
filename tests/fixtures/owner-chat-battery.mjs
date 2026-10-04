@@ -75,7 +75,8 @@ export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallba
       && item.phone === (phone || OWNER_CHAT_SCOPE.phone));
     return row || null;
   };
-  const fieldValue=(table,row,key)=>table==='invoices'&&key==='customer.name'
+  const fieldValue=(table,row,key)=>key.includes('->>')?row[key.split('->>')[0]]?.[key.split('->>')[1]]:
+    table==='invoices'&&key==='customer.name'
     ?tables.customers.find(customer=>customer.workspace_id===row.workspace_id&&customer.id===row.customer_id)?.name:row[key];
   const resultRows = (table, filters, orders, range, limit, columns) => {
     readCalls.push({table, filters: filters.map(filter => filter.label), columns,limit,range:clone(range)});
