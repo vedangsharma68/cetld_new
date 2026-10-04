@@ -46,6 +46,10 @@ export function verifyOwnerNextButton({id,scope,reference,env=process.env,clock=
   return actual.length===expected.length&&actual.toString('base64url')===match[3]&&timingSafeEqual(actual,expected)?ref.choices[Number(match[2])]:null;
 }
 export const isOwnerNextButton=id=>typeof id==='string'&&id.startsWith('ons1.');
+// This historical request type has no executable/confirmation path. Retain its
+// stored row and all mutation guards, but do not let it disable safe shortcuts.
+// Unknown types fail closed, as do every supported approval and draft workflow.
+export const pendingBlocksOwnerNextActions=record=>Boolean(record&&!record.consumed_at&&record.action?.type!=='owner_invoice_request');
 export const NEXT_ACTION_STALE_REPLY='That next action has expired or its details changed. Ask again so I can check the current record.';
 
 async function currentRecord({supabase,scope,choice,authorize}) {

@@ -119,6 +119,31 @@ test('long replies preserve typed chat without creating invalid interactive bodi
  const db=database(),store=createOwnerReplyStore({supabase:db,env,clock}),ref=reference();
  const result=await store.save(scope,{answer:'x'.repeat(1025),ownerNextActionRef:ref,buttons:mint(ref)});assert.equal(result.buttons,undefined);assert.equal(result.answer.length,1025);
 });
+
+test('legacy invoice request cannot suppress persisted John phone choices or safe repeated taps; real and unknown approvals still block',async()=>{
+ for(const type of ['owner_invoice_request','owner_workspace_data_change','owner_invoice_payment','invoice_review_draft','future_unknown_action']){
+  const pending={id:14,version:1,action:{type},created_at:'2026-10-02T09:33:49Z',consumed_at:null};
+  const before=structuredClone(pending),db=database({customers:[{...customer,phone:'+919818685252'}]});
+  let agentCalls=0,providerCalls=0;
+  db.rpc=async()=>{throw Error('This read and information-gathering tap cannot mutate a pending action or business record')};
+  const handler=createOwnerMessageHandler({supabase:db,env,clock,authorize:async()=>true,
+   replyStore:createOwnerReplyStore({supabase:db,env,clock}),
+   pendingActionStoreFactory:()=>({loadPendingAction:async()=>pending,loadPendingActionState:async()=>({generation:1,id:14,version:1,action:pending.action})}),
+   lifecycleFactory:()=>({loadPendingDelete:async()=>({ok:true,pending:false})}),historyReader:async()=>[],
+   ownerStoreFactory:()=>({workspaceId,userId:ownerId,role:'owner',query:async()=>[]}),providerFactory:()=>{providerCalls++;return {}},
+   agentFactory:async({tools})=>{agentCalls++;const result=await tools.execute('workspaceData',{operation:'read',table:'customers',columns:['phone'],filters:[{column:'name',operator:'eq',value:'John Smith'}]});assert.equal(result.ok,true);return {answer:"John Smith's phone number is +919818685252."}},logger:{info(){},warn(){},error(){}}});
+  const output=await handler({...scope,message:'What is John Smith’s phone?'});
+  assert.equal(agentCalls,1);assert.equal(providerCalls,1);assert.deepEqual(pending,before);
+  if(type!=='owner_invoice_request'){assert.equal(output.buttons,undefined);continue;}
+  assert.deepEqual(output.buttons.map(b=>b.title),['Edit details']);
+  assert.equal(db.tables.whatsapp_messages[0].owner_next_action_ref.choices[0].id,customer.id);
+  const click={...scope,messageId:'wamid.legacy-click',message:'Edit details',interactionId:output.buttons[0].id};
+  const first=await handler(click),repeated=await handler(click);
+  assert.match(first.answer,/field and new value/);assert.equal(repeated.answer,first.answer);assert.equal(repeated.replayed,true);
+  assert.equal(agentCalls,1);assert.equal(providerCalls,1);assert.deepEqual(pending,before);
+  assert.equal(db.tables.customers[0].phone,'+919818685252');
+ }
+});
 test('view-file click uses existing scoped tool and restores identical media after interrupted delivery',async()=>{
  const fileId=randomUUID(),media={id:fileId,file_name:'invoice.pdf',mime_type:'application/pdf',bytes:Buffer.from('isolated fixture')};
  const ref=reference([{action:'view_file',title:'View file',table:'invoices',id:invoice.id,updatedAt:invoice.updated_at}]),db=database({whatsapp_messages:[stored(ref)]});
