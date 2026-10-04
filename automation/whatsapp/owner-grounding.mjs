@@ -20,10 +20,12 @@ function actionMatches(clause, result) {
   if(/\b(?:created|creation)\b/i.test(clause))return /creat/.test(action)||result.outcome==='saved';
   if(/\b(?:reopened|reversed|marked[^.!?]{0,24}unpaid)\b/i.test(clause))return action==='invoice.reopened';
   if(/\b(?:restored|restoration)\b/i.test(clause))return /restor/.test(action);
+  const paymentBusinessText=/\bpayment (?:instructions?|information|info)\b/i.test(clause);
+  if(paymentBusinessText&&(!/updat|change|confirmed/.test(action)
+    ||!(Object.hasOwn(result.record||{},'payment_information')||Object.hasOwn(result.record?.custom_fields||{},'payment_information'))))return false;
   const financialClause=clause.replace(/\bpayment (?:instructions?|information|info)\b/gi,'');
   if(/\b(?:marked[^.!?]{0,24}paid|recorded[^.!?]{0,24}payment|payment)\b/i.test(financialClause))return /paid|payment|reopened/.test(action);
-  if(/\bpayment (?:instructions?|information|info)\b/i.test(clause))return /updat|change|confirmed/.test(action)
-    && (Object.hasOwn(result.record||{},'payment_information')||Object.hasOwn(result.record?.custom_fields||{},'payment_information'));
+  if(paymentBusinessText)return true;
   if(/\b(?:updated|changed|update|change)\b/i.test(clause))return /updat|change|confirmed|reopened/.test(action);
   return true;
 }

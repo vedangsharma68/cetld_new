@@ -11,4 +11,5 @@ test('persisted business payment instructions do not get mistaken for a recorded
 test('business payment instructions cannot authorize a payment, paid state or cash movement claim',()=>{
  for(const reply of ['Updated payment instructions and recorded a payment.','I recorded the payment.','I marked the invoice paid.','I marked the invoice unpaid.'])
   assert.equal(ownerGroundingIssue(reply,[receipt]),'unverified_action_result',reply);
+ assert.equal(ownerGroundingIssue('Updated payment instructions and recorded a payment.',[{...receipt,action:'invoice.paid'}]),'unverified_action_result');
 });
