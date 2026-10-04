@@ -172,7 +172,7 @@ test('owner-local morning window schedules after midnight without claiming or se
     await f.db.query("update invoices set next_follow_up_at='2026-10-05T01:00:00Z' where id=$1",[f.scope.invoiceId]);
     const runtime=createAutomationRuntime({env,store:f.store,provider:f.provider,clock:()=>new Date('2026-10-05T02:00:00Z')});
     const result=await runtime.tick(f.scope);assert.equal(result.results[0].reason,'contact_hours');
-    assert.equal((await f.store.getInvoice(f.scope)).next_follow_up_at,'2026-10-05T03:30:00.000Z');
+    assert.equal(new Date((await f.store.getInvoice(f.scope)).next_follow_up_at).toISOString(),'2026-10-05T03:30:00.000Z');
     assert.equal(f.reminderCalls.length,0);assert.equal((await f.db.query('select count(*)::int as n from cetld_core_automation_delivery_claims')).rows[0].n,0);
   }finally{await f.close();}
 });
