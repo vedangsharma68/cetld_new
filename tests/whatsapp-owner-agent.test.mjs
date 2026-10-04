@@ -94,9 +94,13 @@ test('each verified owner message, including greeting, meta, thanks, yes and med
     return {model:CF_QWEN_MODEL,content:'I am here.'};
   }});
   const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase,authorize:async()=>true,pendingActionStoreFactory:pendingStore,
-    providerFactory,ownerStoreFactory:()=>({query:async()=>[]}),toolsFactory:input=>createOwnerAgentTools({...input,
+    providerFactory,ownerStoreFactory:()=>({query:async()=>[]}),toolsFactory:input=>{
+      const ownerTools=createOwnerAgentTools({...input,
       extractAttachment:async()=>({invoiceNumber:{value:'INV-1',confidence:.99},customerName:{value:'John Smith',confidence:.98},
-        total:{value:500,confidence:.99},currency:{value:'INR',confidence:.99}})}),logger:{error(){}}});
+        total:{value:500,confidence:.99},currency:{value:'INR',confidence:.99}})});
+      const execute=ownerTools.execute;
+      return {...ownerTools,async execute(...args){const result=await execute(...args);if(args[0]==='getAIProviderConfiguration')metaToolResult=result;return result;}};
+    },logger:{error(){}}});
   const messages=[
     {message:'Hi'},
     {message:'Which model is answering?'},
@@ -108,7 +112,7 @@ test('each verified owner message, including greeting, meta, thanks, yes and med
   for(let index=0;index<messages.length;index++){
     lastResponse=await handler({...scope,...messages[index],messageId:`wamid.owner-${index}`});
   }
-  assert.equal(calls,8,'the provider is called for every turn and again after selected tools');
+  assert.equal(calls,7,'every turn enters the model loop; verified configuration needs no second summary call');
   assert.equal(lastResponse.answer,'The attachment shows invoice INV-1 for INR 500.');
   assert.equal(analysisResult.analysisOnly,true);assert.equal(analysisResult.fields.invoiceNumber,'INV-1');
   assert.equal(analysisResult.fields.total,500);assert.match(analysisResult.note,/not saved or changed/);
@@ -269,22 +273,24 @@ test('provider metadata identifies configured routes and the planning model with
     lifecyclePending:null,invoiceStoreFactory:()=>({}),settingsStore:{},config,message:'Which model is answering?',
     messageId:'wamid.model-routing',authorize:async()=>true});
   let calls=0,configuration;
-  const provider={async generate({messages}){
+  const originalExecute=tools.execute;
+  tools.execute=async(...args)=>{const output=await originalExecute(...args);if(args[0]==='getAIProviderConfiguration')configuration=output;return output;};
+  const provider={async generate(){
     calls++;
     if(calls===1)return {model:CF_QWEN_MODEL,content:'',toolCalls:[{id:'configuration',type:'function',function:{name:'getAIProviderConfiguration',arguments:'{}'}}]};
-    configuration=JSON.parse(messages.find(item=>item.role==='tool'&&item.tool_call_id==='configuration').content);
-    return {model:'gemini-3.5-flash-lite',content:'The configured primary is Cloudflare Qwen, with Google Gemini as fallback.'};
+    throw Error('Verified configuration must not need another model summary');
   }};
   const result=await runOwnerAgent({provider,tools,message:'Which model is answering?'});
-  assert.equal(calls,2);
+  assert.equal(calls,1);
   assert.equal(configuration.primaryModel,CF_QWEN_MODEL);
   assert.equal(configuration.primaryProvider,'cloudflare');
   assert.equal(configuration.fallbackModel,'gemini-3.5-flash-lite');
   assert.equal(configuration.fallbackProvider,'google');
   assert.equal(configuration.planningModel,CF_QWEN_MODEL);
   assert.equal(configuration.planningProvider,'cloudflare');
-  assert.equal(result.model,'gemini-3.5-flash-lite');
-  assert.equal(result.servedProvider,'google');
+  assert.match(result.answer,/gemini-3.5-flash-lite/);
+  assert.equal(result.model,CF_QWEN_MODEL);
+  assert.equal(result.servedProvider,'cloudflare');
 });
 
 test('owner can search safe customer contacts even when the customer has no invoice',async()=>{

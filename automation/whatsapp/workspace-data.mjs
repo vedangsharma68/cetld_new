@@ -283,8 +283,9 @@ function normalizeRequest(raw,scope,planRequest,ctx) {
       order={column:args.order.column,direction:args.order.direction};
     }
     if(table==='invoices'&&['update','delete','restore','sendFile'].includes(operation)) {
-      const key=operation==='restore'?['invoice_number']:['invoice_number','id'];
-      if(normalizedFilters.length!==1||!key.includes(normalizedFilters[0].column)||normalizedFilters[0].operator!=='eq')
+      const key=operation==='restore'?['invoice_number']:operation==='update'?['invoice_number','id','customer_name']:['invoice_number','id'];
+      if(normalizedFilters.length!==1||!key.includes(normalizedFilters[0].column)
+        ||!(normalizedFilters[0].operator==='eq'||operation==='update'&&normalizedFilters[0].column==='customer_name'&&normalizedFilters[0].operator==='ilike'))
         throw new TypeError('invoice action requires exactly one canonical target');
     }
     if(operation==='create'&&table==='invoices'&&normalizedFilters.length)throw new TypeError('invoice creation cannot include filters');
@@ -699,6 +700,9 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
       const params=await normalizeRequest(raw,scope,planRequest,ctx);
       nextActionParams=structuredClone(params);
+      if(/^(?:what (?:invalid input|went wrong|failed)|why\b[^?!.]{0,60}\b(?:fail(?:ed)?|invalid|error)|explain\b[^?!.]{0,40}\b(?:fail(?:ure|ed)?|invalid|error))\b/i.test(message.trim())
+        && !['read','describe','pending','sendFile','analyzeAttachment'].includes(params.operation))
+        return {ok:false,code:'EXPLANATION_ONLY',readOnly:true,message:'You asked for an explanation, so I did not retry the earlier change. A generic "invalid input" reply does not identify which field failed. Please give the invoice number so I can check its current payment facts; nothing was changed by this question.'};
       if(params.values?.custom_fields!==undefined)validateCustomFields(params.values.custom_fields);
       const dateFields=['due_date','issue_date'].filter(field=>Object.hasOwn(params.values||{},field));
       const ownerRelative=params.operation==='update'&&dateFields.length===1&&!/\b\d{4}-\d{2}-\d{2}\b/.test(message)
@@ -731,6 +735,12 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         return {ok:true,readOnly:true,completed:false,alreadyUnpaid:true,requiresConfirmation:false,invoiceNumber:invoice.invoice_number,
           message:'This invoice is already unpaid. No payment or invoice data was changed.'};
       }
+      if(params.table==='invoices'&&params.operation==='update'&&params.filters[0]?.column==='customer_name'){
+        const found=await resolveWorkspaceRecord({supabase,scope,table:'invoices',filters:params.filters,operation:'update',
+          select:'id,invoice_number',assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
+        if(!found.ok)return safeError(found);
+        params.filters=[{column:'id',operator:'eq',value:found.row.id}];
+      }
       if(['create','update','delete','restore'].includes(params.operation)&&confirmationMode==='direct'&&typeof executeDirectOperation==='function'){
         ctx.assertLive();await ctx.assertAuthorized();writeAttempted=true;
         const result=await executeDirectOperation(params,ctx);
@@ -743,13 +753,22 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         return delegate(params,ctx);
       }
       return fail();
-    } catch(error) {return error instanceof TypeError?fail():safeError(error);}
+    } catch(error) {
+      if(!(error instanceof TypeError))return safeError(error);
+      const errors={
+        'invoice action requires exactly one canonical target':['TARGET_REQUIRED','Which invoice do you mean? Send its invoice number or customer name. If that customer has several invoices, I will ask you to choose. No change was made.'],
+        'invalid invoice fields':['INVALID_FIELDS','Those invoice fields are not supported. Use status paid or unpaid for a payment-status check; unpaid never removes recorded payments. No change was made.'],
+        'invalid request':['REQUEST_SHAPE','The assistant combined two request formats. It should send either a description or structured fields. No change was made.'],
+      };
+      const detail=errors[error.message];
+      return detail?{ok:false,code:'INVALID',validationCode:detail[0],message:detail[1]}:fail();
+    }
   };
   const execute=async(raw,options)=>{
     nextActionParams=null;nextActionResult=null;nextActionRecords=null;
     const result=await executeRequest(raw,options);
     nextActionResult=result;
-    return result?.code==='INVALID'?{...result,message:'Use request text alone, or the structured fields in this catalog. Do not combine request with filters, values or columns. pending/confirm/cancel take no table or values.',catalog:catalog(typeof raw?.table==='string'&&Object.hasOwn(TABLES,raw.table)?raw.table:null)}:result;
+    return result?.code==='INVALID'?{...result,...(!result.validationCode?{message:'Use request text alone, or the structured fields in this catalog. Do not combine request with filters, values or columns. pending/confirm/cancel take no table or values.'}:{}),catalog:catalog(typeof raw?.table==='string'&&Object.hasOwn(TABLES,raw.table)?raw.table:null)}:result;
   };
   return Object.freeze({definition:definition(),execute,getReplyRequirement:()=>replyRequirement?{...replyRequirement}:null,
     getNextActionContext:()=>nextActionParams&&nextActionResult?{params:nextActionParams,result:nextActionResult,records:nextActionRecords}:null,
