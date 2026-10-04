@@ -1,4 +1,10 @@
 // Display only: never calculate or replace persisted ledger balances.
+export function isExternallyManagedInvoice(invoice = {}) {
+  const metadata = invoice.metadata || {};
+  return [invoice.external_provider,invoice.external_invoice_id,metadata.accounting_provider,metadata.bookkeeping_record_id,
+    invoice.accounting_provider,invoice.bookkeeping_record_id].some(value => value != null && String(value).trim() !== '');
+}
+
 export function invoiceBusinessFields(invoice = {}) {
   const meta = invoice.metadata || {};
   const amount = key => {

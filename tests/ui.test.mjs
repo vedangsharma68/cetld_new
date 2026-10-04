@@ -1,3 +1,4 @@
+import {isExternallyManagedInvoice} from '../invoice/business-fields.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -169,7 +170,7 @@ test('payment form executes the RPC with the declared reference and bound reques
   const handler=extractedAppFunction('function paymentForm(id){','function draftForm(id)',{
     state:{demo:false,workspace:{id:'workspace-1'},invoices:[invoice]},FormData:FormValues,crypto:{randomUUID:()=> 'payment-key-1234'},
     openDialog(){},$:selector=>selector==='#payment-form'?form:{close(){}},escape:String,money:()=>'',button:()=>'',terminalInvoice:()=>false,
-    remaining,payment,cents,paymentRequestKey,db:{rpc:async(...args)=>{calls.push(args);return{error:null}}},loadData:async()=>{},toast(){},showError(){},
+    remaining,payment,cents,paymentRequestKey,isExternallyManagedInvoice,db:{rpc:async(...args)=>{calls.push(args);return{error:null}}},loadData:async()=>{},toast(){},showError(){},
   });
   handler('invoice-1');
   await form.submit({preventDefault(){},currentTarget:form});
