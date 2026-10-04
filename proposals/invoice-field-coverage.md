@@ -1,21 +1,25 @@
-# Invoice field coverage audit
+# Invoice field coverage for the local owner-assistant candidate
 
-Local review of deployed 970c43c plus the candidate fixes; no live model calls or financial mutations. Broad custom business data is supported through validated `custom_fields` and `business_records`, but this is not unrestricted invoice editing.
+The local implementation extends the typed workspace catalog and uses scoped server RPCs. The model supplies business operations and values; authenticated server context supplies the owner and workspace. This file describes local code, not a production verification.
 
 | Field or action | WhatsApp owner interface | Dashboard / important limit |
 | --- | --- | --- |
 | Invoice number | Read, ordinary update with unique-label and payment/state guards; create uses actual workspace numbering | Saved label comes from the numbering trigger. Attachment override proposal supports AUTO/workspace convention only, retaining printed source number and audit. Arbitrary new numbering patterns are unsupported. |
 | Issue date / due date | Read, create, update; relative dates use owner's timezone | Dashboard displays saved issue date and due date. |
-| Currency / total | Read, create, ordinary update with amount precision, ledger and payment guards | Cannot reduce total below recorded payments or change currency across payment facts. |
+| Currency / total | Read, create, typed correction with amount precision and ledger guards | Any payment or reversal history blocks financial correction; monetary components and saved line items must reconcile. |
 | Notes | Read, create, update | Same persisted notes. |
 | Paid / unpaid | Paid records remaining balance via payment RPC. Unpaid with actual payments prepares later-confirmed immutable reversals; original receipts remain | No cash refund, payment deletion or arbitrary amount_paid/status overwrite. Already-unpaid is read-only. |
-| Customer name / email / phone | Read/edit the scoped customer record; invoice creation can resolve/create customer | Candidate fixes dashboard display to use current customer facts after rename/edit/clear; historic extraction copies remain preserved. Invoice customer reassignment is not supported by generic invoice update. |
-| Subtotal / tax | Creation and missing attachment review facts only | Ordinary invoice update does not accept these fields. Dashboard stores tax_minor metadata; create/review stores tax/subtotal, so conventions are not fully aligned. Do not claim full tax edit parity. |
-| Line items | Missing attachment review facts only | Ordinary invoice update and generic invoice creation do not accept line_items. Dashboard retains extracted items but offers no item editor. |
-| Invoice direction | Missing attachment review facts only | Generic create does not accept direction; current dashboard save accepts issued receivables. Payable editing is not implemented. |
-| Seller/buyer names, payment instructions | No ordinary generic edits | Dashboard extraction metadata retains these; hidden form fields do not provide a general editor. |
+| Customer name / email / phone | Read/edit scoped customers; invoice creation can resolve/create a customer | Existing invoices can reassign to one existing own-workspace customer by explicit selection or unambiguous John / JohnSmith resolution; current contacts are authoritative, source retained. No implicit shared customer rename. |
+| Subtotal / tax / discount | Scoped reads and typed existing-invoice correction | Shared canonical/legacy-minor display; subtotal plus tax minus discount equals total. Source minor fields remain in history. |
+| Line items | Read saved items; attachment review retains its create path | Existing invoices have typed item editors in WhatsApp direct mode and dashboard. Quantity/price and subtotal reconciliation enforced. Ordinary generic creation retains its existing basic field limits. |
+| Invoice direction | Read and typed correction without payment history | Payable and unknown direction block incoming-payment and collection controls. Ordinary creation retains its existing receivable path. |
+| Seller/buyer names, payment instructions | Read and bounded nullable text correction | Same persisted business projection in dashboard; raw source and system metadata stay private to the server. |
 | Custom business facts | Read/create/update flat typed scalar fields, merged on update; protected system/security names rejected | Both invoice and customer fields are shown. No DDL, arbitrary metadata or credentials exposed. |
 | Delete / restore invoice | Existing guarded lifecycle, reminder cancellation, recovery window | No physical invoice or payment deletion; existing payment audit remains. |
 | Payment amounts, reversals, reminder/consent/security state | Dedicated audited domain workflows only | Cannot be bypassed by custom fields, batch, invoice metadata or direct model credentials. |
 
-Remaining work for full invoice parity needs a separately reviewed generic invoice patch schema with typed business metadata, shared dashboard representation, customer binding/ambiguity checks, payment/currency integrity and reminder invalidation. Expanding arbitrary metadata or declaring unsupported fields editable would be unsafe. This audit proposes no production migration or additional activation.
+The authenticated dashboard correction RPC uses partial patches, CAS and stable request identity. WhatsApp direct corrections verify the current scoped persisted row and immutable correction audit before reporting completion. Interrupted calls recover the same receipt; a later changed row prevents treating the old result as current. Financial and recipient corrections invalidate reminder review; sending or quarantined claims must be reconciled first.
+
+Remaining limits: ordinary invoice creation and manual dashboard creation retain their existing field entry paths and do not have the expanded typed item editor used for existing invoices. Outgoing supplier-payment recording needs a separate domain workflow. Historical invoices with unknown direction and payment history need reviewed classification remediation before new incoming payments. Extended typed corrections are single-invoice direct operations; batches retain their existing catalog and server integrity guards.
+
+No model can overwrite amount_paid, raw metadata, payment/reversal records, consent, security state, arbitrary schema or credentials. Proposed SQL and browser/runtime changes require coordinated review and explicit authorization before migration or publication. Sender activation and real outreach remain separate and disabled.
