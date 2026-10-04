@@ -690,6 +690,11 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     const action=pendingAtStart?.action;
     if(action?.type==='owner_invoice_reopen'){
       if(operation==='pending'){
+        if(Number.isFinite(Date.parse(action.expiresAt))&&Date.parse(action.expiresAt)<=clock().getTime()){
+          replyRequirement=null;
+          return {ok:true,readOnly:true,pending:false,expired:true,requiresConfirmation:false,invoiceNumber:action.invoiceNumber,businessChangeApplied:false,
+            message:'The prior reopening preview expired. No financial change was applied.'};
+        }
         replyRequirement={confirmationText:'yes',requiresCancel:true,requiresReplyCue:true,maxLength:900,
           requiredFacts:{financialReopening:true,invoiceNumber:action.invoiceNumber,currency:action.currency,reversalAmount:action.reversalAmount,
             balanceAfter:action.balanceAfter,paymentHistory:'Payment history is preserved',refund:'No refund',reminders:'Reminders paused after confirmation'}};

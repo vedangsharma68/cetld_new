@@ -1184,8 +1184,9 @@ function operationDescriptionFrom(value, toolName = null) {
   return null;
 }
 
-export function ownerAgentFailureReply(code, {writeAttempted = false, attemptedOperation = null, quotaProviders = [],proposalOnly=false} = {}) {
+export function ownerAgentFailureReply(code, {writeAttempted = false, attemptedOperation = null, quotaProviders = [],proposalOnly=false,verifiedNoBusinessChange=false} = {}) {
   if(proposalOnly)return 'The preview was saved, but I could not finish its reply. No proposed business change was applied. Ask me to review the pending action, or cancel it.';
+  if(verifiedNoBusinessChange)return 'I could not finish the reply. The requested business change was not applied. Please review the current action and try again.';
   const operation = operationDescriptionFrom(attemptedOperation,attemptedOperation?.toolName);
   const completed=attemptedOperation?.completed===true;
   if(code==='OWNER_AI_QUOTA_EXHAUSTED'){
@@ -1349,6 +1350,11 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
   const proposalOnly=()=>{
     const evidence=ownerEvidence(activeTranscript||[],replyRequirement());
     return evidence.some(result=>result.ok===true&&(result.proposal===true||result.requiresConfirmation===true))
+      &&!evidence.some(result=>completedOwnerResult(result));
+  };
+  const verifiedNoBusinessChange=()=>{
+    const evidence=ownerEvidence(activeTranscript||[],replyRequirement());
+    return evidence.some(result=>result.businessChangeApplied===false||result.rolledBack===true)
       &&!evidence.some(result=>completedOwnerResult(result));
   };
   const toolOperation=toolName=>typeof tools.getAttemptedOperation==='function'
@@ -1681,7 +1687,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         if(operation&&typeof operation==='object'&&lastCompletedOperation&&lastAttemptedToolName===null){
           operation.completed=true;
         }
-        return {answer:ownerAgentFailureReply(finalCode,{writeAttempted:writeMayHaveBeenAttempted(),attemptedOperation:operation,proposalOnly:proposalOnly(),
+        return {answer:ownerAgentFailureReply(finalCode,{writeAttempted:writeMayHaveBeenAttempted(),attemptedOperation:operation,proposalOnly:proposalOnly(),verifiedNoBusinessChange:verifiedNoBusinessChange(),
             quotaProviders:finalError?.quotaProviders}),
           plannerFailure:{code:finalCode},agentDiagnostics:diagnosticSnapshot()};
       }
@@ -1698,7 +1704,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
       activeRound.outcome='error';
       emitRound(activeRound);activeRound=null;
     }
-    return {answer:ownerAgentFailureReply(code,{writeAttempted:writeMayHaveBeenAttempted(),attemptedOperation:failureOperation(),proposalOnly:proposalOnly(),
+    return {answer:ownerAgentFailureReply(code,{writeAttempted:writeMayHaveBeenAttempted(),attemptedOperation:failureOperation(),proposalOnly:proposalOnly(),verifiedNoBusinessChange:verifiedNoBusinessChange(),
         quotaProviders:error?.quotaProviders}),
       plannerFailure:{code},agentDiagnostics:diagnosticSnapshot()};
   }finally{

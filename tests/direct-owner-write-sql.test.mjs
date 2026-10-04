@@ -880,3 +880,40 @@ test('atomic owner batch persists all records, rolls back collisions and stale t
   }finally{await db.close();}
 });
 
+
+test('expired owner proposals clear metadata on verified new turns without changing invoices or payments',async()=>{
+  const {db,workspaceId,created}=await reopeningFixture();
+  try{
+    await asOwner(db);await db.query('select public.record_invoice_payment($1,$2,$3,$4,$5,false)',[workspaceId,created.entityId,55,'test transfer','expiry-payment']);
+    await asService(db);await addInbound(db,'expiry-prepare','Mark invoice unpaid');
+    const proposal=await reopen(db,{workspaceId,messageId:'expiry-prepare',message:'Mark invoice unpaid',action:'prepare',invoiceId:created.entityId});assert.equal(proposal.ok,true);
+    const snapshot=(await db.query('select to_jsonb(i) invoice,(select jsonb_agg(to_jsonb(p)) from public.payments p where p.invoice_id=i.id) payments from public.invoices i where id=$1',[created.entityId])).rows[0];
+    const expire=async(id,actor=owner,text='Review my business')=>{
+      await asService(db);await addInbound(db,id,'Review my business');
+      return (await db.query('select public.whatsapp_expire_owner_pending($1,$2,$3,$4,$5) value',[workspaceId,actor,phone,id,text])).rows[0].value;
+    };
+    assert.equal((await expire('expiry-active')).expired,false);
+    await db.exec('reset role');await db.query("update public.invoice_reopening_proposals set expires_at=clock_timestamp()-interval '1 second' where id=$1",[proposal.proposalId]);
+    assert.equal((await expire('expiry-denied',stranger)).code,'DENIED');
+    assert.equal((await expire('expiry-wrong-text',owner,'Invented instruction')).code,'DENIED');
+    const result=await expire('expiry-valid');assert.equal(result.expired,true);assert.equal(result.businessChangeApplied,false);
+    assert.equal((await db.query('select state from public.invoice_reopening_proposals where id=$1',[proposal.proposalId])).rows[0].state,'expired');
+    assert.equal((await db.query("select count(*)::int n from public.whatsapp_pending_actions where workspace_id=$1 and action->>'type'='owner_invoice_reopen' and consumed_at is null",[workspaceId])).rows[0].n,0);
+    assert.deepEqual((await db.query('select to_jsonb(i) invoice,(select jsonb_agg(to_jsonb(p)) from public.payments p where p.invoice_id=i.id) payments from public.invoices i where id=$1',[created.entityId])).rows[0],snapshot);
+    assert.equal((await db.query('select count(*)::int n from public.payment_reversals where workspace_id=$1',[workspaceId])).rows[0].n,0);
+    assert.equal((await expire('expiry-valid')).expired,false);
+    await addInbound(db,'expiry-new-preview','Mark invoice unpaid');
+    const fresh=await reopen(db,{workspaceId,messageId:'expiry-new-preview',message:'Mark invoice unpaid',action:'prepare',invoiceId:created.entityId});assert.equal(fresh.ok,true,JSON.stringify(fresh));assert.notEqual(fresh.proposalId,proposal.proposalId);
+    await db.exec('reset role');await db.query('update public.whatsapp_pending_actions set consumed_at=clock_timestamp() where workspace_id=$1 and consumed_at is null',[workspaceId]);
+    const expiredSettings=await seedPending(db,workspaceId,{type:'owner_settings_update',expiresAt:new Date(Date.now()-60000).toISOString()});
+    await expire('expiry-legacy');assert((await db.query('select consumed_at from public.whatsapp_pending_actions where id=$1',[expiredSettings.id])).rows[0].consumed_at);
+    const saving=await seedPending(db,workspaceId,{type:'invoice_review_draft',stage:'saving',expiresAt:new Date(Date.now()-60000).toISOString()});
+    await expire('expiry-saving');
+    assert.equal((await db.query('select consumed_at from public.whatsapp_pending_actions where id=$1',[saving.id])).rows[0].consumed_at,null);
+    await db.exec('reset role');await db.query('update public.whatsapp_pending_actions set consumed_at=clock_timestamp() where id=$1',[saving.id]);
+    const unknown=await seedPending(db,workspaceId,{type:'future_unsupported_kind',expiresAt:new Date(Date.now()-60000).toISOString()});
+    await expire('expiry-unknown');
+    assert.equal((await db.query('select consumed_at from public.whatsapp_pending_actions where id=$1',[unknown.id])).rows[0].consumed_at,null);
+    await asOwner(db);await assert.rejects(db.query('select public.whatsapp_expire_owner_pending($1,$2,$3,$4,$5)',[workspaceId,owner,phone,'expiry-valid','Review my business']));
+  }finally{await db.close();}
+});

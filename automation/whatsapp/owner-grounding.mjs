@@ -75,8 +75,11 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
     || /\b(?:awaiting|waiting for|needs?|requires?)\b[^.!?]{0,35}\b(?:confirmation|approval)\b/i.test(clause)
     || /^\s*(?:please )?(?:confirm|approve)\b[^.!?]{0,35}\b(?:change|update|payment|invoice|this|it)\b/i.test(clause)
     || /\b(?:confirm|approve|cancel|review)\b[^.!?]{0,40}\bpending (?:action|proposal|change|request)\b/i.test(clause));
-  if(proposalClaims.some(clause=>!/\b(?:not|cannot|can't|couldn't|failed|unable|no)\b/i.test(clause))
-    && !results.some(result=>result.ok!==false&&(result.pending===true||result.proposal===true||result.requiresConfirmation===true)))return 'unverified_proposal';
+  const verifiedProposal=results.some(result=>result.ok!==false&&(result.pending===true||result.proposal===true||result.requiresConfirmation===true));
+  const verifiedPendingBlock=results.some(result=>result.ok===false&&result.code==='PENDING');
+  if(proposalClaims.some(clause=>!/\b(?:not|cannot|can't|couldn't|failed|unable|no)\b/i.test(clause)
+    &&!verifiedProposal&&!(verifiedPendingBlock&&/\bpending (?:action|proposal|change|request)\b/i.test(clause)
+      &&!/\b(?:submitted|created|prepared|proposed)\b/i.test(clause))))return 'unverified_proposal';
   const completed=results.filter(completedOwnerResult);
   if(!completed.length&&(/^(?:done|all done|completed|all set)[.!\s]*$/i.test(text)
     ||/\b(?:the|your|requested) (?:change|deletion|update|payment|action) (?:is|was|has been) (?:now )?(?:complete|completed|confirmed|successful)\b/i.test(text)
