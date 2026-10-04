@@ -173,6 +173,25 @@ test('old recovered receipt cannot claim a newer already-counted invoice version
   }finally{await f.close()}
 });
 
+test('forward batch lock migration patches installed coordinator only, preserves ACL/private engine, and fails closed on repeated markers',async()=>{
+  const f=await setup();try{
+    const signature='public.whatsapp_apply_owner_batch(uuid,uuid,text,text,text,jsonb)';
+    const snapshot=async()=>(await f.db.query("select pg_get_functiondef($1::regprocedure) def,(select proacl::text from pg_proc where oid=$1::regprocedure) acl,(select md5(pg_get_functiondef(p.oid)) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='app' and p.proname='whatsapp_apply_owner_batch_operation') engine",[signature])).rows[0];
+    const installed=await snapshot();
+    const before=installed.def.replace('  -- Owner phone before settings, matching child operations and STOP.\n  perform pg_advisory_xact_lock(hashtextextended(p_phone,0));\n','')
+      .replace('  -- Settings before any invoice/customer child, including mixed settings batches.\n  perform 1 from public.workspace_settings where workspace_id=p_workspace_id for update;\n','');
+    assert.notEqual(before,installed.def);await f.db.exec(before);
+    const previous=await snapshot();assert.equal(previous.acl,installed.acl);assert.equal(previous.engine,installed.engine);
+    const sql=await readFile(new URL('../supabase/migrations/20261004216000_owner_batch_settings_lock.sql',import.meta.url),'utf8');
+    await f.db.exec(sql);assert.deepEqual(await snapshot(),installed);
+    await assert.rejects(f.db.exec(sql),/unexpected installed owner batch lock markers/);await f.db.exec('rollback');
+    assert.deepEqual(await snapshot(),installed);
+    await f.db.exec('set role authenticated');
+    await assert.rejects(f.db.query('select public.whatsapp_apply_owner_batch(null,null,null,null,null,null)'),e=>e.code==='42501');
+    await f.db.exec('reset role');
+  }finally{await f.close()}
+});
+
 test('grants deny anon/authenticated registry/receipt/payment access, and service RPCs enforce actual tenant',async()=>{
   const f=await setup();try{
     for(const role of ['anon','authenticated']){

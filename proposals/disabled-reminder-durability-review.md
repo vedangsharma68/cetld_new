@@ -117,8 +117,8 @@ already recorded for provider-accepted attempts are retained; they are not proof
 of delivery and are never subtracted or used to retry the same claim. An engine
 finalization observing the failure reports failed, not sent.
 
-The final review suite contains 24 actual additive-SQL reminder cases (five new
-lock/failure/CAS regressions) and nine batch planner cases. A separate actual-SQL
+The final review suite contains 25 actual additive-SQL reminder cases (five new
+lock/failure/CAS regressions and one forward-migration preservation case) and nine batch planner cases. A separate actual-SQL
 atomic batch case also verifies invoice-before-settings persistence and replay.
 Typecheck and these offline cases are the focused validation scope; the combined
 candidate must run its release gate after integration. Native two-session lock
@@ -126,8 +126,14 @@ contention and live provider behavior remain unverified.
 
 Canonical LF SHA-256 for the revised complete reminder proposal:
 `60e4dcc3de98dfca9ec0f045e4e412aafff46509dd674eac47de7666085df32d`.
-The mixed-batch lock correction changes the still-unapplied local proposal
-`20261004180350_owner_atomic_batch.sql`; its canonical LF SHA-256 is
-`abede2cda5e1eeb1e5f8be302e50f15a4de83210e4b14ddeb20218bbd37b03ed`.
-Neither SQL file was installed in production; activation and exact DDL approval
-remain separate prerequisites.
+The previously published `20261004180350_owner_atomic_batch.sql` is preserved
+exactly. The mixed-batch lock correction is the separate forward migration
+`20261004216000_owner_batch_settings_lock.sql`; its canonical LF SHA-256 is
+`3a9a7c4824f85c8a07d8d1e11c95c1986f51065f9c15272714834f65530f4e10`.
+It patches only the installed public coordinator using uniquely checked function
+definition markers and preserves the existing ACL and private engine. Unexpected
+or already-patched function definitions fail closed. The actual-SQL fixture
+installs the forward migration, reconstructs the prior coordinator, reapplies
+the forward patch and verifies exact final function/ACL/private-engine identity.
+Neither the forward patch nor reminder proposal was installed in production;
+activation and exact DDL approval remain separate prerequisites.
