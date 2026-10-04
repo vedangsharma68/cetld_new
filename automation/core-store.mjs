@@ -23,7 +23,8 @@ export class CoreAutomationStore extends SupabaseAutomationStore {
     if (!row||row.deleted_at) return null;
     const contacts=await this.request('customers',{query:{select:'phone',id:`eq.${row.customer_id}`,workspace_id:`eq.${input.workspaceId}`,limit:1}});
     const amountMinor=minor(row.total_amount), paidMinor=minor(row.amount_paid);
-    return {...row,ownerId:input.ownerId,workspaceId:input.workspaceId,amountMinor,paidMinor,followupState:row.followup_state,nextFollowUpAt:row.next_follow_up_at,automationVersion:Number(row.automation_version),customerPhone:row.customer_phone || contacts?.[0]?.phone || row.metadata?.debtor_phone || null,number:row.invoice_number};
+    // Current scoped customer is authoritative, including a cleared phone.
+    return {...row,ownerId:input.ownerId,workspaceId:input.workspaceId,amountMinor,paidMinor,followupState:row.followup_state,nextFollowUpAt:row.next_follow_up_at,automationVersion:Number(row.automation_version),customerPhone:contacts?.[0]?.phone ?? null,number:row.invoice_number};
   }
   async updateInvoice(input) {
     const patch={};

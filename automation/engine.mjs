@@ -132,6 +132,15 @@ export class FollowUpEngine {
       await this.event(scope,'needs_attention',{reason:unknown?'delivery_uncertain':'provider_rejected',claimId:claim.id});
       return {status:unknown?'quarantined':'failed'};
     }
+    // Optional review-only durable reminder backend. Ordinary providers retain
+    // their existing receipt/CAS path; production factory never selects this.
+    if(typeof this.provider.finalizeReminder==='function'){
+      let receipt;
+      try{receipt=await this.provider.finalizeReminder({idempotencyKey:key,providerMessageId:result.providerMessageId});}catch{}
+      if(receipt?.ok===true)return {status:'sent',providerMessageId:result.providerMessageId};
+      try{await this.store.markDeliveryFailed({...scope,claimId:claim.id,token:authorization.token,unknown:true,error:'receipt_not_committed'});}catch{}
+      return {status:'quarantined',reason:'receipt_not_committed'};
+    }
     let recorded;
     try{recorded=await this.store.markDeliverySent({...scope,claimId:claim.id,token:authorization.token,providerMessageId:result.providerMessageId});}catch{}
     if (recorded?.ok!==true) {

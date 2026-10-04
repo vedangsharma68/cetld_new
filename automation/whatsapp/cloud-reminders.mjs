@@ -1,4 +1,4 @@
-import {createHash} from 'node:crypto';
+import {reminderFingerprint} from './reminder-fingerprint.mjs';
 import {getSendEligibility} from './consent.mjs';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -31,7 +31,7 @@ export function createFirstPartyReminderProvider({env=process.env,supabase,store
     if(!env.WHATSAPP_ACCESS_TOKEN||!/^\d{5,30}$/.test(env.WHATSAPP_PHONE_NUMBER_ID||'')||!/^\d{5,30}$/.test(env.WHATSAPP_WABA_ID||'')||!/^v\d+\.\d+$/.test(env.WHATSAPP_GRAPH_API_VERSION||''))return blocked('missing_configuration');
     if(template.wabaId!==env.WHATSAPP_WABA_ID||template.phoneNumberId!==env.WHATSAPP_PHONE_NUMBER_ID)return blocked('template_account_mismatch');
     if(!store?.getInvoice||!store?.getWorkspacePreferences||!supabase?.rpc)return blocked('missing_store');
-    let snapshot,payload,hash;
+    let snapshot,payload,hash,callbackToken;
     try {
       const scope={ownerId,workspaceId,invoiceId:input.invoiceId};
       const invoice=await store.getInvoice(scope),settings=await store.getWorkspacePreferences(scope);
@@ -58,7 +58,7 @@ export function createFirstPartyReminderProvider({env=process.env,supabase,store
         consentId:eligibility.consent.id,consentCreatedAt:eligibility.consent.created_at,
         template:{name:template.name,language:template.language,body:template.body,revision:template.revision,
           wabaId:template.wabaId,phoneNumberId:template.phoneNumberId,parameters}};
-      hash=createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+      hash=reminderFingerprint(snapshot);
       payload={messaging_product:'whatsapp',recipient_type:'individual',to:input.to.slice(1),type:'template',
         template:{name:template.name,language:{code:template.language},components:[{type:'body',parameters:parameters.map(text=>({type:'text',text}))}]}};
       // Required future RPC: lock owner/workspace, claim, invoice, preferences,
@@ -71,6 +71,7 @@ export function createFirstPartyReminderProvider({env=process.env,supabase,store
       if(receipt?.authorized!==true)return blocked('atomic_gate_denied');
       if(receipt.snapshot_hash!==hash||! /^[a-f0-9]{64}$/.test(receipt.callback_token||''))return blocked('invalid_gate_receipt');
       payload.biz_opaque_callback_data=receipt.callback_token;
+      callbackToken=receipt.callback_token;
     }catch{return blocked('eligibility_unavailable');}
     // No asynchronous operation between final gate completion and HTTP dispatch.
     try {
@@ -79,7 +80,7 @@ export function createFirstPartyReminderProvider({env=process.env,supabase,store
       if(!response.ok)return {status:response.status>=500||response.status===408?'unknown':'failed'};
       const result=await response.json();
       const id=result?.messages?.[0]?.id;
-      return typeof id==='string'&&id.trim()&&id.length<=256?{status:'accepted',providerMessageId:id}:{status:'unknown'};
+      return typeof id==='string'&&id.trim()&&id.length<=256?{status:'accepted',providerMessageId:id,callbackToken}:{status:'unknown'};
     }catch{return {status:'unknown'};}
   }};
 }
