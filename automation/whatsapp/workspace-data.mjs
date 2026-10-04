@@ -1,4 +1,5 @@
 import {sanitizeReminderTemplate} from '../preferences.mjs';
+import {isExternallyManagedInvoice} from '../../invoice/business-fields.mjs';
 import {applyPaymentReversals,isMissingReversalStorage} from '../../payment-reversals.mjs';
 import {resolveWorkspaceRecord,validateCustomFields,ownerCalendar} from './workspace-records.mjs';
 import {INVOICE_CORRECTION_FIELDS,INVOICE_BUSINESS_METADATA_FIELDS,INVOICE_EXTENDED_CORRECTION_FIELDS,validateInvoiceCorrection,invoiceBusinessFields} from './invoice-corrections.mjs';
@@ -124,6 +125,7 @@ function definition() {
 function catalog(table=null) {
   return {
     operations:OPERATIONS,
+    externalAccounting:{financialChanges:'Externally managed invoice financial fields and new local payments are refused. Apply them in the connected ledger and sync its authoritative facts.',localAnnotations:'Notes, dates and custom business facts can remain local annotations. A local save is not remote accounting writeback or a queued remote task.'},
     atomicBatch:{argument:'operations',minItems:2,maxItems:10,itemFields:['operation','table','filters','values'],operations:['create','update'],oneUnambiguousRecordPerItem:true,allCommitOrAllRollback:true,customFields:'Nest additional business facts in each item values.custom_fields.',excluded:['status changes','deletes','confirmations','invoice extended corrections (customer, items, tax/subtotal/discount, direction and extracted facts)']},
     businessRecordLifecycle:{mode:'direct',delete:'Recoverable deletion; retains all business facts. No values allowed.',restore:'Restore one record deleted by the current owner within 30 days; use its name or ID. No values allowed.',reads:'Deleted records are hidden by default; read with deleted_at gt a supplied timestamp to inspect retained deleted records.'},
     attachmentOperations:{analyzeAttachment:'Read the current attachment and retain its source facts in a durable review without saving an invoice.',
@@ -181,15 +183,16 @@ function safeError(error) {
     OWNER_REQUIRED:'DENIED',UNBOUND:'DENIED',PERMISSION_DENIED:'DENIED','42501':'DENIED',
     INVALID_REQUEST:'INVALID',INVALID_ARGUMENT:'INVALID',INVALID:'INVALID',
     INVALID_CONFIRMATION:'INVALID',STALE_CONFIRMATION:'INVALID',PENDING:'PENDING',ACTION_PENDING:'PENDING',
-    IN_USE:'IN_USE',NO_ACTION:'NO_PENDING_ACTION',NO_PENDING_ACTION:'NO_PENDING_ACTION',DATABASE_UNAVAILABLE:'UNAVAILABLE',
+    IN_USE:'IN_USE',EXTERNAL_ACCOUNTING:'EXTERNAL_ACCOUNTING',EXTERNAL_LEDGER:'EXTERNAL_ACCOUNTING',EXTERNAL_ACCOUNTING_REQUIRED:'EXTERNAL_ACCOUNTING',NO_ACTION:'NO_PENDING_ACTION',NO_PENDING_ACTION:'NO_PENDING_ACTION',DATABASE_UNAVAILABLE:'UNAVAILABLE',
   })[raw]||'UNAVAILABLE';
   const messages={NOT_FOUND:'No matching record was found.',AMBIGUOUS:'More than one record matches. Narrow the request to one record.',
     STALE:'The record changed after it was reviewed. Please review the current value again.',EXPIRED:'That proposal expired. Start a new request.',
     PENDING:'Another owner change is already waiting for a decision. Confirm or cancel it first.',
     IN_USE:'This customer still has invoices and cannot be deleted.',
+    EXTERNAL_ACCOUNTING:'This invoice is managed by connected accounting. Apply financial changes in that ledger and sync it here. No local change was made.',
     DENIED:'This action is not available for the current owner binding.',INVALID:'That workspace data request is not supported.',
     NO_PENDING_ACTION:'There is no pending workspace data change to apply.',UNAVAILABLE:'The workspace data service is temporarily unavailable.'};
-  return fail(code,messages[code]);
+  return {...fail(code,messages[code]),...(code==='EXTERNAL_ACCOUNTING'?{completed:false,requiresConfirmation:false}:{})};
 }
 function sanitise(value,scope,depth=0) {
   if(depth>8)return undefined;
@@ -430,6 +433,16 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
   let writeAttempted=false;
   let attemptedOperation=null;
   let nextActionParams=null,nextActionResult=null,nextActionRecords=null;
+  const externalFinancialFields=new Set(['invoice_number','customer_id','customer_name','line_items','subtotal','tax','discount','total_amount','currency','invoice_direction']);
+  const externalPreflight=async(params,ctx)=>{
+    if(params.table!=='invoices'||params.operation!=='update'||!Object.keys(params.values||{}).some(key=>externalFinancialFields.has(key)||key==='status'&&params.values.status==='paid'))return null;
+    const found=await resolveWorkspaceRecord({supabase,scope,table:'invoices',filters:params.filters,operation:'update',
+      select:'id,invoice_number,external_provider,external_invoice_id,metadata',assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
+    if(!found.ok)return safeError(found);
+    if(!isExternallyManagedInvoice(found.row))return null;
+    replyRequirement=null;nextActionParams=null;nextActionResult=null;nextActionRecords=null;
+    return safeError({code:'EXTERNAL_ACCOUNTING'});
+  };
   const readScoped=async ({table,columns,filters,limit,offset,order},internalColumns=[],ctx,{customerName=false,customerFilter=null}={})=>{
     const spec=TABLES[table];
     const selected=columns||spec.defaults;
@@ -792,6 +805,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
             const relative=String(item.values[field]||'').toLowerCase().replace(/['’]/g,'').replace(/s? date$/,'').trim();
             if(['today','tomorrow','yesterday'].includes(relative)){const calendar=ownerCalendar(clock,timezone);item.values[field]=relative==='today'?calendar.currentDate:calendar[relative];}
           }
+          const blocked=await externalPreflight(item,ctx);if(blocked)return blocked;
         }
         const result=await executeBatchOperation(params,{...ctx,markWriteAttempted(){writeAttempted=true;}});
         await ctx.assertAuthorized();ctx.assertLive();
@@ -821,6 +835,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
           params.values={...params.values,customer_id:customer.row.id};delete params.values.customer_name;
         }
       }
+      const externalBlocked=await externalPreflight(params,ctx);if(externalBlocked)return externalBlocked;
       ctx.assertLive();
       attemptedOperation={operation:params.operation,...(params.table?{table:params.table}:{})};
       const readResult=result=>({...result,operation:params.operation,table:params.table,readOnly:true});
@@ -919,6 +934,10 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     if(repairRequest&&result?.code==='INVALID'&&result.validationCode&&result.writeAttempted===false&&!writeAttempted){
       const rejection={validationCode:result.validationCode,validationShape:result.validationShape,message:result.message};
       result={...await executeRequest(repairRequest,options,rejection),planningRepair:{validationCode:rejection.validationCode,validationShape:rejection.validationShape}};
+    }
+    if(['EXTERNAL_ACCOUNTING','EXTERNAL_LEDGER','EXTERNAL_ACCOUNTING_REQUIRED'].includes(result?.code)){
+      replyRequirement=null;nextActionParams=null;nextActionRecords=null;
+      result={...safeError(result),writeAttempted:result.writeAttempted??writeAttempted};
     }
     nextActionResult=result;
     return result?.code==='INVALID'?{...result,...(!result.validationCode?{message:'Use request text alone, or the structured fields in this catalog. Do not combine request with filters, values or columns. pending/confirm/cancel take no table or values.'}:{}),catalog:catalog(typeof raw?.table==='string'&&Object.hasOwn(TABLES,raw.table)?raw.table:null)}:result;

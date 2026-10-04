@@ -31,6 +31,30 @@ test('failed tool results cannot be described as awaiting confirmation',()=>{
   assert.equal(ownerGroundingIssue('Please confirm this update.',[{ok:false,code:'NOT_FOUND'}]),'unverified_proposal');
 });
 
+test('managed invoice financial preflight uses scoped actual linkage and returns no protected fields, write or fictitious confirmation',async()=>{
+ for(const signal of [{external_provider:'zoho_books'},{external_invoice_id:'private-external-id'},{metadata:{accounting_provider:'quickbooks'}},{metadata:{bookkeeping_record_id:'private-record'}}]){
+  const supabase=fakeSupabase({rows:{invoices:[{id:'33333333-3333-4333-8333-333333333333',workspace_id:scope.workspaceId,invoice_number:'LINKED-17',status:'sent',total_amount:100,amount_paid:0,...signal}]}});
+  let calls=0;const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true,confirmationMode:'direct',executeDirectOperation:async()=>{calls++;return {ok:true,completed:true}}});
+  for(const values of [{total_amount:90},{status:'paid'},{invoice_number:'LOCAL-CHANGE'}]){
+   const result=await tool.execute({operation:'update',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:'LINKED-17'}],values});
+   assert.equal(result.code,'EXTERNAL_ACCOUNTING');assert.equal(result.completed,false);assert.equal(result.requiresConfirmation,false);
+   assert.equal(tool.getReplyRequirement(),null);assert.equal(tool.getNextActionContext(),null);assert.equal(calls,0);
+   assert(!JSON.stringify(result).includes('private-'));assert.match(result.message,/connected accounting/);
+  }
+  assert(supabase.calls.filter(call=>call.table==='invoices').every(call=>call.filters.some(([column,operator,value])=>column==='workspace_id'&&operator==='eq'&&value===scope.workspaceId)));
+ }
+});
+
+test('managed invoice benign notes remain local and native rejected financial confirmation cannot attach buttons',async()=>{
+ const supabase=fakeSupabase({rows:{invoices:[{id:'33333333-3333-4333-8333-333333333333',workspace_id:scope.workspaceId,invoice_number:'LINKED-17',external_provider:'zoho_books',updated_at:'2026-10-02T12:00:00Z'}]}});
+ let calls=0;const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true,confirmationMode:'direct',executeDirectOperation:async()=>{calls++;return {ok:true,completed:true}}});
+ assert.equal((await tool.execute({operation:'update',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:'LINKED-17'}],values:{notes:'Local annotation'}})).ok,true);assert.equal(calls,1);
+ const tools=createOwnerWorkspaceTools({supabase,scope,ownerStore:{async query(){return []}},message:'Confirm',messageId:'fixture.external-button',authorize:async()=>true,interactiveAvailable:true,
+   pending:{async loadPendingAction(){throw Error('blocked result must not advertise pending buttons')}},directWriteAdapter:{async apply(){return {ok:false,completed:false,code:'EXTERNAL_ACCOUNTING',requiresConfirmation:false}},async lookupCompleted(){return {ok:false,code:'NO_RECEIPT'}}}});
+ const result=await tools.decideButton({interactionId:'oab1.external.confirm',decision:'confirm',pending:{id:1,version:1,action:{type:'owner_invoice_payment'}}});
+ assert.equal(result.code,'EXTERNAL_ACCOUNTING');assert.equal(tools.getReplyRequirement(),null);assert.equal(await tools.getPendingActionForButtons(),null);
+});
+
 test('custom fields are discoverable and readable through the same scoped interface',async()=>{
   const supabase=fakeSupabase({rows:{customers:[{workspace_id:scope.workspaceId,name:'John Smith',custom_fields:{delivery_zone:'West'}}]}});
   const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true});

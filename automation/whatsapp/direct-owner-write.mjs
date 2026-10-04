@@ -21,11 +21,11 @@ const SAFE_CODES=new Set([
   'ACTION_PENDING','ALREADY_DELETED','AMBIGUOUS','DATABASE_UNAVAILABLE','DENIED','EXPIRED',
   'IN_USE','INVALID','INVALID_AUTHORIZATION','INVOICE_EXISTS','NO_PENDING_ACTION','NOT_FOUND',
   'NO_RECEIPT','PAYMENT_GUARD','REPLAY_MISMATCH','STALE','UNDO_EXPIRED','UNAVAILABLE','WRITE_UNCONFIRMED',
-  'DELIVERY_IN_FLIGHT','ARITHMETIC_MISMATCH',
+  'DELIVERY_IN_FLIGHT','ARITHMETIC_MISMATCH','EXTERNAL_ACCOUNTING',
   'INVALID_FIELDS','INVALID_TOTAL','CONFIRMATION_REQUIRED','STALE_EVENT','TERMINAL',
 ]);
 
-function failure(code){return {ok:false,completed:false,code:SAFE_CODES.has(code)?code:'DATABASE_UNAVAILABLE'};}
+function failure(code){return {ok:false,completed:false,code:SAFE_CODES.has(code)?code:'DATABASE_UNAVAILABLE',...(code==='EXTERNAL_ACCOUNTING'?{requiresConfirmation:false,message:'This invoice is managed by connected accounting. Apply financial changes in that ledger and sync it here. No local change was made.'}:{})};}
 function valueOf(result){return Array.isArray(result?.data)?result.data[0]:result?.data;}
 function validUuid(value){return typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);}
 function validPhone(value){return typeof value==='string'&&/^\+[1-9][0-9]{7,14}$/.test(value);}

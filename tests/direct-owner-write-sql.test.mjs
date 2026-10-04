@@ -3,6 +3,104 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {PGlite} from '@electric-sql/pglite';
 import {readFile,readdir} from 'node:fs/promises';
+
+test('external ledger guard refuses actual linked owner financial edits but preserves benign fields and tenant facts',async()=>{
+ const {db,workspaceId}=await boot();try{
+  await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+  for(const signal of ['external_provider','external_invoice_id','accounting_provider','bookkeeping_record_id']){
+   const made=await createDirectInvoice(db,workspaceId,{messageId:`external-create-${signal}`,customerName:`Managed ${signal}`});
+   await db.exec('reset role');
+   if(signal.startsWith('external_'))await db.query(`update invoices set ${signal}=$2 where id=$1`,[made.entityId,signal==='external_provider'?'zoho_books':'remote-17']);
+   else await db.query('update invoices set metadata=metadata||jsonb_build_object($2::text,$3::text) where id=$1',[made.entityId,signal,'remote-17']);
+   const invoice=(await db.query('select * from invoices where id=$1',[made.entityId])).rows[0];
+   for(const [field,value] of [['invoice_number','OTHER'],['currency','USD'],['total_amount',60],['invoice_direction','payable'],['line_items',[{description:'Changed',amount:55}]]]){
+    const result=await correctInvoice(db,{workspaceId,invoice,messageId:`external-${signal}-${field}`,values:{[field]:value}});
+    assert.equal(result.code,'EXTERNAL_ACCOUNTING',JSON.stringify(result));assert.equal(result.ok,false);
+   }
+   await asOwner(db);await assert.rejects(db.query("update invoices set currency='USD' where id=$1",[invoice.id]),/EXTERNAL_ACCOUNTING/);
+   await assert.rejects(db.query("update invoices set metadata=metadata-'accounting_provider'-'bookkeeping_record_id',external_provider=null,external_invoice_id=null where id=$1",[invoice.id]),/protected|permission denied/);
+   const ownerResult=(await db.query('select public.owner_correct_invoice($1,$2,$3,$4,$5) value',[workspaceId,invoice.id,invoice.updated_at,randomUUID(),{total_amount:60}])).rows[0].value;
+   assert.equal(ownerResult.code,'EXTERNAL_ACCOUNTING');
+   const benign=await correctInvoice(db,{workspaceId,invoice,messageId:`external-benign-${signal}`,values:{notes:'Local note',due_date:'2026-11-01',custom_fields:{local_review:'done'}}});
+   assert.equal(benign.ok,true,JSON.stringify(benign));assert.equal(Number(benign.record.total_amount),55);
+   assert.equal(benign.record.notes,'Local note');assert.equal(benign.record.custom_fields.local_review,'done');
+   assert.equal((await correctInvoice(db,{workspaceId,invoice,messageId:`external-benign-${signal}`,values:{notes:'Local note',due_date:'2026-11-01',custom_fields:{local_review:'done'}}})).replayed,true);
+   await asOwner(db,stranger);assert.equal((await db.query('select public.owner_correct_invoice($1,$2,$3,$4,$5) value',[workspaceId,invoice.id,invoice.updated_at,randomUUID(),{total_amount:60}])).rows[0].value.code,'DENIED');
+   await db.exec('reset role');assert.equal((await db.query('select count(*)::int n from payments where invoice_id=$1',[invoice.id])).rows[0].n,0);
+  }
+ }finally{await db.close()}
+});
+
+test('external ledger guard denies direct paid, mixed batch repricing, and native legacy payment/financial confirmation without mutation',async()=>{
+ const {db,workspaceId}=await boot();try{
+  await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+  const made=await createDirectInvoice(db,workspaceId,{messageId:'external-native-create',customerName:'Linked native'});
+  await db.exec('reset role');await db.query("update invoices set external_provider='zoho_books',external_invoice_id='remote-native' where id=$1",[made.entityId]);
+  const invoice=(await db.query('select * from invoices where id=$1',[made.entityId])).rows[0];
+  for(const [name,payload] of [['paid',{status:'paid'}],['total',{total_amount:60}]]){
+   await asService(db);await addInbound(db,`external-direct-${name}`,'Change linked invoice');
+   const result=await write(db,{workspaceId,providerMessageId:`external-direct-${name}`,quote:'Change linked invoice',operation:'invoice.update',targetId:invoice.id,expectedUpdatedAt:invoice.updated_at.toISOString(),payload});
+   assert.equal(result.code,'EXTERNAL_ACCOUNTING',JSON.stringify(result));
+  }
+  await addInbound(db,'external-batch','Change linked invoice');
+  const operations=[{operation:'business_record.create',payload:{record_type:'expense',name:'Must roll back'}},
+   {operation:'invoice.update',targetId:invoice.id,expectedUpdatedAt:invoice.updated_at.toISOString(),payload:{total_amount:60}}];
+  const batch=(await db.query('select public.whatsapp_apply_owner_batch($1,$2,$3,$4,$5,$6) value',[workspaceId,owner,phone,'external-batch','Change linked invoice',operations])).rows[0].value;
+  assert.equal(batch.code,'EXTERNAL_ACCOUNTING',JSON.stringify(batch));assert.equal(batch.rolledBack,true);
+  assert.equal((await db.query("select count(*)::int n from business_records where workspace_id=$1 and name='Must roll back'",[workspaceId])).rows[0].n,0);
+  await setConfirmationMode(db,workspaceId,'buttons');
+  for(const [name,type,changes] of [['paid','owner_invoice_payment',{status:'paid'}],['total','owner_invoice_update',{total_amount:60}]]){
+   const source=`external-button-source-${name}`,click=`external-button-click-${name}`,interaction=`oab1.external.${name}`;
+   await asService(db);await addInbound(db,source,'Change linked invoice');
+   const pending=await seedPending(db,workspaceId,{type,sourceMessageId:source,invoiceId:invoice.id,expectedUpdatedAt:invoice.updated_at.toISOString(),changes,expiresAt:new Date(Date.now()+5*60_000).toISOString()});
+   await addInbound(db,click,'Confirm',interaction);
+   const result=await write(db,{workspaceId,providerMessageId:click,interactionId:interaction,operation:'pending.decide',authorizationKind:'button',buttonDecision:'confirm',pendingId:pending.id,pendingVersion:pending.version});
+   assert.equal(result.code,'EXTERNAL_ACCOUNTING',JSON.stringify(result));
+   await db.exec('reset role');await db.query('update whatsapp_pending_actions set consumed_at=now() where id=$1',[pending.id]);
+  }
+  await db.exec('reset role');const after=(await db.query('select * from invoices where id=$1',[invoice.id])).rows[0];
+  assert.deepEqual(after,invoice);assert.equal((await db.query('select count(*)::int n from payments where invoice_id=$1',[invoice.id])).rows[0].n,0);
+ }finally{await db.close()}
+});
+
+test('external ledger guard preserves historical local receipt replay and permits only actually aligned service imports including unknown direction',async()=>{
+ const {db,workspaceId}=await boot();try{
+  await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+  const made=await createDirectInvoice(db,workspaceId,{messageId:'external-import-create',customerName:'Provider receipt'});
+  await asOwner(db);const args=[workspaceId,made.entityId,10,'old-local-receipt','old local',false];
+  const receipt=(await db.query('select (public.record_invoice_payment($1,$2,$3,$4,$5,$6)).*',args)).rows[0];
+  await asService(db);await db.query("update invoices set external_provider='zoho_books',external_invoice_id='remote-import' where id=$1",[made.entityId]);
+  await asOwner(db);assert.equal((await db.query('select (public.record_invoice_payment($1,$2,$3,$4,$5,$6)).*',args)).rows[0].id,receipt.id);
+  await assert.rejects(db.query('select public.record_invoice_payment($1,$2,10,$3,$4,false)',[workspaceId,made.entityId,'new-local-receipt','new local']),/EXTERNAL_ACCOUNTING/);
+  await asService(db);const unknown=await createDirectInvoice(db,workspaceId,{messageId:'external-unknown-create',customerName:'Unknown provider direction'});
+  await db.query("update invoices set metadata=metadata-'invoice_direction',external_provider='zoho_books',external_invoice_id='remote-unknown' where id=$1",[unknown.entityId]);
+  // Supabase's public-table default INSERT prerequisite reproduced only here;
+  // app USAGE comes from the actual forward migration, not fixture grants.
+  await db.exec('reset role;grant insert on payments to service_role');await asService(db);
+  assert.equal((await db.query("select app.currency_uses_two_decimal_precision('USD') ok")).rows[0].ok,true);
+  await assert.rejects(db.query('select app.invoice_has_external_ledger(null::public.invoices)'),e=>e.code==='42501');
+  await assert.rejects(db.query('select app.aligned_authoritative_provider_payment(null::public.invoices,null::public.payments)'),e=>e.code==='42501');
+  await assert.rejects(db.exec('create table app.untrusted_probe(id integer)'),e=>e.code==='42501');
+  for(const [provider,reference] of [['quickbooks','remote-unknown'],['zoho_books','wrong-remote'],[null,'remote-unknown']])
+   await assert.rejects(db.query('insert into payments(workspace_id,invoice_id,amount,external_provider,external_payment_id,metadata) values($1,$2,5,$3,$4,$5)',[workspaceId,unknown.entityId,provider,`bad-${provider}-${reference}`,{external_invoice_id:reference}]),/EXTERNAL_ACCOUNTING/);
+  const imported=(await db.query("insert into payments(workspace_id,invoice_id,amount,external_provider,external_payment_id,metadata) values($1,$2,5,'zoho_books','provider-receipt',$3) returning id",[workspaceId,unknown.entityId,{external_invoice_id:'remote-unknown'}])).rows[0];assert(imported.id);
+  await db.exec('reset role');assert.equal((await db.query('select metadata from invoices where id=$1',[unknown.entityId])).rows[0].metadata.invoice_direction,undefined);
+  // Provider PATCH is a separate authoritative path and can refresh amount paid.
+  await asService(db);await db.query('update invoices set amount_paid=5 where id=$1',[unknown.entityId]);
+  // History classification rightly refuses changing this historical invoice;
+  // create a separate explicitly payable provider invoice to test incoming refusal.
+  const customer=(await db.query("select customer_id from invoices where id=$1",[made.entityId])).rows[0].customer_id;
+  const payable=(await db.query("insert into invoices(workspace_id,customer_id,invoice_number,issue_date,total_amount,currency,external_provider,external_invoice_id,metadata) values($1,$2,'PAYABLE-PROVIDER',current_date,55,'INR','zoho_books','provider-payable','{\"invoice_direction\":\"payable\"}') returning id",[workspaceId,customer])).rows[0].id;
+  await asService(db);await assert.rejects(db.query("insert into payments(workspace_id,invoice_id,amount,external_provider,external_payment_id,metadata) values($1,$2,5,'zoho_books','payable-receipt','{\"external_invoice_id\":\"provider-payable\"}')",[workspaceId,payable]),/receivable invoice/);
+  const bookkeeping=await createDirectInvoice(db,workspaceId,{messageId:'external-bookkeeping-create',customerName:'Bookkeeping linked payment'});
+  await asOwner(db);await db.query("select public.record_invoice_payment($1,$2,10,'bookkeeping-old-local','old',false)",[workspaceId,bookkeeping.entityId]);
+  await asService(db);await db.query("update invoices set metadata=metadata||'{\"bookkeeping_record_id\":\"managed-history\"}' where id=$1",[bookkeeping.entityId]);
+  await addInbound(db,'external-bookkeeping-unpaid','Reopen managed invoice');
+  const blocked=(await db.query("select public.whatsapp_invoice_reopening($1,$2,$3,$4,$5,'prepare',$6) value",[workspaceId,owner,phone,'external-bookkeeping-unpaid','Reopen managed invoice',bookkeeping.entityId])).rows[0].value;
+  assert.equal(blocked.code,'EXTERNAL_LEDGER');assert.notEqual(blocked.requiresConfirmation,true);
+  assert.equal((await db.query('select count(*)::int n from payment_reversals where invoice_id=$1',[bookkeeping.entityId])).rows[0].n,0);
+ }finally{await db.close()}
+});
 import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
