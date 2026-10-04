@@ -201,11 +201,17 @@ grant execute on function public.whatsapp_correct_owner_invoice(uuid,uuid,text,t
 
 create function public.owner_correct_invoice(p_workspace_id uuid,p_invoice_id uuid,p_expected_updated_at timestamptz,p_request_id uuid,p_values jsonb)
 returns jsonb language plpgsql security definer set search_path='' as $$
-declare actor uuid:=auth.uid();
+declare actor uuid:=auth.uid();result jsonb;current_invoice public.invoices%rowtype;
 begin
  if auth.role() is distinct from 'authenticated' or actor is null or p_request_id is null
   or not exists(select 1 from public.workspaces w where w.id=p_workspace_id and w.owner_id=actor) then return jsonb_build_object('ok',false,'code','DENIED');end if;
- return app.apply_owner_invoice_correction(p_workspace_id,actor,p_invoice_id,p_expected_updated_at,p_values,'dashboard',p_request_id::text);
+ result:=app.apply_owner_invoice_correction(p_workspace_id,actor,p_invoice_id,p_expected_updated_at,p_values,'dashboard',p_request_id::text);
+ if result->>'ok'='true' then
+  select * into current_invoice from public.invoices i where i.workspace_id=p_workspace_id and i.id=p_invoice_id for share;
+  if not found or current_invoice.updated_at is distinct from (result->'record'->>'updated_at')::timestamptz
+   or to_jsonb(current_invoice) is distinct from result->'record' then return jsonb_build_object('ok',false,'completed',false,'code','STALE');end if;
+ end if;
+ return result;
 end; $$;
 revoke all on function public.owner_correct_invoice(uuid,uuid,timestamptz,uuid,jsonb) from public,anon,service_role;
 grant execute on function public.owner_correct_invoice(uuid,uuid,timestamptz,uuid,jsonb) to authenticated;

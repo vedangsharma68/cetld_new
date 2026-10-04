@@ -13,8 +13,37 @@ const owner='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const stranger='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const phone='+919871367051';
 
-test('invoice correction math preserves legacy minor components and refuses scalar edits that break saved itemization',async()=>{
+test('paid history protects classification across authenticated and privileged updates without blocking benign edits or reversal workflows',async()=>{
  const {db,workspaceId}=await boot();try{
+  await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+  const made=await createDirectInvoice(db,workspaceId,{messageId:'classification-create',customerName:'Classification client'});
+  await asOwner(db);const otherCustomer=(await db.query("insert into public.customers(workspace_id,name) values($1,'Other') returning id",[workspaceId])).rows[0];
+  await db.query('select public.record_invoice_payment($1,$2,null,$3,$4,true)',[workspaceId,made.entityId,'classification-payment','Actual received']);
+  let invoice=(await db.query('select * from public.invoices where id=$1',[made.entityId])).rows[0];
+  const historical=(await db.query('select to_jsonb(p) value from public.payments p where invoice_id=$1',[made.entityId])).rows;
+  await assert.rejects(db.query('update public.invoices set customer_id=$2 where id=$1',[invoice.id,otherCustomer.id]),/immutable after payment history/);
+  await assert.rejects(db.query("update public.invoices set invoice_number='REPLACED' where id=$1",[invoice.id]),/immutable after payment history/);
+  const replacements={line_items:[{description:'Changed item',amount:55}],subtotal:54,subtotal_minor:5400,tax:1,tax_minor:100,discount:1,discount_minor:100,invoice_direction:'payable'};
+  for(const [key,value] of Object.entries(replacements))await assert.rejects(db.query('update public.invoices set metadata=jsonb_set(metadata,$2::text[],$3::jsonb) where id=$1',[invoice.id,[key],JSON.stringify(value)]),/immutable after payment history/);
+  await db.exec('reset role');await assert.rejects(db.query("update public.invoices set metadata=jsonb_set(metadata,'{invoice_direction}','\"payable\"') where id=$1",[invoice.id]),/immutable after payment history/);
+  await asOwner(db);await db.query("update public.invoices set notes='Benign paid correction',due_date='2026-11-03',metadata=metadata||'{\"seller_name\":\"Supplier\",\"payment_information\":\"Bank instructions\",\"followup_state\":\"paused\",\"next_follow_up_at\":null}' where id=$1",[invoice.id]);
+  await db.exec('reset role');await db.query("update public.invoices set followup_state='paused',next_follow_up_at=null where id=$1",[invoice.id]);
+  await asOwner(db);
+  assert.deepEqual((await db.query('select to_jsonb(p) value from public.payments p where invoice_id=$1',[invoice.id])).rows,historical);
+  await asService(db);await addInbound(db,'classification-reopen-prepare','Reopen this paid invoice');
+  const prepared=(await db.query("select public.whatsapp_invoice_reopening($1,$2,$3,$4,$5,'prepare',$6) value",[workspaceId,owner,phone,'classification-reopen-prepare','Reopen this paid invoice',invoice.id])).rows[0].value;assert.equal(prepared.ok,true,JSON.stringify(prepared));
+  const pending=(await db.query("select id,version from public.whatsapp_pending_actions where workspace_id=$1 and action->>'proposalId'=$2 and consumed_at is null",[workspaceId,prepared.proposalId])).rows[0];
+  await addInbound(db,'classification-reopen-confirm','yes');
+  const reopened=(await db.query("select public.whatsapp_invoice_reopening($1,$2,$3,$4,$5,'confirm',null,$6,$7,$8,null) value",[workspaceId,owner,phone,'classification-reopen-confirm','yes',prepared.proposalId,pending.id,pending.version])).rows[0].value;assert.equal(reopened.ok,true,JSON.stringify(reopened));
+  await db.exec('reset role');invoice=(await db.query('select * from public.invoices where id=$1',[made.entityId])).rows[0];assert.equal(Number(invoice.amount_paid),0);
+  assert.deepEqual((await db.query('select to_jsonb(p) value from public.payments p where invoice_id=$1',[invoice.id])).rows,historical);
+  await assert.rejects(db.query('update public.invoices set customer_id=$2 where id=$1',[invoice.id,otherCustomer.id]),/immutable after payment history/);
+  assert.equal((await db.query('select count(*)::int n from public.payment_reversals where invoice_id=$1',[invoice.id])).rows[0].n,1);
+ }finally{await db.close();}
+});
+
+test('invoice correction math preserves legacy minor components and refuses scalar edits that break saved itemization',async()=>{
+ const {db,workspaceId}=await boot({skipClassificationGuard:true});try{
   await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
   const made=await createDirectInvoice(db,workspaceId,{messageId:'legacy-math-create',customerName:'Legacy math',amount:'110.00'});
   await db.exec('reset role');await db.query("update public.invoices set metadata=(metadata-'tax'-'discount')||$2::jsonb where id=$1",[made.entityId,JSON.stringify({subtotal:100,tax_minor:1000,discount_minor:0,line_items:[{description:'Source service',amount:100}]})]);
@@ -39,8 +68,24 @@ test('invoice correction math preserves legacy minor components and refuses scal
  }finally{await db.close();}
 });
 
-test('incoming payments require receivable direction across RPC, direct assistant and raw inserts while historical replay stays unchanged',async()=>{
+test('all unpaid update paths reconcile stored financial components while benign legacy edits remain possible',async()=>{
  const {db,workspaceId}=await boot();try{
+  await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+  const made=await createDirectInvoice(db,workspaceId,{messageId:'unpaid-math-create',customerName:'Unpaid itemized',amount:'100.00'});
+  await asOwner(db);await db.query("update public.invoices set metadata=metadata||$2::jsonb where id=$1",[made.entityId,JSON.stringify({subtotal:100,tax:0,discount:0,line_items:[{description:'Saved service',amount:100}]})]);
+  let invoice=(await db.query('select * from public.invoices where id=$1',[made.entityId])).rows[0];
+  await assert.rejects(db.query('update public.invoices set total_amount=110 where id=$1',[invoice.id]),/financial components must reconcile/);
+  const corrected=await correctInvoice(db,{workspaceId,invoice,messageId:'unpaid-math-coherent',values:{subtotal:110,total_amount:110,line_items:[{description:'Corrected service',amount:110}]}});assert.equal(corrected.ok,true,JSON.stringify(corrected));
+  await db.exec('reset role');const legacy=(await db.query("insert into public.invoices(workspace_id,customer_id,invoice_number,total_amount,metadata) values($1,$2,'LEGACY-BAD-ITEMS',100,$3::jsonb) returning *",[workspaceId,invoice.customer_id,JSON.stringify({invoice_direction:'receivable',subtotal:100,line_items:[{description:'Legacy unvalidated',quantity:2,unitPrice:25,amount:99}]})])).rows[0];
+  await asOwner(db);await db.query("update public.invoices set notes='Benign legacy clarification' where id=$1",[legacy.id]);
+  await assert.rejects(db.query('update public.invoices set total_amount=105 where id=$1',[legacy.id]),/invalid itemization/);
+  invoice=(await db.query('select * from public.invoices where id=$1',[legacy.id])).rows[0];
+  const repaired=await correctInvoice(db,{workspaceId,invoice,messageId:'unpaid-math-legacy-repair',values:{total_amount:105,subtotal:105,line_items:[{description:'Owner corrected legacy item',amount:105}]}});assert.equal(repaired.ok,true,JSON.stringify(repaired));
+ }finally{await db.close();}
+});
+
+test('incoming payments require receivable direction across RPC, direct assistant and raw inserts while historical replay stays unchanged',async()=>{
+ const {db,workspaceId}=await boot({skipClassificationGuard:true});try{
   await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
   const made=await createDirectInvoice(db,workspaceId,{messageId:'direction-create',customerName:'Direction client'});
   await asOwner(db);const historical=(await db.query('select to_jsonb(public.record_invoice_payment($1,$2,10,$3,$4,false)) value',[workspaceId,made.entityId,'historical-direction','actual received transfer'])).rows[0].value;
@@ -58,11 +103,13 @@ test('incoming payments require receivable direction across RPC, direct assistan
    const direct=await write(db,{workspaceId,providerMessageId:`direction-paid-${direction}`,quote:'Mark this invoice paid',operation:'invoice.update',targetId:made.entityId,expectedUpdatedAt:current.updated_at,payload:{status:'paid'}});assert.equal(direct.ok,false);assert.equal(direct.code,'PAYMENT_GUARD');
    await db.exec('reset role');assert.deepEqual((await db.query('select to_jsonb(i) value from public.invoices i where id=$1',[made.entityId])).rows[0].value,snapshot);
   }
-  await db.exec('reset role');await db.query("update public.invoices set metadata=jsonb_set(metadata,'{invoice_direction}','\"receivable\"') where id=$1",[made.entityId]);
-  await asOwner(db);const received=(await db.query('select to_jsonb(public.record_invoice_payment($1,$2,5,$3,$4,false)) value',[workspaceId,made.entityId,'valid-receivable','actual received transfer'])).rows[0].value;assert.equal(Number(received.amount),5);
+  await db.exec('reset role');await db.exec(await readFile(new URL('../supabase/migrations/20261004214000_invoice_history_classification_guard.sql',import.meta.url),'utf8'));
+  await asOwner(db);assert.deepEqual((await db.query('select to_jsonb(public.record_invoice_payment($1,$2,10,$3,$4,false)) value',[workspaceId,made.entityId,'historical-direction','actual received transfer'])).rows[0].value,historical);
+  await asService(db);const receivable=await createDirectInvoice(db,workspaceId,{messageId:'direction-new-receivable',customerName:'Valid receivable'});
+  await asOwner(db);const received=(await db.query('select to_jsonb(public.record_invoice_payment($1,$2,5,$3,$4,false)) value',[workspaceId,receivable.entityId,'valid-receivable','actual received transfer'])).rows[0].value;assert.equal(Number(received.amount),5);
   await asOwner(db,stranger);await assert.rejects(db.query('select public.record_invoice_payment($1,$2,5,$3,$4,false)',[workspaceId,made.entityId,'foreign-direction','unauthorized']),/workspace access denied/);
   await db.exec('reset role');assert.deepEqual((await db.query('select to_jsonb(p) value from public.payments p where id=$1',[historical.id])).rows[0].value,historical);
-  assert.equal((await db.query('select count(*)::int n from public.payments where invoice_id=$1',[made.entityId])).rows[0].n,2);
+  assert.equal((await db.query('select count(*)::int n from public.payments where invoice_id=$1',[made.entityId])).rows[0].n,1);
  }finally{await db.close();}
 });
 
@@ -132,6 +179,9 @@ test('dashboard corrections authenticate owner, replay independently, reject fin
   const request=randomUUID();const values={notes:'Paid invoice explanatory correction',due_date:'2026-11-04',seller_name:'Correct supplier',custom_fields:{project_code:'OWN-19'}};
   const result=await call(values,request);assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.record.amount_paid,20);assert.equal(result.record.total_amount,55);
   assert.equal((await call(values,request)).replayed,true);assert.equal((await call({notes:'stale'})).code,'STALE');
+  const next=await call({notes:'A later verified correction'},randomUUID(),result.record.updated_at);assert.equal(next.ok,true,JSON.stringify(next));
+  const oldRetry=await call(values,request);assert.equal(oldRetry.code,'STALE');assert.equal(oldRetry.completed,false);
+  assert.equal((await db.query('select notes from public.invoices where id=$1',[made.entityId])).rows[0].notes,'A later verified correction');
   assert.deepEqual((await db.query('select to_jsonb(p) value from public.payments p where invoice_id=$1',[made.entityId])).rows,payments);
   await asOwner(db,stranger);assert.equal((await call({notes:'foreign'})).code,'DENIED');
   await asService(db);await assert.rejects(call({notes:'service bypass'}),/permission denied/);
@@ -499,7 +549,7 @@ test('business custom fields persist and merge through direct and button writes 
   }finally{await db.close();}
 });
 
-async function boot({crlfLegacyWorkspaceData=false,supabaseDefaultGrants=false}={}){
+async function boot({crlfLegacyWorkspaceData=false,supabaseDefaultGrants=false,skipClassificationGuard=false}={}){
   const db=new PGlite();
   await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;
     create schema auth;create schema storage;
@@ -519,6 +569,7 @@ async function boot({crlfLegacyWorkspaceData=false,supabaseDefaultGrants=false}=
   if(supabaseDefaultGrants)await db.exec('alter default privileges in schema public grant all on tables to service_role');
   const migrations=(await readdir(new URL('../supabase/migrations/',import.meta.url))).filter(name=>name.endsWith('.sql')).sort();
   for(const name of migrations){
+    if(skipClassificationGuard&&name==='20261004214000_invoice_history_classification_guard.sql')continue;
     if(crlfLegacyWorkspaceData&&name==='20261003141000_direct_owner_write.sql'){
       const current=(await db.query(`select
         pg_catalog.pg_get_functiondef('public.whatsapp_workspace_data_propose(uuid,uuid,text,text,text,text,uuid,timestamptz,jsonb,text,bigint,bigint,bigint)'::regprocedure) as propose,
