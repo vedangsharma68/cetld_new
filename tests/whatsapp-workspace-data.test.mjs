@@ -111,6 +111,27 @@ test('real provider can repair a malformed generic business create before the si
   assert.equal(calls,3);assert.equal(writes,1);
 });
 
+test('record target validation and filter aliases never dispatch missing, broad or foreign targets',async()=>{
+  const rows=[{id:'33333333-3333-4333-8333-333333333333',workspace_id:scope.workspaceId,name:'QA',record_type:'qa_check',updated_at:'2026-10-04T15:16:06Z'},
+    {id:'44444444-4444-4444-8444-444444444444',workspace_id:'foreign',name:'Foreign QA',record_type:'qa_check',updated_at:'2026-10-04T15:16:06Z'}];
+  let writes=0;
+  const tool=createWorkspaceDataTool({supabase:fakeSupabase({rows:{business_records:rows}}),scope,authorize:async()=>true,
+    message:'Set QA check_count to 2',messageId:'isolated-target',confirmationMode:'direct',executeDirectOperation:async params=>{
+      writes++;assert.deepEqual(params.filters,[{column:'id',operator:'eq',value:rows[0].id}]);return {ok:true};}});
+  for(const filters of [[],[{column:'record_type',operator:'ilike',value:'qa_check'}],[{column:'name',operator:'neq',value:'other'}]]){
+    const result=await tool.execute({operation:'update',table:'business_records',filters,values:{custom_fields:{check_count:2}}});
+    assert.equal(result.validationCode,'TARGET_REQUIRED');assert.equal(tool.getWriteAttempted(),false);assert.equal(writes,0);
+  }
+  for(const filters of [[{field:'workspace_id',op:'=',value:'foreign'}],[{column:'name',field:'name',operator:'eq',value:'QA'}]]){
+    const result=await tool.execute({operation:'update',table:'business_records',filters,values:{custom_fields:{check_count:2}}});
+    assert.equal(result.ok,false);assert.equal(writes,0);
+  }
+  const absent=await tool.execute({operation:'update',table:'business_records',filters:[{field:'name',op:'equals',value:'Foreign QA'}],values:{custom_fields:{check_count:2}}});
+  assert.equal(absent.code,'NOT_FOUND');assert.equal(tool.getWriteAttempted(),false);assert.equal(writes,0);
+  const updated=await tool.execute({operation:'update',table:'business_records',filters:[{field:'name',op:'=',value:'QA'}],values:{custom_fields:{check_count:2}}});
+  assert.equal(updated.ok,true);assert.equal(writes,1);
+});
+
 function fakeSupabase({rows={}, rpcResult={ok:true}, rpcError=null}={}) {
   const calls=[];
   return {

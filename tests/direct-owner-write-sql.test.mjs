@@ -3,10 +3,71 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {PGlite} from '@electric-sql/pglite';
 import {readFile,readdir} from 'node:fs/promises';
+import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
+import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
+import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 
 const owner='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const stranger='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const phone='+919871367051';
+
+test('real provider, catalog, resolver and PostgreSQL repair a targeted update after a successful read',async()=>{
+  const {db,workspaceId}=await boot();
+  try{
+    await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+    const name='CETLD QA 20261004 1442',initial={record_type:'qa_check',name,custom_fields:{check_note:'temporary assistant test',check_count:1,qa_status:'active'}};
+    await addInbound(db,'qa-sql-seed','Create QA record');
+    const created=await write(db,{workspaceId,providerMessageId:'qa-sql-seed',quote:'Create QA record',operation:'business_record.create',payload:initial});
+    assert.equal(created.ok,true);
+    const scope={workspaceId,ownerId:owner,customerId:await verifiedCustomerId(db),phone};
+    let dispatches=0;
+    const supabase={
+      from(table){
+        assert(['business_records','whatsapp_direct_write_receipts'].includes(table));
+        const filters=[];let max=50,start=0;
+        const read=async()=>{
+          assert(filters.some(([column,,value])=>column==='workspace_id'&&value===workspaceId));
+          const params=filters.map(([, ,value])=>value);
+          const where=filters.map(([column,op],i)=>{assert(/^[a-z_]+$/.test(column));return `b.${column} ${op} $${i+1}`;}).join(' and ');
+          return (await db.query(`select to_jsonb(b) as row from public.${table} b where ${where} limit ${max} offset ${start}`,params)).rows.map(row=>row.row);
+        };
+        const q={select(){return q;},eq(column,value){filters.push([column,'=',value]);return q;},ilike(column,value){filters.push([column,'ilike',value]);return q;},
+          order(){return q;},limit(value){max=value;return q;},range(a,b){start=a;max=b-a+1;return q;},
+          async maybeSingle(){return {data:(await read())[0]||null,error:null};},then(resolve,reject){return read().then(data=>({data,error:null})).then(resolve,reject);}};
+        return q;
+      },
+      async rpc(functionName,args){
+        assert.equal(functionName,'whatsapp_apply_direct_owner_write');dispatches++;
+        const keys=['workspace_id','owner_id','phone','provider_message_id','interaction_id','idempotency_key','operation','target_id','expected_updated_at','authorization_kind','authorization_quote','button_decision','pending_id','pending_version','payload'];
+        const params=keys.map(key=>key==='payload'?JSON.stringify(args.p_payload):args['p_'+key]);
+        return {data:(await db.query('select public.whatsapp_apply_direct_owner_write($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb) as value',params)).rows[0].value,error:null};
+      },
+    };
+    const makeTools=(message,messageId)=>createOwnerWorkspaceTools({supabase,scope,message,messageId,authorize:async()=>true,ownerStore:{async query(){throw Error('Legacy tools must not run');}},
+      botPreferences:{confirmationMode:'direct'},pendingStoreAvailable:false});
+    const read=await makeTools('Show '+name,'qa-read').execute('workspaceData',{operation:'read',table:'business_records',filters:[{column:'name',operator:'eq',value:name}]});
+    assert.equal(read.rows.length,1);assert.equal(read.rows[0].custom_fields.check_count,1);
+    const message='For '+name+', set check_count to 2 and qa_status to archived.';
+    await addInbound(db,'qa-update',message);const tools=makeTools(message,'qa-update');let calls=0;
+    const provider=new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,
+      logger:{info(){},warn(){},error(){}},fetchImpl:async(_url,init)=>{
+        const wire=JSON.parse(init.body);calls++;let content;
+        if(calls===1){assert(wire.tools.find(tool=>tool.function.name==='workspaceData').function.parameters.properties.filters);content=JSON.stringify({name:'workspaceData',parameters:{operation:'update',table:'business_records',values:{custom_fields:{check_count:2,qa_status:'archived'}}}});}
+        else if(calls===2){assert.equal(dispatches,0);const rejection=JSON.parse(wire.messages.find(row=>row.role==='tool').content);
+          assert.equal(rejection.validationCode,'TARGET_REQUIRED');assert(rejection.catalog.tables.business_records.writeTargetConstraints.filtersRequired);
+          content=JSON.stringify({name:'workspaceData',parameters:{operation:'update',table:'business_records',filters:[{field:'name',op:'equals',value:name}],values:{custom_fields:{check_count:2,qa_status:'archived'}}}});}
+        else{assert.equal(dispatches,1);content='Updated '+name+': check_count is 2 and qa_status is archived.';}
+        return {ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({choices:[{message:{content},finish_reason:'stop'}]})};
+      }});
+    const result=await runOwnerAgent({provider,message,tools,history:[{role:'assistant',content:JSON.stringify(read.rows)}]});
+    assert.equal(result.plannerFailure,undefined);assert.match(result.answer,/check_count is 2/);assert.equal(calls,3);assert.equal(dispatches,1);
+    const persisted=(await db.query('select to_jsonb(b) as row from public.business_records b where workspace_id=$1 and id=$2',[workspaceId,created.entityId])).rows[0].row;
+    assert.deepEqual(persisted.custom_fields,{check_note:'temporary assistant test',check_count:2,qa_status:'archived'});
+    assert.equal((await db.query('select count(*)::int as n from public.business_records where workspace_id=$1 and name=$2',[workspaceId,name])).rows[0].n,1);
+    assert.equal((await tools.lookupCompleted()).replayed,true);assert.equal(dispatches,1);
+    await asOwner(db,stranger);assert.equal((await db.query('select * from public.business_records where id=$1',[created.entityId])).rows.length,0);
+  }finally{await db.close();}
+});
 
 test('the requested QA business record persists typed custom fields once and stays private',async()=>{
   const {db,workspaceId}=await boot();
