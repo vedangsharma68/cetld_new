@@ -13,6 +13,70 @@ const owner='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const stranger='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const phone='+919871367051';
 
+async function correctInvoice(db,{workspaceId,invoice,messageId,values,ownerId=owner,quote='Correct my invoice'}){
+  await asService(db);await addInbound(db,messageId,quote);
+  return (await db.query('select public.whatsapp_correct_owner_invoice($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb) value',
+    [workspaceId,ownerId,phone,messageId,quote,keyFor(messageId),invoice.id,invoice.updated_at,JSON.stringify(values)])).rows[0].value;
+}
+test('invoice corrections persist typed fields, preserve source, audit immutable snapshots and recover exact replay',async()=>{
+ const {db,workspaceId}=await boot();try{
+  await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+  const made=await createDirectInvoice(db,workspaceId,{messageId:'correction-create',invoiceNumber:'SOURCE-17',customerName:'John'});
+  await db.exec('reset role');await db.query("update public.invoices set metadata=metadata||$2::jsonb where id=$1",[made.entityId,JSON.stringify({source_file:'original.pdf',extraction_raw:{printed:'SOURCE-17'}})]);
+  const before=(await db.query('select * from public.invoices where id=$1',[made.entityId])).rows[0];
+  const second=(await db.query("insert into public.customers(workspace_id,name) values($1,'Jane') returning id",[workspaceId])).rows[0];
+  const values={customer_id:second.id,invoice_number:'CORRECT-18',line_items:[{description:'Service',quantity:2,unitPrice:20,amount:40,confidence:0.9},{description:'Legacy',amount:10}],subtotal:50,tax:10,discount:5,total_amount:55,currency:'USD',issue_date:'2026-10-02',due_date:'2026-11-03',notes:'Corrected',invoice_direction:'payable',seller_name:'Supplier',buyer_name:'My business',payment_information:'Bank details',custom_fields:{purchase_order:'PO-19'}};
+  const result=await correctInvoice(db,{workspaceId,invoice:before,messageId:'correction-all',values});assert.equal(result.ok,true,JSON.stringify(result));
+  assert.equal(result.record.customer_id,second.id);assert.equal(result.record.metadata.source_file,'original.pdf');assert.deepEqual(result.record.metadata.extraction_raw,{printed:'SOURCE-17'});
+  assert.equal(result.record.metadata.printed_invoice_number,before.metadata.printed_invoice_number);assert.equal(result.record.invoice_number,'CORRECT-18');
+  assert.equal(result.record.next_follow_up_at,null);assert.equal(result.record.metadata.approved_reminder_text??null,null);
+  const audit=(await db.query('select * from public.invoice_correction_audits where id=$1',[result.correctionAuditId])).rows[0];
+  assert.equal(audit.source_kind,'whatsapp');assert.equal(audit.before_snapshot.invoice_number,before.invoice_number);assert.deepEqual(audit.after_snapshot,result.record);
+  const replay=await correctInvoice(db,{workspaceId,invoice:before,messageId:'correction-all',values});assert.equal(replay.replayed,true);assert.equal(replay.correctionAuditId,result.correctionAuditId);
+  assert.equal((await correctInvoice(db,{workspaceId,invoice:before,messageId:'correction-all',values:{notes:'Different'}})).code,'REPLAY_MISMATCH');
+  await db.exec('reset role');await assert.rejects(db.query('delete from public.invoice_correction_audits where id=$1',[audit.id]),/immutable/);
+  assert.equal((await db.query('select count(*)::int n from public.payments where invoice_id=$1',[before.id])).rows[0].n,0);
+ }finally{await db.close();}
+});
+test('invoice corrections reject foreign scopes, protected fields, stale events, invalid arithmetic and non-direct authorization without partial writes',async()=>{
+ const {db,workspaceId}=await boot();try{
+  await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+  const made=await createDirectInvoice(db,workspaceId,{messageId:'correction-negative-create',customerName:'John'});const before=made.record;
+  for(const [suffix,values,code] of [['protected',{metadata:{role:'admin'}},'INVALID_FIELDS'],['total',{subtotal:50,tax:10,total_amount:55},'INVALID_TOTAL'],['items',{line_items:[{description:'Bad',quantity:2,unitPrice:20,amount:41}],total_amount:41},'INVALID'],['precision',{tax:1.001},'INVALID'],['invalid-date',{due_date:'2026-02-31'},'INVALID'],['foreign-customer',{customer_id:randomUUID()},'NOT_FOUND']]){
+   assert.equal((await correctInvoice(db,{workspaceId,invoice:before,messageId:`correction-${suffix}`,values})).code,code);
+  }
+  assert.equal((await correctInvoice(db,{workspaceId,invoice:before,messageId:'correction-wrong-owner',values:{notes:'bad'},ownerId:stranger})).code,'DENIED');
+  assert.equal((await correctInvoice(db,{workspaceId:randomUUID(),invoice:before,messageId:'correction-wrong-ws',values:{notes:'bad'}})).code,'DENIED');
+  await setConfirmationMode(db,workspaceId,'buttons');assert.equal((await correctInvoice(db,{workspaceId,invoice:before,messageId:'correction-buttons',values:{notes:'bad'}})).code,'CONFIRMATION_REQUIRED');
+  await setConfirmationMode(db,workspaceId,'direct');await addInbound(db,'correction-stale-event','Correct my invoice');await db.query("update public.whatsapp_inbound_events set received_at=now()-interval '25 hours' where provider_message_id='correction-stale-event'");
+  assert.equal((await correctInvoice(db,{workspaceId,invoice:before,messageId:'correction-stale-event',values:{notes:'bad'}})).code,'STALE_EVENT');
+  await db.exec('reset role');await db.query("insert into public.cetld_core_automation_delivery_claims(workspace_id,invoice_id,scheduled_for,invoice_version,preferences_updated_at,status,lease_until) values($1,$2,now(),1,now(),'sending',now()-interval '1 hour')",[workspaceId,before.id]);
+  assert.equal((await correctInvoice(db,{workspaceId,invoice:before,messageId:'correction-sending',values:{notes:'bad'}})).code,'DELIVERY_IN_FLIGHT');
+  await db.exec('reset role');await db.query("update public.cetld_core_automation_delivery_claims set status='quarantined' where invoice_id=$1",[before.id]);
+  assert.equal((await correctInvoice(db,{workspaceId,invoice:before,messageId:'correction-quarantined',values:{notes:'bad'}})).code,'DELIVERY_IN_FLIGHT');
+  await db.exec('reset role');const actual=(await db.query('select * from public.invoices where id=$1',[before.id])).rows[0];assert.equal(actual.notes,before.notes);assert.deepEqual(actual.metadata,before.metadata);
+  assert.equal((await db.query('select count(*)::int n from public.invoice_correction_audits')).rows[0].n,0);
+  assert.equal((await db.query("select has_function_privilege('authenticated','app.apply_owner_invoice_correction(uuid,uuid,uuid,timestamptz,jsonb,text,text)','execute') yes")).rows[0].yes,false);
+ }finally{await db.close();}
+});
+test('dashboard corrections authenticate owner, replay independently, reject financial history and retain payment bytes for benign edits',async()=>{
+ const {db,workspaceId}=await boot();try{
+  await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+  const made=await createDirectInvoice(db,workspaceId,{messageId:'dashboard-correction-create',customerName:'John'});
+  await asOwner(db);await db.query('select public.record_invoice_payment($1,$2,20,$3,$4,false)',[workspaceId,made.entityId,'receipt','correction-payment']);
+  let invoice=(await db.query('select * from public.invoices where id=$1',[made.entityId])).rows[0];
+  const payments=(await db.query('select to_jsonb(p) value from public.payments p where invoice_id=$1',[made.entityId])).rows;
+  const call=async(values,request=randomUUID(),expected=invoice.updated_at)=>(await db.query('select public.owner_correct_invoice($1,$2,$3,$4,$5::jsonb) value',[workspaceId,invoice.id,expected,request,JSON.stringify(values)])).rows[0].value;
+  for(const values of [{total_amount:60},{currency:'USD'},{customer_id:invoice.customer_id},{invoice_direction:'payable'},{line_items:[]},{subtotal:55},{tax:0},{discount:0},{invoice_number:'NEW'}])assert.equal((await call(values)).code,'PAYMENT_GUARD');
+  const request=randomUUID();const values={notes:'Paid invoice explanatory correction',due_date:'2026-11-04',seller_name:'Correct supplier',custom_fields:{project_code:'OWN-19'}};
+  const result=await call(values,request);assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.record.amount_paid,20);assert.equal(result.record.total_amount,55);
+  assert.equal((await call(values,request)).replayed,true);assert.equal((await call({notes:'stale'})).code,'STALE');
+  assert.deepEqual((await db.query('select to_jsonb(p) value from public.payments p where invoice_id=$1',[made.entityId])).rows,payments);
+  await asOwner(db,stranger);assert.equal((await call({notes:'foreign'})).code,'DENIED');
+  await asService(db);await assert.rejects(call({notes:'service bypass'}),/permission denied/);
+ }finally{await db.close();}
+});
+
 test('business record lifecycle retains facts, scopes owner CAS and receipts, restores once, and blocks archived updates',async()=>{
   const {db,workspaceId}=await boot();
   try{
