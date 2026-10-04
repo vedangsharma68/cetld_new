@@ -38,6 +38,7 @@ begin
     end if;$old$;
  new_block:=$new$    recorded_tax:=app.owner_invoice_recorded_component(meta,'tax');
     recorded_discount:=app.owner_invoice_recorded_component(meta,'discount');$new$;
+ old_block:=replace(old_block,chr(13),'');new_block:=replace(new_block,chr(13),'');
  if (length(definition)-length(replace(definition,old_block,'')))/length(old_block)<>1 then raise exception 'owner confirmation tax marker mismatch';end if;
  definition:=replace(definition,old_block,new_block);
  old_block:=$old$'subtotal',new_total-recorded_tax,'tax',recorded_tax)$old$;
