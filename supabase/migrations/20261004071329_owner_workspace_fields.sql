@@ -33,7 +33,7 @@ create index business_records_workspace_category_idx on public.business_records(
 create trigger business_records_updated_at before update on public.business_records for each row execute function app.set_updated_at();
 alter table public.business_records enable row level security;
 alter table public.business_records force row level security;
-revoke all on public.business_records from public,anon,authenticated;
+revoke all on public.business_records from public,anon,authenticated,service_role;
 grant select on public.business_records to authenticated;
 grant select,insert,update on public.business_records to service_role;
 create policy business_records_owner_read on public.business_records for select to authenticated
