@@ -746,14 +746,14 @@ const FAST_SCENARIOS = [
     assertAnswer(second);
     if(!second.replayed)throw new Error('same provider message ID was not replayed');
     if(second.agentDiagnostics?.rounds!==0)throw new Error('replayed message entered the model loop');
-    if(harness.observed.calls.length!==2)throw new Error(`same wamid unexpectedly used ${harness.observed.calls.length} provider calls`);
+    if(harness.observed.calls.length!==1)throw new Error(`same wamid unexpectedly used ${harness.observed.calls.length} provider calls`);
     harness.db.tables.whatsapp_messages.push({id:'in-wamid.owner-repeat-2',workspace_id:OWNER_CHAT_SCOPE.workspaceId,
       phone:OWNER_CHAT_SCOPE.phone,audience:'owner',direction:'inbound',body:message,status:'received',kind:'text',
       provider_message_id:'wamid.owner-repeat-2',idempotency_key:null,created_at:DEFAULT_NOW.toISOString()});
     const repeated=await harness.handler({...OWNER_CHAT_SCOPE,message,messageId:'wamid.owner-repeat-2'});
     if(repeated.replayed)throw new Error('new message ID reused stale text reply');
     if(repeated.answer!==first.answer)throw new Error('same-text replay changed the canonical answer');
-    if(harness.observed.calls.length!==4)throw new Error('repeated question did not read fresh configuration');
+    if(harness.observed.calls.length!==2)throw new Error('repeated question did not read fresh configuration');
     assertNoForeignData(harness.db);
   }),
 ];

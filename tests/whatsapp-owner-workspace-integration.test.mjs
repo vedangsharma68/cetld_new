@@ -60,7 +60,7 @@ test('default owner handler exposes compact workspace and configuration tools an
     return {model:CF_QWEN_MODEL,content:`Your primary model is ${CF_QWEN_MODEL}. Your fallback is ${GEMINI_FALLBACK_MODEL}.`};
   }});
   const result=await h({...scope,message:'Which model are you using?',messageId:'meta-1'});
-  assert.equal(calls,2);assert.match(result.answer,/qwen3/);assert.doesNotMatch(result.answer,/invoice|OTHER-BUSINESS/);
+  assert.equal(calls,1);assert.match(result.answer,/qwen3/);assert.ok(result.answer.includes(GEMINI_FALLBACK_MODEL));assert.doesNotMatch(result.answer,/invoice|OTHER-BUSINESS/);
   assert.equal(result.agentDiagnostics.toolRounds,1);
 });
 
