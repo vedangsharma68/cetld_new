@@ -1501,6 +1501,8 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
           try{output=await bounded(()=>tools.execute(name,args,{signal:workController.signal,deadlineAt:workDeadlineAt}),'tool','work');}
           finally{try{logger?.info?.('WhatsApp owner tool call',{traceId:scopedTrace,toolName:safeToolName(name),durationMs:Date.now()-toolStartedAt,code:logToolCode(output),
             ...(['TARGET_REQUIRED','INVALID_FIELDS','REQUEST_SHAPE','REQUIRED_FIELDS','INVALID_CATEGORY','INVALID_VALUE','FILTER_SHAPE'].includes(output?.validationCode)?{validationCode:output.validationCode}:{}),
+            ...(name==='workspaceData'&&output?.validationShape?{validationShape:output.validationShape}:{}),
+            ...(name==='workspaceData'&&output?.planningRepair?{planningRepair:output.planningRepair}:{}),
             ...(name==='workspaceData'?{operation:output?.operation||null,table:output?.table||null,rowCount:Array.isArray(output?.rows)?output.rows.length:null}:{}),
           });}catch{}}
           inFlightTool=null;

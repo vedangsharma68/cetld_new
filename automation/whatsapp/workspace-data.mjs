@@ -240,7 +240,7 @@ function validateFilter(filter,table) {
   if(operator==='ilike'&&typeof value!=='string')throw new TypeError('invalid pattern');
   return {column,operator,value};
 }
-function normalizeRequest(raw,scope,planRequest,ctx) {
+function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
   if(!ownObject(raw))throw new TypeError('invalid arguments');
   if(containsForbiddenIdentity(raw,scope))throw new TypeError('scope identity supplied');
   if(Object.keys(raw).some(key=>!ALLOWED_ARGS.has(key)))throw new TypeError('unknown arguments');
@@ -250,7 +250,7 @@ function normalizeRequest(raw,scope,planRequest,ctx) {
     if(typeof planRequest!=='function')throw new TypeError('natural-language planning unavailable');
     const hints=Object.fromEntries(['operation','table'].filter(key=>raw[key]!==undefined).map(key=>[key,raw[key]]));
     const text=Object.keys(hints).length?JSON.stringify({request:raw.request.trim(),hints}):raw.request.trim();
-    return Promise.resolve(planRequest(text,{catalog:catalog(raw.table||null),signal:ctx.signal,deadlineAt:ctx.deadlineAt}))
+    return Promise.resolve(planRequest(text,{catalog:catalog(raw.table||null),signal:ctx.signal,deadlineAt:ctx.deadlineAt,validationFeedback}))
       .then(planned=>{
         ctx.assertLive();
         if(!ownObject(planned)||containsForbiddenIdentity(planned,scope))throw new TypeError('invalid planned operation');
@@ -301,6 +301,16 @@ function normalizeRequest(raw,scope,planRequest,ctx) {
     if(operation==='create'&&table==='customers'&&normalizedFilters.length)throw new TypeError('customer creation cannot include filters');
     return {operation,table,columns,filters:normalizedFilters,values,limit,offset,order};
   }
+}
+
+function validationShape(params) {
+  const fields=new Set(Object.values(TABLES).flatMap(table=>table.filters));
+  const valueFields=new Set(Object.values(WRITE_SCHEMA).flatMap(operations=>Object.values(operations).flat()));
+  const type=value=>value===null?'null':Array.isArray(value)?'array':typeof value;
+  return {operation:OPERATIONS.includes(params?.operation)?params.operation:'unsupported',table:Object.hasOwn(TABLES,params?.table||'')?params.table:'unsupported',
+    filters:Array.isArray(params?.filters)?params.filters.slice(0,8).map(filter=>({column:fields.has(filter?.column)?filter.column:'unsupported',
+      operator:FILTER_OPERATORS.includes(filter?.operator)?filter.operator:'unsupported',valueType:type(filter?.value)})):[],
+    valueFields:ownObject(params?.values)?Object.keys(params.values).slice(0,20).map(field=>valueFields.has(field)?field:'unsupported'):[]};
 }
 
 function validateValues(table,operation,values,current={}) {
@@ -689,7 +699,8 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     await ctx.assertAuthorized();
     return {ok:true,catalog:catalog(table),...(!table?{runtime:safeRuntime}:{}),...(!table||table==='workspace_ai_settings'?{modelChoices:VERIFIED_MODEL_CATALOG.map(({id,label,provider,roles})=>({id,label,provider,roles}))}:{})};
   };
-  const executeRequest=async (raw,executionOptions={})=>{
+  const executeRequest=async (raw,executionOptions={},validationFeedback=null)=>{
+    let shape=validationShape(raw);
     const signals=[signal,executionOptions?.signal].filter(Boolean);
     const combinedSignal=signals.length>1&&typeof AbortSignal?.any==='function'?AbortSignal.any(signals):signals[0];
     const deadlines=[deadlineAt,executionOptions?.deadlineAt].map(asEpoch).filter(Number.isFinite);
@@ -707,7 +718,8 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     try {
       try { await ctx.assertAuthorized(); }
       catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
-      const params=await normalizeRequest(raw,scope,planRequest,ctx);
+      const params=await normalizeRequest(raw,scope,planRequest,ctx,validationFeedback);
+      shape=validationShape(params);
       nextActionParams=structuredClone(params);
       if(params.values?.custom_fields!==undefined)validateCustomFields(params.values.custom_fields);
       const dateFields=['due_date','issue_date'].filter(field=>Object.hasOwn(params.values||{},field));
@@ -792,12 +804,19 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         'invalid text field':['INVALID_VALUE','Record text fields must be nonempty, within the catalog length limits and contain no control characters. No database write was attempted.'],
       };
       const detail=errors[error.message];
-      return detail?{ok:false,code:'INVALID',validationCode:detail[0],message:detail[1]}:fail();
+      return detail?{ok:false,code:'INVALID',validationCode:detail[0],validationShape:shape,writeAttempted:false,message:detail[1]}:fail();
     }
   };
   const execute=async(raw,options)=>{
     nextActionParams=null;nextActionResult=null;nextActionRecords=null;
-    const result=await executeRequest(raw,options);
+    let result=await executeRequest(raw,options);
+    // The model may repeat the same natural-language tool call. Repair its
+    // rejected plan once here, before the outer loop caches the final result.
+    // Only a server-validated preflight rejection with no dispatch qualifies.
+    if(typeof raw?.request==='string'&&result?.code==='INVALID'&&result.validationCode&&result.writeAttempted===false&&!writeAttempted){
+      const rejection={validationCode:result.validationCode,validationShape:result.validationShape,message:result.message};
+      result={...await executeRequest(raw,options,rejection),planningRepair:{validationCode:rejection.validationCode,validationShape:rejection.validationShape}};
+    }
     nextActionResult=result;
     return result?.code==='INVALID'?{...result,...(!result.validationCode?{message:'Use request text alone, or the structured fields in this catalog. Do not combine request with filters, values or columns. pending/confirm/cancel take no table or values.'}:{}),catalog:catalog(typeof raw?.table==='string'&&Object.hasOwn(TABLES,raw.table)?raw.table:null)}:result;
   };
