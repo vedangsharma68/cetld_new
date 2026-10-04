@@ -4,6 +4,8 @@ create function app.protect_invoice_history_classification() returns trigger
 language plpgsql security definer set search_path='' as $$
 declare financial_changed boolean;money_changed boolean;k text;subtotal numeric;tax numeric;discount numeric;item_sum numeric:=0;
 begin
+ if new.total_amount is distinct from old.total_amount and scale(new.total_amount)>2 then
+  raise exception 'invoice amount must use at most two decimal places' using errcode='22023';end if;
  financial_changed:=new.customer_id is distinct from old.customer_id or new.invoice_number is distinct from old.invoice_number;
  foreach k in array array['line_items','subtotal','subtotal_minor','tax','tax_minor','discount','discount_minor','invoice_direction'] loop
   financial_changed:=financial_changed or new.metadata->k is distinct from old.metadata->k;
