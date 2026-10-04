@@ -137,7 +137,7 @@ export class FollowUpEngine {
     if(typeof this.provider.finalizeReminder==='function'){
       let receipt;
       try{receipt=await this.provider.finalizeReminder({idempotencyKey:key,providerMessageId:result.providerMessageId});}catch{}
-      if(receipt?.ok===true)return {status:'sent',providerMessageId:result.providerMessageId};
+      if(receipt?.ok===true)return {status:receipt.status==='failed'?'failed':'sent',providerMessageId:result.providerMessageId,...(receipt.status==='failed'?{reason:'signed_provider_failure'}:{})};
       try{await this.store.markDeliveryFailed({...scope,claimId:claim.id,token:authorization.token,unknown:true,error:'receipt_not_committed'});}catch{}
       return {status:'quarantined',reason:'receipt_not_committed'};
     }

@@ -87,6 +87,92 @@ test('actual additive proposal SQL + real engine/local payment checker/adapter s
   }finally{await f.close()}
 });
 
+test('signed failure after HTTP acceptance pauses exact reviewed state without recount/resend; delivery supersedes audit state only',async()=>{
+  const f=await setup();try{
+    assert.equal((await f.engine.run(f.scope)).status,'sent');
+    await f.callback({status:'failed'});await f.callback({status:'failed'});await f.callback({status:'sent'});
+    let d=(await f.db.query('select * from app.first_party_reminder_dispatches')).rows[0];
+    assert.equal(d.state,'failed');assert.equal(d.counted,true);
+    let invoice=await f.store.getInvoice(f.scope);
+    assert.equal(invoice.reminder_count,1);assert.equal(invoice.followup_state,'paused');assert.equal(invoice.next_follow_up_at,null);
+    assert.equal(invoice.metadata.approved_reminder_text,undefined);
+    assert.equal((await f.db.query('select status from cetld_core_automation_delivery_claims')).rows[0].status,'failed');
+    await f.engine.run(f.scope);assert.equal(f.graph.length,1);
+    await f.callback({status:'delivered'});await f.callback({status:'read'});
+    d=(await f.db.query('select * from app.first_party_reminder_dispatches')).rows[0];assert.equal(d.state,'read');
+    invoice=await f.store.getInvoice(f.scope);assert.equal(invoice.reminder_count,1);assert.equal(invoice.followup_state,'paused');
+    assert.equal((await f.db.query("select count(*)::int n from app.first_party_reminder_receipt_events where status='failed'")).rows[0].n,1);
+  }finally{await f.close()}
+});
+
+test('signed failure before HTTP finalize cannot resurrect acceptance, count, schedule or report sent',async()=>{
+  const f=await setup();try{
+    f.onSend(async()=>{assert.equal((await f.callback({status:'failed'})).code,200)});
+    const result=await f.engine.run(f.scope);assert.equal(result.status,'failed');assert.equal(result.reason,'signed_provider_failure');
+    let invoice=await f.store.getInvoice(f.scope);assert.equal(invoice.reminder_count,0);assert.equal(invoice.followup_state,'paused');assert.equal(invoice.next_follow_up_at,null);
+    assert.equal((await f.db.query('select state from app.first_party_reminder_dispatches')).rows[0].state,'failed');
+    await f.engine.run(f.scope);assert.equal(f.graph.length,1);
+    await f.callback({status:'delivered'});await f.callback({status:'delivered'});
+    invoice=await f.store.getInvoice(f.scope);assert.equal(invoice.reminder_count,1);assert.equal(invoice.followup_state,'paused');assert.equal(invoice.next_follow_up_at,null);
+    assert.equal((await f.db.query('select state from app.first_party_reminder_dispatches')).rows[0].state,'delivered');
+  }finally{await f.close()}
+});
+
+test('signed failure preserves newer paid, STOP, and owner-edited invoice facts',async()=>{
+  for(const change of ['paid','stop','owner']){
+    const f=await setup();try{
+      assert.equal((await f.engine.run(f.scope)).status,'sent');
+      if(change==='paid'){
+        await f.db.query("select set_config('request.jwt.claim.sub',$1,false),set_config('request.jwt.claim.role','authenticated',false)",[f.scope.ownerId]);
+        await f.db.query("select public.record_invoice_payment($1,$2,125,'fixture-payment','offline',false)",[f.scope.workspaceId,f.scope.invoiceId]);
+      }
+      if(change==='stop')await f.supabase.rpc('whatsapp_revoke_phone',{p_workspace_id:f.scope.workspaceId,p_phone:phone,p_via:'stop',p_message_id:'fixture-stop'});
+      if(change==='owner')await f.db.query("update invoices set metadata=metadata||'{\"notes\":\"new owner note\"}',followup_state='draft',next_follow_up_at=null where id=$1",[f.scope.invoiceId]);
+      const before=(await f.db.query('select to_jsonb(i) value from invoices i where id=$1',[f.scope.invoiceId])).rows[0].value;
+      await f.callback({status:'failed'});
+      const after=(await f.db.query('select to_jsonb(i) value from invoices i where id=$1',[f.scope.invoiceId])).rows[0].value;
+      assert.deepEqual(after,before,change);assert.equal(after.reminder_count,1);assert.equal(f.graph.length,1);
+    }finally{await f.close()}
+  }
+});
+
+test('installed SQL source orders phone/settings before invoice and mixed batch children (single-connection evidence only)',async()=>{
+  const f=await setup();try{
+    for(const name of ['cetld_core_authorize_first_party_reminder','cetld_core_record_first_party_receipt']){
+      const def=(await f.db.query("select pg_get_functiondef(p.oid) def from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname=$1",[name])).rows[0].def;
+      assert(def.indexOf('pg_advisory_xact_lock')<def.indexOf('from public.workspace_settings'));
+      assert(def.indexOf('from public.workspace_settings')<def.indexOf('from public.invoices'));
+      assert.equal((def.match(/workspace_settings[^;]*for share/g)||[]).length,1);
+    }
+    const def=(await f.db.query("select pg_get_functiondef('public.whatsapp_apply_owner_batch(uuid,uuid,text,text,text,jsonb)'::regprocedure) def")).rows[0].def;
+    assert(def.indexOf('hashtextextended(p_phone,0)')<def.indexOf('from public.workspace_settings'));
+    assert(def.indexOf('from public.workspace_settings')<def.indexOf('for v_item in'));
+    const contacts=(await f.db.query("select pg_get_functiondef(t.tgfoid) def from pg_trigger t where t.tgrelid='public.customers'::regclass and not t.tgisinternal")).rows;
+    assert(contacts.length>0);for(const {def} of contacts)assert(!/update\s+(public\.)?invoices/i.test(def));
+    const settings=(await f.db.query("select pg_get_functiondef('app.invalidate_core_followup_approvals()'::regprocedure) def")).rows[0].def;
+    assert.match(settings,/update public\.invoices/);
+    const direct=(await f.db.query("select pg_get_functiondef(p.oid) def from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='whatsapp_apply_direct_owner_write'")).rows[0].def;
+    assert(direct.indexOf('hashtextextended(p_phone,0)')<direct.indexOf("elsif p_operation='settings.update'"));
+    const customer=direct.slice(direct.indexOf("elsif p_operation='customer.update'"),direct.indexOf("elsif p_operation='customer.delete'"));
+    assert(customer.length>0);assert(!/update\s+public\.invoices/i.test(customer));
+  }finally{await f.close()}
+});
+
+test('old recovered receipt cannot claim a newer already-counted invoice version for its later failure',async()=>{
+  const f=await setup();try{
+    const input=await f.prepare();const accepted=await f.provider.sendReminder(input);assert.equal(accepted.status,'accepted');
+    // A later reviewed state has already counted an attempt. The old receipt
+    // must not label that unchanged row as its own reconciliation write.
+    await f.db.query("update invoices set reminder_count=1,metadata=metadata||'{\"notes\":\"new review\"}' where id=$1",[f.scope.invoiceId]);
+    assert.equal((await f.provider.finalizeReminder({idempotencyKey:input.idempotencyKey,providerMessageId:accepted.providerMessageId})).ok,true);
+    const d=(await f.db.query('select * from app.first_party_reminder_dispatches')).rows[0];assert.equal(d.counted,true);assert.equal(d.reconciled_invoice_version,null);
+    const before=(await f.db.query('select to_jsonb(i) value from invoices i where id=$1',[f.scope.invoiceId])).rows[0].value;
+    await f.callback({status:'failed'});
+    assert.deepEqual((await f.db.query('select to_jsonb(i) value from invoices i where id=$1',[f.scope.invoiceId])).rows[0].value,before);
+    assert.equal(f.graph.length,1);
+  }finally{await f.close()}
+});
+
 test('grants deny anon/authenticated registry/receipt/payment access, and service RPCs enforce actual tenant',async()=>{
   const f=await setup();try{
     for(const role of ['anon','authenticated']){

@@ -18,7 +18,7 @@ create table app.first_party_reminder_dispatches(
   phone text not null,callback_token text not null unique check(callback_token ~ '^[a-f0-9]{64}$'),
   snapshot jsonb not null,snapshot_hash text not null check(snapshot_hash ~ '^[a-f0-9]{64}$'),
   state text not null default 'reserved' check(state in ('reserved','accepted','delivered','read','failed','uncertain')),
-  provider_message_id text unique,counted boolean not null default false,
+  provider_message_id text unique,counted boolean not null default false,reconciled_invoice_version bigint,
   count_before integer not null,reserved_at timestamptz not null default clock_timestamp(),lease_until timestamptz not null,
   receipt_at timestamptz,last_error text,
   foreign key(workspace_id,owner_id) references public.workspaces(id,owner_id),
@@ -77,10 +77,11 @@ begin
   if p_snapshot->>'phone' !~ '^\+[1-9][0-9]{7,14}$' then return '{"authorized":false}';end if;
   -- Same phone advisory lock already used by active-consent and all STOP RPCs.
   perform pg_advisory_xact_lock(hashtextextended(p_snapshot->>'phone',0));
-  -- Invoice before claim throughout this proposal. STOP follows this order.
+  -- Settings before invoice: preference invalidation holds settings then invoices.
+  -- STOP never locks settings; invoice remains before claim in both paths.
+  select * into s from public.workspace_settings where workspace_id=p_workspace_id for share;
   select * into i from public.invoices where workspace_id=p_workspace_id and id=(p_snapshot->>'invoiceId')::uuid for update;
   select * into c from public.cetld_core_automation_delivery_claims where id=p_claim_id and workspace_id=p_workspace_id for update;
-  select * into s from public.workspace_settings where workspace_id=p_workspace_id for share;
   select * into x from public.customers where id=i.customer_id and workspace_id=p_workspace_id for share;
   -- Consent writes acquire the same phone advisory lock; an MVCC read avoids
   -- row-lock -> advisory inversion inside BEFORE consent triggers.
@@ -253,12 +254,13 @@ create trigger first_party_workspace_stop after insert on public.whatsapp_suppre
 create function public.cetld_core_record_first_party_receipt(p_callback_token text,p_waba_id text,p_phone_number_id text,p_phone text,p_message_id text,p_status text)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare d app.first_party_reminder_dispatches%rowtype;i public.invoices%rowtype;s public.workspace_settings%rowtype;
-  next_at timestamptz; rank_old integer;rank_new integer;
+  next_at timestamptz; rank_old integer;rank_new integer; own_reconciled_version bigint;
 begin
   if p_status is null or p_status not in ('accepted','sent','delivered','read','failed') or p_message_id is null or length(p_message_id) not between 1 and 256 then return '{"ok":false}';end if;
   select * into d from app.first_party_reminder_dispatches where callback_token=p_callback_token;
   if d.claim_id is null or d.phone is distinct from p_phone or d.snapshot#>>'{template,wabaId}' is distinct from p_waba_id or d.snapshot#>>'{template,phoneNumberId}' is distinct from p_phone_number_id then return '{"ok":false}';end if;
   perform pg_advisory_xact_lock(hashtextextended(d.phone,0));
+  select * into s from public.workspace_settings where workspace_id=d.workspace_id for share;
   select * into i from public.invoices where workspace_id=d.workspace_id and id=d.invoice_id for update;
   perform 1 from public.cetld_core_automation_delivery_claims where id=d.claim_id for update;
   select * into d from app.first_party_reminder_dispatches where claim_id=d.claim_id for update;
@@ -269,16 +271,32 @@ begin
   rank_old:=case d.state when 'accepted' then 1 when 'delivered' then 2 when 'read' then 3 else 0 end;
   rank_new:=case p_status when 'accepted' then 1 when 'sent' then 1 when 'delivered' then 2 when 'read' then 3 else 0 end;
   if rank_new=0 and rank_old>=2 then return '{"ok":true}';end if;
+  -- HTTP acceptance and sent are weaker than a signed conclusive failure.
+  -- Delivered/read may supersede it, retaining the complete receipt audit.
+  if d.state='failed' and rank_new=1 then return '{"ok":true,"status":"failed"}';end if;
   update app.first_party_reminder_dispatches set state=case when rank_new>=rank_old then case p_status when 'sent' then 'accepted' else p_status end else state end,
     provider_message_id=p_message_id,receipt_at=coalesce(receipt_at,clock_timestamp()) where claim_id=d.claim_id;
   if rank_new=0 then
-    update public.cetld_core_automation_delivery_claims set status='failed',provider_message_id=p_message_id,last_error='signed_provider_failure' where id=d.claim_id and status<>'sent';
-    return '{"ok":true}';
+    update app.first_party_reminder_dispatches set state='failed',last_error='signed_provider_failure' where claim_id=d.claim_id;
+    update public.cetld_core_automation_delivery_claims set status='failed',provider_message_id=p_message_id,last_error='signed_provider_failure' where id=d.claim_id;
+    update public.cetld_core_automation_messages set status='failed',provider_message_id=p_message_id where workspace_id=d.workspace_id and payload->>'claimId'=d.claim_id::text;
+    -- Pause only the exact invoice state produced by this dispatch. Never undo
+    -- a newer owner edit, payment, STOP, settings edit or review. Accepted counts
+    -- remain attempts; no subtraction or retry is safe after provider acceptance.
+    if d.state<>'failed' and i.deleted_at is null
+      and i.automation_version=coalesce(d.reconciled_invoice_version,(d.snapshot->>'invoiceVersion')::bigint)
+      and s.updated_at=(d.snapshot->>'preferencesUpdatedAt')::timestamptz
+      and i.followup_state in ('approved','active','scheduled') and i.status='sent'
+      and i.amount_paid<i.total_amount and i.metadata->>'invoice_direction'='receivable' then
+      update public.invoices set followup_state='paused',next_follow_up_at=null,
+        metadata=metadata-'approved_reminder_text'-'approved_preferences_updated_at'
+        where workspace_id=d.workspace_id and id=d.invoice_id;
+    end if;
+    return '{"ok":true,"status":"failed"}';
   end if;
   update public.cetld_core_automation_delivery_claims set status='sent',provider_message_id=p_message_id,last_error=null where id=d.claim_id;
   update public.cetld_core_automation_messages set status='sent',provider_message_id=p_message_id where workspace_id=d.workspace_id and payload->>'claimId'=d.claim_id::text;
   if not d.counted and i.deleted_at is null then
-    select * into s from public.workspace_settings where workspace_id=d.workspace_id for share;
     -- Already committed normal engine receipt/count wins. A recovered receipt
     -- never overwrites payment/pause/STOP/changed preferences or edited facts.
     if i.reminder_count<=d.count_before then
@@ -293,9 +311,9 @@ begin
       end if;
       update public.invoices set reminder_count=reminder_count+1,last_follow_up_at=greatest(coalesce(last_follow_up_at,d.reserved_at),d.reserved_at),
         next_follow_up_at=next_at,followup_state=case when next_at is null and followup_state in ('approved','active','scheduled') then 'paused' else followup_state end
-        where workspace_id=d.workspace_id and id=d.invoice_id;
+        where workspace_id=d.workspace_id and id=d.invoice_id returning automation_version into own_reconciled_version;
     end if;
-    update app.first_party_reminder_dispatches set counted=true where claim_id=d.claim_id;
+    update app.first_party_reminder_dispatches set counted=true,reconciled_invoice_version=own_reconciled_version where claim_id=d.claim_id;
   end if;
   return '{"ok":true}';
 end $$;

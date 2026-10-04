@@ -38,6 +38,10 @@ begin
     or not exists(select 1 from public.whatsapp_inbound_events e where e.provider_message_id=p_provider_message_id and e.sender_phone=p_phone and e.message_text=p_authorization_quote) then
     return jsonb_build_object('ok',false,'code','DENIED');
   end if;
+  -- Child operations use this same owner/recipient phone lock. Acquire it before
+  -- settings so a mixed invoice/customer -> settings batch cannot invert the
+  -- preference invalidation or final reminder settings -> invoice lock order.
+  perform pg_advisory_xact_lock(hashtextextended(p_phone,0));
   perform pg_advisory_xact_lock(hashtextextended('owner_batch:'||p_provider_message_id,0));
   v_request:=jsonb_build_object('kind','batch','quote',p_authorization_quote,'operations',p_operations);
   select * into v_receipt from public.whatsapp_direct_write_receipts where provider_message_id=p_provider_message_id for update;
@@ -47,6 +51,7 @@ begin
     end if;
     return v_receipt.result||jsonb_build_object('replayed',true);
   end if;
+  perform 1 from public.workspace_settings where workspace_id=p_workspace_id for update;
   for v_item in select value from jsonb_array_elements(p_operations) loop
     v_index:=v_index+1;
     if jsonb_typeof(v_item)<>'object' or exists(select 1 from jsonb_object_keys(v_item) k where k not in ('operation','targetId','expectedUpdatedAt','payload'))

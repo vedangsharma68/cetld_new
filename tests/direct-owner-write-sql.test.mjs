@@ -1088,6 +1088,14 @@ test('atomic owner batch persists all records, rolls back collisions and stale t
     assert.equal((await batch('batch-success')).replayed,true);
     const mismatch=structuredClone(operations);mismatch[0].payload.invoice_number='INV-2026-0009';assert.equal((await batch('batch-success',mismatch)).code,'REPLAY_MISMATCH');
     assert.equal((await db.query('select count(*)::int n from public.whatsapp_direct_write_receipts where provider_message_id=$1',['batch-success'])).rows[0].n,1);
+    const invoiceVersion=(await db.query('select updated_at from public.invoices where id=$1',[first.entityId])).rows[0].updated_at.toISOString();
+    const settingsVersion=(await db.query('select updated_at from public.workspace_settings where workspace_id=$1',[workspaceId])).rows[0].updated_at.toISOString();
+    const mixed=[{operation:'invoice.update',targetId:first.entityId,expectedUpdatedAt:invoiceVersion,payload:{custom_fields:{mixed_lock_order:'verified'}}},
+      {operation:'settings.update',targetId:workspaceId,expectedUpdatedAt:settingsVersion,payload:{default_timezone:'America/New_York'}}];
+    const mixedResult=await batch('batch-invoice-before-settings',mixed);assert.equal(mixedResult.ok,true,JSON.stringify(mixedResult));
+    assert.equal((await batch('batch-invoice-before-settings',mixed)).replayed,true);
+    assert.equal((await db.query('select default_timezone from public.workspace_settings where workspace_id=$1',[workspaceId])).rows[0].default_timezone,'America/New_York');
+    assert.equal((await db.query('select custom_fields from public.invoices where id=$1',[first.entityId])).rows[0].custom_fields.mixed_lock_order,'verified');
     await asOwner(db);assert.deepEqual((await db.query('select invoice_number,custom_fields from public.invoices where id=any($1::uuid[]) order by invoice_number',[[first.entityId,second.entityId]])).rows.map(row=>row.invoice_number),['INV-2026-0003','INV-2026-0004']);
     await assert.rejects(db.query('select public.whatsapp_apply_owner_batch($1,$2,$3,$4,$5,$6)',[workspaceId,owner,phone,'batch-success','Renumber both invoices like John',JSON.stringify(operations)]));
     await assert.rejects(db.query('select app.whatsapp_apply_owner_batch_operation($1,$2,$3,$4,null,$5,$6,$7,$8,$9,$10,null,null,null,$11)',[workspaceId,owner,phone,'batch-success','ownerwrite_private','invoice.update',first.entityId,first.updatedAt,'instruction','Renumber both invoices like John','{}']));

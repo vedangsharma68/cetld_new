@@ -95,3 +95,39 @@ in that request. Authorized live verification must confirm the actual account's
 template content before activation. Operations must disable the local registry
 before changing remote template content and review a new local revision. This
 offline implementation does not prove provider-enforced template revision CAS.
+
+The local review correction orders final dispatch and receipt locks as phone,
+workspace settings, invoice, claim, then current customer/registry as needed.
+Mixed owner batches acquire the same owner phone lock and settings FOR UPDATE
+before invoking any child, including an invoice followed by a settings edit.
+Preference invalidation already holds settings before updating invoices. Current
+customer triggers and the standalone owner customer-update branch do not update
+invoices in this candidate; installed-function regression assertions verify this
+assumption. Introducing a contact-to-invoice trigger requires a new lock review.
+Single-connection SQL source assertions and mixed-batch persistence/replay tests
+are supporting evidence, not genuine two-session deadlock proof.
+
+A signed failure overrides HTTP accepted/sent, marks the dispatch/claim failed,
+and pauses only the unchanged invoice state bound to that dispatch. Its own
+accepted-reconciliation version is stored to distinguish a newer owner edit,
+payment, STOP or preference change. Late HTTP acceptance cannot resurrect a
+failure or schedule/count it. Delivered/read may supersede failure with all
+audit events retained, but never automatically resume the paused invoice. Counts
+already recorded for provider-accepted attempts are retained; they are not proof
+of delivery and are never subtracted or used to retry the same claim. An engine
+finalization observing the failure reports failed, not sent.
+
+The final review suite contains 24 actual additive-SQL reminder cases (five new
+lock/failure/CAS regressions) and nine batch planner cases. A separate actual-SQL
+atomic batch case also verifies invoice-before-settings persistence and replay.
+Typecheck and these offline cases are the focused validation scope; the combined
+candidate must run its release gate after integration. Native two-session lock
+contention and live provider behavior remain unverified.
+
+Canonical LF SHA-256 for the revised complete reminder proposal:
+`60e4dcc3de98dfca9ec0f045e4e412aafff46509dd674eac47de7666085df32d`.
+The mixed-batch lock correction changes the still-unapplied local proposal
+`20261004180350_owner_atomic_batch.sql`; its canonical LF SHA-256 is
+`abede2cda5e1eeb1e5f8be302e50f15a4de83210e4b14ddeb20218bbd37b03ed`.
+Neither SQL file was installed in production; activation and exact DDL approval
+remain separate prerequisites.
