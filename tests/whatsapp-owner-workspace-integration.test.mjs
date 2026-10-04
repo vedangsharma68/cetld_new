@@ -70,7 +70,9 @@ test('natural-language workspaceData reads real fixture invoices and preserves J
     {role:'assistant',content:'You are welcome.'},{role:'user',content:'What can you help with?'},{role:'assistant',content:'Your workspace records.'}];
   let planned=0;
   const h=handler(db,{async generateStructured({messages}){
-    planned++;assert.match(messages.at(-1).content,/John/);
+    planned++;assert.equal(messages.at(-1).content,'Tell me about his invoices');
+    assert.match(messages.at(-2).content,/Find John's customer record/);
+    assert(messages.some(row=>row.role==='user'&&row.content==='John Smith is my customer'));
     return {data:{operation:'read',table:'customers',columns:['name'],filters:[{column:'name',operator:'ilike',value:'%John%'}]}};
   },async generate({tools,messages}){
     if(tools)assert.deepEqual(tools.map(tool=>tool.function.name),['getAIProviderConfiguration','workspaceData']);
