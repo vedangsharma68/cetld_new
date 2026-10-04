@@ -15,6 +15,16 @@ import {createOwnerReplyStore} from './owner-reply-store.mjs';
 import {createProviderHealthStore} from '../../ai/provider-health.mjs';
 import {ownerButtonClaimIssue} from './owner-grounding.mjs';
 
+// Exact standalone messages only. Mixed greetings and business requests go to
+// the model, and authorization/replay happen before this shortcut is considered.
+export function standaloneOwnerGreeting(message){
+  const text=String(message||'').trim().toLowerCase().replace(/[?!.]+$/,'').trim();
+  if(['hi','hello','hey'].includes(text))return 'Hi! How can I help with your business today?';
+  if(text==='how are you')return "I'm ready to help. How can I help with your business today?";
+  if(['what do you do','what can you do'].includes(text))return 'I help you look up and manage your business records, customers and invoices. Tell me what you need.';
+  return null;
+}
+
 const dataOrThrow = result => {if(result?.error)throw result.error;return result?.data;};
 async function timedContextRead(logger,query,operation){
   const startedAt=Date.now();
@@ -48,7 +58,8 @@ async function readOwnerSourceMedia({supabase,providerMessageId,phone}){
 }
 
 /**
- * A verified owner turn always starts with the model. All ledger reads, invoice
+ * Business turns start with the model; standalone basic greetings are instant.
+ * All ledger reads, invoice
  * and settings proposals, confirmations, deletion and attachment processing
  * are exposed as owner-scoped tools in owner-agent.mjs.
  */
@@ -309,7 +320,10 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
               agentDiagnostics:{rounds:0,toolRounds:0,cacheHits:0,safetyRejects:[]}};
           }catch{logger?.warn?.('WhatsApp owner reply receipt lookup failed',{code:'OWNER_REPLY_STORE_FAILED'});}
         }
-        const result=await processTurn(boundedScope,tools=>{activeTools=tools;},()=>{},authorizeRequest);
+        const basic=!scope.interactionId&&!scope.media&&!scope.mediaError&&!scope.checkpoint
+          ?standaloneOwnerGreeting(scope.message):null;
+        const result=basic?{answer:basic,agentDiagnostics:{rounds:0,toolRounds:0,cacheHits:0,safetyRejects:[]}}
+          :await processTurn(boundedScope,tools=>{activeTools=tools;},()=>{},authorizeRequest);
         if(result?.checkpoint)latestCheckpoint=result.checkpoint;
         if(replyStore&&result?.answer&&!result?.deferred&&await authorizeRequest(boundedScope)){
           try{return await replyStore.save(boundedScope,result);}

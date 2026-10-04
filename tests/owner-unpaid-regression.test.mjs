@@ -41,20 +41,28 @@ test('post-release unpaid, explanation and model question remain separate durabl
  db.tables.whatsapp_messages.push({id:'old-failure',workspace_id:scope.workspaceId,phone:scope.phone,audience:'owner',direction:'outbound',kind:'normal',status:'delivered',created_at:DEFAULT_NOW.toISOString(),body:"I couldn't mark John Smith's invoice as unpaid because the operation failed due to invalid input."});
  const handler=createOwnerMessageHandler({supabase:db.supabase,authorize:async()=>true,env:{},clock:()=>DEFAULT_NOW,logger:{info(){},warn(){},error(){}},
   providerFactory:()=>({async generate({messages}){
-   calls++;const latest=[...messages].reverse().find(row=>row.role==='user').content;
-   // Reproduce a model attempting the old write again for the explanation.
-   return {model:CF_PRIMARY_MODEL,content:'',toolCalls:[{id:'call-'+calls,type:'function',function:{name:latest==='which model are you using'?'getAIProviderConfiguration':'workspaceData',arguments:JSON.stringify(latest==='which model are you using'?{}:request())}}]};
-  },async generateStructured(){throw Error('No extra planner or provider calls expected');}})});
+   calls++;const evidence=messages.filter(row=>row.role==='tool').map(row=>JSON.parse(row.content));
+   const original=messages.find(row=>row.role==='system'&&row.content.startsWith('Answer this current owner request only:'))?.content||'';
+   if(evidence.length){
+    if(original.includes('which model are you using'))return {model:CF_PRIMARY_MODEL,content:`The primary model is ${evidence.at(-1).primaryModel}.`};
+    if(original.includes('what invalid input'))return {model:CF_PRIMARY_MODEL,content:'The previous generic invalid-input message did not explain which field failed. This explanation did not retry the change.'};
+    assert.equal(evidence.at(-1).code,'PAYMENT_GUARD');
+    return {model:CF_PRIMARY_MODEL,content:'Payments exist on this invoice; I cannot erase payment history by marking it unpaid.'};
+   }
+   const latest=[...messages].reverse().find(row=>row.role==='user').content;
+   return {model:CF_PRIMARY_MODEL,toolCalls:[{id:'call-'+calls,type:'function',function:{name:latest==='which model are you using'?'getAIProviderConfiguration':'workspaceData',
+    arguments:JSON.stringify(latest==='which model are you using'?{}:latest==='what invalid input??'?{operation:'read',table:'invoices'}:request())}}]};
+  },async generateStructured(){throw Error('No planner needed for structured operations');}})});
  const answers=[];
  for(const [index,message] of ['mark the invoice as unpaid','what invalid input??','which model are you using'].entries()){
   const messageId='isolated-regression-'+index;
   db.tables.whatsapp_messages.push({id:'in-'+index,workspace_id:scope.workspaceId,phone:scope.phone,audience:'owner',direction:'inbound',kind:'text',status:'received',created_at:DEFAULT_NOW.toISOString(),provider_message_id:messageId,body:message});
-  const result=await handler({...scope,message,messageId});answers.push(result.answer);assert.equal(result.plannerFailure,undefined);
+  const result=await handler({...scope,message,messageId});answers.push(result.answer);assert.equal(result.plannerFailure,undefined,JSON.stringify({message,result}));
   assert.equal((await handler({...scope,message,messageId})).answer,result.answer,'duplicate webhook must replay its own receipt');
  }
  assert.match(answers[0],/payments.*cannot erase payment history/i);assert.doesNotMatch(answers[0],/invalid input|confirmation/i);
  assert.match(answers[1],/explanation.*did not retry/i);assert.doesNotMatch(answers[1],/couldn't mark/i);
  assert.match(answers[2],new RegExp(CF_PRIMARY_MODEL.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));assert.doesNotMatch(answers[2],/invoice|unpaid|confirm/i);
- assert.equal(calls,3);assert.deepEqual({invoices:db.tables.invoices,payments:db.tables.payments},before);
+ assert.equal(calls,6);assert.deepEqual({invoices:db.tables.invoices,payments:db.tables.payments},before);
  assert.equal(db.tables.whatsapp_pending_actions.filter(row=>!row.consumed_at).length,0);db.assertScopedReads();
 });

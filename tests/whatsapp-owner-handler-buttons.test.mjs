@@ -126,7 +126,7 @@ test('unsupported legacy pending state cannot become a fictional submission or b
 test('handler does not persist a button claim introduced after agent validation',async()=>{
   const handler=makeHandler(database({ownerPreferences:preferences({serviceReplySignature:'Tap the button below.'})}),{
     agentFactory:async()=>({answer:'Hello.'}),providerFactory:()=>({})});
-  const result=await handler({workspaceId,ownerId,phone,messageId:'signature-no-buttons',message:'Hello'});
+  const result=await handler({workspaceId,ownerId,phone,messageId:'signature-no-buttons',message:'Check my settings'});
   assert.doesNotMatch(result.answer,/tap the button/i);
   assert.equal(result.plannerFailure?.code,'OWNER_CHOICES_UNAVAILABLE');
 });

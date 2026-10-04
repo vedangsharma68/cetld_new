@@ -4,16 +4,6 @@ const NEGATIVE = /\b(?:not|never|cannot|can't|couldn't|could not|haven't|hasn't|
 const COMMITTED = new Set(['deleted','restored','invoice_created','settings_updated','customer_created','customer_updated','customer_deleted','updated','created','paid','cancelled','canceled','review_updated']);
 const COMMITTED_TYPES=new Set(['owner_invoice_update','owner_invoice_payment','owner_invoice_create','owner_settings_update','owner_workspace_data_confirmed','owner_workspace_data_cancelled']);
 const normalize=value=>String(value||'').replace(/[\u201c\u201d]/g,'"').replace(/\u2019/g,"'");
-// Gate the assistant's own configuration capability against this turn, never
-// old conversation content. Business operations remain catalog/planner driven.
-export function ownerConfigurationRequested(message){
-  const text=String(message||'').trim();
-  const topic=/\b(?:models?|providers?|powered|powers|backend|engine)\b/i.test(text);
-  return topic&&/\b(?:you|your|u|ur|assistant|bot|AI|LLM)\b/i.test(text)
-    ||/\b(?:primary|fallback)(?: AI)? (?:model|provider)\b/i.test(text)
-    ||/^(?:what|which) (?:AI )?(?:models?|providers?)(?: (?:are you using|(?:is|are) (?:answering|active|running|configured|in use)))?(?: now| currently)?\s*[?!.]*$/i.test(text)
-    ||/(?:आप|तुम|एआई).*(?:मॉडल|प्रोवाइडर)/i.test(text);
-}
 function actionMatches(clause, result) {
   const action=String(result.action||result.actionType||result.operation||'');
   const entity=String(result.entityType||result.table||action);
@@ -70,7 +60,6 @@ export function ownerButtonClaimIssue(reply,{buttonsAvailable=false}={}){
 }
 export function ownerGroundingIssue(reply,results=[],message='',capabilities={}){
   const text=normalize(reply);
-  if(/\b(?:This turn used\b|Primary:|Fallback:)/i.test(text)&&!ownerConfigurationRequested(message))return 'current_request_mismatch';
   const buttonIssue=ownerButtonClaimIssue(text,capabilities);
   if(buttonIssue)return buttonIssue;
   const proposalClaims=text.split(/[.!?\n]+/).filter(clause=>

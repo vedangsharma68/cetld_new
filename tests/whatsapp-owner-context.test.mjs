@@ -35,7 +35,7 @@ test('owner turn reuses one request-local authorization result across setup and 
     agentFactory:async()=>({answer:'Your workspace is ready.',model:CF_QWEN_MODEL}),
   });
 
-  const result=await handler({workspaceId,ownerId:binding.owner_id,customerId:binding.customer_id,phone,message:'Hi',messageId:'turn-1'});
+  const result=await handler({workspaceId,ownerId:binding.owner_id,customerId:binding.customer_id,phone,message:'Check my workspace',messageId:'turn-1'});
   assert.equal(result.answer,'Your workspace is ready.');
   assert.equal(authorizationCalls,1);
 });

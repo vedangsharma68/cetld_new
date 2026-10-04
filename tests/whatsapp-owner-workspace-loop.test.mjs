@@ -178,15 +178,15 @@ test('the loop-limit repair request omits tool fields',async()=>{
 });
 
 test('the final no-tools request rejects an unexecuted tool call',async()=>{
- let calls=0,executions=0;
- const provider={async generate(){
-  calls++;
-  if(calls===1)return {content:'',toolCalls:[call('getAIProviderConfiguration',{},'config')]};
+ let executions=0;
+ const provider={async generate(request){
+  assert.equal(request.tools,undefined);
   return {content:'The workspace was updated.',toolCalls:[call('workspaceData',{request:'Update a setting'},'repair-write')]};
  }};
  const ownerTools=tools(['workspaceData','getAIProviderConfiguration'],async()=>{executions++;return {ok:true,readOnly:true};});
- const result=await runOwnerAgent({provider,tools:ownerTools,message:'Read settings'});
- assert.equal(executions,1);
+ const result=await runOwnerAgent({provider,tools:ownerTools,message:'Read settings',
+  checkpoint:{version:1,phase:'final',transcript:[{role:'user',content:'Read settings'},{role:'tool',name:'workspaceData',tool_call_id:'saved-read',content:'{"ok":true,"readOnly":true}'}]}});
+ assert.equal(executions,0);
  assert.equal(result.plannerFailure?.code,'OWNER_REPLY_REPAIR_FAILED');
  assert.doesNotMatch(result.answer,/workspace was updated/);
 });
@@ -210,13 +210,13 @@ test('repeated tool name and canonical arguments reuse the cached result',async(
  assert.equal(result.agentDiagnostics?.cacheHits,1);
 });
 
-test('AI provider configuration gets one tool round then a no-tools final answer',async()=>{
+test('AI provider configuration uses the ordinary read loop and model-written summary',async()=>{
  let calls=0,executionCount=0;
  const provider={async generate(request){
   calls++;
   if(calls===1)return {content:'',toolCalls:[call('getAIProviderConfiguration',{},'config')]};
-  assert.equal(Object.hasOwn(request,'tools'),false);
-  assert.equal(Object.hasOwn(request,'toolChoice'),false);
+  assert.ok(request.tools?.length);
+  assert.equal(request.toolChoice,'auto');
   assert.ok(request.messages.some(item=>item.role==='tool'&&item.tool_call_id==='config'));
   return answer('The model settings are configured.');
  }};
@@ -282,16 +282,12 @@ test('read-only tool work stops after three rounds',async()=>{
 test('final reply safety repair keeps output checks and never offers tools',async()=>{
  let calls=0;
  const provider={async generate(request){
-  calls++;
-  if(calls===1)return {content:'',toolCalls:[call('getAIProviderConfiguration',{},'config')]};
-  assert.equal(Object.hasOwn(request,'tools'),false);
-  assert.equal(Object.hasOwn(request,'toolChoice'),false);
-  if(calls===2)return answer('The model settings are ready — and verified.');
-  return answer('The model settings are ready and verified.');
+  calls++;assert.equal(Object.hasOwn(request,'tools'),false);assert.equal(Object.hasOwn(request,'toolChoice'),false);
+  return answer(calls===1?'The model settings are ready \u2014 and verified.':'The model settings are ready and verified.');
  }};
- const result=await runOwnerAgent({provider,tools:tools(['workspaceData','getAIProviderConfiguration'],async()=>({ok:true,readOnly:true})),message:'Which models are active?'});
- assert.equal(calls,3);
- assert.match(result.answer,/ready and verified/i);
+ const result=await runOwnerAgent({provider,tools:tools(['workspaceData','getAIProviderConfiguration'],async()=>({ok:true,readOnly:true})),message:'Which models are active?',
+  checkpoint:{version:1,phase:'final',transcript:[{role:'user',content:'Which models are active?'},{role:'tool',name:'getAIProviderConfiguration',tool_call_id:'config',content:'{"ok":true,"readOnly":true}'}]}});
+ assert.equal(calls,2);assert.match(result.answer,/ready and verified/i);
  assert.ok(result.agentDiagnostics?.safetyRejects.includes('dash_style'));
 });
 
@@ -363,7 +359,7 @@ test('a timed-out final answer after provider configuration names the completed 
  const result=await runOwnerAgent({provider,
   tools:tools(['workspaceData','getAIProviderConfiguration'],async()=>({ok:true,readOnly:true,operation:'configuration'})),
   message:'Which provider is configured?',budgetMs:500});
- assert.equal(calls,2);
+ assert.equal(calls,3);
  assert.equal(result.plannerFailure?.code,'OWNER_LOOP_TIMEOUT');
  assert.match(result.answer,/looked up AI provider configuration/i);
  assert.match(result.answer,/couldn\'t finish the reply/i);

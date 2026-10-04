@@ -700,9 +700,6 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
       const params=await normalizeRequest(raw,scope,planRequest,ctx);
       nextActionParams=structuredClone(params);
-      if(/^(?:what (?:invalid input|went wrong|failed)|why\b[^?!.]{0,60}\b(?:fail(?:ed)?|invalid|error)|explain\b[^?!.]{0,40}\b(?:fail(?:ure|ed)?|invalid|error))\b/i.test(message.trim())
-        && !['read','describe','pending','sendFile','analyzeAttachment'].includes(params.operation))
-        return {ok:false,code:'EXPLANATION_ONLY',readOnly:true,message:'You asked for an explanation, so I did not retry the earlier change. A generic "invalid input" reply does not identify which field failed. Please give the invoice number so I can check its current payment facts; nothing was changed by this question.'};
       if(params.values?.custom_fields!==undefined)validateCustomFields(params.values.custom_fields);
       const dateFields=['due_date','issue_date'].filter(field=>Object.hasOwn(params.values||{},field));
       const ownerRelative=params.operation==='update'&&dateFields.length===1&&!/\b\d{4}-\d{2}-\d{2}\b/.test(message)
