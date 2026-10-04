@@ -19,6 +19,31 @@ revoke all on function app.guard_invoice_correction_audit() from public,anon,aut
 create trigger immutable_invoice_correction before update or delete on public.invoice_correction_audits
 for each row execute function app.guard_invoice_correction_audit();
 
+-- Validation is shared for incoming item replacements and existing saved
+-- itemization, so a scalar-only edit cannot quietly break the document math.
+create function app.invoice_correction_line_sum(items jsonb) returns numeric
+language plpgsql set search_path='' as $$
+declare x jsonb;total numeric:=0;
+begin
+ if jsonb_typeof(items) is distinct from 'array' or jsonb_array_length(items)>100 then raise exception 'invalid itemization' using errcode='22023';end if;
+ for x in select value from jsonb_array_elements(items) loop
+  if jsonb_typeof(x)<>'object' or not x ?& array['description','amount']
+   or exists(select 1 from jsonb_object_keys(x) a(key) where key not in ('description','quantity','unitPrice','amount','confidence'))
+   or jsonb_typeof(x->'description')<>'string' or length(btrim(x->>'description')) not between 1 and 500 or x->>'description' ~ '[[:cntrl:]]'
+   or jsonb_typeof(x->'amount')<>'number'
+   or x?'quantity' and jsonb_typeof(x->'quantity') not in ('number','null')
+   or x?'unitPrice' and jsonb_typeof(x->'unitPrice') not in ('number','null')
+   or x?'confidence' and (jsonb_typeof(x->'confidence') not in ('number','null') or (x->>'confidence')::numeric not between 0 and 1) then raise exception 'invalid itemization' using errcode='22023';end if;
+  if (x->>'quantity')::numeric<=0 or (x->>'quantity')::numeric>1000000 or scale((x->>'quantity')::numeric)>4
+    or (x->>'unitPrice')::numeric<0 or (x->>'unitPrice')::numeric>=10000000000000000 or scale((x->>'unitPrice')::numeric)>2
+    or (x->>'amount')::numeric<0 or (x->>'amount')::numeric>=10000000000000000 or scale((x->>'amount')::numeric)>2
+    or round((x->>'quantity')::numeric*(x->>'unitPrice')::numeric,2)<>(x->>'amount')::numeric then raise exception 'invalid itemization' using errcode='22023';end if;
+  total:=total+(x->>'amount')::numeric;
+ end loop;
+ return total;
+end; $$;
+revoke all on function app.invoice_correction_line_sum(jsonb) from public,anon,authenticated,service_role;
+
 create function app.apply_owner_invoice_correction(
  p_workspace_id uuid,p_owner_id uuid,p_invoice_id uuid,p_expected_updated_at timestamptz,p_values jsonb,p_source_kind text,p_source_event_id text
 ) returns jsonb language plpgsql security definer set search_path='' as $$
@@ -74,33 +99,27 @@ begin
    if k='total_amount' then total:=v;else m:=m||jsonb_build_object(k,v);end if;
   end if;
  end loop;
- if p_values?'line_items' then
-  if jsonb_typeof(p_values->'line_items')<>'array' or jsonb_array_length(p_values->'line_items')>100 then return jsonb_build_object('ok',false,'code','INVALID');end if;
-  for x in select value from jsonb_array_elements(p_values->'line_items') loop
-   if jsonb_typeof(x)<>'object' or not x ?& array['description','amount']
-    or exists(select 1 from jsonb_object_keys(x) a(key) where key not in ('description','quantity','unitPrice','amount','confidence'))
-    or jsonb_typeof(x->'description')<>'string' or length(btrim(x->>'description')) not between 1 and 500
-    or jsonb_typeof(x->'amount')<>'number'
-    or x?'quantity' and jsonb_typeof(x->'quantity') not in ('number','null') or x?'unitPrice' and jsonb_typeof(x->'unitPrice') not in ('number','null')
-    or x?'confidence' and (jsonb_typeof(x->'confidence')<>'number' or (x->>'confidence')::numeric not between 0 and 1) then return jsonb_build_object('ok',false,'code','INVALID');end if;
-   if (x->>'quantity')::numeric<=0 or (x->>'quantity')::numeric>1000000 or scale((x->>'quantity')::numeric)>4
-     or (x->>'unitPrice')::numeric<0 or scale((x->>'unitPrice')::numeric)>2 or (x->>'amount')::numeric<0 or scale((x->>'amount')::numeric)>2
-     or round((x->>'quantity')::numeric*(x->>'unitPrice')::numeric,2)<>(x->>'amount')::numeric then return jsonb_build_object('ok',false,'code','INVALID');end if;
-   item_sum:=item_sum+(x->>'amount')::numeric;
-  end loop;
-  m:=m||jsonb_build_object('line_items',p_values->'line_items');
-  if not p_values?'subtotal' then m:=m||jsonb_build_object('subtotal',item_sum);end if;
- end if;
+ if p_values?'line_items' then m:=m||jsonb_build_object('line_items',p_values->'line_items');end if;
  if financial and p_values ?| array['line_items','subtotal','tax','discount','total_amount'] then
-  subtotal:=coalesce((m->>'subtotal')::numeric,total-coalesce((m->>'tax')::numeric,0)+coalesce((m->>'discount')::numeric,0));
-  tax:=coalesce((m->>'tax')::numeric,0);discount:=coalesce((m->>'discount')::numeric,0);
-  if subtotal<0 or tax<0 or discount<0 or subtotal+tax-discount<>total or (p_values?'line_items' and item_sum<>subtotal) then return jsonb_build_object('ok',false,'code','INVALID_TOTAL');end if;
+  if m?'line_items' then
+   if jsonb_typeof(m->'line_items')<>'array' then return jsonb_build_object('ok',false,'code','INVALID');end if;
+   item_sum:=app.invoice_correction_line_sum(m->'line_items');
+  end if;
+  if p_values?'line_items' and not p_values?'subtotal' then m:=m||jsonb_build_object('subtotal',item_sum);end if;
+  if m->>'tax' is null and m->>'tax_minor' is not null and (m->>'tax_minor')::numeric<>trunc((m->>'tax_minor')::numeric)
+    or m->>'discount' is null and m->>'discount_minor' is not null and (m->>'discount_minor')::numeric<>trunc((m->>'discount_minor')::numeric) then return jsonb_build_object('ok',false,'code','INVALID_TOTAL');end if;
+  tax:=coalesce((m->>'tax')::numeric,round((m->>'tax_minor')::numeric/100,2),0);
+  discount:=coalesce((m->>'discount')::numeric,round((m->>'discount_minor')::numeric/100,2),0);
+  subtotal:=coalesce((m->>'subtotal')::numeric,case when m?'line_items' and jsonb_array_length(m->'line_items')>0 then item_sum else total-tax+discount end);
+  if subtotal<0 or tax<0 or discount<0 or subtotal>=10000000000000000 or tax>=10000000000000000 or discount>=10000000000000000 or scale(subtotal)>2 or scale(tax)>2 or scale(discount)>2
+    or subtotal+tax-discount<>total
+    or (m?'line_items' and jsonb_array_length(m->'line_items')>0 and item_sum<>subtotal) then return jsonb_build_object('ok',false,'code','INVALID_TOTAL');end if;
  end if;
  foreach k in array array['notes','seller_name','buyer_name','payment_information'] loop
   if p_values?k then
-   if jsonb_typeof(p_values->k) not in ('string','null') or length(p_values->>k)>4000 then return jsonb_build_object('ok',false,'code','INVALID');end if;
+   if jsonb_typeof(p_values->k) not in ('string','null') or length(p_values->>k)>(case k when 'seller_name' then 255 when 'buyer_name' then 255 when 'payment_information' then 2000 else 4000 end) then return jsonb_build_object('ok',false,'code','INVALID');end if;
    if k in ('seller_name','buyer_name') and (p_values->>k) ~ '[[:cntrl:]]'
-     or k in ('notes','payment_information') and replace(replace(p_values->>k,chr(10),''),chr(13),'') ~ '[[:cntrl:]]' then return jsonb_build_object('ok',false,'code','INVALID');end if;
+     or k in ('notes','payment_information') and replace(replace(replace(p_values->>k,chr(9),''),chr(10),''),chr(13),'') ~ '[[:cntrl:]]' then return jsonb_build_object('ok',false,'code','INVALID');end if;
    if k<>'notes' then m:=m||jsonb_build_object(k,p_values->k);end if;
   end if;
  end loop;

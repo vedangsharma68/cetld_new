@@ -13,6 +13,27 @@ const owner='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const stranger='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const phone='+919871367051';
 
+test('invoice correction math preserves legacy minor components and refuses scalar edits that break saved itemization',async()=>{
+ const {db,workspaceId}=await boot();try{
+  await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+  const made=await createDirectInvoice(db,workspaceId,{messageId:'legacy-math-create',customerName:'Legacy math',amount:'110.00'});
+  await db.exec('reset role');await db.query("update public.invoices set metadata=(metadata-'tax'-'discount')||$2::jsonb where id=$1",[made.entityId,JSON.stringify({subtotal:100,tax_minor:1000,discount_minor:0,line_items:[{description:'Source service',amount:100}]})]);
+  let invoice=(await db.query('select * from public.invoices where id=$1',[made.entityId])).rows[0];
+  const changed=await correctInvoice(db,{workspaceId,invoice,messageId:'legacy-discount-correction',values:{discount:5,total_amount:105}});assert.equal(changed.ok,true,JSON.stringify(changed));
+  assert.equal(changed.record.metadata.tax_minor,1000);assert.equal(changed.record.metadata.discount_minor,0);assert.equal(changed.record.metadata.discount,5);
+  invoice=changed.record;
+  assert.equal((await correctInvoice(db,{workspaceId,invoice,messageId:'legacy-subtotal-mismatch',values:{subtotal:101,total_amount:106}})).code,'INVALID_TOTAL');
+  await db.exec('reset role');await db.query("update public.invoices set metadata=jsonb_set(metadata,'{line_items}',$2::jsonb) where id=$1",[made.entityId,JSON.stringify([{description:'Bad source item',quantity:2,unitPrice:25,amount:100}])]);
+  invoice=(await db.query('select * from public.invoices where id=$1',[made.entityId])).rows[0];
+  assert.equal((await correctInvoice(db,{workspaceId,invoice,messageId:'legacy-bad-items',values:{discount:0,total_amount:110}})).ok,false);
+  const repaired=await correctInvoice(db,{workspaceId,invoice,messageId:'legacy-item-replacement',values:{discount:0,total_amount:110,line_items:[{description:'Correct service',quantity:null,unitPrice:null,amount:100,confidence:null}],notes:'Bank\tbranch\nOriginal evidence retained'}});
+  assert.equal(repaired.ok,true,JSON.stringify(repaired));assert.equal(repaired.record.metadata.line_items[0].confidence,null);
+  invoice=repaired.record;
+  for(const [suffix,values] of [['seller-length',{seller_name:'x'.repeat(256)}],['payment-length',{payment_information:'x'.repeat(2001)}],['seller-control',{buyer_name:'Name\tInjected'}],['large-payload',{line_items:Array.from({length:70},()=>({description:'x'.repeat(500),amount:1}))}]])assert.equal((await correctInvoice(db,{workspaceId,invoice,messageId:`legacy-${suffix}`,values})).ok,false);
+  await db.exec('reset role');assert.equal((await db.query('select count(*)::int n from public.payments where invoice_id=$1',[made.entityId])).rows[0].n,0);
+ }finally{await db.close();}
+});
+
 test('incoming payments require receivable direction across RPC, direct assistant and raw inserts while historical replay stays unchanged',async()=>{
  const {db,workspaceId}=await boot();try{
   await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
