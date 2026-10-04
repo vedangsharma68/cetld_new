@@ -4,6 +4,8 @@ import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {ownerGroundingIssue} from '../automation/whatsapp/owner-grounding.mjs';
+import {createDirectOwnerWriteAdapter} from '../automation/whatsapp/direct-owner-write.mjs';
+import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs';
 import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as scope,DEFAULT_NOW,JOHN_INVOICE_ID} from './fixtures/owner-chat-battery.mjs';
 const logger={info(){},warn(){},error(){}};
 
@@ -60,6 +62,34 @@ test('ambiguous and unresolved batch targets fail before any write is marked or 
 test('completion and background claims require corresponding durable evidence',()=>{
   assert.equal(ownerGroundingIssue('I am still working on it and will message you.',[]),'unverified_background_job');
   assert.equal(ownerGroundingIssue('Updated both invoices.',[{ok:false,rolledBack:true}]),'unverified_action_result');
+});
+
+test('lost batch response recovers from persisted aggregate receipt without executing another write',async()=>{
+  const db=createOwnerChatDatabase(),rows=db.tables.invoices.filter(row=>row.workspace_id===scope.workspaceId).slice(0,2);let calls=0;
+  db.tables.whatsapp_direct_write_receipts=[];
+  db.supabase.rpc=async()=>{
+    calls++;
+    const results=rows.map(row=>{row.notes='Persisted before connection interruption';return {ok:true,completed:true,action:'invoice.updated',entityType:'invoice',entityId:row.id,updatedAt:row.updated_at};});
+    db.tables.whatsapp_direct_write_receipts.push({workspace_id:scope.workspaceId,owner_id:scope.ownerId,phone:scope.phone,provider_message_id:'interrupted-batch',result:{ok:true,completed:true,action:'batch.completed',entityType:'batch',entityId:scope.workspaceId,results}});
+    throw Error('isolated post-commit connection interruption');
+  };
+  const adapter=createDirectOwnerWriteAdapter({supabase:db.supabase});
+  const binding={workspaceId:scope.workspaceId,ownerId:scope.ownerId,phone:scope.phone,providerMessageId:'interrupted-batch'};
+  const result=await adapter.applyBatch({...binding,authorization:{kind:'instruction',quote:'Update both notes'},operations:rows.map(row=>({operation:'invoice.update',targetId:row.id,expectedUpdatedAt:row.updated_at,payload:{notes:'Persisted before connection interruption'}}))});
+  assert.equal(result.code,'WRITE_UNCONFIRMED');
+  const recovered=await adapter.lookupCompleted(binding);assert.equal(recovered.completed,true);assert.equal(recovered.results.length,2);assert.equal(calls,1);db.assertScopedReads();
+  rows[1].updated_at='2026-10-09T00:00:00Z';assert.equal((await adapter.lookupCompleted(binding)).code,'WRITE_UNCONFIRMED');
+});
+
+test('batch relative dates use the owner calendar and security identity/nested batches fail before dispatch',async()=>{
+  const db=createOwnerChatDatabase();let captured=null;
+  const tool=createWorkspaceDataTool({supabase:db.supabase,scope,authorize:async()=>true,confirmationMode:'direct',timezone:'Asia/Kolkata',clock:()=>new Date('2026-10-04T22:00:00Z'),
+    async executeBatchOperation(params){captured=params;return {ok:false,code:'STALE',rolledBack:true};}});
+  const child={operation:'update',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:'INV-001'}],values:{due_date:'tomorrow'}};
+  await tool.execute({operations:[child,{...child,filters:[{column:'invoice_number',operator:'eq',value:'INV-003'}]}]});
+  assert.equal(captured.operations[0].values.due_date,'2026-10-06');
+  captured=null;assert.equal((await tool.execute({operations:[{...child,values:{owner_id:scope.ownerId}},child]})).ok,false);assert.equal(captured,null);
+  assert.equal((await tool.execute({operations:[{operations:[child,child]},child]})).ok,false);assert.equal(captured,null);
 });
 
 

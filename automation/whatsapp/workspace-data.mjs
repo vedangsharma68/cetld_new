@@ -96,12 +96,12 @@ const WRITE_SCHEMA = Object.freeze({
 function definition() {
   // The server validates the full catalog. Do not send that catalog on every
   // model request; describe exposes it when the model needs unfamiliar fields.
-  const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA)},filters:{type:'array',maxItems:8,items:{type:'object',properties:{column:{type:'string'},operator:{type:'string',enum:FILTER_OPERATORS},value:{}},required:['column','operator','value'],additionalProperties:false}},values:{type:'object'}},required:['operation','table','values']};
+  const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA)},filters:{type:'array',items:{type:'object'}},values:{type:'object'}},required:['operation','table','values']};
   return {type:'function',function:{name:'workspaceData',
-    description:'Read or change workspace data. Clear owner instructions execute directly when allowed; otherwise a proposal needs a decision. Prefer structured fields; request text handles unfamiliar operations. Omit columns for defaults. business_records create needs record_type and name; updates need filters identifying one record (name eq). Extra facts go in custom_fields. Customers use name/email/phone; invoices use customer_name (joined name; ilike for partial names), invoice_number/total_amount/status. Settings use primary_model/fallback_model/follow_up_preferences. custom_fields is a flat object of snake_case keys and text/number/boolean/null values, merged on update; describe lists fields; pending reads proposals; confirm/cancel decide them.',
+    description:'Read/change owner data. Prefer structured fields; request plans operations. describe lists fields. business_records create needs record_type/name; updates need filters. custom_fields: flat snake_case keys, text/number/boolean/null; merged on update. Customers: name/email/phone. Invoices: invoice_number/customer_name/total_amount/status. Filters: column/operator/value. pending reads proposals; confirm/cancel decide.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
-        operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic ordered create/update operations. Read all targets first. For numbering use unique concrete numbers inferred from current scoped records; never a literal placeholder. No financial status changes or deletes in a batch. Combine patches for each target into one item.'},
+        operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic create/update batch. Read targets; use unique concrete numbers from scoped examples. No status changes/deletes. One patch per target; filters have column/operator/value.'},
         request:{type:'string',minLength:1,maxLength:1200},
         operation:{type:'string',enum:OPERATIONS},
         table:{type:'string',enum:Object.keys(TABLES)},
