@@ -31,7 +31,7 @@ export async function writeReleaseManifest({outputPath='owner-chat-build.json'}=
     'automation/whatsapp/owner-workspace-tools.mjs','automation/whatsapp/workspace-data.mjs','automation/whatsapp/owner-reply-store.mjs',
     'automation/whatsapp/cloud-inbound.mjs','automation/whatsapp/cloud-outbound.mjs','automation/whatsapp/owner-binding.mjs',
     'automation/whatsapp/owner-diagnostics.mjs','scripts/owner-chat-battery.mjs','tests/fixtures/owner-chat-battery.mjs',
-    'automation/whatsapp/invoice-corrections.mjs','invoice/business-fields.mjs','invoice/correction-form.mjs','invoice/correction-client.mjs',
+    'automation/whatsapp/invoice-corrections.mjs','invoice/business-fields.mjs','invoice/correction-form.mjs','invoice/correction-client.mjs','styles.css',
     'automation/engine.mjs','automation/core-store.mjs','automation/local-reminder-payment.mjs',
     'automation/whatsapp/cloud-reminders.mjs','automation/whatsapp/reminder-fingerprint.mjs','automation/whatsapp/reminder-receipts.mjs'];
   const files={};for(const path of paths)files[path]=createHash('sha256').update(await readFile(path)).digest('hex');
