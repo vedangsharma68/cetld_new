@@ -53,7 +53,13 @@ begin
   select * into i from public.invoices where workspace_id=p_workspace_id and id=p_invoice_id for update;
   if i.id is null or i.deleted_at is not null then return '{"ok":false,"reason":"invoice_unavailable"}';end if;
   if i.metadata->>'invoice_direction' is distinct from 'receivable' then return '{"ok":false,"reason":"invoice_direction"}';end if;
-  if i.external_provider is not null or i.external_invoice_id is not null or i.metadata ? 'bookkeeping_record_id'
+  -- Keep this optional proposal standalone: mirror all authoritative linkage
+  -- markers without depending on the separately reviewed owner guard helper.
+  -- Custom fields are owner labels, never accounting authority.
+  if nullif(btrim(i.external_provider),'') is not null
+    or nullif(btrim(i.external_invoice_id),'') is not null
+    or nullif(btrim(i.metadata->>'accounting_provider'),'') is not null
+    or nullif(btrim(i.metadata->>'bookkeeping_record_id'),'') is not null
     then return '{"ok":false,"reason":"external_accounting_required"}';end if;
   if exists(select 1 from public.payment_reversals r left join public.payments p on p.workspace_id=r.workspace_id and p.id=r.payment_id
     where r.workspace_id=p_workspace_id and (r.invoice_id=p_invoice_id or p.invoice_id=p_invoice_id) and (p.id is null or p.invoice_id<>r.invoice_id or p.amount<>r.amount))

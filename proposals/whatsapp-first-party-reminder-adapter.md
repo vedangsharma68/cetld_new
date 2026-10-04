@@ -1,5 +1,15 @@
 # Disabled first-party invoice reminder adapter proposal
 
+The optional durability SQL now rejects local-ledger authorization whenever an
+invoice has a trimmed, nonempty `external_provider`, `external_invoice_id`,
+`metadata.accounting_provider`, or `metadata.bookkeeping_record_id`. Empty,
+space-only and null values carry no accounting authority. Matching keys in owner
+custom fields are labels and cannot select a ledger. The SQL predicate is
+self-contained; it does not depend on the separate owner correction migration.
+The service-only final gate independently invokes this check before reserving a
+dispatch. External records require a separately reviewed fresh accounting check.
+This change does not enable, deploy or approve the reminder sender.
+
 This is a design proposal, not an activated provider. No reminder adapter, new
 template, scheduler, credentials, migration or feature flag is enabled by this
 change. Existing `meta`/`wapi` factory rejection and the Cloud outbound hold remain.

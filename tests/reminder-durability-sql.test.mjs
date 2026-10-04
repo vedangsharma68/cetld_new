@@ -393,3 +393,57 @@ for(const [label,mutation] of [
     assert.equal((await f.db.query('select count(*)::int n from app.first_party_reminder_dispatches')).rows[0].n,0);
   }finally{await f.close()}
 });
+
+test('actual final gate rejects all authoritative external-ledger markers with true service grants and ignores custom labels',async t=>{
+  const f=await setup();try{
+    const input=await f.prepare();let original;
+    f.intercept(async(url,options)=>{if(url.pathname.endsWith('/rpc/cetld_core_authorize_first_party_reminder')){original=JSON.parse(options.body);throw Error('capture before reservation');}});
+    assert.equal((await f.rawProvider.sendReminder(input)).status,'blocked');f.intercept(null);assert.equal(f.graph.length,0);
+    const markers=['external_provider','external_invoice_id','accounting_provider','bookkeeping_record_id'];
+    async function candidate(marker,value,{custom=false,foreign=false}={}){
+      await f.db.exec('reset role');
+      const metadata={invoice_direction:'receivable'};
+      if(['accounting_provider','bookkeeping_record_id'].includes(marker)&&!custom)metadata[marker]=value;
+      const columns={external_provider:null,external_invoice_id:null};if(marker in columns&&!custom)columns[marker]=value;
+      const customFields=custom?{accounting_provider:'quickbooks',external_provider:'quickbooks',ledger_reference:'fake-label'}:{};
+      const row=(await f.db.query(`insert into invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,status,metadata,external_provider,external_invoice_id,custom_fields)
+        values($1,$2,'MARKER',current_date-10,current_date-1,'USD',125,'sent',$3,$4,$5,$6) returning to_jsonb(invoices) row`,
+        [f.scope.workspaceId,f.customerId,JSON.stringify(metadata),columns.external_provider,columns.external_invoice_id,JSON.stringify(customFields)])).rows[0].row;
+      const snapshot=structuredClone(original.p_snapshot);snapshot.invoiceId=row.id;snapshot.template.parameters[2]=row.invoice_number;
+      snapshot.body=snapshot.template.body.replace(/\{\{([1-6])\}\}/g,(_,n)=>snapshot.template.parameters[Number(n)-1]);
+      await f.db.query(`update invoices set metadata=metadata||jsonb_build_object('followup_state','approved','approved_reminder_text',$2::text,
+        'approved_preferences_updated_at',(select updated_at from workspace_settings where workspace_id=$3)),next_follow_up_at=now()-interval '1 minute' where id=$1`,[row.id,snapshot.body,f.scope.workspaceId]);
+      const invoice=(await f.db.query('select to_jsonb(i) row from invoices i where id=$1',[row.id])).rows[0].row;
+      snapshot.invoiceUpdatedAt=invoice.updated_at;snapshot.invoiceVersion=String(invoice.automation_version);
+      const claim=(await f.db.query(`insert into cetld_core_automation_delivery_claims(workspace_id,invoice_id,scheduled_for,invoice_version,preferences_updated_at,status,lease_until,delivery_token)
+        values($1,$2,now(),$3,$4,'sending',now()+interval '10 minutes',gen_random_uuid()) returning id`,[f.scope.workspaceId,row.id,invoice.automation_version,snapshot.preferencesUpdatedAt])).rows[0].id;
+      await f.db.exec("set request.jwt.claim.role='service_role';set request.jwt.claim.sub='';set role service_role");
+      const owner=foreign?f.foreignOwner:f.scope.ownerId;
+      const checked=await f.supabase.rpc('cetld_core_check_local_reminder_payment',{p_owner_id:owner,p_workspace_id:f.scope.workspaceId,p_invoice_id:row.id});assert.equal(checked.error,null);
+      const gated=await f.supabase.rpc('cetld_core_authorize_first_party_reminder',{...original,p_owner_id:owner,p_claim_id:claim,p_snapshot:snapshot,p_snapshot_hash:reminderFingerprint(snapshot)});assert.equal(gated.error,null,JSON.stringify(f.errors));
+      const expected=!foreign&&(custom||value==null||String(value).trim()==='');
+      assert.equal(checked.data.ok,expected,`${marker}: ${JSON.stringify(checked.data)}`);assert.equal(gated.data.authorized,expected,`${marker}: ${JSON.stringify(gated.data)}`);
+      await f.db.exec('reset role');
+      assert.equal((await f.db.query('select count(*)::int n from app.first_party_reminder_dispatches where claim_id=$1',[claim])).rows[0].n,expected?1:0);
+      if(!expected&&!foreign)assert.equal(checked.data.reason,'external_accounting_required');
+      assert.equal(f.graph.length,0);
+    }
+    for(const marker of markers)await t.test(marker+' nonempty and whitespace semantics',async()=>{
+      for(const value of marker==='external_provider'?['quickbooks',null]:[' quickbooks ','','   ',null])await candidate(marker,value);
+      if(marker==='external_provider'){await f.db.exec('reset role');for(const value of [' quickbooks ','','   '])await assert.rejects(f.db.query('update invoices set external_provider=$2 where id=$1',[f.scope.invoiceId,value]),/external_provider_check/);}
+    });
+    await t.test('custom fields cannot fabricate accounting authority',async()=>candidate('accounting_provider','quickbooks',{custom:true}));
+    await t.test('reserved custom-field identifiers fail storage validation',async()=>{
+      await f.db.exec('reset role');
+      for(const key of ['external_invoice_id','bookkeeping_record_id'])await assert.rejects(f.db.query('update invoices set custom_fields=$2 where id=$1',[f.scope.invoiceId,JSON.stringify({[key]:'fake-id'})]),/custom_fields_check/);
+    });
+    await t.test('foreign owner cannot authorize even coherent healthy invoice',async()=>candidate('accounting_provider',null,{foreign:true}));
+    await t.test('authenticated and anon cannot execute service-only payment checker or gate',async()=>{
+      for(const role of ['authenticated','anon']){
+        await f.db.exec(`reset role;set request.jwt.claim.role='${role}';set request.jwt.claim.sub='${f.scope.ownerId}';set role ${role}`);
+        await assert.rejects(f.db.query('select public.cetld_core_check_local_reminder_payment($1,$2,$3)',[f.scope.ownerId,f.scope.workspaceId,f.scope.invoiceId]),/permission denied/);
+        await assert.rejects(f.db.query('select public.cetld_core_authorize_first_party_reminder($1,$2,$3,$4,$5)',[original.p_owner_id,original.p_workspace_id,original.p_claim_id,JSON.stringify(original.p_snapshot),original.p_snapshot_hash]),/permission denied/);
+      }
+    });
+  }finally{await f.close()}
+});
