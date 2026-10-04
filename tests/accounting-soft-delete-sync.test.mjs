@@ -23,20 +23,22 @@ test('accounting sync skips tombstoned invoices and linked payments while contin
   const calls = [];
   const records = {
     'deleted-external': {id: 'deleted-local', external_invoice_id: 'deleted-external', invoice_number: 'INV-DELETED', deleted_at: '2026-10-01T00:00:00Z'},
-    'active-external': {id: 'active-local', external_invoice_id: 'active-external', invoice_number: 'INV-ACTIVE', deleted_at: null},
+    'active-external': {id: 'active-local', external_invoice_id: 'active-external', invoice_number: 'INV-ACTIVE', deleted_at: null, metadata: {invoice_direction: 'receivable'}, updated_at: '2026-10-04T00:00:00Z'},
   };
   const fetchImpl = async (input, init = {}) => {
     const url = new URL(String(input));
     const table = url.pathname.split('/').at(-1);
     const body = init.body ? JSON.parse(init.body) : null;
     calls.push({table, method: init.method || 'GET', url, body});
+    if (table === 'workspaces') return json([{id: identity.workspaceId}]);
+    if (table === 'payments' && (init.method || 'GET') === 'GET') return json([]);
     if (table === 'cetld_accounting_sync_records') return json(body);
     if (table === 'customers') return json([{id: 'customer-local'}]);
     if (table === 'invoices' && (init.method || 'GET') === 'GET') {
       const externalId = url.searchParams.get('external_invoice_id')?.slice(3);
       return json(externalId && records[externalId] ? [records[externalId]] : []);
     }
-    if (table === 'invoices' && init.method === 'PATCH') return new Response(null, {status: 204});
+    if (table === 'invoices' && init.method === 'PATCH') return json([{id: url.searchParams.get('id').slice(3)}]);
     if (table === 'payments' && init.method === 'POST') return json([{id: 'payment-local'}]);
     throw new Error(`Unexpected accounting request ${init.method || 'GET'} ${url.pathname}`);
   };
@@ -65,14 +67,16 @@ test('accounting sync falls back only when deleted_at is genuinely missing', asy
     const url = new URL(String(input));
     const table = url.pathname.split('/').at(-1);
     calls.push({table, method: init.method || 'GET', url});
+    if (table === 'workspaces') return json([{id: identity.workspaceId}]);
+    if (table === 'payments' && (init.method || 'GET') === 'GET') return json([]);
     if (table === 'cetld_accounting_sync_records') return json(JSON.parse(init.body));
     if (table === 'customers') return json([{id: 'customer-local'}]);
     if (table === 'invoices' && (init.method || 'GET') === 'GET') {
       if (url.searchParams.get('select').includes('deleted_at')) return json({code: '42703', message: 'column invoices.deleted_at does not exist'}, 400);
-      return json([{id: 'legacy-active', external_invoice_id: 'legacy-external', invoice_number: 'INV-LEGACY'}]);
+      return json([{id: 'legacy-active', external_invoice_id: 'legacy-external', invoice_number: 'INV-LEGACY', metadata: {invoice_direction: 'receivable'}, updated_at: '2026-10-04T00:00:00Z'}]);
     }
     if (table === 'invoices' && init.method === 'PATCH' && url.searchParams.has('deleted_at')) return json({code: '42703', message: 'column invoices.deleted_at does not exist'}, 400);
-    if (table === 'invoices' && init.method === 'PATCH') return new Response(null, {status: 204});
+    if (table === 'invoices' && init.method === 'PATCH') return json([{id: url.searchParams.get('id').slice(3)}]);
     throw new Error(`Unexpected accounting request ${init.method || 'GET'} ${url.pathname}`);
   };
   const store = new SupabaseAccountingStore({...options, fetchImpl});
@@ -96,6 +100,8 @@ test('accounting sync does not use the legacy invoice lookup after unrelated dat
     const url = new URL(String(input));
     const table = url.pathname.split('/').at(-1);
     calls.push({table, method: init.method || 'GET', url});
+    if (table === 'workspaces') return json([{id: identity.workspaceId}]);
+    if (table === 'payments' && (init.method || 'GET') === 'GET') return json([]);
     if (table === 'cetld_accounting_sync_records') return json(JSON.parse(init.body));
     if (table === 'customers') return json([{id: 'customer-local'}]);
     if (table === 'invoices' && (init.method || 'GET') === 'GET') return json({code: '42501', message: 'permission denied'}, 403);
@@ -111,8 +117,8 @@ test('accounting sync does not use the legacy invoice lookup after unrelated dat
 test('accounting sync skips a payment write only after a reread confirms its invoice was deleted', async () => {
   const calls = [];
   const records = {
-    'payment-race-invoice': {id: 'payment-race-local', workspace_id: identity.workspaceId, external_provider: identity.provider, external_invoice_id: 'payment-race-invoice', invoice_number: 'INV-PAY-RACE', deleted_at: null},
-    'payment-active-invoice': {id: 'payment-active-local', workspace_id: identity.workspaceId, external_provider: identity.provider, external_invoice_id: 'payment-active-invoice', invoice_number: 'INV-PAY-ACTIVE', deleted_at: null},
+    'payment-race-invoice': {id: 'payment-race-local', workspace_id: identity.workspaceId, external_provider: identity.provider, external_invoice_id: 'payment-race-invoice', invoice_number: 'INV-PAY-RACE', deleted_at: null, metadata: {invoice_direction: 'receivable'}, updated_at: '2026-10-04T00:00:00Z'},
+    'payment-active-invoice': {id: 'payment-active-local', workspace_id: identity.workspaceId, external_provider: identity.provider, external_invoice_id: 'payment-active-invoice', invoice_number: 'INV-PAY-ACTIVE', deleted_at: null, metadata: {invoice_direction: 'receivable'}, updated_at: '2026-10-04T00:00:00Z'},
   };
   const fetchImpl = async (input, init = {}) => {
     const url = new URL(String(input));
@@ -120,6 +126,8 @@ test('accounting sync skips a payment write only after a reread confirms its inv
     const method = init.method || 'GET';
     const body = init.body ? JSON.parse(init.body) : null;
     calls.push({table, method, url, body});
+    if (table === 'workspaces') return json([{id: identity.workspaceId}]);
+    if (table === 'payments' && (init.method || 'GET') === 'GET') return json([]);
     if (table === 'cetld_accounting_sync_records') return json(body);
     if (table === 'customers') return json([{id: 'customer-local'}]);
     if (table === 'invoices' && method === 'GET') {
@@ -160,6 +168,8 @@ test('accounting sync skips a failed invoice upsert only after a reread confirms
     const method = init.method || 'GET';
     const body = init.body ? JSON.parse(init.body) : null;
     calls.push({table, method, url, body});
+    if (table === 'workspaces') return json([{id: identity.workspaceId}]);
+    if (table === 'payments' && (init.method || 'GET') === 'GET') return json([]);
     if (table === 'cetld_accounting_sync_records') return json(body);
     if (table === 'customers') return json([{id: 'customer-local'}]);
     if (table === 'invoices' && method === 'GET') {
@@ -176,7 +186,7 @@ test('accounting sync skips a failed invoice upsert only after a reread confirms
         return json({code: 'P0001', message: 'cannot update deleted invoice'}, 400);
       }
       records[row.external_invoice_id] = {id: 'invoice-active-local', workspace_id: identity.workspaceId, external_provider: identity.provider,
-        external_invoice_id: row.external_invoice_id, invoice_number: row.invoice_number, deleted_at: null};
+        external_invoice_id: row.external_invoice_id, invoice_number: row.invoice_number, deleted_at: null, metadata: {invoice_direction: 'receivable'}, updated_at: '2026-10-04T00:00:00Z'};
       return json([{id: 'invoice-active-local'}]);
     }
     if (table === 'payments' && method === 'POST') return json([{id: 'payment-active-row'}]);
@@ -207,6 +217,8 @@ test('accounting sync propagates an invoice upsert error when the scoped reread 
     const method = init.method || 'GET';
     const body = init.body ? JSON.parse(init.body) : null;
     calls.push({table, method, url, body});
+    if (table === 'workspaces') return json([{id: identity.workspaceId}]);
+    if (table === 'payments' && (init.method || 'GET') === 'GET') return json([]);
     if (table === 'cetld_accounting_sync_records') return json(body);
     if (table === 'customers') return json([{id: 'customer-local'}]);
     if (table === 'invoices' && method === 'GET') return json([]);
