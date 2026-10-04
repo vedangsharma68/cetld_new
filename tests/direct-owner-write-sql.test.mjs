@@ -13,6 +13,33 @@ const owner='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const stranger='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const phone='+919871367051';
 
+test('incoming payments require receivable direction across RPC, direct assistant and raw inserts while historical replay stays unchanged',async()=>{
+ const {db,workspaceId}=await boot();try{
+  await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+  const made=await createDirectInvoice(db,workspaceId,{messageId:'direction-create',customerName:'Direction client'});
+  await asOwner(db);const historical=(await db.query('select to_jsonb(public.record_invoice_payment($1,$2,10,$3,$4,false)) value',[workspaceId,made.entityId,'historical-direction','actual received transfer'])).rows[0].value;
+  for(const direction of ['payable',null,'unknown']){
+   await db.exec('reset role');await db.query("update public.invoices set metadata=jsonb_set(metadata,'{invoice_direction}',$2::jsonb) where id=$1",[made.entityId,JSON.stringify(direction)]);
+   const snapshot=(await db.query('select to_jsonb(i) value from public.invoices i where id=$1',[made.entityId])).rows[0].value;
+   await asOwner(db);
+   await assert.rejects(db.query('select public.record_invoice_payment($1,$2,5,$3,$4,false)',[workspaceId,made.entityId,`new-${direction}`,'new received transfer']),/incoming payment requires a receivable invoice/);
+   const replay=(await db.query('select to_jsonb(public.record_invoice_payment($1,$2,10,$3,$4,false)) value',[workspaceId,made.entityId,'historical-direction','actual received transfer'])).rows[0].value;assert.deepEqual(replay,historical);
+   await db.exec('reset role');await assert.rejects(db.query('insert into public.payments(workspace_id,invoice_id,amount,idempotency_key,reference,settle_remaining) values($1,$2,5,$3,$4,false)',[workspaceId,made.entityId,`raw-${direction}`,'new received transfer']),/incoming payment requires a receivable invoice/);
+   await assert.rejects(db.query('insert into public.payments(workspace_id,invoice_id,amount,idempotency_key,reference,settle_remaining) values($1,$2,11,$3,$4,false) on conflict (workspace_id,idempotency_key) where idempotency_key is not null do nothing',[workspaceId,made.entityId,'historical-direction','actual received transfer']),/incoming payment requires a receivable invoice/);
+   await db.query('insert into public.payments(workspace_id,invoice_id,amount,idempotency_key,reference,settle_remaining) values($1,$2,10,$3,$4,false) on conflict (workspace_id,idempotency_key) where idempotency_key is not null do nothing',[workspaceId,made.entityId,'historical-direction','actual received transfer']);
+   const current=(await db.query('select * from public.invoices where id=$1',[made.entityId])).rows[0];
+   await addInbound(db,`direction-paid-${direction}`,'Mark this invoice paid');
+   const direct=await write(db,{workspaceId,providerMessageId:`direction-paid-${direction}`,quote:'Mark this invoice paid',operation:'invoice.update',targetId:made.entityId,expectedUpdatedAt:current.updated_at,payload:{status:'paid'}});assert.equal(direct.ok,false);assert.equal(direct.code,'PAYMENT_GUARD');
+   await db.exec('reset role');assert.deepEqual((await db.query('select to_jsonb(i) value from public.invoices i where id=$1',[made.entityId])).rows[0].value,snapshot);
+  }
+  await db.exec('reset role');await db.query("update public.invoices set metadata=jsonb_set(metadata,'{invoice_direction}','\"receivable\"') where id=$1",[made.entityId]);
+  await asOwner(db);const received=(await db.query('select to_jsonb(public.record_invoice_payment($1,$2,5,$3,$4,false)) value',[workspaceId,made.entityId,'valid-receivable','actual received transfer'])).rows[0].value;assert.equal(Number(received.amount),5);
+  await asOwner(db,stranger);await assert.rejects(db.query('select public.record_invoice_payment($1,$2,5,$3,$4,false)',[workspaceId,made.entityId,'foreign-direction','unauthorized']),/workspace access denied/);
+  await db.exec('reset role');assert.deepEqual((await db.query('select to_jsonb(p) value from public.payments p where id=$1',[historical.id])).rows[0].value,historical);
+  assert.equal((await db.query('select count(*)::int n from public.payments where invoice_id=$1',[made.entityId])).rows[0].n,2);
+ }finally{await db.close();}
+});
+
 async function correctInvoice(db,{workspaceId,invoice,messageId,values,ownerId=owner,quote='Correct my invoice'}){
   await asService(db);await addInbound(db,messageId,quote);
   return (await db.query('select public.whatsapp_correct_owner_invoice($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb) value',
