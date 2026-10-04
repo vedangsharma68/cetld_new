@@ -8,6 +8,20 @@ const owner='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const stranger='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const phone='+919871367051';
 
+test('business record grants override inherited Supabase service privileges',async()=>{
+  const {db}=await boot({supabaseDefaultGrants:true});
+  try {
+    const {rows:[grants]}=await db.query(`select
+      has_table_privilege('service_role','public.business_records','SELECT') as read,
+      has_table_privilege('service_role','public.business_records','INSERT') as create,
+      has_table_privilege('service_role','public.business_records','UPDATE') as edit,
+      has_table_privilege('service_role','public.business_records','DELETE') as delete,
+      has_table_privilege('service_role','public.business_records','TRUNCATE') as truncate,
+      has_table_privilege('authenticated','public.business_records','INSERT,UPDATE,DELETE') as client_write`);
+    assert.deepEqual(grants,{read:true,create:true,edit:true,delete:false,truncate:false,client_write:false});
+  } finally {await db.close();}
+});
+
 test('owner-defined business categories support atomic create/edit, button decisions, replay and negative tenant access',async()=>{
   const {db,workspaceId}=await boot();
   try{
@@ -95,7 +109,7 @@ test('business custom fields persist and merge through direct and button writes 
   }finally{await db.close();}
 });
 
-async function boot({crlfLegacyWorkspaceData=false}={}){
+async function boot({crlfLegacyWorkspaceData=false,supabaseDefaultGrants=false}={}){
   const db=new PGlite();
   await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;
     create schema auth;create schema storage;
@@ -112,6 +126,7 @@ async function boot({crlfLegacyWorkspaceData=false}={}){
     create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
     create table storage.objects(id uuid default gen_random_uuid(),bucket_id text,name text);
     alter table storage.objects enable row level security;`);
+  if(supabaseDefaultGrants)await db.exec('alter default privileges in schema public grant all on tables to service_role');
   const migrations=(await readdir(new URL('../supabase/migrations/',import.meta.url))).filter(name=>name.endsWith('.sql')).sort();
   for(const name of migrations){
     if(crlfLegacyWorkspaceData&&name==='20261003141000_direct_owner_write.sql'){
