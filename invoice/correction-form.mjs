@@ -7,7 +7,7 @@ export function correctionLineItemRow(item = {}, escape = String, locked = false
 
 export function invoiceCorrectionFormView(invoice, customers, escape) {
   const fields = invoiceBusinessFields(invoice);
-  const locked = Number(invoice.paid_minor || 0) > 0 || invoice.has_payment_history === true;
+  const locked = Number(invoice.paid_minor || 0) > 0 || invoice.has_payment_history === true || invoice.status==='paid' || Boolean(invoice.deleted_at) || ['void','cancelled'].includes(invoice.status);
   const disabled = locked ? 'disabled' : '';
   const input = (label,name,value,type='text',financial=false) => `<label class="field">${label}<input name="${name}" type="${type}" value="${escape(value ?? '')}" ${financial?disabled:''}></label>`;
   const customersHtml = `<option value="" ${customers.some(customer=>customer.id===invoice.customer_id)?'':'selected'} disabled>Choose customer</option>` + customers.map(customer=>`<option value="${escape(customer.id)}" ${customer.id===invoice.customer_id?'selected':''}>${escape(customer.name || customer.company_name || 'Customer')}</option>`).join('');
@@ -17,10 +17,11 @@ export function invoiceCorrectionFormView(invoice, customers, escape) {
 function moneyValue(value, nullable = false) {
   const text = String(value ?? '').trim();
   if (!text && nullable) return null;
-  if (!/^\d+(?:\.\d{1,2})?$/.test(text)) throw new Error('Amounts must be non-negative and use at most two decimal places.');
-  const numeric = Number(text);
-  if (!Number.isFinite(numeric)) throw new Error('Amount is invalid.');
-  return numeric;
+  if (!/^\d{1,12}(?:\.\d{1,2})?$/.test(text)) throw new Error('Amounts must be non-negative, use at most twelve whole digits and two decimal places.');
+  const [whole,fraction='']=text.split('.');
+  const minor=BigInt(whole)*100n+BigInt(fraction.padEnd(2,'0'));
+  if (minor>BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Amount is invalid.');
+  return Number(minor)/100;
 }
 
 export function readCorrectionLineItems(rows) {
@@ -29,7 +30,7 @@ export function readCorrectionLineItems(rows) {
     const description = get('description');
     if (!description) throw new Error('Each line item needs a description.');
     const quantity = get('quantity');
-    if (quantity && (!/^\d+(?:\.\d{1,6})?$/.test(quantity) || Number(quantity)<=0)) throw new Error('Item quantity must be positive.');
+    if (quantity && (!/^\d+(?:\.\d{1,4})?$/.test(quantity) || Number(quantity)<=0 || Number(quantity)>1000000)) throw new Error('Item quantity must be positive, at most 1000000, and use at most four decimal places.');
     const unitPrice = get('unitPrice');
     return {description,quantity:quantity?Number(quantity):null,unitPrice:unitPrice?moneyValue(unitPrice):null,amount:moneyValue(get('amount')),
       ...(row.dataset.confidence == null?{}:{confidence:Number(row.dataset.confidence)})};
@@ -50,7 +51,7 @@ export function correctionValues(form, invoice, formData = new FormData(form)) {
       if (value !== before) values[name] = value;
     } else {
       if (name==='currency') value=value.toUpperCase();
-      if (String(original[name] ?? '') !== value) values[name] = name==='due_date'&&!value?null:value;
+      if (String(original[name] ?? '') !== value) values[name] = ['due_date','notes','seller_name','buyer_name','payment_information'].includes(name)&&!value?null:value;
     }
   }
   const rows = form.querySelectorAll('[data-correction-item]');

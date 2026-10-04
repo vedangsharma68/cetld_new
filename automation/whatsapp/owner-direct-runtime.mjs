@@ -2,7 +2,7 @@ import {createDirectOwnerWriteAdapter} from './direct-owner-write.mjs';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
 const TABLE_TYPES={invoices:'invoice',customers:'customer',business_records:'business_record',workspace_settings:'settings',workspace_ai_settings:'ai_settings'};
 const data=result=>{if(result?.error)throw result.error;return result?.data;};
-export function createOwnerDirectRuntime({supabase,scope,message,messageId,authorize,adapter=createDirectOwnerWriteAdapter({supabase})}){
+export function createOwnerDirectRuntime({supabase,scope,message,messageId,authorize,adapter=createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnabled:true})}){
   return {
     async lookupCompleted(){
       if(!await authorize(scope))return {ok:false,code:'DENIED'};
@@ -45,7 +45,7 @@ export function createOwnerDirectRuntime({supabase,scope,message,messageId,autho
         if(!settings){
           const found=await resolveWorkspaceRecord({supabase,scope,table,filters,operation,
             assertAuthorized:()=>ctx.assertAuthorized?.(),assertLive:()=>ctx.assertLive?.(),
-            select:table==='invoices'?'id,invoice_number,updated_at':table==='business_records'?'id,name,record_type,updated_at':'id,name,company_name,updated_at'});
+            select:table==='invoices'?'id,invoice_number,updated_at,metadata':table==='business_records'?'id,name,record_type,updated_at':'id,name,company_name,updated_at'});
           if(!found.ok)return found;
           row=found.row;
         }else{
@@ -53,11 +53,20 @@ export function createOwnerDirectRuntime({supabase,scope,message,messageId,autho
           row=data(await query.maybeSingle());
         }
       }
+      let payload=values;
+      if(table==='invoices'&&operation==='update'&&values.status==='paid'&&row?.metadata?.invoice_direction!=='receivable')
+        return {ok:false,completed:false,code:'PAYMENT_GUARD',message:'Recording money received requires a receivable invoice. No payment was recorded.'};
+      if(table==='invoices'&&operation==='update'&&values.customer_name!==undefined){
+        const customer=await resolveWorkspaceRecord({supabase,scope,table:'customers',operation:'update',filters:[{column:'name',operator:'eq',value:values.customer_name}],select:'id,name,updated_at',
+          assertAuthorized:()=>ctx.assertAuthorized?.(),assertLive:()=>ctx.assertLive?.()});
+        if(!customer.ok)return customer;
+        payload={...values,customer_id:customer.row.id};delete payload.customer_name;
+      }
       await ctx.assertAuthorized?.();ctx.assertLive?.();
       return adapter.apply({workspaceId:scope.workspaceId,ownerId:scope.ownerId,phone:scope.phone,
         providerMessageId:messageId,authorization:{kind:'instruction',quote:String(message||'')},
         operation:TABLE_TYPES[table]+'.'+operation,targetId:row?.id||(table.startsWith('workspace_')?scope.workspaceId:null),
-        expectedUpdatedAt:row?.updated_at||null,payload:values});
+        expectedUpdatedAt:row?.updated_at||null,payload});
     },
     async decideButton({interactionId,decision,pending}){
       if(!await authorize(scope))return {ok:false,code:'DENIED'};

@@ -1,6 +1,7 @@
 import {sanitizeReminderTemplate} from '../preferences.mjs';
 import {applyPaymentReversals,isMissingReversalStorage} from '../../payment-reversals.mjs';
 import {resolveWorkspaceRecord,validateCustomFields,ownerCalendar} from './workspace-records.mjs';
+import {INVOICE_CORRECTION_FIELDS,INVOICE_BUSINESS_METADATA_FIELDS,INVOICE_EXTENDED_CORRECTION_FIELDS,validateInvoiceCorrection,invoiceBusinessFields} from './invoice-corrections.mjs';
 import {sanitizeOwnerBotPreferences,mergeOwnerBotPreferences,OWNER_BOT_LANGUAGE_OPTIONS} from './bot-preferences.mjs';
 import {
   CF_PRIMARY_MODEL,
@@ -50,10 +51,10 @@ const TABLES = Object.freeze({
   },
   invoices: {
     label:'Invoices', scope:'workspace',
-    columns:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status','notes','custom_fields','created_at','updated_at'],
+    columns:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status','notes','custom_fields','created_at','updated_at',...INVOICE_BUSINESS_METADATA_FIELDS],
     defaults:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status','custom_fields'],
     filters:['id','invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status'],
-    writeColumns:['invoice_number','customer_name','customer_id','customer_email','customer_phone','issue_date','due_date','currency','total_amount','subtotal','tax','notes','status','custom_fields','invoice_direction'],
+    writeColumns:[...INVOICE_CORRECTION_FIELDS,'customer_email','customer_phone','status'],
   },
   payments: {
     label:'Payments', scope:'workspace',
@@ -87,7 +88,7 @@ const WRITE_SCHEMA = Object.freeze({
   workspace_ai_settings:{update:['primary_model','fallback_model']},
   invoices:{
     create:['invoice_number','customer_name','customer_id','customer_email','customer_phone','issue_date','due_date','currency','total_amount','subtotal','tax','notes','custom_fields'],
-    update:['invoice_number','issue_date','due_date','currency','total_amount','notes','status','custom_fields'],
+    update:[...INVOICE_CORRECTION_FIELDS,'status'],
     reviewAttachment:['invoice_number_intent','invoice_number','customer_name','issue_date','due_date','total_amount','currency','invoice_direction','subtotal','tax','notes','line_items','customer_email','customer_phone'],
   },
   workspace_settings:{update:['business_name','follow_up_preferences','default_currency','default_timezone','owner_bot_preferences']},
@@ -123,7 +124,7 @@ function definition() {
 function catalog(table=null) {
   return {
     operations:OPERATIONS,
-    atomicBatch:{argument:'operations',minItems:2,maxItems:10,itemFields:['operation','table','filters','values'],operations:['create','update'],oneUnambiguousRecordPerItem:true,allCommitOrAllRollback:true,customFields:'Nest additional business facts in each item values.custom_fields.',excluded:['status changes','deletes','confirmations']},
+    atomicBatch:{argument:'operations',minItems:2,maxItems:10,itemFields:['operation','table','filters','values'],operations:['create','update'],oneUnambiguousRecordPerItem:true,allCommitOrAllRollback:true,customFields:'Nest additional business facts in each item values.custom_fields.',excluded:['status changes','deletes','confirmations','invoice extended corrections (customer, items, tax/subtotal/discount, direction and extracted facts)']},
     businessRecordLifecycle:{mode:'direct',delete:'Recoverable deletion; retains all business facts. No values allowed.',restore:'Restore one record deleted by the current owner within 30 days; use its name or ID. No values allowed.',reads:'Deleted records are hidden by default; read with deleted_at gt a supplied timestamp to inspect retained deleted records.'},
     attachmentOperations:{analyzeAttachment:'Read the current attachment and retain its source facts in a durable review without saving an invoice.',
       saveAttachment:'Save the current attachment or this owner\'s current retained attachment review. Reuse its known facts; do not recreate it from chat text.',
@@ -133,7 +134,7 @@ function catalog(table=null) {
       writeFields:WRITE_SCHEMA[name]||{},
       ...(['business_records','customers'].includes(name)?{writeTargetConstraints:{requiredFor:['update',...(name==='customers'?['delete']:[])],filtersRequired:true,operators:{eq:spec.filters,ilike:spec.filters.filter(field=>['name','company_name'].includes(field))},oneUnambiguousRecord:true}}:{}),
       ...(name==='business_records'?{writeValueConstraints:{create:{required:['record_type','name'],record_type:'lowercase category: one letter followed by up to 63 lowercase letters, digits or underscores',name:'nonempty text, up to 200 characters',custom_fields:'flat object of snake_case business keys and text/number/boolean/null values; extra fields must be nested here'},update:{record_type:'same category format',name:'nonempty text, up to 200 characters',custom_fields:'merges with existing fields'}}}:{}),
-      ...(name==='invoices'?{writeValueConstraints:{update:{status:['paid','unpaid'],unpaid:'Already unpaid is a read-only check. Recorded local payments require a later explicit confirmation to reopen with immutable reversal audit, original receipts preserved, no cash refund, and reminders paused. External or inconsistent ledgers are blocked.'}}}:{}),
+      ...(name==='invoices'?{writeValueConstraints:{update:{status:['paid','unpaid'],unpaid:'Already unpaid is a read-only check. Recorded local payments require a later explicit confirmation to reopen with immutable reversal audit, original receipts preserved, no cash refund, and reminders paused. External or inconsistent ledgers are blocked.',corrections:'Direct owner mode. Typed partial patch; current row and immutable correction audit are verified before reporting success. Preserve original source facts. Any recorded payments/reversals block financial, customer, direction and number edits. Notes/dates/extracted business text stay separate from payment facts.',customer_name:'Reassign to one existing customer in this workspace; partial names allowed only when unambiguous. Never rename a shared customer implicitly.',money:'Nonnegative amounts with at most 2 decimals; total positive. Combined subtotal+tax-discount must match total; line amounts must match subtotal.',line_items:'Array up to 100 of description (1–500 chars), amount, optional quantity (>0, up to 4 decimals), unitPrice, confidence (0–1); quantity × unitPrice must match amount rounded to 2 decimals.',invoice_direction:['receivable','payable'],seller_name:'nullable text up to 255 chars',buyer_name:'nullable text up to 255 chars',payment_information:'nullable business payment instructions up to 2000 chars; never credentials'}}}:{}),
       ...(name==='workspace_settings'?{writeValueConstraints:{update:{
         owner_bot_preferences:{description:'Owner assistant style; partial fields merge with saved preferences.',assistantName:'text, 1-50 characters',tone:['concise','friendly','formal'],language:OWNER_BOT_LANGUAGE_OPTIONS.map(item=>item.value),replyLength:['short','balanced','detailed'],confirmationMode:['direct','buttons'],serviceReplySignature:'text, up to 120 characters',customInstruction:'style text, up to 500 characters'},
         follow_up_preferences:{description:'Customer reminder settings; partial fields merge with saved preferences.',tone:['gentle','professional','firm'],reminderTemplate:'up to 1000 characters; tokens {{business_name}}, {{customer_name}}, {{invoice_number}}, {{balance}}, {{due_date}}',allowedWeekdays:'array of weekday numbers 0-6',escalation:['pause','manual_review'],stopOnPayment:true}
@@ -198,9 +199,13 @@ function sanitise(value,scope,depth=0) {
   }
   if(Array.isArray(value))return value.map(item=>sanitise(item,scope,depth+1)).filter(item=>item!==undefined);
   if(!value||typeof value!=='object')return undefined;
+  if(ownObject(value.metadata)&&typeof value.invoice_number==='string'){
+    const {metadata,...business}=value;
+    value={...business,...invoiceBusinessFields({metadata})};
+  }
   const out={};
   for(const [key,item] of Object.entries(value)) {
-    if(SECRET_KEY.test(key)||INTERNAL_KEY.test(key)||FORBIDDEN_KEY.test(key))continue;
+    if(key==='correctionAuditId'||SECRET_KEY.test(key)||INTERNAL_KEY.test(key)||FORBIDDEN_KEY.test(key))continue;
     const safe=sanitise(item,scope,depth+1);if(safe!==undefined)out[key]=safe;
   }
   return out;
@@ -312,7 +317,7 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
     if(args.order!==undefined) {
       if(!exactKeys(args.order,['column','direction'])||!TABLES[table]?.columns.includes(args.order.column)
           ||!['asc','desc'].includes(args.order.direction))throw new TypeError('invalid order');
-      if(args.order.column==='customer_name'||(['payments','invoice_files'].includes(table)&&args.order.column==='invoice_number'))
+      if(args.order.column==='customer_name'||table==='invoices'&&INVOICE_BUSINESS_METADATA_FIELDS.includes(args.order.column)||(['payments','invoice_files'].includes(table)&&args.order.column==='invoice_number'))
         throw new TypeError('related fields cannot control pagination order');
       order={column:args.order.column,direction:args.order.direction};
     }
@@ -428,10 +433,10 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
   const readScoped=async ({table,columns,filters,limit,offset,order},internalColumns=[],ctx,{customerName=false,customerFilter=null}={})=>{
     const spec=TABLES[table];
     const selected=columns||spec.defaults;
-    const actual=selected.filter(column=>column!=='customer_name'
+    const actual=selected.filter(column=>column!=='customer_name'&&!(table==='invoices'&&INVOICE_BUSINESS_METADATA_FIELDS.includes(column))
       &&!(table==='payments'&&['reversed_amount','net_amount','reversed_at'].includes(column))
       &&!(['payments','invoice_files'].includes(table)&&column==='invoice_number'));
-    const selectedWithInternals=[...new Set([...actual,...internalColumns])];
+    const selectedWithInternals=[...new Set([...actual,...internalColumns,...(table==='invoices'&&selected.some(column=>INVOICE_BUSINESS_METADATA_FIELDS.includes(column))?['metadata']:[])])];
     if(!selectedWithInternals.length)throw new TypeError('empty selected fields');
     await ctx?.assertAuthorized?.();
     const joinCustomer=table==='invoices'&&(customerName||customerFilter);
@@ -522,6 +527,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     const finalColumns=requested.filter(column=>column!=='customer_name'
       &&!(['payments','invoice_files'].includes(table)&&column==='invoice_number'));
     const output=rows.map(row=>{
+      if(table==='invoices')row={...row,...invoiceBusinessFields(row)};
       const safe=Object.fromEntries(finalColumns.filter(column=>Object.hasOwn(row,column)&&!INTERNAL_KEY.test(column)).map(column=>[column,
         column==='follow_up_preferences'?safeFollowupPreferences(row[column]):row[column]]));
       if(requested.includes('customer_name'))safe.customer_name=row.customer?.name||row.customer?.[0]?.name||null;
@@ -779,6 +785,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         attemptedOperation={operation:'batch'};
         if(confirmationMode!=='direct'||typeof executeBatchOperation!=='function')return fail('INVALID','Atomic batches require direct owner instructions.');
         for(const item of params.operations){
+          if(item.table==='invoices'&&item.operation==='update'&&Object.keys(item.values).some(key=>INVOICE_EXTENDED_CORRECTION_FIELDS.includes(key)))throw new TypeError('invalid batch');
           if(item.values.custom_fields!==undefined)validateCustomFields(item.values.custom_fields);
           if(['customers','business_records','workspace_settings','workspace_ai_settings'].includes(item.table))item.values=validateValues(item.table,item.operation,item.values);
           if(item.table==='invoices')for(const field of ['issue_date','due_date']){
@@ -801,6 +808,17 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         if(['today','tomorrow','yesterday'].includes(relative)){
           const calendar=ownerCalendar(clock,timezone);
           params.values[field]=relative==='today'?calendar.currentDate:calendar[relative];
+        }
+      }
+      if(params.table==='invoices'&&params.operation==='update'&&!Object.hasOwn(params.values,'status')){
+        params.values=validateInvoiceCorrection(params.values);
+        if(confirmationMode!=='direct'&&Object.keys(params.values).some(key=>INVOICE_EXTENDED_CORRECTION_FIELDS.includes(key)))return fail('UNAVAILABLE','These audited invoice corrections require direct owner mode. No change was made.');
+        if(params.values.customer_name!==undefined||params.values.customer_id!==undefined){
+          const byName=params.values.customer_name!==undefined;
+          const customer=await resolveWorkspaceRecord({supabase,scope,table:'customers',operation:'update',filters:[{column:byName?'name':'id',operator:'eq',value:byName?params.values.customer_name:params.values.customer_id}],select:'id,name,updated_at',
+            assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
+          if(!customer.ok)return safeError(customer);
+          params.values={...params.values,customer_id:customer.row.id};delete params.values.customer_name;
         }
       }
       ctx.assertLive();
@@ -875,6 +893,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         'invalid batch':['BATCH_SHAPE','Atomic batches support 2–10 create/update items in operations, each with table, filters and values. One unambiguous record per item; all commit or all roll back. Nest custom business fields in values.custom_fields. Status changes and deletes are separate operations. No write was attempted.'],
         'invoice action requires exactly one canonical target':['TARGET_REQUIRED','Which invoice do you mean? Send its invoice number or customer name. If that customer has several invoices, I will ask you to choose. No change was made.'],
         'invalid invoice fields':['INVALID_FIELDS','Those invoice fields are not supported. Use status paid or unpaid separately. Reopening preserves original payments and requires explicit confirmation. No change was made.'],
+        'invalid invoice correction':['INVALID_FIELDS','Use typed invoice correction fields from this catalog. Money requires at most two decimals; line items require description and amount, with consistent quantity/unitPrice when supplied. Do not write metadata, ledger/security fields or credentials. No write was attempted.'],
         'invalid request':['REQUEST_SHAPE','The assistant combined two request formats. It should send either a description or structured fields. No change was made.'],
         'record action requires identifying filters':['TARGET_REQUIRED','Updates and deletes require filters identifying one existing record, for example name eq with the record name already supplied by the owner. Keep changes in values.custom_fields. Correct the arguments using this catalog and current owner message; no database write was attempted.'],
         'invalid filter':['FILTER_SHAPE','Each filter requires column, operator and value from this catalog. Updates need one unambiguous record, using eq (or ilike for names). Correct the arguments from the owner message; no database write was attempted.'],

@@ -33,6 +33,7 @@ function database({ownerPreferences=preferences(),pendingAction=null}={}) {
     invoices:[invoice],
     whatsapp_pending_actions:pendingRows,
     whatsapp_direct_write_receipts:[],
+    invoice_correction_audits:[],
   };
   const db={calls,tables,from(table){
     const filters=[];let columns='*',limit=100;
@@ -56,6 +57,14 @@ function database({ownerPreferences=preferences(),pendingAction=null}={}) {
   },async rpc(name,args){
     calls.push({name,args});
     if(name==='invoice_lifecycle_action')return {data:{ok:true,pending:false}};
+    if(name==='whatsapp_correct_owner_invoice'){
+      Object.assign(invoice,args.p_values,{updated_at:changedAt});
+      const auditId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      tables.invoice_correction_audits.push({id:auditId,workspace_id:workspaceId,owner_id:ownerId,
+        invoice_id:invoiceId,after_snapshot:structuredClone(invoice)});
+      return {data:{ok:true,completed:true,action:'invoice.updated',entityType:'invoice',entityId:invoiceId,
+        updatedAt:changedAt,correctionAuditId:auditId}};
+    }
     if(name==='whatsapp_apply_direct_owner_write'){
       if(args.p_operation==='invoice.update'){
         Object.assign(invoice,args.p_payload,{updated_at:changedAt});
@@ -160,14 +169,12 @@ test('direct owner command sends the exact inbound quote to the write RPC and re
   }})});
 
   const result=await handler({workspaceId,ownerId,phone,messageId:'direct-command-1',message});
-  const rpc=db.calls.find(call=>call.name==='whatsapp_apply_direct_owner_write');
-  assert.ok(rpc,'direct command should use the atomic owner-write RPC');
-  assert.equal(rpc.args.p_authorization_kind,'instruction');
-  assert.equal(rpc.args.p_authorization_quote,message);
-  assert.equal(rpc.args.p_operation,'invoice.update');
-  assert.equal(rpc.args.p_target_id,invoiceId);
+  const rpc=db.calls.find(call=>call.name==='whatsapp_correct_owner_invoice');
+  assert.ok(rpc,'direct correction should use the audited invoice RPC');
+  assert.equal(rpc.args.p_user_message,message);
+  assert.equal(rpc.args.p_invoice_id,invoiceId);
   assert.equal(rpc.args.p_expected_updated_at,updatedAt);
-  assert.deepEqual(rpc.args.p_payload,{total_amount:130});
+  assert.deepEqual(rpc.args.p_values,{total_amount:130});
   assert.match(result.answer,/Updated invoice INV-JOHN-1\./);
   assert.match(result.answer,/CETLD support/);
   assert.match(preferenceSystemMessage,/"tone":"concise"/);

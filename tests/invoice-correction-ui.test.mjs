@@ -37,6 +37,10 @@ test('form sends only actual typed changes and preserves nullable quantity legac
   assert.deepEqual(correctionValues(form,invoice,unchanged),{due_date:null,notes:'Corrected'});
   assert.deepEqual(readCorrectionLineItems([row({description:'Service',quantity:'',unitPrice:'',amount:'100'})]),[{description:'Service',quantity:null,unitPrice:null,amount:100}]);
   assert.throws(()=>readCorrectionLineItems([row({description:'Service',amount:'1.001'})]),/two decimal/);
+  assert.throws(()=>readCorrectionLineItems([row({description:'Service',amount:'90071992547409.91'})]),/twelve whole digits/);
+  assert.throws(()=>readCorrectionLineItems([row({description:'Service',quantity:'0.00001',unitPrice:'0',amount:'0'})]),/four decimal/);
+  unchanged.set('notes','');
+  assert.deepEqual(correctionValues(form,invoice,unchanged),{due_date:null,notes:null});
 });
 
 test('authenticated correction client sends exact scope/CAS/idempotency payload and requires persisted success',async()=>{

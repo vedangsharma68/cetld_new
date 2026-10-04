@@ -45,6 +45,7 @@ before(async () => {
     if (name === '20260925140000_secure_invoice_settlement_and_currency_guards.sql' || name === '20260925150000_exact_invoice_money_and_delete_guards.sql') { deferredIntegrityMigrations.push(migration); continue; }
     await db.exec(migration.replace('create extension if not exists pgcrypto;', ''));
   }
+  const finalPaymentDefinition=(await db.query("select pg_get_functiondef('public.record_invoice_payment(uuid,uuid,numeric,text,text,boolean)'::regprocedure) definition")).rows[0].definition;
   await db.exec(`insert into auth.users(id) values ('${userA}'),('${userB}'); set role authenticated;`);
   await identity(userA);
   workspaceA = (await db.query("select (public.create_workspace('Alpha','alpha-space')).id")).rows[0].id;
@@ -68,6 +69,7 @@ before(async () => {
     ['legacy-yen', 'sent', '0.00', '118.25', {}, 'JPY'],
     ['legacy-dinar', 'sent', '0.00', '10.125', {}, 'KWD'],
   ]) {
+    metadata.invoice_direction='receivable';
     if(metadata.followup_state==='approved'){metadata.approved_reminder_text='Invoice update.\n\nAlpha';}
     invoiceIds[label] = (await withOwner(() => db.query(
       `insert into public.invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,total_amount,amount_paid,status,metadata,currency)
@@ -93,6 +95,9 @@ before(async () => {
   ))).rows[0].id;
   await withOwner(() => db.exec(deferredIntegrityMigrations[1]));
   await withOwner(async () => db.exec(await readFile(new URL('../supabase/migrations/20260929100000_consistent_invoice_numbers.sql', import.meta.url), 'utf8')));
+  // Earlier migrations are replayed only to seed legacy numeric fixtures. The
+  // tests must still execute the final, direction-guarded payment RPC.
+  await withOwner(() => db.exec(finalPaymentDefinition));
 });
 
 after(async () => db.close());
@@ -289,7 +294,7 @@ test('database rejects unsupported currencies on new invoices and settlement whi
 
 test('the paid Assistant invoice RPC creates invoice and payment atomically and idempotently', async () => {
   await identity(userA);
-  const metadata = {assistant_idempotency_key: 'assistant_paid_invoice_1048', followup_state: 'draft', next_follow_up_at: null, bookkeeping_sync_status: 'pending'};
+  const metadata = {invoice_direction:'receivable',assistant_idempotency_key: 'assistant_paid_invoice_1048', followup_state: 'draft', next_follow_up_at: null, bookkeeping_sync_status: 'pending'};
   const args = [workspaceA, customerAId, 'INV-assistant-paid', '2026-09-01', '2026-10-01', 'INR', 118, 'Paid at entry', JSON.stringify(metadata), 'assistant_paid_invoice_1048', 'Marked as already paid'];
   const call = () => db.query(`select * from public.create_paid_assistant_invoice($1::uuid,$2::uuid,$3::text,$4::date,$5::date,$6::text,$7::numeric,$8::text,$9::jsonb,$10::text,$11::text)`, args);
   const created = (await call()).rows[0];
@@ -321,7 +326,7 @@ test('a failed paid Assistant invoice RPC rolls back the inserted invoice', asyn
   await identity(userA);
   await assert.rejects(db.query(
     `select * from public.create_paid_assistant_invoice($1::uuid,$2::uuid,$3::text,$4::date,$5::date,$6::text,$7::numeric,$8::text,$9::jsonb,$10::text,$11::text)`,
-    [workspaceA, customerAId, 'INV-assistant-zero', '2026-09-01', '2026-10-01', 'INR', 0, null, JSON.stringify({assistant_idempotency_key: 'assistant_paid_invoice_zero'}), 'assistant_paid_invoice_zero', 'Marked as already paid'],
+    [workspaceA, customerAId, 'INV-assistant-zero', '2026-09-01', '2026-10-01', 'INR', 0, null, JSON.stringify({invoice_direction:'receivable',assistant_idempotency_key: 'assistant_paid_invoice_zero'}), 'assistant_paid_invoice_zero', 'Marked as already paid'],
   ), /already paid|balance/i);
   assert.equal((await db.query("select count(*)::int as count from public.invoices where workspace_id=$1 and invoice_number='INV-assistant-zero'", [workspaceA])).rows[0].count, 0);
   assert.equal((await db.query("select count(*)::int as count from public.payments where workspace_id=$1 and idempotency_key='assistant_paid_invoice_zero'", [workspaceA])).rows[0].count, 0);
@@ -329,7 +334,7 @@ test('a failed paid Assistant invoice RPC rolls back the inserted invoice', asyn
 
 test('the paid Assistant invoice RPC repairs the legacy paid-without-history state on retry', async () => {
   await identity(userA);
-  const metadata = {assistant_idempotency_key: 'assistant_legacy_repair_1', followup_state: 'draft'};
+  const metadata = {invoice_direction:'receivable',assistant_idempotency_key: 'assistant_legacy_repair_1', followup_state: 'draft'};
   const legacy = (await withOwner(() => db.query(
     `insert into public.invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata)
      values ($1,$2,'INV-legacy-paid','2026-09-01','2026-10-01','INR',118,118,'paid','Legacy paid', $3::jsonb) returning id`,
