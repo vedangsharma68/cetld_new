@@ -16,7 +16,6 @@ const phone='+919871367051';
 test('reopening draft preserves paid receipts, needs later confirmation, replays once and pauses reminders',async()=>{
   const {db,workspaceId}=await boot();
   try{
-    await db.exec('reset role');await db.exec(await readFile(new URL('../proposals/owner-invoice-reopening.sql',import.meta.url),'utf8'));
     await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
     const created=await createDirectInvoice(db,workspaceId,{messageId:'reopen-create',invoiceNumber:'INV-REOPEN',customerName:'Reopen Client'});
     assert.equal(created.ok,true);
@@ -62,7 +61,6 @@ async function reopen(db,{workspaceId,ownerId=owner,messageId,message,action,inv
 
 async function reopeningFixture(){
   const fixture=await boot(),{db,workspaceId}=fixture;
-  await db.exec('reset role');await db.exec(await readFile(new URL('../proposals/owner-invoice-reopening.sql',import.meta.url),'utf8'));
   await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
   const created=await createDirectInvoice(db,workspaceId,{messageId:'financial-create',invoiceNumber:'INV-FINANCIAL',customerName:'John Smith'});
   assert.equal(created.ok,true,JSON.stringify(created));
