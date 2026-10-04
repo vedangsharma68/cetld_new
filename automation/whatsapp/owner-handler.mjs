@@ -1,6 +1,6 @@
 import {normalizeOwnerBotPreferences,normalizeOwnerServiceReplyText} from './bot-preferences.mjs';
 import {ownerCalendar} from './workspace-records.mjs';
-import {isOwnerNextButton,runOwnerNextAction,planOwnerNextActions,createOwnerNextButtons} from './owner-next-actions.mjs';
+import {isOwnerNextButton,runOwnerNextAction,planOwnerNextActions,createOwnerNextButtons,pendingBlocksOwnerNextActions} from './owner-next-actions.mjs';
 import {createOwnerActionButtons,verifyOwnerActionButton} from './owner-action-buttons.mjs';
 import {AIProvider, CF_PRIMARY_MODEL, GEMINI_FALLBACK_MODEL, sanitizeModelSettings} from '../../ai/provider.mjs';
 import {createInvoiceLifecycleService} from '../../ai/invoice-lifecycle.mjs';
@@ -190,7 +190,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     }
     onToolsReady(tools);
     if(isOwnerNextButton(scope.interactionId)){
-      const blocked=Boolean(pendingAtStart||lifecyclePending?.pending)||!pendingStoreAvailable||!lifecycleAvailable;
+      const blocked=pendingBlocksOwnerNextActions(pendingAtStart)||Boolean(lifecyclePending?.pending)||!pendingStoreAvailable||!lifecycleAvailable;
       const result=await runOwnerNextAction({supabase,scope,env,clock,authorize,tools,pending:blocked});
       if(!result.media&&Array.from(result.answer||'').length<=1024&&replyStore&&!blocked){
         try{
@@ -245,7 +245,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     if(!buttons.length&&!response?.plannerFailure&&!response?.media&&Array.from(answer).length<=1024&&scope.messageId&&replyStore){
       try{
         ownerNextActionRef=await planOwnerNextActions({supabase,scope,context:tools.getNextActionContext?.(),clock,authorize,
-          pending:Boolean(pendingAtStart||lifecyclePending?.pending)||!pendingStoreAvailable||!lifecycleAvailable});
+          pending:pendingBlocksOwnerNextActions(pendingAtStart)||Boolean(lifecyclePending?.pending)||!pendingStoreAvailable||!lifecycleAvailable});
         buttons=createOwnerNextButtons({scope,reference:ownerNextActionRef,env,clock});
         if(!buttons.length)ownerNextActionRef=null;
       }catch{ownerNextActionRef=null;logger?.warn?.('WhatsApp next actions unavailable',{code:'OWNER_NEXT_ACTIONS_UNAVAILABLE'});}
