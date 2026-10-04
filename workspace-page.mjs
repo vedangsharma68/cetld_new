@@ -1,4 +1,4 @@
-const PAGES = new Set(['Overview', 'Assistant', 'Invoices', 'Conversations', 'Payments', 'Connections', 'Settings', 'Onboarding']);
+const PAGES = new Set(['Overview', 'Assistant', 'Business records', 'Invoices', 'Conversations', 'Payments', 'Connections', 'Settings', 'Onboarding']);
 const key = userId => `cetld.workspace-page:${userId}`;
 
 export function readWorkspacePage(storage, userId) {

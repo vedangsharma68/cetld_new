@@ -5,6 +5,52 @@ import {PGlite} from '@electric-sql/pglite';
 import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {VERIFIED_MODEL_CATALOG} from '../ai/provider.mjs';
+import {ownerCalendar,validateCustomFields} from '../automation/whatsapp/workspace-records.mjs';
+import {ownerGroundingIssue} from '../automation/whatsapp/owner-grounding.mjs';
+import {customFieldsView,businessRecordsView} from '../custom-fields.mjs';
+
+test('owner local tomorrow follows calendar days across midnight and daylight saving',()=>{
+  assert.deepEqual(ownerCalendar(()=>new Date('2026-10-04T20:00:00Z'),'Asia/Kolkata'),
+    {timezone:'Asia/Kolkata',currentDate:'2026-10-05',tomorrow:'2026-10-06',yesterday:'2026-10-04'});
+  assert.equal(ownerCalendar(()=>new Date('2026-03-08T06:30:00Z'),'America/New_York').tomorrow,'2026-03-09');
+});
+
+test('custom field validation and dashboard display keep system fields and HTML inert',()=>{
+  assert.deepEqual(validateCustomFields({delivery_zone:'West',priority:true,credit_days:30}),{delivery_zone:'West',priority:true,credit_days:30});
+  for(const value of [{workspace_id:'foreign'},{amount_paid:0},{api_key:'secret'},{metadata:{}},{status:'paid'},{nested:{}}])
+    assert.throws(()=>validateCustomFields(value));
+  const escape=s=>String(s).replaceAll('<','&lt;').replaceAll('>','&gt;');
+  assert.match(customFieldsView({delivery_zone:'<script>'},escape),/delivery zone.*&lt;script&gt;/);
+  assert.match(businessRecordsView([{name:'<script>',record_type:'supplier',custom_fields:{city:'Mumbai'}}],escape),/&lt;script&gt;.*city.*Mumbai/);
+});
+
+test('failed tool results cannot be described as awaiting confirmation',()=>{
+  assert.equal(ownerGroundingIssue('This update is awaiting confirmation.',[{ok:false,code:'INVALID'}]),'unverified_proposal');
+  assert.equal(ownerGroundingIssue('Please confirm this update.',[{ok:false,code:'NOT_FOUND'}]),'unverified_proposal');
+});
+
+test('custom fields are discoverable and readable through the same scoped interface',async()=>{
+  const supabase=fakeSupabase({rows:{customers:[{workspace_id:scope.workspaceId,name:'John Smith',custom_fields:{delivery_zone:'West'}}]}});
+  const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true});
+  const description=await tool.execute({operation:'describe',table:'customers'});
+  assert.ok(description.catalog.tables.customers.columns.includes('custom_fields'));
+  assert.ok(description.catalog.tables.customers.writeFields.update.includes('custom_fields'));
+  const read=await tool.execute({operation:'read',table:'customers',columns:['name','custom_fields']});
+  assert.deepEqual(read.rows,[{name:'John Smith',custom_fields:{delivery_zone:'West'}}]);
+  assert.deepEqual(supabase.calls[0].filters,[['workspace_id','eq',scope.workspaceId]]);
+});
+
+test('new business categories use the generic catalog, scoped reads and existing confirmation protocol',async()=>{
+  const record={id:'33333333-3333-4333-8333-333333333333',workspace_id:scope.workspaceId,record_type:'supplier',name:'Acme Metals',custom_fields:{city:'Mumbai'},updated_at:'2026-10-01T00:00:00Z'};
+  const supabase=fakeSupabase({rows:{business_records:[record]}});
+  const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true,message:'Change Acme lead days',messageId:'business-request',
+    pending:{async loadPendingActionState(){return {generation:0};}}});
+  const read=await tool.execute({operation:'read',table:'business_records',filters:[{column:'record_type',operator:'eq',value:'supplier'}]});
+  assert.deepEqual(read.rows,[{record_type:'supplier',name:'Acme Metals',custom_fields:{city:'Mumbai'}}]);
+  const update=await tool.execute({operation:'update',table:'business_records',filters:[{column:'name',operator:'eq',value:'Acme'}],values:{custom_fields:{lead_days:5}}});
+  assert.equal(update.requiresConfirmation,true);
+  assert.equal(supabase.calls.filter(call=>call.kind==='rpc').at(-1).args.p_target_id,record.id);
+});
 
 const scope = Object.freeze({
   workspaceId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -63,6 +109,55 @@ function fakeSupabase({rows={}, rpcResult={ok:true}, rpcError=null}={}) {
     },
   };
 }
+
+test('John and JohnSmith reads and writes resolve the same scoped John Smith; ambiguity refuses mutation',async()=>{
+  const john={id:'33333333-3333-4333-8333-333333333333',workspace_id:scope.workspaceId,name:'John Smith',phone:null,updated_at:'2026-10-01T00:00:00Z'};
+  const foreign={...john,id:'44444444-4444-4444-8444-444444444444',workspace_id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'};
+  const supabase=fakeSupabase({rows:{customers:[john,foreign]}});
+  const pending={async loadPendingActionState(){return {generation:0};}};
+  for(const name of ['John','JohnSmith']){
+    const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true,pending,message:'Set his phone',messageId:'req-'+name});
+    const read=await tool.execute({operation:'read',table:'customers',columns:['name','phone'],filters:[{column:'name',operator:'eq',value:name}]});
+    assert.deepEqual(read.rows,[{name:'John Smith',phone:null}]);
+    const write=await tool.execute({operation:'update',table:'customers',filters:[{column:'name',operator:'eq',value:name}],values:{phone:'+12025550123'}});
+    assert.equal(write.requiresConfirmation,true);
+    assert.equal(supabase.calls.filter(c=>c.kind==='rpc').at(-1).args.p_target_id,john.id);
+  }
+  const ambiguous=fakeSupabase({rows:{customers:[john,{...john,id:'55555555-5555-4555-8555-555555555555',name:'John Brown'}]}});
+  const tool=createWorkspaceDataTool({supabase:ambiguous,scope,authorize:async()=>true,pending,message:'Set John phone',messageId:'ambiguous'});
+  const result=await tool.execute({operation:'update',table:'customers',filters:[{column:'name',operator:'eq',value:'John'}],values:{phone:'+12025550123'}});
+  assert.equal(result.code,'AMBIGUOUS');assert.equal(result.requiresConfirmation,undefined);
+  assert.equal(ambiguous.calls.some(c=>c.kind==='rpc'),false);
+  const unrelated=fakeSupabase({rows:{customers:[{...john,name:'Mary Johnson'}]}});
+  const noJohn=createWorkspaceDataTool({supabase:unrelated,scope,authorize:async()=>true,pending,message:'Set John phone',messageId:'no-john'});
+  const absent=await noJohn.execute({operation:'update',table:'customers',filters:[{column:'name',operator:'eq',value:'John'}],values:{phone:'+12025550123'}});
+  assert.equal(absent.code,'NOT_FOUND');assert.equal(unrelated.calls.some(c=>c.kind==='rpc'),false);
+});
+
+test('unpaid is an honest no-op only when current invoice and payment facts agree',async()=>{
+  const invoice={id:'33333333-3333-4333-8333-333333333333',workspace_id:scope.workspaceId,invoice_number:'INV-JOHN',status:'sent',total_amount:'100',amount_paid:'0'};
+  for(const [patch,payments,expected] of [[{},[],true],[{amount_paid:'20'},[],false],[{status:'paid',amount_paid:'100'},[],false],[{},[{invoice_id:invoice.id,amount:'1'}],false]]){
+    const supabase=fakeSupabase({rows:{invoices:[{...invoice,...patch}],payments}});
+    const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true});
+    const result=await tool.execute({operation:'update',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:'INV-JOHN'}],values:{status:'unpaid'}});
+    assert.equal(result.ok,expected);assert.notEqual(result.completed,true);assert.notEqual(result.requiresConfirmation,true);
+    if(expected)assert.equal(result.alreadyUnpaid,true);else assert.equal(result.code,'PAYMENT_GUARD');
+    assert.equal(supabase.calls.some(c=>c.kind==='rpc'),false);
+  }
+});
+
+test('structured tomorrow and custom fields reach direct execution only with current authorization',async()=>{
+  let seen;
+  const tool=createWorkspaceDataTool({supabase:fakeSupabase(),scope,authorize:async()=>true,message:'set it to tomorrows date',confirmationMode:'direct',timezone:'Asia/Kolkata',
+    clock:()=>new Date('2026-10-04T20:00:00Z'),executeDirectOperation:async params=>{seen=params;return {ok:true,completed:true};}});
+  await tool.execute({operation:'update',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:'INV-JOHN'}],values:{due_date:'2019-02-26'}});
+  assert.equal(seen.values.due_date,'2026-10-06');
+  const invalid=await tool.execute({operation:'update',table:'customers',filters:[{column:'name',operator:'eq',value:'John'}],values:{custom_fields:{owner_id:'foreign'}}});
+  assert.equal(invalid.ok,false);
+  const controller=new AbortController();controller.abort();
+  const stopped=await tool.execute({operation:'update',table:'customers',values:{custom_fields:{priority:true}}},{signal:controller.signal});
+  assert.equal(stopped.ok,false);assert.equal(seen.values.due_date,'2026-10-06');
+});
 
 test('workspaceData offers one generic tool and scoped reads expose sanitized allowlisted fields', async()=>{
   const supabase=fakeSupabase({rows:{customers:[{
@@ -138,7 +233,7 @@ test('natural-language planning receives the safe catalog and never receives ver
   assert.ok(seen.catalog.tables.customers.columns.includes('name'));
   assert.ok(seen.catalog.tables.invoices.writeFields.create.includes('customer_name'));
   assert.ok(seen.catalog.tables.invoices.writeFields.update.includes('status'));
-  assert.deepEqual(seen.catalog.tables.invoices.writeValueConstraints.update.status,['paid']);
+  assert.deepEqual(seen.catalog.tables.invoices.writeValueConstraints.update.status,['paid','unpaid']);
   assert.ok(seen.catalog.tables.workspace_settings.writeFields.update.includes('business_name'));
   assert.ok(seen.catalog.tables.workspace_settings.writeFields.update.includes('follow_up_preferences'));
   const preferences=seen.catalog.tables.workspace_settings.writeValueConstraints.update;

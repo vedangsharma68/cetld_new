@@ -1,7 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
-import {runReleaseGate} from '../scripts/check-owner-chat-gate.mjs';
+import {readFile,mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
+import {runReleaseGate,writeReleaseManifest} from '../scripts/check-owner-chat-gate.mjs';
+
+test('release evidence fingerprints the custom-field renderer and scoped record interface',async()=>{
+  const directory=await mkdtemp(path.join(tmpdir(),'cetld-manifest-'));
+  try {
+    const outputPath=path.join(directory,'manifest.json');
+    await writeReleaseManifest({outputPath});
+    const evidence=JSON.parse(await readFile(outputPath,'utf8'));
+    for(const module of ['custom-fields.mjs','automation/whatsapp/workspace-records.mjs']) {
+      assert.equal(evidence.files[module],createHash('sha256').update(await readFile(module)).digest('hex'));
+    }
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
 
 test('failed owner chat battery stops the release gate before any later build check',async()=>{
   const calls=[];

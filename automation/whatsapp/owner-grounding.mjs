@@ -64,6 +64,8 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
   if(buttonIssue)return buttonIssue;
   const proposalClaims=text.split(/[.!?\n]+/).filter(clause=>
     /\b(?:submitted|created|prepared|proposed)\b[^.!?]{0,65}\b(?:request|proposal|deletion|change)\b/i.test(clause)
+    || /\b(?:awaiting|waiting for|needs?|requires?)\b[^.!?]{0,35}\b(?:confirmation|approval)\b/i.test(clause)
+    || /^\s*(?:please )?(?:confirm|approve)\b[^.!?]{0,35}\b(?:change|update|payment|invoice|this|it)\b/i.test(clause)
     || /\b(?:confirm|approve|cancel|review)\b[^.!?]{0,40}\bpending (?:action|proposal|change|request)\b/i.test(clause));
   if(proposalClaims.some(clause=>!/\b(?:not|cannot|can't|couldn't|failed|unable|no)\b/i.test(clause))
     && !results.some(result=>result.ok!==false&&(result.pending===true||result.proposal===true||result.requiresConfirmation===true)))return 'unverified_proposal';

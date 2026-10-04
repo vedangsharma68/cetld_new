@@ -25,8 +25,8 @@ function runCommand(script) {
     child.once('exit',code=>code===0?resolve():reject(new Error(`Release gate failed: ${script}`)));
   });
 }
-async function manifest() {
-  const paths=['automation/preferences.mjs','owner-whatsapp-ui.mjs','followup-preferences-ui.mjs','app.js','automation/whatsapp/owner-grounding.mjs','automation/whatsapp/owner-direct-runtime.mjs',
+export async function writeReleaseManifest({outputPath='owner-chat-build.json'}={}) {
+  const paths=['custom-fields.mjs','automation/whatsapp/workspace-records.mjs','automation/preferences.mjs','owner-whatsapp-ui.mjs','followup-preferences-ui.mjs','app.js','automation/whatsapp/owner-grounding.mjs','automation/whatsapp/owner-direct-runtime.mjs',
     'automation/whatsapp/direct-owner-write.mjs','automation/whatsapp/owner-action-buttons.mjs','automation/whatsapp/bot-preferences.mjs','ai/provider.mjs','ai/provider-health.mjs','automation/whatsapp/owner-agent.mjs','automation/whatsapp/owner-handler.mjs',
     'automation/whatsapp/owner-workspace-tools.mjs','automation/whatsapp/workspace-data.mjs','automation/whatsapp/owner-reply-store.mjs',
     'automation/whatsapp/cloud-inbound.mjs','automation/whatsapp/cloud-outbound.mjs','automation/whatsapp/owner-binding.mjs',
@@ -34,12 +34,12 @@ async function manifest() {
   const files={};for(const path of paths)files[path]=createHash('sha256').update(await readFile(path)).digest('hex');
   let commit=process.env.VERCEL_GIT_COMMIT_SHA||process.env.GITHUB_SHA;
   if(!commit)try{commit=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();}catch{commit=null;}
-  await writeFile('owner-chat-build.json',JSON.stringify({version:1,commit,files,checks:['owner-chat-fast','typecheck','full-suite']})+'\n');
+  await writeFile(outputPath,JSON.stringify({version:1,commit,files,checks:['owner-chat-fast','typecheck','full-suite']})+'\n');
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href) {
   try{
     await unlink('owner-chat-build.json').catch(error=>{if(error.code!=='ENOENT')throw error;});
-    await runReleaseGate();await manifest();
+    await runReleaseGate();await writeReleaseManifest();
     console.log('Owner chat release gate passed.');
   }catch(error){console.error(error.message);process.exitCode=1;}
 }

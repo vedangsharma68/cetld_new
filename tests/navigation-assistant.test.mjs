@@ -5,7 +5,7 @@ import fs from 'node:fs';
 const app = fs.readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 
 test('primary navigation leads with assistant without removing existing destinations', () => {
-  assert.match(app, /const nav=\[\['Overview','grid'\],\['Assistant','assistant'\],\['Invoices','invoice'\],\['Conversations','chat'\],\['Payments','wallet'\],\['Connections','link'\]\]/);
+  assert.match(app, /const nav=\[\['Overview','grid'\],\['Assistant','assistant'\],\['Business records','grid'\],\['Invoices','invoice'\],\['Conversations','chat'\],\['Payments','wallet'\],\['Connections','link'\]\]/);
   assert.match(app, /data-page="Settings"[\s\S]*icon\('cog'\)/);
 });
 

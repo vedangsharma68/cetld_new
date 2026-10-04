@@ -1,4 +1,5 @@
 import {sanitizeReminderTemplate} from '../preferences.mjs';
+import {resolveWorkspaceRecord,validateCustomFields,ownerCalendar} from './workspace-records.mjs';
 import {sanitizeOwnerBotPreferences,mergeOwnerBotPreferences,OWNER_BOT_LANGUAGE_OPTIONS} from './bot-preferences.mjs';
 import {
   CF_PRIMARY_MODEL,
@@ -22,6 +23,11 @@ const CANCEL = /^\s*(?:no|cancel|never mind|nevermind|discard)\s*[.!]?\s*$/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const TABLES = Object.freeze({
+  business_records: {
+    label:'Custom business records (suppliers, projects, inventory, and other owner-defined categories)',scope:'workspace',
+    columns:['record_type','name','custom_fields','created_at','updated_at'],defaults:['record_type','name','custom_fields'],
+    filters:['id','record_type','name'],writeColumns:['record_type','name','custom_fields'],
+  },
   workspace_settings: {
     label:'Business settings', scope:'workspace',
     columns:['business_name','default_currency','default_timezone','follow_up_preferences','owner_bot_preferences','created_at','updated_at'],
@@ -37,16 +43,16 @@ const TABLES = Object.freeze({
   },
   customers: {
     label:'Customers', scope:'workspace',
-    columns:['name','company_name','email','phone','created_at','updated_at'],
-    defaults:['name','company_name','email','phone'], filters:['id','name','company_name','email','phone'],
-    writeColumns:['name','company_name','email','phone'],
+    columns:['name','company_name','email','phone','custom_fields','created_at','updated_at'],
+    defaults:['name','company_name','email','phone','custom_fields'], filters:['id','name','company_name','email','phone'],
+    writeColumns:['name','company_name','email','phone','custom_fields'],
   },
   invoices: {
     label:'Invoices', scope:'workspace',
-    columns:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status','notes','created_at','updated_at'],
-    defaults:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status'],
+    columns:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status','notes','custom_fields','created_at','updated_at'],
+    defaults:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status','custom_fields'],
     filters:['id','invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status'],
-    writeColumns:['invoice_number','customer_name','customer_id','customer_email','customer_phone','issue_date','due_date','currency','total_amount','subtotal','tax','notes','status','invoice_direction'],
+    writeColumns:['invoice_number','customer_name','customer_id','customer_email','customer_phone','issue_date','due_date','currency','total_amount','subtotal','tax','notes','status','custom_fields','invoice_direction'],
   },
   payments: {
     label:'Payments', scope:'workspace',
@@ -71,15 +77,16 @@ const TYPE_BY_COLUMN = Object.freeze({
 });
 
 const WRITE_SCHEMA = Object.freeze({
+  business_records:{create:['record_type','name','custom_fields'],update:['record_type','name','custom_fields']},
   customers:{
-    create:['name','company_name','email','phone'],
-    update:['name','company_name','email','phone'],
+    create:['name','company_name','email','phone','custom_fields'],
+    update:['name','company_name','email','phone','custom_fields'],
     delete:[],
   },
   workspace_ai_settings:{update:['primary_model','fallback_model']},
   invoices:{
-    create:['invoice_number','customer_name','customer_id','customer_email','customer_phone','issue_date','due_date','currency','total_amount','subtotal','tax','notes'],
-    update:['invoice_number','issue_date','due_date','currency','total_amount','notes','status'],
+    create:['invoice_number','customer_name','customer_id','customer_email','customer_phone','issue_date','due_date','currency','total_amount','subtotal','tax','notes','custom_fields'],
+    update:['invoice_number','issue_date','due_date','currency','total_amount','notes','status','custom_fields'],
     reviewAttachment:['invoice_number','customer_name','issue_date','due_date','total_amount','currency','invoice_direction'],
   },
   workspace_settings:{update:['business_name','follow_up_preferences','default_currency','default_timezone','owner_bot_preferences']},
@@ -89,7 +96,7 @@ function definition() {
   // The server validates the full catalog. Do not send that catalog on every
   // model request; describe exposes it when the model needs unfamiliar fields.
   return {type:'function',function:{name:'workspaceData',
-    description:'Read or change workspace data. Clear owner instructions execute directly when allowed; otherwise a proposal needs a decision. Prefer structured fields; request text handles unfamiliar operations. Omit columns for defaults. Customers use name/email/phone; invoices use customer_name (joined name; ilike for partial names), invoice_number/total_amount/status. Settings use primary_model/fallback_model/follow_up_preferences. describe lists fields; pending reads proposals; confirm/cancel decide them.',
+    description:'Read or change workspace data. Clear owner instructions execute directly when allowed; otherwise a proposal needs a decision. Prefer structured fields; request text handles unfamiliar operations. Omit columns for defaults. Customers use name/email/phone; invoices use customer_name (joined name; ilike for partial names), invoice_number/total_amount/status. Settings use primary_model/fallback_model/follow_up_preferences. custom_fields stores extra business facts as a flat object of snake_case keys and text/number/boolean/null values, with a merge on update; describe lists fields; pending reads proposals; confirm/cancel decide them.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         request:{type:'string',minLength:1,maxLength:1200},
@@ -116,14 +123,14 @@ function catalog(table=null) {
     tables:Object.fromEntries(Object.entries(TABLES).filter(([name])=>!table||name===table).map(([name,spec])=>[name,{
       label:spec.label,columns:spec.columns,filters:spec.filters,
       writeFields:WRITE_SCHEMA[name]||{},
-      ...(name==='invoices'?{writeValueConstraints:{update:{status:['paid']}}}:{}),
+      ...(name==='invoices'?{writeValueConstraints:{update:{status:['paid','unpaid'],unpaid:'Checks current payment facts. Never removes or reverses payments.'}}}:{}),
       ...(name==='workspace_settings'?{writeValueConstraints:{update:{
         owner_bot_preferences:{description:'Owner assistant style; partial fields merge with saved preferences.',assistantName:'text, 1-50 characters',tone:['concise','friendly','formal'],language:OWNER_BOT_LANGUAGE_OPTIONS.map(item=>item.value),replyLength:['short','balanced','detailed'],confirmationMode:['direct','buttons'],serviceReplySignature:'text, up to 120 characters',customInstruction:'style text, up to 500 characters'},
         follow_up_preferences:{description:'Customer reminder settings; partial fields merge with saved preferences.',tone:['gentle','professional','firm'],reminderTemplate:'up to 1000 characters; tokens {{business_name}}, {{customer_name}}, {{invoice_number}}, {{balance}}, {{due_date}}',allowedWeekdays:'array of weekday numbers 0-6',escalation:['pause','manual_review'],stopOnPayment:true}
       }}}:{}),
       ...(name==='workspace_ai_settings'?{writeValueConstraints:{update:{primary_model:VERIFIED_MODEL_CATALOG.filter(entry=>entry.roles.includes('primary')).map(entry=>entry.id),fallback_model:[null,...VERIFIED_MODEL_CATALOG.filter(entry=>entry.roles.includes('fallback')).map(entry=>entry.id)]}}}:{}),
       operations:name==='invoices'?['read','create','update','delete','restore','reviewAttachment']
-        :name==='customers'?['read','create','update','delete']
+        :name==='business_records'?['read','create','update']:name==='customers'?['read','create','update','delete']
           :name==='workspace_settings'||name==='workspace_ai_settings'?['read','update']
             :['read'],
     }])),
@@ -262,7 +269,7 @@ function normalizeRequest(raw,scope,planRequest,ctx) {
     const values=args.values===undefined?{}:args.values;
     if(!ownObject(values))throw new TypeError('invalid values');
     if(table==='invoices'&&['create','update','reviewAttachment'].includes(operation)
-      &&(!exactKeys(values,WRITE_SCHEMA.invoices[operation])||!Object.keys(values).length||values.status!==undefined&&values.status!=='paid'))throw new TypeError('invalid invoice fields');
+      &&(!exactKeys(values,WRITE_SCHEMA.invoices[operation])||!Object.keys(values).length||values.status!==undefined&&!['paid','unpaid'].includes(values.status)))throw new TypeError('invalid invoice fields');
     const limit=args.limit===undefined?20:Number(args.limit);
     if(!Number.isInteger(limit)||limit<1||limit>MAX_LIMIT)throw new TypeError('invalid limit');
     const offset=args.offset===undefined?0:Number(args.offset);
@@ -299,6 +306,7 @@ function validateValues(table,operation,values,current={}) {
       continue;
     }
     if(key==='owner_bot_preferences'){clean[key]=sanitizeOwnerBotPreferences(value);continue;}
+    if(key==='custom_fields'){clean[key]=validateCustomFields(value);continue;}
     if(value===null&&['company_name','email','phone','fallback_model'].includes(key)){clean[key]=null;continue;}
     if(typeof value==='string') {
       const text=value.trim();
@@ -308,7 +316,8 @@ function validateValues(table,operation,values,current={}) {
       clean[key]=key==='default_currency'?text.toUpperCase():text;
     } else throw new TypeError('invalid write value');
   }
-  if(table==='customers'&&operation==='create'&&typeof clean.name!=='string')throw new TypeError('customer name required');
+  if(['customers','business_records'].includes(table)&&operation==='create'&&typeof clean.name!=='string')throw new TypeError('record name required');
+  if(table==='business_records'&&(operation==='create'&&!clean.record_type||clean.record_type!==undefined&&!/^[a-z][a-z0-9_]{0,63}$/.test(clean.record_type)))throw new TypeError('invalid record category');
   if(table==='workspace_settings'&&operation==='update') {
     if(clean.default_currency!==undefined&&!/^[A-Z]{3}$/.test(clean.default_currency))throw new TypeError('invalid currency');
     if(clean.default_timezone!==undefined)try{new Intl.DateTimeFormat('en',{timeZone:clean.default_timezone});}catch{throw new TypeError('invalid timezone');}
@@ -364,7 +373,7 @@ function validateAdapterSettingsValues(values) {
 }
 
 export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,getRuntimeConfig,planRequest,authorize,
-  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,confirmationMode='buttons'}={}) {
+  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,confirmationMode='buttons',timezone='UTC'}={}) {
   if(!supabase?.from||typeof scope?.workspaceId!=='string')throw new TypeError('Supabase and verified workspace scope required');
   let replyRequirement=null;
   let writeAttempted=false;
@@ -386,7 +395,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     if(customerFilter)query=applyFilter(query,{...customerFilter,column:'customer.name'});
     if(order)query=query.order(order.column,{ascending:order.direction==='asc'});
     else if(['customers','invoices','payments','invoice_files'].includes(table))query=query.order('created_at',{ascending:false});
-    if(['customers','invoices','payments','invoice_files'].includes(table))query=query.order('id',{ascending:false});
+    if(['customers','invoices','payments','invoice_files','business_records'].includes(table))query=query.order('id',{ascending:false});
     if(typeof query.range==='function')query=query.range(offset,offset+limit);
     else query=query.limit(offset+limit+1);
     const result=await query;
@@ -437,6 +446,13 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     if(table==='customers'&&params.operation!=='read')internal.push('id','updated_at');
     rows=await readScoped({...params,filters},internal,ctx,{customerName:requested.includes('customer_name'),
       customerFilter:relationFilters[0]&&table==='invoices'?relationFilters[0]:null});
+    if(!rows.length&&['customers','invoices','business_records'].includes(table)&&params.filters.length
+      &&params.filters.every(f=>f.operator==='eq')&&params.filters.some(f=>['name','company_name','customer_name'].includes(f.column))){
+      const found=await resolveWorkspaceRecord({supabase,scope,table,filters:params.filters,operation:'read',
+        select:table==='invoices'?'id,invoice_number':'id,name',assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
+      if(found.code==='AMBIGUOUS')return safeError(found);
+      if(found.ok)rows=await readScoped({...params,filters:[{column:'id',operator:'in',value:found.rows.map(row=>row.id)}]},internal,ctx,{customerName:requested.includes('customer_name')});
+    }
     const rawPageCount=rows.length;
     let labels=new Map();
     if(['payments','invoice_files'].includes(table)&&internal.includes('invoice_id')) {
@@ -497,24 +513,26 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
   };
   const checkWriteTarget=async (params,ctx)=>{
     const {table,operation,filters,values}=params;
-    let clean=table==='workspace_ai_settings'?null:validateValues(table,operation,values);
+    let clean=table==='workspace_ai_settings'?null:table==='invoices'?{custom_fields:validateCustomFields(values.custom_fields)}:validateValues(table,operation,values);
     let row=null,targetId=null,expectedUpdatedAt=null,summary='';
-    if(table==='customers'&&operation==='create') {
-      summary=`Create customer ${clean.name}`;
+    if(['customers','business_records'].includes(table)&&operation==='create') {
+      summary=`Create ${table==='customers'?'customer':clean.record_type} ${clean.name}`;
+    } else if(table==='business_records') {
+      const found=await resolveWorkspaceRecord({supabase,scope,table,filters,operation,select:'id,record_type,name,custom_fields,updated_at',
+        assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
+      if(!found.ok)throw Object.assign(new Error('business record lookup failed'),{code:found.code});
+      row=found.row;targetId=row.id;expectedUpdatedAt=row.updated_at;summary=`Update ${row.record_type} ${row.name}: ${JSON.stringify(clean)}`;
+    } else if(table==='invoices') {
+      const found=await resolveWorkspaceRecord({supabase,scope,table,filters,operation,select:'id,invoice_number,custom_fields,updated_at',
+        assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
+      if(!found.ok)throw Object.assign(new Error('invoice lookup failed'),{code:found.code});
+      row=found.row;targetId=row.id;expectedUpdatedAt=row.updated_at;
+      summary=`Update invoice ${row.invoice_number}: custom fields ${JSON.stringify(clean.custom_fields)}`;
     } else if(table==='customers') {
-      if(!filters.length||filters.some(filter=>filter.operator!=='eq'||!['id','name','company_name','email','phone'].includes(filter.column)))
-        throw Object.assign(new Error('a customer write must select one exact record'),{code:'INVALID'});
-      await ctx.assertAuthorized();
-      let query=supabase.from('customers').select('id,name,company_name,email,phone,updated_at,metadata').eq('workspace_id',scope.workspaceId);
-      for(const filter of filters)query=applyFilter(query,filter);
-      const found=await query.limit(2);
-      await ctx.assertAuthorized();
-      ctx.assertLive();
-      if(found?.error)throw found.error;
-      const matches=found?.data||[];
-      if(matches.length===0)throw Object.assign(new Error('customer not found'),{code:'NOT_FOUND'});
-      if(matches.length!==1)throw Object.assign(new Error('customer filter is ambiguous'),{code:'AMBIGUOUS'});
-      row=matches[0];targetId=row.id;expectedUpdatedAt=row.updated_at;
+      const found=await resolveWorkspaceRecord({supabase,scope,table,filters,operation,select:'id,name,company_name,email,phone,custom_fields,updated_at,metadata',
+        assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
+      if(!found.ok)throw Object.assign(new Error('customer lookup failed'),{code:found.code});
+      row=found.row;targetId=row.id;expectedUpdatedAt=row.updated_at;
       if(!UUID.test(targetId||'')||typeof expectedUpdatedAt!=='string')throw Object.assign(new Error('customer changed'),{code:'STALE'});
       if(row.metadata?.whatsapp_owner===true)return fail('DENIED','The linked owner contact cannot be changed as a customer.');
       if(operation==='delete')summary=`Delete customer ${row.name}`;
@@ -564,7 +582,8 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     return {clean,row,targetId,expectedUpdatedAt,summary};
   };
   const propose=async (params,ctx)=>{
-    if(!['customers','workspace_settings','workspace_ai_settings'].includes(params.table))
+    const invoiceCustom=params.table==='invoices'&&params.operation==='update'&&Object.keys(params.values).length===1&&params.values.custom_fields;
+    if(!invoiceCustom&&!['customers','business_records','workspace_settings','workspace_ai_settings'].includes(params.table))
       return typeof executeSafetyOperation==='function'?delegate(params,ctx):fail();
     if(params.table==='workspace_settings'&&params.operation==='update'
       &&Object.keys(params.values).every(key=>['business_name','follow_up_preferences'].includes(key))
@@ -573,9 +592,9 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       return delegate(params,ctx);
     }
     if(params.operation==='delete'&&params.table!=='customers')return fail();
-    if(params.operation==='create'&&params.table!=='customers')return fail();
+    if(params.operation==='create'&&!['customers','business_records'].includes(params.table))return fail();
     if(params.operation==='update'&&params.table==='customers'||params.operation==='delete'&&params.table==='customers'
-      ||params.operation==='create'&&params.table==='customers'||params.operation==='update'&&['workspace_settings','workspace_ai_settings'].includes(params.table)) {
+      ||params.operation==='create'&&['customers','business_records'].includes(params.table)||params.operation==='update'&&['workspace_settings','workspace_ai_settings','business_records'].includes(params.table)||invoiceCustom) {
       await ctx.assertAuthorized();
       const pendingState=await pending?.loadPendingActionState?.({...scope});
       await ctx.assertAuthorized();
@@ -674,6 +693,17 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       try { await ctx.assertAuthorized(); }
       catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
       const params=await normalizeRequest(raw,scope,planRequest,ctx);
+      if(params.values?.custom_fields!==undefined)validateCustomFields(params.values.custom_fields);
+      const dateFields=['due_date','issue_date'].filter(field=>Object.hasOwn(params.values||{},field));
+      const ownerRelative=params.operation==='update'&&dateFields.length===1&&!/\b\d{4}-\d{2}-\d{2}\b/.test(message)
+        ?(()=>{const days=[...new Set([...String(message).matchAll(/\b(today|tomorrow|yesterday)(?:['’]?s)?\b/gi)].map(match=>match[1].toLowerCase()))];return days.length===1?days[0]:null;})():null;
+      if(params.table==='invoices')for(const field of ['due_date','issue_date']){
+        const relative=ownerRelative&&dateFields.includes(field)?ownerRelative:String(params.values?.[field]??'').toLowerCase().replace(/['’]/g,'').replace(/s? date$/,'').trim();
+        if(['today','tomorrow','yesterday'].includes(relative)){
+          const calendar=ownerCalendar(clock,timezone);
+          params.values[field]=relative==='today'?calendar.currentDate:calendar[relative];
+        }
+      }
       ctx.assertLive();
       attemptedOperation={operation:params.operation,...(params.table?{table:params.table}:{})};
       const readResult=result=>({...result,operation:params.operation,table:params.table,readOnly:true});
@@ -683,9 +713,22 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         return params.operation==='pending'?readResult(result):result;
       }
       if(params.operation==='read')return readResult(await read(params,ctx));
+      if(params.table==='invoices'&&params.operation==='update'&&params.values.status==='unpaid'){
+        if(Object.keys(params.values).length!==1)return fail('INVALID','Check unpaid status separately from other invoice changes.');
+        const found=await resolveWorkspaceRecord({supabase,scope,table:'invoices',filters:params.filters,operation:'update',
+          select:'id,invoice_number,status,total_amount,amount_paid',assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
+        if(!found.ok)return safeError(found);
+        const invoice=found.row;
+        const payments=await findRelatedRows('payments','invoice_id',[invoice.id],'id,amount',ctx);
+        if(Number(invoice.amount_paid)!==0||payments.length||!['draft','sent','overdue'].includes(invoice.status))
+          return fail('PAYMENT_GUARD','This invoice has payments or a terminal status. Marking it unpaid cannot erase payment history. Review the recorded payments first.');
+        return {ok:true,readOnly:true,completed:false,alreadyUnpaid:true,requiresConfirmation:false,invoiceNumber:invoice.invoice_number,
+          message:'This invoice is already unpaid. No payment or invoice data was changed.'};
+      }
       if(['create','update','delete','restore'].includes(params.operation)&&confirmationMode==='direct'&&typeof executeDirectOperation==='function'){
         ctx.assertLive();await ctx.assertAuthorized();writeAttempted=true;
         const result=await executeDirectOperation(params,ctx);
+        await ctx.assertAuthorized();ctx.assertLive();
         return {...sanitise(result,scope),operation:params.operation,table:params.table,writeAttempted:true};
       }
       if(params.operation==='create'||params.operation==='update'||params.operation==='delete')return await propose(params,ctx);
