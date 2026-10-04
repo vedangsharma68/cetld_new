@@ -88,7 +88,7 @@ const WRITE_SCHEMA = Object.freeze({
   invoices:{
     create:['invoice_number','customer_name','customer_id','customer_email','customer_phone','issue_date','due_date','currency','total_amount','subtotal','tax','notes','custom_fields'],
     update:['invoice_number','issue_date','due_date','currency','total_amount','notes','status','custom_fields'],
-    reviewAttachment:['invoice_number','customer_name','issue_date','due_date','total_amount','currency','invoice_direction','subtotal','tax','notes','line_items','customer_email','customer_phone'],
+    reviewAttachment:['invoice_number_intent','invoice_number','customer_name','issue_date','due_date','total_amount','currency','invoice_direction','subtotal','tax','notes','line_items','customer_email','customer_phone'],
   },
   workspace_settings:{update:['business_name','follow_up_preferences','default_currency','default_timezone','owner_bot_preferences']},
 });
@@ -126,7 +126,7 @@ function catalog(table=null) {
     atomicBatch:{argument:'operations',minItems:2,maxItems:10,itemFields:['operation','table','filters','values'],operations:['create','update'],oneUnambiguousRecordPerItem:true,allCommitOrAllRollback:true,customFields:'Nest additional business facts in each item values.custom_fields.',excluded:['status changes','deletes','confirmations']},
     attachmentOperations:{analyzeAttachment:'Read the current attachment and retain its source facts in a durable review without saving an invoice.',
       saveAttachment:'Save the current attachment or this owner\'s current retained attachment review. Reuse its known facts; do not recreate it from chat text.',
-      reviewAttachment:'Supply missing owner-evidenced facts or acknowledge unchanged known fields. Existing extracted fields cannot be overwritten by this operation.'},
+      reviewAttachment:'Supply missing owner-evidenced facts or acknowledge unchanged known fields. Only invoice_number may be explicitly overridden to workspace numbering: include invoice_number_intent use_workspace_numbering with invoice_number AUTO. Concrete number or pattern replacement is unsupported. The workspace sequence assigns the unique ledger number on save and original extraction is audited. Other extracted fields cannot be overwritten.'},
     tables:Object.fromEntries(Object.entries(TABLES).filter(([name])=>!table||name===table).map(([name,spec])=>[name,{
       label:spec.label,columns:spec.columns,filters:spec.filters,
       writeFields:WRITE_SCHEMA[name]||{},

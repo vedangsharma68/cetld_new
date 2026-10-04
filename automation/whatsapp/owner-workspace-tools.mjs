@@ -42,7 +42,7 @@ export function createOwnerWorkspaceTools(options = {}) {
       if (operation === 'analyzeAttachment') return invoke('readInvoiceAttachment');
       if (operation === 'saveAttachment') return invoke('ingestInvoiceAttachment');
       if (operation === 'reviewAttachment') {
-        const names={invoice_number:'invoiceNumber',customer_name:'customerName',issue_date:'invoiceDate',due_date:'dueDate',total_amount:'total',currency:'currency',invoice_direction:'direction',subtotal:'subtotal',tax:'tax',notes:'notes',line_items:'lineItems',customer_email:'clientEmail',customer_phone:'clientPhone'};
+        const names={invoice_number_intent:'invoiceNumberIntent',invoice_number:'invoiceNumber',customer_name:'customerName',issue_date:'invoiceDate',due_date:'dueDate',total_amount:'total',currency:'currency',invoice_direction:'direction',subtotal:'subtotal',tax:'tax',notes:'notes',line_items:'lineItems',customer_email:'clientEmail',customer_phone:'clientPhone'};
         if(Object.keys(values).some(key=>!names[key]))return {ok:false,code:'INVALID',message:'That field cannot be added to this invoice review.'};
         return invoke('continueInvoiceReview',Object.fromEntries(Object.entries(values).map(([key,value])=>[names[key],value])));
       }

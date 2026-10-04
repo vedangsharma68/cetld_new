@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
+import {createWhatsAppInvoiceStore} from '../automation/whatsapp/invoice-store.mjs';
 import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as scope,DEFAULT_NOW} from './fixtures/owner-chat-battery.mjs';
 
 const clone=value=>structuredClone(value),clock=()=>DEFAULT_NOW;
@@ -22,14 +23,23 @@ function fixture(){
       current={...current,version:++version,action:clone(action)};return clone(current);
     },
   };
-  let persisted=null;
+  let persisted=null,omitAudit=false;
   const store={
     async findAssistantInvoice(){return persisted;},async findCustomer(){return {id:'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'};},
-    async createAssistantInvoice({invoice}){saved++;persisted={id:'ffffffff-ffff-4fff-8fff-fffffffffff2',workspace_id:scope.workspaceId,
-      invoice_number:invoice.invoiceNumber,issue_date:invoice.invoiceDate,due_date:invoice.dueDate,currency:invoice.currency,total_amount:invoice.total,
-      amount_paid:0,status:'draft',metadata:{assistant_idempotency_key:invoice.idempotencyKey,line_items:clone(invoice.lineItems),subtotal:invoice.subtotal,tax:invoice.tax}};return persisted;},
+    async createAssistantInvoice({invoice,reviewNumberAudit}){saved++;if(omitAudit)reviewNumberAudit=null;persisted={id:'ffffffff-ffff-4fff-8fff-fffffffffff2',workspace_id:scope.workspaceId,
+      invoice_number:invoice.invoiceNumber==='AUTO'?'INV-2026-0042':invoice.invoiceNumber,issue_date:invoice.invoiceDate,due_date:invoice.dueDate,currency:invoice.currency,total_amount:invoice.total,
+      amount_paid:0,status:'draft',metadata:{...(reviewNumberAudit?{printed_invoice_number:reviewNumberAudit.originalExtractedNumber,invoice_number_override_audit:clone(reviewNumberAudit)}:{}),assistant_idempotency_key:invoice.idempotencyKey,line_items:clone(invoice.lineItems),subtotal:invoice.subtotal,tax:invoice.tax}};return persisted;},
     async updateAssistantInvoiceMetadata(_id,metadata){persisted.metadata={...persisted.metadata,...metadata};return persisted;},
     async keepInvoiceFile(input){files++;assert.deepEqual(input.bytes,sourceBytes);},
+  };
+  db.supabase.rpc=async(name,args)=>{
+    if(name!=='whatsapp_override_invoice_review_number')return {error:{message:'isolated unavailable'}};
+    assert.equal(args.p_workspace_id,scope.workspaceId);assert.equal(args.p_owner_id,scope.ownerId);assert.equal(args.p_phone,scope.phone);
+    if(current?.version!==args.p_version)return {data:{ok:false,code:'STALE'}};
+    const audit={originalExtractedNumber:current.action.invoice.invoiceNumber,requestedNumber:args.p_number,
+      intent:args.p_intent,ownerMessageId:args.p_provider_message_id,ownerInstruction:args.p_authorization_quote,sourceMessageId:sourceId};
+    current={...current,version:++version,action:{...current.action,invoice:{...current.action.invoice,invoiceNumber:args.p_number},invoiceNumberOverrideAudit:audit}};
+    return {data:{ok:true,review:clone(current)}};
   };
   let sourceAvailable=true;
   const tools=(message,messageId,media=null)=>createOwnerWorkspaceTools({supabase:db.supabase,scope,clock,ownerStore:{query:async()=>[]},
@@ -39,6 +49,7 @@ function fixture(){
       return sourceAvailable?{bytes:sourceBytes,mimeType:'application/pdf',fileName:'fixture.pdf'}:null;},
     extractAttachment:async()=>{extractions++;return clone(extracted);}});
   return {tools,sourceId,sourceBytes,pending,db,get current(){return current;},get saved(){return saved;},get files(){return files;},get extractions(){return extractions;},get persisted(){return persisted;},
+    omitAudit(){omitAudit=true;},restoreAudit(){persisted.metadata.printed_invoice_number=current.action.invoiceNumberOverrideAudit.originalExtractedNumber;persisted.metadata.invoice_number_override_audit=clone(current.action.invoiceNumberOverrideAudit);},
     unavailable(){sourceAvailable=false;},replace(){current={...current,version:++version,action:{...current.action,sourceMessageId:'new-owner-photo'}};}};
 }
 const call=args=>({toolCalls:[{id:'fixture-call',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(args)}}],model:'fixture'});
@@ -103,4 +114,59 @@ test('acknowledging known facts does not spend the write slot before saving the 
   assert.equal((await tools.execute('workspaceData',{operation:'reviewAttachment',table:'invoices',values:{invoice_number:'INV-17',total_amount:662.75}})).unchanged,true);
   assert.equal((await tools.execute('workspaceData',{operation:'saveAttachment'})).completed,true);
   assert.equal(f.saved,1);
+});
+
+test('owner numbering intent preserves extraction audit and assigns a unique number only after later approval',async()=>{
+  const f=fixture();await f.tools('Read invoice',f.sourceId,{bytes:f.sourceBytes,mimeType:'application/pdf'}).execute('workspaceData',{operation:'analyzeAttachment'});
+  const original=clone(f.current.action.invoice);
+  const changed=await f.tools('Use my usual numbering for this invoice','fixture-renumber').execute('workspaceData',{
+    operation:'reviewAttachment',table:'invoices',values:{invoice_number:'AUTO',invoice_number_intent:'use_workspace_numbering'}});
+  assert.equal(changed.ok,true);assert.equal(changed.requiresLaterConfirmation,true);assert.equal(changed.originalExtractedNumber,'INV-17');assert.equal(f.saved,0);
+  assert.deepEqual({...f.current.action.invoice,invoiceNumber:original.invoiceNumber},original);
+  assert.equal((await f.tools('Use my usual numbering for this invoice','fixture-renumber').execute('workspaceData',{operation:'saveAttachment'})).ok,false);
+  const saved=await f.tools('The reviewed number and facts are fine; save it','fixture-approve-number').execute('workspaceData',{operation:'saveAttachment'});
+  assert.equal(saved.completed,true);assert.equal(saved.invoiceNumber,'INV-2026-0042');assert.equal(f.saved,1);
+  assert.equal(f.persisted.metadata.printed_invoice_number,'INV-17');
+  assert.equal(f.persisted.metadata.invoice_number_override_audit.originalExtractedNumber,'INV-17');
+  assert.equal(f.persisted.metadata.invoice_number_override_audit.ownerInstruction,'Use my usual numbering for this invoice');
+});
+
+test('number override requires intent, bounded owner value and changes no other known fields',async()=>{
+  for(const values of [{invoice_number:'AUTO'},{invoice_number:'AUTO',invoice_number_intent:'replace_extracted_number'},
+    {invoice_number:'INVENTED',invoice_number_intent:'replace_extracted_number'},
+    {invoice_number:'AUTO',invoice_number_intent:'use_workspace_numbering',total_amount:99},
+    {invoice_number:'bad\nnumber',invoice_number_intent:'replace_extracted_number'}]){
+    const f=fixture();await f.tools('Read invoice',f.sourceId,{bytes:f.sourceBytes,mimeType:'application/pdf'}).execute('workspaceData',{operation:'analyzeAttachment'});
+    const result=await f.tools('Use my usual numbering','fixture-bad-number').execute('workspaceData',{operation:'reviewAttachment',table:'invoices',values});
+    assert.equal(result.ok,false);assert.equal(f.current.action.invoice.invoiceNumber,'INV-17');assert.equal(f.saved,0);
+  }
+});
+
+test('real owner invoice adapter inserts number audit atomically and rejects foreign customer or untrusted customer audit',async()=>{
+  const db=createOwnerChatDatabase();
+  const store=createWhatsAppInvoiceStore({supabase:db.supabase,...scope,audience:'owner',authorize:async()=>true});
+  const audit={originalExtractedNumber:'INV-17',requestedNumber:'AUTO',ownerMessageId:'owner-number-request',ownerInstruction:'Use usual numbering'};
+  const invoice={invoiceNumber:'AUTO',invoiceDate:'2026-10-01',dueDate:'2026-10-31',currency:'USD',total:662.75,
+    subtotal:600,tax:62.75,clientName:'John Smith',idempotencyKey:'isolated-real-store',direction:'receivable',lineItems:[]};
+  await store.createAssistantInvoice({customerId:'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',invoice,reviewNumberAudit:audit});
+  const saved=db.tables.invoices.find(row=>row.metadata?.assistant_idempotency_key==='isolated-real-store');
+  assert.deepEqual(saved.metadata.invoice_number_override_audit,audit);assert.equal(saved.metadata.printed_invoice_number,'INV-17');
+  assert.equal(saved.workspace_id,scope.workspaceId);
+  await assert.rejects(store.createAssistantInvoice({customerId:'e0000000-0000-4000-8000-000000000001',invoice,reviewNumberAudit:audit}),/customer scope/);
+  const customerStore=createWhatsAppInvoiceStore({supabase:db.supabase,...scope});
+  await assert.rejects(customerStore.createAssistantInvoice({customerId:scope.customerId,invoice,reviewNumberAudit:audit}),/invalid trusted invoice number audit/);
+});
+
+test('unverified saved audit does not claim success; reconciliation resumes the same invoice once',async()=>{
+  const f=fixture();await f.tools('Read invoice',f.sourceId,{bytes:f.sourceBytes,mimeType:'application/pdf'}).execute('workspaceData',{operation:'analyzeAttachment'});
+  await f.tools('Use usual numbering','fixture-number-reconcile').execute('workspaceData',{
+    operation:'reviewAttachment',table:'invoices',values:{invoice_number:'AUTO',invoice_number_intent:'use_workspace_numbering'}});
+  f.omitAudit();
+  const uncertain=await f.tools('Save it','fixture-number-save').execute('workspaceData',{operation:'saveAttachment'});
+  assert.equal(uncertain.ok,false);assert.equal(uncertain.code,'DATABASE_UNAVAILABLE');assert.equal(uncertain.completed,undefined);
+  assert.equal(f.saved,1);assert.equal(f.current.action.stage,'saving');assert.equal(f.files,0);
+  f.restoreAudit();
+  const resumed=await f.tools('Check and finish the save','fixture-number-resume').execute('workspaceData',{operation:'saveAttachment'});
+  assert.equal(resumed.completed,true);assert.equal(resumed.replayed,true);assert.equal(resumed.invoiceNumber,'INV-2026-0042');
+  assert.equal(f.saved,1);assert.equal(f.files,1);assert.equal(f.current.action.stage,'saved');
 });
