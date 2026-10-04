@@ -10,6 +10,7 @@ async function boot(beforeOwnerMigrations){
  create schema auth;create schema storage;
  create table auth.users(id uuid primary key,raw_user_meta_data jsonb default '{}');
  create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
+ create function auth.role() returns text language sql stable as $$select nullif(current_setting('request.jwt.claim.role',true),'')$$;
  grant usage on schema auth,storage to authenticated,anon,service_role;
  grant execute on function auth.uid() to authenticated,anon,service_role;
  create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
@@ -19,7 +20,7 @@ async function boot(beforeOwnerMigrations){
   if(file==='20261002020102_owner_followup_conversations.sql'&&beforeOwnerMigrations)await beforeOwnerMigrations(db);
   await db.exec((await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8')).replace('create extension if not exists pgcrypto;',''));
  }
- await db.exec(`insert into auth.users(id) values('${owner}'),('${stranger}') on conflict(id) do nothing;set role authenticated;set request.jwt.claim.sub='${owner}'`);
+ await db.exec(`insert into auth.users(id) values('${owner}'),('${stranger}') on conflict(id) do nothing;set request.jwt.claim.role='authenticated';set role authenticated;set request.jwt.claim.sub='${owner}'`);
  const ws=(await db.query("select (public.create_workspace('CETLD test','owner-test')).id")).rows[0].id;
  return {db,ws};
 }
@@ -37,7 +38,7 @@ test('complete migration chain verifies ownership, atomically changes existing i
   assert.equal(consent.phone,'+14155550244');
   const invoice=(await db.query(`insert into public.invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,total_amount,currency,metadata)
    values($1,$2,'1223113','2026-09-01','2026-10-01',1725,'USD','{"invoice_direction":"receivable","subtotal":1500,"tax":225}') returning *`,[ws,customer])).rows[0];
-  await db.exec("reset role;set request.jwt.claim.sub='';set role service_role");
+  await db.exec("reset role;set request.jwt.claim.sub='';set request.jwt.claim.role='service_role';set role service_role");
   const linked=(await db.query('select public.whatsapp_verify_owner_code($1,$2) as value',[phone,verification.code])).rows[0].value;
   assert.equal(linked.ok,true);
   assert.equal((await db.query('select public.whatsapp_verify_owner_code($1,$2) as value',[phone,verification.code])).rows[0].value.replayed,true);
@@ -51,11 +52,11 @@ test('complete migration chain verifies ownership, atomically changes existing i
   assert.equal((await db.query("select public.whatsapp_claim_owner_ack('owner-job',$1,$2) as claimed",[phone,ws])).rows[0].claimed,true);
   assert.equal((await db.query("select public.whatsapp_claim_owner_ack('owner-job',$1,$2) as claimed",[phone,ws])).rows[0].claimed,false,'one acknowledgement per inbound message');
   assert.equal((await db.query("select public.whatsapp_claim_owner_reply('owner-job',$1,$2) as claimed",[phone,ws])).rows[0].claimed,true,'ack leaves final reply claim available');
-  await db.exec(`reset role;set role authenticated;set request.jwt.claim.sub='${owner}'`);
+  await db.exec(`reset role;set request.jwt.claim.role='authenticated';set role authenticated;set request.jwt.claim.sub='${owner}'`);
   await assert.rejects(db.query("select public.whatsapp_claim_owner_ack('owner-job',$1,$2)",[phone,ws]),/permission denied/i);
   await assert.rejects(db.query('select * from public.ai_provider_health'),/permission denied/i);
   await assert.rejects(db.query('select owner_job_checkpoint from public.whatsapp_inbound_events'),/permission denied/i);
-  await db.exec("reset role;set request.jwt.claim.sub='';set role service_role");
+  await db.exec("reset role;set request.jwt.claim.sub='';set request.jwt.claim.role='service_role';set role service_role");
   const createAction=async(changes,type='owner_invoice_update',stamp=invoice.updated_at)=>{
    const state=(await db.query('select * from public.whatsapp_load_pending_action_state($1,$2,$3)',[ws,binding.customer_id,phone])).rows[0];
    const action={type,invoiceId:invoice.id,expectedUpdatedAt:stamp,changes,expiresAt:new Date(Date.now()+600000).toISOString()};
@@ -100,11 +101,11 @@ test('complete migration chain verifies ownership, atomically changes existing i
   const paid=(await db.query('select total_amount,amount_paid,status,metadata from public.invoices where id=$1',[invoice.id])).rows[0];
   assert.equal(paid.status,'paid');assert.equal(Number(paid.amount_paid),2100);assert.equal(paid.metadata.followup_state,'cancelled');
   assert.equal((await db.query('select count(*)::int as count from public.payments where invoice_id=$1',[invoice.id])).rows[0].count,1);
-  await db.exec(`reset role;set role authenticated;set request.jwt.claim.sub='${owner}'`);
+  await db.exec(`reset role;set request.jwt.claim.role='authenticated';set role authenticated;set request.jwt.claim.sub='${owner}'`);
   await assert.rejects(db.query('select public.whatsapp_confirm_owner_invoice_action($1,$2,$3,$4,$5,$6,true)',[ws,owner,phone,payment.id,payment.version,'blocked-auth']),/permission denied/i);
   await db.query('select public.owner_unbind_whatsapp($1)',[ws]);
   assert.equal((await db.query('select public.owner_whatsapp_verification_status($1) as status',[ws])).rows[0].status,'expired');
-  await db.exec("reset role;set request.jwt.claim.sub='';set role service_role");
+  await db.exec("reset role;set request.jwt.claim.sub='';set request.jwt.claim.role='service_role';set role service_role");
   assert.equal((await db.query('select * from public.whatsapp_resolve_verified_owner($1)',[phone])).rows.length,0);
   assert.equal((await db.query('select count(*)::int as count from public.invoices where workspace_id=$1',[ws])).rows[0].count,1);
  }finally{await db.close();}
@@ -114,7 +115,7 @@ test('release upgrades existing ad hoc owner functions and preserves a verified 
  let existingWorkspace,existingCustomer,existingProof;
  const {db}=await boot(async db=>{
   await db.exec(await readFile(new URL('fixtures/owner-verification-legacy.sql',import.meta.url),'utf8'));
-  await db.exec(`insert into auth.users(id) values('${owner}');set role authenticated;set request.jwt.claim.sub='${owner}'`);
+  await db.exec(`insert into auth.users(id) values('${owner}');set request.jwt.claim.role='authenticated';set role authenticated;set request.jwt.claim.sub='${owner}'`);
   existingWorkspace=(await db.query("select (public.create_workspace('CETLD test','legacy-owner')).id")).rows[0].id;
   await db.query('update public.workspace_settings set whatsapp_owner_attested_at=now() where workspace_id=$1',[existingWorkspace]);
   await db.exec("reset role;set request.jwt.claim.sub=''");
@@ -123,11 +124,11 @@ test('release upgrades existing ad hoc owner functions and preserves a verified 
   existingProof=(await db.query("insert into public.whatsapp_owner_verifications(workspace_id,phone,requested_by,code_hash,expires_at,verified_at) values($1,$2,$3,'already-verified-proof',now(),now()) returning id",[existingWorkspace,phone,owner])).rows[0].id;
  });
  try{
-  await db.exec("reset role;set request.jwt.claim.sub='';set role service_role");
+  await db.exec("reset role;set request.jwt.claim.sub='';set request.jwt.claim.role='service_role';set role service_role");
   const resolved=(await db.query('select * from public.whatsapp_resolve_verified_owner($1)',[phone])).rows;
   assert.equal(resolved.length,1);assert.equal(resolved[0].workspace_id,existingWorkspace);assert.equal(resolved[0].customer_id,existingCustomer);
   assert.equal((await db.query('select id from public.whatsapp_owner_verifications where verified_at is not null')).rows[0].id,existingProof);
-  await db.exec(`reset role;set role authenticated;set request.jwt.claim.sub='${owner}'`);
+  await db.exec(`reset role;set request.jwt.claim.role='authenticated';set role authenticated;set request.jwt.claim.sub='${owner}'`);
   assert.equal((await db.query('select public.owner_whatsapp_verification_status($1) as value',[existingWorkspace])).rows[0].value,'linked');
  }finally{await db.close();}
 });

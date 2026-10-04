@@ -55,7 +55,7 @@ test('real accounting store preserves invoice source and immutable receipts unde
     const id=randomUUID();await db.query("insert into invoices(id,workspace_id,customer_id,invoice_number,issue_date,currency,total_amount,amount_paid,status,external_provider,external_invoice_id,metadata) values($1,$2,$3,$4,'2026-10-01','USD',100,25,'sent','quickbooks',$4,$5)",[id,ws,i.customer_id,'blocked-'+id,JSON.stringify(direction?{invoice_direction:direction}:{})]);
     if(direction) await assert.rejects(store.upsertSyncSnapshots({...identity,invoices:[{...invoice,externalId:'blocked-'+id,number:'blocked-'+id}]}),{code:'ACCOUNTING_INVOICE_DIRECTION_REVIEW'});
     else { await store.upsertSyncSnapshots({...identity,invoices:[{...invoice,externalId:'blocked-'+id,number:'blocked-'+id}]});assert.equal((await db.query('select metadata from invoices where id=$1',[id])).rows[0].metadata.invoice_direction,undefined); }
-    await assert.rejects(db.query('insert into payments(workspace_id,invoice_id,amount) values($1,$2,10)',[ws,id]),/receivable/);
+    await assert.rejects(db.query('insert into payments(workspace_id,invoice_id,amount) values($1,$2,10)',[ws,id]),{code:'22023',message:'EXTERNAL_ACCOUNTING: linked invoice requires an aligned authoritative provider receipt'});
     assert.equal((await db.query('select count(*)::int n from payments where invoice_id=$1',[id])).rows[0].n,0);
    }
   });

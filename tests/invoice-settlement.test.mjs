@@ -19,7 +19,7 @@ async function identity(userId) {
 async function withOwner(callback) {
   await db.exec('reset role');
   try { return await callback(); }
-  finally { await db.exec('set role authenticated'); }
+  finally { await db.exec("set request.jwt.claim.role='authenticated';set role authenticated"); }
 }
 
 async function recordPayment({workspaceId, invoiceId, amount, idempotencyKey, settleRemaining = false, reference = 'bank transfer'}) {
@@ -34,6 +34,7 @@ before(async () => {
     create schema auth; create schema storage;
     create table auth.users(id uuid primary key, raw_user_meta_data jsonb default '{}');
     create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
+    create function auth.role() returns text language sql stable as $$ select nullif(current_setting('request.jwt.claim.role',true),'') $$;
     grant usage on schema auth,storage to authenticated,anon;
     grant execute on function auth.uid() to authenticated,anon;
     create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
@@ -46,7 +47,7 @@ before(async () => {
     await db.exec(migration.replace('create extension if not exists pgcrypto;', ''));
   }
   const finalPaymentDefinition=(await db.query("select pg_get_functiondef('public.record_invoice_payment(uuid,uuid,numeric,text,text,boolean)'::regprocedure) definition")).rows[0].definition;
-  await db.exec(`insert into auth.users(id) values ('${userA}'),('${userB}'); set role authenticated;`);
+  await db.exec(`insert into auth.users(id) values ('${userA}'),('${userB}'); set request.jwt.claim.role='authenticated'; set role authenticated;`);
   await identity(userA);
   workspaceA = (await db.query("select (public.create_workspace('Alpha','alpha-space')).id")).rows[0].id;
   await identity(userB);

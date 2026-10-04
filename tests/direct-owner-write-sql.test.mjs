@@ -386,7 +386,11 @@ test('reopening draft rejects unsafe ledgers and stale, expired or ambiguous con
       if(scenario==='manual-paid'){await db.exec('reset role');await db.query("update public.invoices set status='paid' where workspace_id=$1 and id=$2",[workspaceId,created.entityId]);}
       else if(scenario==='legacy-mismatch'){await db.exec('reset role');await db.query('update public.invoices set amount_paid=20 where workspace_id=$1 and id=$2',[workspaceId,created.entityId]);}
       else await db.query('select public.record_invoice_payment($1,$2,$3,$4,$5,false)',[workspaceId,created.entityId,20,'test transfer','financial-pay']);
-      if(scenario==='external')await db.query("update public.invoices set metadata=metadata||'{\"accounting_provider\":\"external\"}'::jsonb where workspace_id=$1 and id=$2",[workspaceId,created.entityId]);
+      if(scenario==='external'){
+        // Authoritative linkage is service-owned; authenticated owners cannot seed it.
+        await asService(db);
+        await db.query("update public.invoices set metadata=metadata||'{\"accounting_provider\":\"external\"}'::jsonb where workspace_id=$1 and id=$2",[workspaceId,created.entityId]);
+      }
       await asService(db);await addInbound(db,'financial-request','Mark INV-FINANCIAL unpaid');
       const args={workspaceId,messageId:'financial-request',message:'Mark INV-FINANCIAL unpaid',action:'prepare',invoiceId:created.entityId};
       assert.equal((await reopen(db,{...args,invoiceId:randomUUID()})).code,'NOT_FOUND');

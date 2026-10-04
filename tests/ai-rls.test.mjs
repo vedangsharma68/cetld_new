@@ -12,6 +12,7 @@ test('real Postgres RLS: settings persist, isolate tenants, restrict members, pr
       create schema auth; create schema storage;
       create table auth.users(id uuid primary key, raw_user_meta_data jsonb default '{}');
       create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
+      create function auth.role() returns text language sql stable as $$ select nullif(current_setting('request.jwt.claim.role',true),'') $$;
       grant usage on schema auth,storage to authenticated,anon;
       grant execute on function auth.uid() to authenticated,anon;
       create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
@@ -33,7 +34,7 @@ test('real Postgres RLS: settings persist, isolate tenants, restrict members, pr
     const migratedLegacy=(await db.query('select primary_model,fallback_model from workspace_ai_settings where workspace_id=$1',[legacyWorkspaceId])).rows[0];
     assert.deepEqual(migratedLegacy,{primary_model:'space-bunny-free',fallback_model:'longcat-2.5-preview-free'});
     const a='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', b='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', member='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
-    await db.exec(`insert into auth.users(id) values ('${a}'),('${b}'),('${member}'); set role authenticated;`);
+    await db.exec(`insert into auth.users(id) values ('${a}'),('${b}'),('${member}'); set request.jwt.claim.role='authenticated'; set role authenticated;`);
     async function identity(id) { await db.query("select set_config('request.jwt.claim.sub',$1,false)",[id]); }
     await identity(a);
     const wa=(await db.query("select (public.create_workspace('Alpha','alpha-space')).id")).rows[0].id;
@@ -62,7 +63,7 @@ test('real Postgres RLS: settings persist, isolate tenants, restrict members, pr
     await assert.rejects(db.query('update workspace_ai_settings set fallback_model=primary_model'),/check constraint/);
     const policies = await db.query("select policyname from pg_policies where tablename='workspace_ai_settings'");
     assert.equal(policies.rows.length,3);
-    await db.exec('reset role; set role anon;');
+    await db.exec("reset role; set request.jwt.claim.role='anon'; set role anon;");
     await assert.rejects(db.query('select * from workspace_ai_settings'), /permission denied/);
   } finally { await db.close(); }
 });

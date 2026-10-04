@@ -273,6 +273,8 @@ test('local payment checker rejects mismatched allocations and linked external a
     assert.deepEqual(await f.paymentChecker(f.scope),{paidMinor:0});
     await f.db.query('update invoices set amount_paid=25 where id=$1',[f.scope.invoiceId]);
     await assert.rejects(f.paymentChecker(f.scope),/verification unavailable/);
+    // Trusted fixture seed represents accounting linkage; an owner cannot assign it.
+    await f.db.exec("set request.jwt.claim.role='service_role'");
     await f.db.query("update invoices set amount_paid=0,external_provider='zoho_books',external_invoice_id='fixture-external' where id=$1",[f.scope.invoiceId]);
     await assert.rejects(f.paymentChecker(f.scope),/verification unavailable/);
     await assert.rejects(f.paymentChecker({...f.scope,workspaceId:f.foreignWs}),/scope mismatch/);
