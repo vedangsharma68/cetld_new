@@ -666,8 +666,13 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
   const handlePending=async (operation,ctx)=>{
     const action=pendingAtStart?.action;
     if(action?.type==='owner_invoice_reopen'){
-      if(operation==='pending')return {ok:true,pending:true,requiresConfirmation:true,invoiceNumber:action.invoiceNumber,currency:action.currency,
-        reversalAmount:action.reversalAmount,paymentCount:action.paymentCount,balanceAfter:action.balanceAfter,cashRefund:false,paymentHistoryPreserved:true,expiresAt:action.expiresAt};
+      if(operation==='pending'){
+        replyRequirement={confirmationText:'yes',requiresCancel:true,requiresReplyCue:true,maxLength:900,
+          requiredFacts:{financialReopening:true,invoiceNumber:action.invoiceNumber,currency:action.currency,reversalAmount:action.reversalAmount,
+            balanceAfter:action.balanceAfter,paymentHistory:'Payment history is preserved',refund:'No refund',reminders:'Reminders paused after confirmation'}};
+        return {ok:true,pending:true,requiresConfirmation:true,invoiceNumber:action.invoiceNumber,currency:action.currency,
+          reversalAmount:action.reversalAmount,paymentCount:action.paymentCount,balanceAfter:action.balanceAfter,cashRefund:false,paymentHistoryPreserved:true,expiresAt:action.expiresAt};
+      }
       const explicit=operation==='confirm'?YES.test(String(message||'')):operation==='cancel'&&CANCEL.test(String(message||''));
       if(!explicit||!messageId||messageId===action.sourceMessageId)return fail('INVALID','A later explicit confirmation or cancellation is required.');
       if(typeof executeReopeningDecision!=='function')return fail('UNAVAILABLE','Invoice reopening is unavailable. No financial change was made.');
