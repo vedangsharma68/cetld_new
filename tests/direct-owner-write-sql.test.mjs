@@ -13,6 +13,44 @@ const owner='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const stranger='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const phone='+919871367051';
 
+test('business record lifecycle retains facts, scopes owner CAS and receipts, restores once, and blocks archived updates',async()=>{
+  const {db,workspaceId}=await boot();
+  try{
+    await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+    await addInbound(db,'br-create','Create my supplier');
+    const created=await write(db,{workspaceId,providerMessageId:'br-create',quote:'Create my supplier',operation:'business_record.create',payload:{record_type:'supplier',name:'John Smith',custom_fields:{city:'Mumbai',check_count:3}}});
+    assert.equal(created.ok,true,JSON.stringify(created));
+    const facts={name:created.record.name,record_type:created.record.record_type,custom_fields:created.record.custom_fields};
+    const payments=(await db.query('select count(*)::int as n from public.payments')).rows[0].n;
+    await addInbound(db,'br-delete','Delete John supplier');
+    const input={workspaceId,providerMessageId:'br-delete',quote:'Delete John supplier',operation:'business_record.delete',targetId:created.entityId,expectedUpdatedAt:created.updatedAt,payload:{}};
+    assert.equal((await write(db,{...input,ownerId:stranger})).code,'DENIED');
+    assert.equal((await write(db,{...input,quote:'invented instruction'})).code,'INVALID_AUTHORIZATION');
+    assert.equal((await write(db,{...input,payload:{name:'erase'}})).code,'INVALID');
+    const deleted=await write(db,input);assert.equal(deleted.ok,true,JSON.stringify(deleted));assert.equal(deleted.action,'business_record.deleted');assert(deleted.record.deleted_at);assert.equal(deleted.record.deleted_by,owner);
+    assert.deepEqual({name:deleted.record.name,record_type:deleted.record.record_type,custom_fields:deleted.record.custom_fields},facts);
+    assert.equal((await write(db,input)).replayed,true);
+    await addInbound(db,'br-edit','Edit deleted supplier');
+    assert.equal((await write(db,{...input,providerMessageId:'br-edit',quote:'Edit deleted supplier',operation:'business_record.update',expectedUpdatedAt:deleted.updatedAt,payload:{name:'changed'}})).code,'ALREADY_DELETED');
+    await addInbound(db,'br-restore','Restore John supplier');
+    const restore={...input,providerMessageId:'br-restore',quote:'Restore John supplier',operation:'business_record.restore',expectedUpdatedAt:deleted.updatedAt};
+    assert.equal((await write(db,{...restore,expectedUpdatedAt:created.updatedAt})).code,'STALE');
+    const restored=await write(db,restore);assert.equal(restored.ok,true,JSON.stringify(restored));assert.equal(restored.record.deleted_at,null);assert.equal(restored.action,'business_record.restored');
+    assert.equal((await write(db,restore)).replayed,true);
+    assert.equal((await db.query('select count(*)::int as n from public.business_records where id=$1',[created.entityId])).rows[0].n,1);
+    assert.equal((await db.query('select count(*)::int as n from public.payments')).rows[0].n,payments);
+    await addInbound(db,'br-delete-old','Delete John supplier again');
+    const old=await write(db,{...input,providerMessageId:'br-delete-old',quote:'Delete John supplier again',expectedUpdatedAt:restored.updatedAt});assert.equal(old.ok,true);
+    await db.query("update business_records set deleted_at=clock_timestamp()-interval '31 days' where id=$1",[created.entityId]);
+    const oldVersion=(await db.query('select to_jsonb(b) row from business_records b where id=$1',[created.entityId])).rows[0].row.updated_at;
+    await addInbound(db,'br-restore-expired','Restore old supplier');
+    assert.equal((await write(db,{...restore,providerMessageId:'br-restore-expired',quote:'Restore old supplier',expectedUpdatedAt:oldVersion})).code,'UNDO_EXPIRED');
+    await asOwner(db,stranger);assert.equal((await db.query('select * from public.business_records')).rows.length,0);
+    await assert.rejects(db.query("select app.apply_business_record($1,'delete',$2,null,'{}')",[workspaceId,created.entityId]));
+    await asOwner(db);await assert.rejects(db.query('update public.business_records set deleted_at=now(),deleted_by=$1 where id=$2',[owner,created.entityId]));
+  }finally{await db.close();}
+});
+
 test('reopening draft preserves paid receipts, needs later confirmation, replays once and pauses reminders',async()=>{
   const {db,workspaceId}=await boot();
   try{
@@ -176,6 +214,7 @@ test('real provider, catalog, resolver and PostgreSQL repair a targeted update a
           return (await db.query(`select to_jsonb(b) as row from public.${table} b where ${where} limit ${max} offset ${start}`,params)).rows.map(row=>row.row);
         };
         const q={select(){return q;},eq(column,value){filters.push([column,'=',value]);return q;},ilike(column,value){filters.push([column,'ilike',value]);return q;},
+          is(column,value){filters.push([column,'is not distinct from',value]);return q;},
           order(){return q;},limit(value){max=value;return q;},range(a,b){start=a;max=b-a+1;return q;},
           async maybeSingle(){return {data:(await read())[0]||null,error:null};},then(resolve,reject){return read().then(data=>({data,error:null})).then(resolve,reject);}};
         return q;

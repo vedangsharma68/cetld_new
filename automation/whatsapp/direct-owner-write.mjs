@@ -3,12 +3,12 @@ import {createHash} from 'node:crypto';
 const OPERATIONS=new Set([
   'invoice.create','invoice.update','invoice.delete','invoice.restore',
   'customer.create','customer.update','customer.delete',
-  'business_record.create','business_record.update',
+  'business_record.create','business_record.update','business_record.delete','business_record.restore',
   'settings.update','ai_settings.update','pending.decide',
 ]);
 
 const TABLES=Object.freeze({
-  business_record:{table:'business_records',select:'id,workspace_id,record_type,name,custom_fields,created_at,updated_at'},
+  business_record:{table:'business_records',select:'id,workspace_id,record_type,name,custom_fields,created_at,updated_at,deleted_at,deleted_by'},
   invoice:{table:'invoices',select:'id,workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,custom_fields,metadata,created_at,updated_at,deleted_at,deleted_by'},
   customer:{table:'customers',select:'id,workspace_id,name,company_name,email,phone,custom_fields,metadata,created_at,updated_at'},
   settings:{table:'workspace_settings',select:'workspace_id,business_name,default_currency,default_timezone,follow_up_preferences,owner_bot_preferences,updated_at'},
@@ -125,6 +125,8 @@ export function createDirectOwnerWriteAdapter({supabase}={}){
         if(outcome.updatedAt&&record.updated_at!==outcome.updatedAt)return failure('WRITE_UNCONFIRMED');
         if(outcome.entityType==='invoice'&&outcome.action==='invoice.deleted'&&!record.deleted_at)return failure('WRITE_UNCONFIRMED');
         if(outcome.entityType==='invoice'&&outcome.action==='invoice.restored'&&record.deleted_at!==null)return failure('WRITE_UNCONFIRMED');
+        if(outcome.entityType==='business_record'&&outcome.action==='business_record.deleted'&&!record.deleted_at)return failure('WRITE_UNCONFIRMED');
+        if(outcome.entityType==='business_record'&&outcome.action==='business_record.restored'&&record.deleted_at!==null)return failure('WRITE_UNCONFIRMED');
         if(outcome.entityType==='invoice'&&outcome.action==='invoice.paid'&&!isSettledPaidInvoice(record))return failure('WRITE_UNCONFIRMED');
         if(outcome.entityType==='invoice'&&outcome.action==='invoice.reopened'
           &&(minorUnits(record.amount_paid)!==0n||!['sent','overdue'].includes(record.status)))return failure('WRITE_UNCONFIRMED');
@@ -207,6 +209,8 @@ export function createDirectOwnerWriteAdapter({supabase}={}){
         if(outcome.updatedAt&&record.updated_at!==outcome.updatedAt)return failure('WRITE_UNCONFIRMED');
         if(entityType==='invoice'&&outcome.action==='invoice.deleted'&&!record.deleted_at)return failure('WRITE_UNCONFIRMED');
         if(entityType==='invoice'&&outcome.action==='invoice.restored'&&record.deleted_at!==null)return failure('WRITE_UNCONFIRMED');
+        if(entityType==='business_record'&&outcome.action==='business_record.deleted'&&!record.deleted_at)return failure('WRITE_UNCONFIRMED');
+        if(entityType==='business_record'&&outcome.action==='business_record.restored'&&record.deleted_at!==null)return failure('WRITE_UNCONFIRMED');
         if(entityType==='invoice'&&outcome.action==='invoice.paid'&&!isSettledPaidInvoice(record))return failure('WRITE_UNCONFIRMED');
       }
       return {ok:true,completed:true,action:outcome.action,entityType,entityId,record,replayed:outcome.replayed===true};

@@ -74,7 +74,11 @@ export async function createOfflineSqlNetwork({externalFetch}={}){
         }).join(',')}`:'';
         const limit=params.has('limit')?` limit ${bind(Number(params.get('limit')))}`:'';
         const offset=params.has('offset')?` offset ${bind(Number(params.get('offset')))}`:'';
-        result=await db.query(`select ${columns} from public.${table}${where}${order}${limit}${offset}`,args);
+        // Match PostgREST's PostgreSQL JSON representation, including timestamptz
+        // strings. PGlite's JS Date decoding would rewrite +00:00 to Z and make
+        // persisted version verification differ from the actual JSONB RPC wire.
+        const selected=await db.query(`select to_jsonb(fixture_row) as fixture_row from (select ${columns} from public.${table}${where}${order}${limit}${offset}) fixture_row`,args);
+        result={rows:selected.rows.map(row=>row.fixture_row)};
       }else if(method==='PATCH'){
         const patch=JSON.parse(body),set=Object.entries(patch).map(([column,value])=>`${name(column)}=${bind(value)}`).join(',');
         result=await db.query(`update public.${table} set ${set}${where} returning *`,args);

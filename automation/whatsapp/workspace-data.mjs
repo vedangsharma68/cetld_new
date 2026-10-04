@@ -26,8 +26,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const TABLES = Object.freeze({
   business_records: {
     label:'Custom business records (suppliers, projects, inventory, and other owner-defined categories)',scope:'workspace',
-    columns:['record_type','name','custom_fields','created_at','updated_at'],defaults:['record_type','name','custom_fields'],
-    filters:['id','record_type','name'],writeColumns:['record_type','name','custom_fields'],
+    columns:['record_type','name','custom_fields','created_at','updated_at','deleted_at'],defaults:['record_type','name','custom_fields'],
+    filters:['id','record_type','name','deleted_at'],writeColumns:['record_type','name','custom_fields'],
   },
   workspace_settings: {
     label:'Business settings', scope:'workspace',
@@ -78,7 +78,7 @@ const TYPE_BY_COLUMN = Object.freeze({
 });
 
 const WRITE_SCHEMA = Object.freeze({
-  business_records:{create:['record_type','name','custom_fields'],update:['record_type','name','custom_fields']},
+  business_records:{create:['record_type','name','custom_fields'],update:['record_type','name','custom_fields'],delete:[],restore:[]},
   customers:{
     create:['name','company_name','email','phone','custom_fields'],
     update:['name','company_name','email','phone','custom_fields'],
@@ -124,6 +124,7 @@ function catalog(table=null) {
   return {
     operations:OPERATIONS,
     atomicBatch:{argument:'operations',minItems:2,maxItems:10,itemFields:['operation','table','filters','values'],operations:['create','update'],oneUnambiguousRecordPerItem:true,allCommitOrAllRollback:true,customFields:'Nest additional business facts in each item values.custom_fields.',excluded:['status changes','deletes','confirmations']},
+    businessRecordLifecycle:{mode:'direct',delete:'Recoverable deletion; retains all business facts. No values allowed.',restore:'Restore one record deleted by the current owner within 30 days; use its name or ID. No values allowed.',reads:'Deleted records are hidden by default; read with deleted_at gt a supplied timestamp to inspect retained deleted records.'},
     attachmentOperations:{analyzeAttachment:'Read the current attachment and retain its source facts in a durable review without saving an invoice.',
       saveAttachment:'Save the current attachment or this owner\'s current retained attachment review. Reuse its known facts; do not recreate it from chat text.',
       reviewAttachment:'Supply missing owner-evidenced facts or acknowledge unchanged known fields. Only invoice_number may be explicitly overridden to workspace numbering: include invoice_number_intent use_workspace_numbering with invoice_number AUTO. Concrete number or pattern replacement is unsupported. The workspace sequence assigns the unique ledger number on save and original extraction is audited. Other extracted fields cannot be overwritten.'},
@@ -139,7 +140,7 @@ function catalog(table=null) {
       }}}:{}),
       ...(name==='workspace_ai_settings'?{writeValueConstraints:{update:{primary_model:VERIFIED_MODEL_CATALOG.filter(entry=>entry.roles.includes('primary')).map(entry=>entry.id),fallback_model:[null,...VERIFIED_MODEL_CATALOG.filter(entry=>entry.roles.includes('fallback')).map(entry=>entry.id)]}}}:{}),
       operations:name==='invoices'?['read','create','update','delete','restore','reviewAttachment']
-        :name==='business_records'?['read','create','update']:name==='customers'?['read','create','update','delete']
+        :name==='business_records'?['read','create','update','delete','restore']:name==='customers'?['read','create','update','delete']
           :name==='workspace_settings'||name==='workspace_ai_settings'?['read','update']
             :['read'],
     }])),
@@ -300,6 +301,7 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
       ||columns.some(column=>typeof column!=='string'||!TABLES[table]?.columns.includes(column))))throw new TypeError('invalid columns');
     const values=args.values===undefined?{}:args.values;
     if(!ownObject(values))throw new TypeError('invalid values');
+    if(table==='business_records'&&['delete','restore'].includes(operation)&&Object.keys(values).length)throw new TypeError('invalid write fields');
     if(table==='invoices'&&['create','update','reviewAttachment'].includes(operation)
       &&(!exactKeys(values,WRITE_SCHEMA.invoices[operation])||!Object.keys(values).length||values.status!==undefined&&!['paid','unpaid'].includes(values.status)))throw new TypeError('invalid invoice fields');
     const limit=args.limit===undefined?20:Number(args.limit);
@@ -436,7 +438,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     const joinName=joinCustomer?`,customer:customers!invoices_workspace_id_customer_id_fkey${customerFilter?'!inner':''}(name)`:'';
     let query=supabase.from(table).select(selectedWithInternals.join(',')+joinName);
     query=query.eq('workspace_id',scope.workspaceId);
-    if(table==='invoices')query=query.is('deleted_at',null);
+    if(table==='invoices'||table==='business_records'&&!filters.some(filter=>filter.column==='deleted_at'))query=query.is('deleted_at',null);
     for(const filter of filters)query=applyFilter(query,filter);
     if(customerFilter)query=applyFilter(query,{...customerFilter,column:'customer.name'});
     if(order)query=query.order(order.column,{ascending:order.direction==='asc'});
@@ -841,7 +843,8 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       // can then be corrected from the catalog without a database write attempt.
       if(['business_records','customers'].includes(params.table)&&['create','update'].includes(params.operation))
         params.values=validateValues(params.table,params.operation,params.values);
-      if(['business_records','customers'].includes(params.table)&&['update','delete'].includes(params.operation)){
+      if(params.table==='business_records'&&['delete','restore'].includes(params.operation)&&confirmationMode!=='direct')return fail('UNAVAILABLE','Recoverable business-record deletion and restoration require direct owner mode. No change was made.');
+      if(['business_records','customers'].includes(params.table)&&['update','delete','restore'].includes(params.operation)){
         const allowed=TABLES[params.table].filters;
         if(!params.filters.length||params.filters.some(filter=>!allowed.includes(filter.column)
           ||!['eq','ilike'].includes(filter.operator)||filter.operator==='ilike'&&!['name','company_name'].includes(filter.column)
