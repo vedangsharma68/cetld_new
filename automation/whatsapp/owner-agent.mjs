@@ -1500,7 +1500,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
           const toolStartedAt=Date.now();
           try{output=await bounded(()=>tools.execute(name,args,{signal:workController.signal,deadlineAt:workDeadlineAt}),'tool','work');}
           finally{try{logger?.info?.('WhatsApp owner tool call',{traceId:scopedTrace,toolName:safeToolName(name),durationMs:Date.now()-toolStartedAt,code:logToolCode(output),
-            ...(['TARGET_REQUIRED','INVALID_FIELDS','REQUEST_SHAPE'].includes(output?.validationCode)?{validationCode:output.validationCode}:{}),
+            ...(['TARGET_REQUIRED','INVALID_FIELDS','REQUEST_SHAPE','REQUIRED_FIELDS','INVALID_CATEGORY','INVALID_VALUE'].includes(output?.validationCode)?{validationCode:output.validationCode}:{}),
             ...(name==='workspaceData'?{operation:output?.operation||null,table:output?.table||null,rowCount:Array.isArray(output?.rows)?output.rows.length:null}:{}),
           });}catch{}}
           inFlightTool=null;

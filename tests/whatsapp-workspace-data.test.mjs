@@ -7,6 +7,8 @@ import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-
 import {VERIFIED_MODEL_CATALOG} from '../ai/provider.mjs';
 import {ownerCalendar,validateCustomFields} from '../automation/whatsapp/workspace-records.mjs';
 import {ownerGroundingIssue} from '../automation/whatsapp/owner-grounding.mjs';
+import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
+import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 import {customFieldsView,businessRecordsView} from '../custom-fields.mjs';
 
 test('owner local tomorrow follows calendar days across midnight and daylight saving',()=>{
@@ -57,6 +59,56 @@ const scope = Object.freeze({
   ownerId:'11111111-1111-4111-8111-111111111111',
   customerId:'22222222-2222-4222-8222-222222222222',
   phone:'+919871367051',
+});
+
+test('direct record preflight exposes repairable schema errors without attempting a write',async()=>{
+  let writes=0;
+  const tool=createWorkspaceDataTool({supabase:fakeSupabase(),scope,authorize:async()=>true,confirmationMode:'direct',message:'Create QA record',messageId:'isolated-preflight',
+    executeDirectOperation:async()=>{writes++;return {ok:true};}});
+  for(const [values,code] of [
+    [{name:'QA',check_count:1},'INVALID_FIELDS'],
+    [{name:'QA'},'INVALID_CATEGORY'],
+    [{record_type:'qa_check'},'REQUIRED_FIELDS'],
+    [{record_type:'QA Check',name:'QA'},'INVALID_CATEGORY'],
+    [{record_type:'qa_check',name:22},'INVALID_VALUE'],
+  ]){
+    const result=await tool.execute({operation:'create',table:'business_records',values});
+    assert.equal(result.ok,false);assert.equal(result.validationCode,code,JSON.stringify({values,result}));
+    assert(result.catalog.tables.business_records.writeValueConstraints.create);
+    assert.equal(tool.getWriteAttempted(),false);assert.equal(writes,0);
+  }
+  const denied=await tool.execute({operation:'create',table:'business_records',values:{record_type:'qa_check',name:'QA',workspace_id:'foreign'}});
+  assert.equal(denied.ok,false);assert.equal(writes,0);assert.equal(tool.getWriteAttempted(),false);
+  const result=await tool.execute({operation:'create',table:'business_records',values:{record_type:'qa_check',name:'QA',custom_fields:{check_count:1,qa_status:'active'}}});
+  assert.equal(result.ok,true);assert.equal(tool.getWriteAttempted(),true);assert.equal(writes,1);
+});
+
+test('real provider can repair a malformed generic business create before the single scoped write',async()=>{
+  const message="Create a qa_check business record named CETLD QA 20261004 1442 with custom fields check_note 'temporary assistant test', check_count 1 and qa_status 'active'.";
+  const values={record_type:'qa_check',name:'CETLD QA 20261004 1442',custom_fields:{check_note:'temporary assistant test',check_count:1,qa_status:'active'}};
+  let calls=0,writes=0,saved;
+  const workspaceTools=createOwnerWorkspaceTools({supabase:fakeSupabase(),scope,ownerStore:{async query(){return [];}},
+    message,messageId:'isolated-business-create',authorize:async candidate=>candidate===scope,botPreferences:{confirmationMode:'direct'},
+    directWriteAdapter:{async lookupCompleted(){return {ok:false,code:'NO_RECEIPT'};},async apply(input){
+      writes++;assert.equal(input.workspaceId,scope.workspaceId);assert.equal(input.ownerId,scope.ownerId);
+      assert.equal(input.operation,'business_record.create');assert.deepEqual(input.payload,values);
+      assert.equal(input.authorization.quote,message);saved=structuredClone(input.payload);
+      return {ok:true,completed:true,action:'business_record.created',entityType:'business_record',entityId:'33333333-3333-4333-8333-333333333333',record:saved};
+    }}});
+  const provider=new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,
+    logger:{info(){},warn(){},error(){}},fetchImpl:async(_url,init)=>{
+      calls++;const wire=JSON.parse(init.body);let content;
+      if(calls===1)content=JSON.stringify({name:'workspaceData',parameters:{operation:'create',table:'business_records',values:{name:values.name,check_count:1}}});
+      else if(calls===2){
+        assert.equal(writes,0);assert(wire.tools?.length);
+        assert(wire.messages.some(row=>row.role==='tool'&&JSON.parse(row.content).validationCode==='INVALID_FIELDS'));
+        content=JSON.stringify({name:'workspaceData',parameters:{operation:'create',table:'business_records',values}});
+      }else{assert.equal(writes,1);assert.deepEqual(saved,values);content='Created CETLD QA 20261004 1442 with check_note temporary assistant test, check_count 1 and qa_status active.';}
+      return {ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({choices:[{message:{content},finish_reason:'stop'}]})};
+    }});
+  const result=await runOwnerAgent({provider,message,tools:workspaceTools});
+  assert.equal(result.plannerFailure,undefined);assert.match(result.answer,/Created CETLD QA/);
+  assert.equal(calls,3);assert.equal(writes,1);
 });
 
 function fakeSupabase({rows={}, rpcResult={ok:true}, rpcError=null}={}) {

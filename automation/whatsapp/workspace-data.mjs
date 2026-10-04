@@ -96,7 +96,7 @@ function definition() {
   // The server validates the full catalog. Do not send that catalog on every
   // model request; describe exposes it when the model needs unfamiliar fields.
   return {type:'function',function:{name:'workspaceData',
-    description:'Read or change workspace data. Clear owner instructions execute directly when allowed; otherwise a proposal needs a decision. Prefer structured fields; request text handles unfamiliar operations. Omit columns for defaults. Customers use name/email/phone; invoices use customer_name (joined name; ilike for partial names), invoice_number/total_amount/status. Settings use primary_model/fallback_model/follow_up_preferences. custom_fields stores extra business facts as a flat object of snake_case keys and text/number/boolean/null values, with a merge on update; describe lists fields; pending reads proposals; confirm/cancel decide them.',
+    description:'Read or change workspace data. Clear owner instructions execute directly when allowed; otherwise a proposal needs a decision. Prefer structured fields; request text handles unfamiliar operations. Omit columns for defaults. business_records create values require record_type and name; extra fields go inside custom_fields. Customers use name/email/phone; invoices use customer_name (joined name; ilike for partial names), invoice_number/total_amount/status. Settings use primary_model/fallback_model/follow_up_preferences. custom_fields stores extra business facts as a flat object of snake_case keys and text/number/boolean/null values, with a merge on update; describe lists fields; pending reads proposals; confirm/cancel decide them.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         request:{type:'string',minLength:1,maxLength:1200},
@@ -123,6 +123,7 @@ function catalog(table=null) {
     tables:Object.fromEntries(Object.entries(TABLES).filter(([name])=>!table||name===table).map(([name,spec])=>[name,{
       label:spec.label,columns:spec.columns,filters:spec.filters,
       writeFields:WRITE_SCHEMA[name]||{},
+      ...(name==='business_records'?{writeValueConstraints:{create:{required:['record_type','name'],record_type:'lowercase category: one letter followed by up to 63 lowercase letters, digits or underscores',name:'nonempty text, up to 200 characters',custom_fields:'flat object of snake_case business keys and text/number/boolean/null values; extra fields must be nested here'},update:{record_type:'same category format',name:'nonempty text, up to 200 characters',custom_fields:'merges with existing fields'}}}:{}),
       ...(name==='invoices'?{writeValueConstraints:{update:{status:['paid','unpaid'],unpaid:'Checks current payment facts. Never removes or reverses payments.'}}}:{}),
       ...(name==='workspace_settings'?{writeValueConstraints:{update:{
         owner_bot_preferences:{description:'Owner assistant style; partial fields merge with saved preferences.',assistantName:'text, 1-50 characters',tone:['concise','friendly','formal'],language:OWNER_BOT_LANGUAGE_OPTIONS.map(item=>item.value),replyLength:['short','balanced','detailed'],confirmationMode:['direct','buttons'],serviceReplySignature:'text, up to 120 characters',customInstruction:'style text, up to 500 characters'},
@@ -738,6 +739,10 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         if(!found.ok)return safeError(found);
         params.filters=[{column:'id',operator:'eq',value:found.row.id}];
       }
+      // Validate before marking or dispatching a write. A malformed model call
+      // can then be corrected from the catalog without a database write attempt.
+      if(['business_records','customers'].includes(params.table)&&['create','update'].includes(params.operation))
+        params.values=validateValues(params.table,params.operation,params.values);
       if(['create','update','delete','restore'].includes(params.operation)&&confirmationMode==='direct'&&typeof executeDirectOperation==='function'){
         ctx.assertLive();await ctx.assertAuthorized();writeAttempted=true;
         const result=await executeDirectOperation(params,ctx);
@@ -756,6 +761,12 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         'invoice action requires exactly one canonical target':['TARGET_REQUIRED','Which invoice do you mean? Send its invoice number or customer name. If that customer has several invoices, I will ask you to choose. No change was made.'],
         'invalid invoice fields':['INVALID_FIELDS','Those invoice fields are not supported. Use status paid or unpaid for a payment-status check; unpaid never removes recorded payments. No change was made.'],
         'invalid request':['REQUEST_SHAPE','The assistant combined two request formats. It should send either a description or structured fields. No change was made.'],
+        'invalid write fields':['INVALID_FIELDS','Use the supported write fields in this catalog. Additional business facts must be nested inside custom_fields. Correct the tool arguments using the owner message already supplied; no database write was attempted.'],
+        'record name required':['REQUIRED_FIELDS','Creating this record requires a nonempty name. Business records also require record_type. Use the owner message already supplied and the returned catalog; no database write was attempted.'],
+        'invalid record category':['INVALID_CATEGORY','Business records require record_type as a lowercase category with letters, digits or underscores. Use the owner category already supplied; no database write was attempted.'],
+        'invalid write value':['INVALID_VALUE','Use the field types in this catalog. Extra business facts belong in custom_fields, which accepts text, numbers, booleans or null. No database write was attempted.'],
+        'empty write':['REQUIRED_FIELDS','Provide at least one supported field from the owner request. No database write was attempted.'],
+        'invalid text field':['INVALID_VALUE','Record text fields must be nonempty, within the catalog length limits and contain no control characters. No database write was attempted.'],
       };
       const detail=errors[error.message];
       return detail?{ok:false,code:'INVALID',validationCode:detail[0],message:detail[1]}:fail();
