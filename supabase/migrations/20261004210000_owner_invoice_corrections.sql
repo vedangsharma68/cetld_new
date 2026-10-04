@@ -24,7 +24,7 @@ create function app.apply_owner_invoice_correction(
 ) returns jsonb language plpgsql security definer set search_path='' as $$
 declare i public.invoices%rowtype;before_row jsonb;result jsonb;
  m jsonb;k text;x jsonb;v numeric;item_sum numeric:=0;subtotal numeric;tax numeric;discount numeric;total numeric;
- customer uuid;issue date;due date;cur text;financial boolean;correction uuid;history public.invoice_correction_audits%rowtype;label text;
+ customer uuid;contact_phone text;issue date;due date;cur text;financial boolean;correction uuid;history public.invoice_correction_audits%rowtype;label text;
 begin
  if p_workspace_id is null or p_owner_id is null or p_invoice_id is null or p_expected_updated_at is null
   or p_source_kind not in ('whatsapp','dashboard') or p_source_event_id is null or length(p_source_event_id) not between 1 and 256
@@ -58,11 +58,12 @@ begin
   if jsonb_typeof(p_values->'invoice_number')<>'string' or length(btrim(p_values->>'invoice_number')) not between 1 and 100 then return jsonb_build_object('ok',false,'code','INVALID');end if;
   label:=btrim(p_values->>'invoice_number');
  end if;
- before_row:=to_jsonb(i);m:=i.metadata;customer:=i.customer_id;issue:=i.issue_date;due:=i.due_date;cur:=i.currency;total:=i.total_amount;
+ before_row:=to_jsonb(i);m:=i.metadata;customer:=i.customer_id;contact_phone:=i.customer_phone;issue:=i.issue_date;due:=i.due_date;cur:=i.currency;total:=i.total_amount;
  if p_values?'customer_id' then
   if jsonb_typeof(p_values->'customer_id')<>'string' then return jsonb_build_object('ok',false,'code','INVALID');end if;
   customer:=(p_values->>'customer_id')::uuid;
-  if not exists(select 1 from public.customers c where c.workspace_id=p_workspace_id and c.id=customer) then return jsonb_build_object('ok',false,'code','NOT_FOUND');end if;
+  select c.phone into contact_phone from public.customers c where c.workspace_id=p_workspace_id and c.id=customer for share;
+  if not found then return jsonb_build_object('ok',false,'code','NOT_FOUND');end if;
  end if;
  if p_values?'currency' then cur:=p_values->>'currency';if jsonb_typeof(p_values->'currency')<>'string' or not app.currency_uses_two_decimal_precision(cur) then return jsonb_build_object('ok',false,'code','INVALID');end if;end if;
  foreach k in array array['subtotal','tax','discount','total_amount'] loop
@@ -114,7 +115,7 @@ begin
   due:=(p_values->>'due_date')::date;end if;
  if due<issue then return jsonb_build_object('ok',false,'code','INVALID');end if;
  m:=m||jsonb_build_object('outstanding_amount',total-i.amount_paid,'followup_state','paused','next_follow_up_at',null,'approved_reminder_text',null,'approved_preferences_updated_at',null,'bookkeeping_sync_status','pending');
- update public.invoices set invoice_number=label,custom_fields=case when p_values?'custom_fields' then i.custom_fields||p_values->'custom_fields' else i.custom_fields end,customer_id=customer,issue_date=issue,due_date=due,currency=cur,total_amount=total,
+ update public.invoices set invoice_number=label,custom_fields=case when p_values?'custom_fields' then i.custom_fields||p_values->'custom_fields' else i.custom_fields end,customer_id=customer,customer_phone=contact_phone,issue_date=issue,due_date=due,currency=cur,total_amount=total,
   notes=case when p_values?'notes' then p_values->>'notes' else i.notes end,metadata=m,followup_state='paused',next_follow_up_at=null
   where workspace_id=p_workspace_id and id=p_invoice_id returning * into i;
  update public.invoice_lifecycle_proposals set state='stale' where workspace_id=p_workspace_id and owner_id=p_owner_id and invoice_id=i.id and state='pending';

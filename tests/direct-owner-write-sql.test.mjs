@@ -22,12 +22,13 @@ test('invoice corrections persist typed fields, preserve source, audit immutable
  const {db,workspaceId}=await boot();try{
   await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
   const made=await createDirectInvoice(db,workspaceId,{messageId:'correction-create',invoiceNumber:'SOURCE-17',customerName:'John'});
-  await db.exec('reset role');await db.query("update public.invoices set metadata=metadata||$2::jsonb where id=$1",[made.entityId,JSON.stringify({source_file:'original.pdf',extraction_raw:{printed:'SOURCE-17'}})]);
+  await db.exec('reset role');await db.query("update public.invoices set customer_phone='+919811111111',metadata=metadata||$2::jsonb where id=$1",[made.entityId,JSON.stringify({source_file:'original.pdf',extraction_raw:{printed:'SOURCE-17'},debtor_phone:'+919811111111'})]);
   const before=(await db.query('select * from public.invoices where id=$1',[made.entityId])).rows[0];
   const second=(await db.query("insert into public.customers(workspace_id,name) values($1,'Jane') returning id",[workspaceId])).rows[0];
   const values={customer_id:second.id,invoice_number:'CORRECT-18',line_items:[{description:'Service',quantity:2,unitPrice:20,amount:40,confidence:0.9},{description:'Legacy',amount:10}],subtotal:50,tax:10,discount:5,total_amount:55,currency:'USD',issue_date:'2026-10-02',due_date:'2026-11-03',notes:'Corrected',invoice_direction:'payable',seller_name:'Supplier',buyer_name:'My business',payment_information:'Bank details',custom_fields:{purchase_order:'PO-19'}};
   const result=await correctInvoice(db,{workspaceId,invoice:before,messageId:'correction-all',values});assert.equal(result.ok,true,JSON.stringify(result));
   assert.equal(result.record.customer_id,second.id);assert.equal(result.record.metadata.source_file,'original.pdf');assert.deepEqual(result.record.metadata.extraction_raw,{printed:'SOURCE-17'});
+  assert.equal(result.record.customer_phone,null,'a reassignment to a contact with no phone clears the old canonical recipient');assert.equal(result.record.metadata.debtor_phone,before.metadata.debtor_phone);
   assert.equal(result.record.metadata.printed_invoice_number,before.metadata.printed_invoice_number);assert.equal(result.record.invoice_number,'CORRECT-18');
   assert.equal(result.record.next_follow_up_at,null);assert.equal(result.record.metadata.approved_reminder_text??null,null);
   const audit=(await db.query('select * from public.invoice_correction_audits where id=$1',[result.correctionAuditId])).rows[0];
@@ -36,6 +37,9 @@ test('invoice corrections persist typed fields, preserve source, audit immutable
   assert.equal((await correctInvoice(db,{workspaceId,invoice:before,messageId:'correction-all',values:{notes:'Different'}})).code,'REPLAY_MISMATCH');
   await db.exec('reset role');await assert.rejects(db.query('delete from public.invoice_correction_audits where id=$1',[audit.id]),/immutable/);
   assert.equal((await db.query('select count(*)::int n from public.payments where invoice_id=$1',[before.id])).rows[0].n,0);
+  await db.query("update public.customers set phone='+919822222222' where id=$1",[second.id]);
+  const refreshed=await correctInvoice(db,{workspaceId,invoice:result.record,messageId:'correction-recipient-refresh',values:{customer_id:second.id}});
+  assert.equal(refreshed.ok,true);assert.equal(refreshed.record.customer_phone,'+919822222222');assert.equal(refreshed.record.metadata.debtor_phone,before.metadata.debtor_phone);
  }finally{await db.close();}
 });
 test('invoice corrections reject foreign scopes, protected fields, stale events, invalid arithmetic and non-direct authorization without partial writes',async()=>{
