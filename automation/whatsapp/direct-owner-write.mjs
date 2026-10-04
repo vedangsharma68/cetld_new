@@ -114,9 +114,12 @@ export function createDirectOwnerWriteAdapter({supabase}={}){
         if(outcome.entityType==='invoice'&&outcome.action==='invoice.deleted'&&!record.deleted_at)return failure('WRITE_UNCONFIRMED');
         if(outcome.entityType==='invoice'&&outcome.action==='invoice.restored'&&record.deleted_at!==null)return failure('WRITE_UNCONFIRMED');
         if(outcome.entityType==='invoice'&&outcome.action==='invoice.paid'&&!isSettledPaidInvoice(record))return failure('WRITE_UNCONFIRMED');
+        if(outcome.entityType==='invoice'&&outcome.action==='invoice.reopened'
+          &&(minorUnits(record.amount_paid)!==0n||!['sent','overdue'].includes(record.status)))return failure('WRITE_UNCONFIRMED');
       }
       return {ok:true,completed:true,action:outcome.action,entityType:outcome.entityType,
-        entityId:outcome.entityId,record,replayed:true};
+        entityId:outcome.entityId,record,replayed:true,...(outcome.action==='invoice.reopened'?{invoiceNumber:outcome.invoiceNumber,currency:outcome.currency,
+          reversedAmount:outcome.reversedAmount,balanceAfter:outcome.balanceAfter,paymentCount:outcome.paymentCount,paymentHistoryPreserved:true,cashRefund:false}: {})};
     },
     async apply(input={}){
       const {workspaceId,ownerId,phone,providerMessageId,interactionId=null,authorization,operation,

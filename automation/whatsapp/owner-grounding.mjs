@@ -1,5 +1,5 @@
 // Output safety: an assistant sentence is not a database receipt.
-const COMPLETION = /\b(?:deleted|removed|created|saved|updated|changed|restored|recorded|sent|cancelled|canceled|reset|completed|marked[^.!?]{0,24}paid)\b/i;
+const COMPLETION = /\b(?:deleted|removed|created|saved|updated|changed|restored|reopened|reversed|recorded|sent|cancelled|canceled|reset|completed|marked[^.!?]{0,24}paid)\b/i;
 const NEGATIVE = /\b(?:not|never|cannot|can't|couldn't|could not|haven't|hasn't|wasn't|weren't|didn't|did not|unable|failed|pending|propos(?:al|ed)|would|will|can|could|should|if|once|before|after|to be|to delete|to update|to change|to send)\b/i;
 const COMMITTED = new Set(['deleted','restored','invoice_created','settings_updated','customer_created','customer_updated','customer_deleted','updated','created','paid','cancelled','canceled','review_updated']);
 const COMMITTED_TYPES=new Set(['owner_invoice_update','owner_invoice_payment','owner_invoice_create','owner_settings_update','owner_workspace_data_confirmed','owner_workspace_data_cancelled']);
@@ -16,9 +16,10 @@ function actionMatches(clause, result) {
   if(/\b(?:cancelled|canceled)\b/i.test(clause))return /cancel/.test(action);
   if(/\b(?:deleted|removed|deletion)\b/i.test(clause))return /delet/.test(action)||Boolean(result.record?.deleted_at);
   if(/\b(?:created|creation)\b/i.test(clause))return /creat/.test(action)||result.outcome==='saved';
+  if(/\b(?:reopened|reversed|marked[^.!?]{0,24}unpaid)\b/i.test(clause))return action==='invoice.reopened';
   if(/\b(?:restored|restoration)\b/i.test(clause))return /restor/.test(action);
-  if(/\b(?:marked[^.!?]{0,24}paid|recorded[^.!?]{0,24}payment|payment)\b/i.test(clause))return /paid|payment/.test(action);
-  if(/\b(?:updated|changed|update|change)\b/i.test(clause))return /updat|change|confirmed/.test(action);
+  if(/\b(?:marked[^.!?]{0,24}paid|recorded[^.!?]{0,24}payment|payment)\b/i.test(clause))return /paid|payment|reopened/.test(action);
+  if(/\b(?:updated|changed|update|change)\b/i.test(clause))return /updat|change|confirmed|reopened/.test(action);
   return true;
 }
 function numericEvidence(results) {
@@ -60,6 +61,7 @@ export function ownerButtonClaimIssue(reply,{buttonsAvailable=false}={}){
 }
 export function ownerGroundingIssue(reply,results=[],message='',capabilities={}){
   const text=normalize(reply);
+  if(results.some(result=>result.cashRefund===false)&&text.split(/[.!?\n]+/).some(clause=>/\b(?:refunded|sent[^.!?]{0,25}refund|refund[^.!?]{0,25}(?:sent|processed|issued))\b/i.test(clause)&&!NEGATIVE.test(clause)&&!/\bno\b/i.test(clause)))return 'unverified_refund';
   const buttonIssue=ownerButtonClaimIssue(text,capabilities);
   if(buttonIssue)return buttonIssue;
   const proposalClaims=text.split(/[.!?\n]+/).filter(clause=>
@@ -77,8 +79,8 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
   // different unsupported success claim in the same reply.
   const claims=text.split(/[.!?\n]+/).filter(part=>COMPLETION.test(part)&&!NEGATIVE.test(part)
     &&(!/\bcompleted\b/i.test(part)||/\b(?:update|change|deletion|payment|creation|restoration|action)\b/i.test(part))
-    &&(/^\s*(?:deleted|removed|created|saved|updated|changed|restored|recorded|sent|cancelled|canceled|reset)\b/i.test(part)
-      ||/\b(?:I|we|I've|we've)\s+(?:(?:have|already|now|successfully|just|also)\s+)*(?:deleted|removed|created|saved|updated|changed|restored|recorded|sent|cancelled|canceled|reset|marked|completed)\b/i.test(part)
+    &&(/^\s*(?:deleted|removed|created|saved|updated|changed|restored|reopened|reversed|recorded|sent|cancelled|canceled|reset)\b/i.test(part)
+      ||/\b(?:I|we|I've|we've)\s+(?:(?:have|already|now|successfully|just|also)\s+)*(?:deleted|removed|created|saved|updated|changed|restored|reopened|reversed|recorded|sent|cancelled|canceled|reset|marked|completed)\b/i.test(part)
       ||/\b(?:has|have|was|were|now|successfully)\b[^.!?]{0,35}\b(?:deleted|removed|created|saved|updated|changed|restored|recorded|sent|cancelled|canceled|completed|marked)\b/i.test(part)
       ||/\bis (?:now )?marked(?: as)? paid\b/i.test(part)));
   for(const clause of claims){

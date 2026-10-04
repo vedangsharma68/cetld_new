@@ -1,4 +1,5 @@
 import {sanitizeReminderTemplate} from '../preferences.mjs';
+import {applyPaymentReversals,isMissingReversalStorage} from '../../payment-reversals.mjs';
 import {resolveWorkspaceRecord,validateCustomFields,ownerCalendar} from './workspace-records.mjs';
 import {sanitizeOwnerBotPreferences,mergeOwnerBotPreferences,OWNER_BOT_LANGUAGE_OPTIONS} from './bot-preferences.mjs';
 import {
@@ -56,8 +57,8 @@ const TABLES = Object.freeze({
   },
   payments: {
     label:'Payments', scope:'workspace',
-    columns:['invoice_number','amount','paid_at','method','reference','created_at'],
-    defaults:['invoice_number','amount','paid_at','method','reference'],
+    columns:['invoice_number','amount','paid_at','method','reference','created_at','reversed_amount','net_amount','reversed_at'],
+    defaults:['invoice_number','amount','paid_at','method','reference','reversed_amount','net_amount','reversed_at'],
     filters:['invoice_number','amount','paid_at','method','reference'],
   },
   invoice_files: {
@@ -72,7 +73,7 @@ const TYPE_BY_COLUMN = Object.freeze({
   name:'string',company_name:'string',email:'string',phone:'string',business_name:'string',
   default_currency:'string',default_timezone:'string',primary_model:'string',fallback_model:'string',
   invoice_number:'string',customer_name:'string',issue_date:'date',due_date:'date',currency:'string',
-  total_amount:'number',amount_paid:'number',status:'string',notes:'string',amount:'number',paid_at:'date',
+  total_amount:'number',amount_paid:'number',status:'string',notes:'string',amount:'number',paid_at:'date',reversed_amount:'number',net_amount:'number',reversed_at:'date',
   method:'string',reference:'string',file_name:'string',mime_type:'string',size_bytes:'number',created_at:'date',updated_at:'date',
 });
 
@@ -125,7 +126,7 @@ function catalog(table=null) {
       writeFields:WRITE_SCHEMA[name]||{},
       ...(['business_records','customers'].includes(name)?{writeTargetConstraints:{requiredFor:['update',...(name==='customers'?['delete']:[])],filtersRequired:true,operators:{eq:spec.filters,ilike:spec.filters.filter(field=>['name','company_name'].includes(field))},oneUnambiguousRecord:true}}:{}),
       ...(name==='business_records'?{writeValueConstraints:{create:{required:['record_type','name'],record_type:'lowercase category: one letter followed by up to 63 lowercase letters, digits or underscores',name:'nonempty text, up to 200 characters',custom_fields:'flat object of snake_case business keys and text/number/boolean/null values; extra fields must be nested here'},update:{record_type:'same category format',name:'nonempty text, up to 200 characters',custom_fields:'merges with existing fields'}}}:{}),
-      ...(name==='invoices'?{writeValueConstraints:{update:{status:['paid','unpaid'],unpaid:'Checks current payment facts. Never removes or reverses payments.'}}}:{}),
+      ...(name==='invoices'?{writeValueConstraints:{update:{status:['paid','unpaid'],unpaid:'Already unpaid is a read-only check. Recorded local payments require a later explicit confirmation to reopen with immutable reversal audit, original receipts preserved, no cash refund, and reminders paused. External or inconsistent ledgers are blocked.'}}}:{}),
       ...(name==='workspace_settings'?{writeValueConstraints:{update:{
         owner_bot_preferences:{description:'Owner assistant style; partial fields merge with saved preferences.',assistantName:'text, 1-50 characters',tone:['concise','friendly','formal'],language:OWNER_BOT_LANGUAGE_OPTIONS.map(item=>item.value),replyLength:['short','balanced','detailed'],confirmationMode:['direct','buttons'],serviceReplySignature:'text, up to 120 characters',customInstruction:'style text, up to 500 characters'},
         follow_up_preferences:{description:'Customer reminder settings; partial fields merge with saved preferences.',tone:['gentle','professional','firm'],reminderTemplate:'up to 1000 characters; tokens {{business_name}}, {{customer_name}}, {{invoice_number}}, {{balance}}, {{due_date}}',allowedWeekdays:'array of weekday numbers 0-6',escalation:['pause','manual_review'],stopOnPayment:true}
@@ -393,7 +394,7 @@ function validateAdapterSettingsValues(values) {
 }
 
 export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,getRuntimeConfig,planRequest,authorize,
-  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,confirmationMode='buttons',timezone='UTC'}={}) {
+  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,executeInvoiceReopening=null,executeReopeningDecision=null,confirmationMode='buttons',timezone='UTC'}={}) {
   if(!supabase?.from||typeof scope?.workspaceId!=='string')throw new TypeError('Supabase and verified workspace scope required');
   let replyRequirement=null;
   let writeAttempted=false;
@@ -403,6 +404,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     const spec=TABLES[table];
     const selected=columns||spec.defaults;
     const actual=selected.filter(column=>column!=='customer_name'
+      &&!(table==='payments'&&['reversed_amount','net_amount','reversed_at'].includes(column))
       &&!(['payments','invoice_files'].includes(table)&&column==='invoice_number'));
     const selectedWithInternals=[...new Set([...actual,...internalColumns])];
     if(!selectedWithInternals.length)throw new TypeError('empty selected fields');
@@ -465,6 +467,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     if(table==='invoices')internal.push('id','invoice_number','updated_at','status','total_amount','amount_paid');
     if(table==='customers')internal.push('id','name','updated_at','metadata');
     if(['payments','invoice_files'].includes(table))internal.push('invoice_id');
+    if(table==='payments')internal.push('id','workspace_id','amount');
     if(['payments','invoice_files'].includes(table)&&relationFilters.length)internal.push('invoice_id');
     if(table==='customers'&&params.operation!=='read')internal.push('id','updated_at');
     rows=await readScoped({...params,filters},internal,ctx,{customerName:requested.includes('customer_name'),
@@ -483,6 +486,14 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       if(ids.length){const invoices=await findRelatedRows('invoices','id',ids,'id,invoice_number',ctx);labels=new Map(invoices.map(row=>[row.id,row.invoice_number]));}
     }
     if(['payments','invoice_files'].includes(table))rows=rows.filter(row=>labels.has(row.invoice_id));
+    if(table==='payments'&&rows.length){
+      await ctx.assertAuthorized();
+      const audit=await supabase.from('payment_reversals').select('workspace_id,invoice_id,payment_id,amount,recorded_at')
+        .eq('workspace_id',scope.workspaceId).in('payment_id',rows.map(row=>row.id)).limit(MAX_LIMIT+1);
+      await ctx.assertAuthorized();ctx.assertLive();
+      if(audit?.error&&!isMissingReversalStorage(audit.error))throw audit.error;
+      rows=applyPaymentReversals(rows,audit?.error?[]:audit?.data||[],scope.workspaceId);
+    }
     const finalColumns=requested.filter(column=>column!=='customer_name'
       &&!(['payments','invoice_files'].includes(table)&&column==='invoice_number'));
     const output=rows.map(row=>{
@@ -654,6 +665,16 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
   };
   const handlePending=async (operation,ctx)=>{
     const action=pendingAtStart?.action;
+    if(action?.type==='owner_invoice_reopen'){
+      if(operation==='pending')return {ok:true,pending:true,requiresConfirmation:true,invoiceNumber:action.invoiceNumber,currency:action.currency,
+        reversalAmount:action.reversalAmount,paymentCount:action.paymentCount,balanceAfter:action.balanceAfter,cashRefund:false,paymentHistoryPreserved:true,expiresAt:action.expiresAt};
+      const explicit=operation==='confirm'?YES.test(String(message||'')):operation==='cancel'&&CANCEL.test(String(message||''));
+      if(!explicit||!messageId||messageId===action.sourceMessageId)return fail('INVALID','A later explicit confirmation or cancellation is required.');
+      if(typeof executeReopeningDecision!=='function')return fail('UNAVAILABLE','Invoice reopening is unavailable. No financial change was made.');
+      await ctx.assertAuthorized();ctx.assertLive();writeAttempted=true;
+      const result=await executeReopeningDecision({pending:pendingAtStart,decision:operation},ctx);
+      await ctx.assertAuthorized();ctx.assertLive();return sanitise(result,scope);
+    }
     if(operation==='pending'&&action?.type===DATA_ACTION)return {
       ok:true,pending:true,kind:'workspace_data_change',table:action.table,operation:action.operation,
       summary:typeof action.summary==='string'?action.summary:null,expiresAt:action.expiresAt||pendingAtStart.expires_at||null,
@@ -748,6 +769,15 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         if(!found.ok)return safeError(found);
         const invoice=found.row;
         const payments=await findRelatedRows('payments','invoice_id',[invoice.id],'id,amount',ctx);
+        if((Number(invoice.amount_paid)!==0||payments.length||invoice.status==='paid')&&typeof executeInvoiceReopening==='function'){
+          await ctx.assertAuthorized();ctx.assertLive();writeAttempted=true;
+          const result=await executeInvoiceReopening({invoiceId:invoice.id},ctx);
+          await ctx.assertAuthorized();ctx.assertLive();
+          if(result?.ok===true&&result.requiresConfirmation===true)replyRequirement={confirmationText:'yes',requiresCancel:true,requiresReplyCue:true,maxLength:900,
+            requiredFacts:{financialReopening:true,invoiceNumber:result.invoiceNumber,currency:result.currency,reversalAmount:result.reversalAmount,paymentCount:result.paymentCount,
+              balanceAfter:result.balanceAfter,paymentHistory:'Original payment receipts remain in audit history',refund:'No money is refunded',reminders:'Reminders will be paused'}};
+          return {...sanitise(result,scope),writeAttempted:true};
+        }
         if(Number(invoice.amount_paid)!==0||payments.length||!['draft','sent','overdue'].includes(invoice.status))
           return fail('PAYMENT_GUARD','This invoice has payments or a terminal status. Marking it unpaid cannot erase payment history. Review the recorded payments first.');
         return {ok:true,readOnly:true,completed:false,alreadyUnpaid:true,requiresConfirmation:false,invoiceNumber:invoice.invoice_number,
@@ -792,7 +822,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       if(!(error instanceof TypeError))return safeError(error);
       const errors={
         'invoice action requires exactly one canonical target':['TARGET_REQUIRED','Which invoice do you mean? Send its invoice number or customer name. If that customer has several invoices, I will ask you to choose. No change was made.'],
-        'invalid invoice fields':['INVALID_FIELDS','Those invoice fields are not supported. Use status paid or unpaid for a payment-status check; unpaid never removes recorded payments. No change was made.'],
+        'invalid invoice fields':['INVALID_FIELDS','Those invoice fields are not supported. Use status paid or unpaid separately. Reopening preserves original payments and requires explicit confirmation. No change was made.'],
         'invalid request':['REQUEST_SHAPE','The assistant combined two request formats. It should send either a description or structured fields. No change was made.'],
         'record action requires identifying filters':['TARGET_REQUIRED','Updates and deletes require filters identifying one existing record, for example name eq with the record name already supplied by the owner. Keep changes in values.custom_fields. Correct the arguments using this catalog and current owner message; no database write was attempted.'],
         'invalid filter':['FILTER_SHAPE','Each filter requires column, operator and value from this catalog. Updates need one unambiguous record, using eq (or ilike for names). Correct the arguments from the owner message; no database write was attempted.'],

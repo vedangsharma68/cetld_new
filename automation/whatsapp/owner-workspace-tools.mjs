@@ -3,6 +3,7 @@ import {createOwnerDirectRuntime} from './owner-direct-runtime.mjs';
 import {createOwnerSafetyTools} from './owner-agent.mjs';
 import {createWorkspaceDataTool} from './workspace-data.mjs';
 import {createOwnerActionButtons} from './owner-action-buttons.mjs';
+import {createInvoiceReopeningRuntime} from './invoice-reopening.mjs';
 
 // These adapters retain atomic invoice/payment/attachment safeguards. They are
 // private server operations, never additional functions offered to the model.
@@ -16,6 +17,7 @@ export function createOwnerWorkspaceTools(options = {}) {
   let buttonAction=null;
   let pendingWasRead=false;
   const direct=createOwnerDirectRuntime({...options,adapter:options.directWriteAdapter});
+  const reopening=createInvoiceReopeningRuntime(options);
   const safety = createOwnerSafetyTools({...options,signal:controller.signal});
   const invoke = (name, args = {}) => safety.execute(name, args);
   const target = params => {
@@ -26,6 +28,8 @@ export function createOwnerWorkspaceTools(options = {}) {
   const tool = createWorkspaceDataTool({...options,signal:controller.signal,
     confirmationMode:options.botPreferences?.confirmationMode||'buttons',
     executeDirectOperation:(params,ctx)=>direct.execute(params,ctx),
+    executeInvoiceReopening:(params,ctx)=>reopening.prepare(params,ctx),
+    executeReopeningDecision:(params,ctx)=>reopening.decide(params,ctx),
     getRuntimeConfig: () => invoke('getAIProviderConfiguration'),
     async executeSafetyOperation(params) {
       if(params.signal?.aborted || (Number.isFinite(params.deadlineAt) && Date.now()>=params.deadlineAt)) throw Object.assign(new Error(),{code:'OWNER_LOOP_TIMEOUT'});
@@ -107,7 +111,7 @@ export function createOwnerWorkspaceTools(options = {}) {
         ||(['pending','confirm'].includes(operation)&&options.pendingAtStart?.action?.type==='invoice_review_draft');
       return buttonAction&&!attachmentReview?{...requirement,maxLength:Math.min(requirement?.maxLength||900,900),confirmationText:null,requiresCancel:false,requiresReplyCue:false,buttonsAvailable:true}:requirement;
     },
-    decideButton:async input=>sanitizeWorkspaceToolResult(await direct.decideButton(input),options.scope),
+    decideButton:async input=>sanitizeWorkspaceToolResult(await (input?.pending?.action?.type==='owner_invoice_reopen'?reopening.decide(input):direct.decideButton(input)),options.scope),
     lookupCompleted:async()=>sanitizeWorkspaceToolResult(await direct.lookupCompleted(),options.scope),
     async getPendingActionForButtons(){return options.pending?.loadPendingAction?.({...options.scope});},
   };

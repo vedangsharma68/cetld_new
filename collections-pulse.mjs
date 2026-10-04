@@ -41,7 +41,7 @@ export function collectionsPulse(invoices=[],payments=[],{today=localDate(),defa
     const paymentCurrency=payment.currency||invoice?.currency;
     if(!paymentCurrency)continue;
     const row=bucket(paymentCurrency);
-    row.collectedThisMonth+=amount(payment.amount_minor);
+    row.collectedThisMonth+=amount(payment.net_amount_minor??payment.amount_minor);
   }
   if(!byCurrency.size)bucket(defaultCurrency);
   return [...byCurrency.values()].sort((a,b)=>a.currency.localeCompare(b.currency));

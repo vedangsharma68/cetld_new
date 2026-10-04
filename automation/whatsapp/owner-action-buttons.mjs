@@ -8,6 +8,7 @@ const PHONE = /^\+[1-9]\d{6,14}$/;
 const BUTTON_ACTION_TYPES = new Set([
   'owner_invoice_delete_proposal', 'owner_workspace_data_change', 'owner_invoice_create',
   'owner_settings_update', 'owner_invoice_update', 'owner_invoice_payment',
+  'owner_invoice_reopen',
 ]);
 const TRANSIENT_ACTION_FIELDS = new Set(['createdAt', 'requestedAt', 'sourceMessageId', 'requestMessageId']);
 
@@ -107,8 +108,8 @@ function referenceFor({scope, action, decision, env, clock}) {
 
 export function createOwnerActionButtons({scope, action, env = process.env, clock = () => new Date(),
   confirmTitle = 'Confirm', cancelTitle = 'Cancel'} = {}) {
-  const confirm = title(confirmTitle);
-  const cancel = title(cancelTitle);
+  const confirm = title(action?.action?.type==='owner_invoice_reopen'?'Reopen invoice':confirmTitle);
+  const cancel = title(action?.action?.type==='owner_invoice_reopen'?'Keep payments':cancelTitle);
   if (!confirm || !cancel) return [];
   const confirmId = referenceFor({scope, action, decision: 'confirm', env, clock});
   const cancelId = referenceFor({scope, action, decision: 'cancel', env, clock});

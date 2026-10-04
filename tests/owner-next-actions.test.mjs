@@ -39,9 +39,9 @@ test('verified invoice results offer only supported current actions and file ava
  const db=database(),context={params:{operation:'read',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:'INV-1'}]},result:{ok:true,readOnly:true,rows:[{invoice_number:'INV-1'}]}};
  assert.deepEqual((await planOwnerNextActions({...options(db),context})).choices.map(c=>c.title),['Edit details','Record payment']);
  db.tables.invoice_files=[{id:randomUUID(),workspace_id:workspaceId,invoice_id:invoice.id}];
- assert.deepEqual((await planOwnerNextActions({...options(db),context})).choices.map(c=>c.title),['View file','Edit details','Record payment']);
+ assert.deepEqual((await planOwnerNextActions({...options(db),context})).choices.map(c=>c.title),['View INV-1','Edit details','Record payment']);
  db.tables.invoices[0].status='paid';db.tables.invoices[0].amount_paid=100;
- assert.deepEqual((await planOwnerNextActions({...options(db),context})).choices.map(c=>c.title),['View file']);
+ assert.deepEqual((await planOwnerNextActions({...options(db),context})).choices.map(c=>c.title),['View INV-1']);
  assert.equal(await planOwnerNextActions({...options(db),context,pending:true}),null);
  assert.equal(await planOwnerNextActions({...options(db),context:{...context,result:{ok:false,code:'DENIED'}}}),null);
  assert(db.calls.filter(c=>['invoices','invoice_files'].includes(c.table)).every(c=>c.filters.some(([k,v])=>k==='workspace_id'&&v===workspaceId)));
@@ -146,7 +146,7 @@ test('legacy invoice request cannot suppress persisted John phone choices or saf
 });
 test('view-file click uses existing scoped tool and restores identical media after interrupted delivery',async()=>{
  const fileId=randomUUID(),media={id:fileId,file_name:'invoice.pdf',mime_type:'application/pdf',bytes:Buffer.from('isolated fixture')};
- const ref=reference([{action:'view_file',title:'View file',table:'invoices',id:invoice.id,updatedAt:invoice.updated_at}]),db=database({whatsapp_messages:[stored(ref)]});
+ const ref=reference([{action:'view_file',title:'View INV-1',table:'invoices',id:invoice.id,updatedAt:invoice.updated_at}]),db=database({whatsapp_messages:[stored(ref)]});
  const output=await runOwnerNextAction({...options(db),scope:{...scope,interactionId:mint(ref)[0].id},tools:{execute:async(name,args)=>{assert.equal(args.operation,'sendFile');assert.equal(args.filters[0].value,invoice.id);return {ok:true,available:true,invoiceNumber:'INV-1'}},getMedia:()=>media}});
  assert.equal(output.media,media);
  const store=createOwnerReplyStore({supabase:db,env,clock,mediaReader:async()=>media});await store.save({...scope,messageId:'file-click'},output);

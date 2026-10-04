@@ -32,7 +32,7 @@ test('customer-name unpaid checks reach payment facts, without any ledger or pro
 test('missing target and unsupported fields return specific model-facing validation reasons',async()=>{
  const db=isolatedDatabase(),tool=createWorkspaceDataTool({supabase:db.supabase,scope,authorize:async()=>true});
  const missing=await tool.execute(request([]));assert.equal(missing.validationCode,'TARGET_REQUIRED');assert.match(missing.message,/Which invoice/);
- const fields=await tool.execute({...request(),values:{payment_status:'unpaid'}});assert.equal(fields.validationCode,'INVALID_FIELDS');assert.match(fields.message,/never removes recorded payments/);
+ const fields=await tool.execute({...request(),values:{payment_status:'unpaid'}});assert.equal(fields.validationCode,'INVALID_FIELDS');assert.match(fields.message,/preserves original payments/);
  assert(fields.catalog.tables.invoices.writeValueConstraints.update.status.includes('unpaid'));assert.equal(db.readCalls.length,0);
 });
 
@@ -46,8 +46,8 @@ test('post-release unpaid, explanation and model question remain separate durabl
    if(evidence.length){
     if(original.includes('which model are you using'))return {model:CF_PRIMARY_MODEL,content:`The primary model is ${evidence.at(-1).primaryModel}.`};
     if(original.includes('what invalid input'))return {model:CF_PRIMARY_MODEL,content:'The previous generic invalid-input message did not explain which field failed. This explanation did not retry the change.'};
-    assert.equal(evidence.at(-1).code,'PAYMENT_GUARD');
-    return {model:CF_PRIMARY_MODEL,content:'Payments exist on this invoice; I cannot erase payment history by marking it unpaid.'};
+    assert.equal(evidence.at(-1).code,'UNAVAILABLE');
+    return {model:CF_PRIMARY_MODEL,content:'The reopening service is unavailable. I cannot confirm any financial change; the original payment history remains.'};
    }
    const latest=[...messages].reverse().find(row=>row.role==='user').content;
    return {model:CF_PRIMARY_MODEL,toolCalls:[{id:'call-'+calls,type:'function',function:{name:latest==='which model are you using'?'getAIProviderConfiguration':'workspaceData',
@@ -60,7 +60,7 @@ test('post-release unpaid, explanation and model question remain separate durabl
   const result=await handler({...scope,message,messageId});answers.push(result.answer);assert.equal(result.plannerFailure,undefined,JSON.stringify({message,result}));
   assert.equal((await handler({...scope,message,messageId})).answer,result.answer,'duplicate webhook must replay its own receipt');
  }
- assert.match(answers[0],/payments.*cannot erase payment history/i);assert.doesNotMatch(answers[0],/invalid input|confirmation/i);
+ assert.match(answers[0],/reopening service is unavailable/i);assert.doesNotMatch(answers[0],/invalid input|awaiting confirmation/i);
  assert.match(answers[1],/explanation.*did not retry/i);assert.doesNotMatch(answers[1],/couldn't mark/i);
  assert.match(answers[2],new RegExp(CF_PRIMARY_MODEL.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));assert.doesNotMatch(answers[2],/invoice|unpaid|confirm/i);
  assert.equal(calls,6);assert.deepEqual({invoices:db.tables.invoices,payments:db.tables.payments},before);

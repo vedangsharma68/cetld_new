@@ -7,10 +7,155 @@ import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {createOwnerWorkspacePlanner} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerActionButtons,verifyOwnerActionButton} from '../automation/whatsapp/owner-action-buttons.mjs';
 
 const owner='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const stranger='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const phone='+919871367051';
+
+test('reopening draft preserves paid receipts, needs later confirmation, replays once and pauses reminders',async()=>{
+  const {db,workspaceId}=await boot();
+  try{
+    await db.exec('reset role');await db.exec(await readFile(new URL('../proposals/owner-invoice-reopening.sql',import.meta.url),'utf8'));
+    await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+    const created=await createDirectInvoice(db,workspaceId,{messageId:'reopen-create',invoiceNumber:'INV-REOPEN',customerName:'Reopen Client'});
+    assert.equal(created.ok,true);
+    await addInbound(db,'reopen-pay','Mark INV-REOPEN paid');
+    const paid=await write(db,{workspaceId,providerMessageId:'reopen-pay',quote:'Mark INV-REOPEN paid',operation:'invoice.update',targetId:created.entityId,expectedUpdatedAt:created.updatedAt,payload:{status:'paid'}});
+    assert.equal(paid.ok,true,JSON.stringify(paid));
+    const original=(await db.query('select to_jsonb(p) as row from public.payments p where workspace_id=$1 and invoice_id=$2 order by id',[workspaceId,created.entityId])).rows;
+    await addInbound(db,'reopen-request','Mark INV-REOPEN unpaid');
+    const prepareArgs={workspaceId,messageId:'reopen-request',message:'Mark INV-REOPEN unpaid',action:'prepare',invoiceId:created.entityId};
+    const proposal=await reopen(db,prepareArgs);
+    assert.equal(proposal.ok,true,JSON.stringify(proposal));assert.equal(proposal.requiresConfirmation,true);assert.equal(proposal.cashRefund,false);
+    assert.equal(proposal.reversalAmount,Number(paid.record.amount_paid));assert.equal(proposal.paymentCount,1);
+    assert.equal((await reopen(db,prepareArgs)).replayed,true);
+    const pending=(await db.query("select * from public.whatsapp_pending_actions where workspace_id=$1 and action->>'type'='owner_invoice_reopen' and consumed_at is null",[workspaceId])).rows[0];
+    assert.equal((await db.query('select amount_paid::text,status::text from public.invoices where id=$1',[created.entityId])).rows[0].status,'paid');
+    assert.equal((await db.query('select count(*)::int as n from public.payment_reversals')).rows[0].n,0);
+    await addInbound(db,'reopen-maybe','maybe');
+    const decision={workspaceId,messageId:'reopen-maybe',message:'maybe',action:'confirm',proposalId:proposal.proposalId,pendingId:pending.id,pendingVersion:pending.version};
+    assert.equal((await reopen(db,decision)).code,'INVALID');
+    assert.equal((await reopen(db,{...decision,ownerId:stranger})).code,'DENIED');
+    await addInbound(db,'reopen-confirm','yes');
+    const confirmed=await reopen(db,{...decision,messageId:'reopen-confirm',message:'yes'});
+    assert.equal(confirmed.ok,true,JSON.stringify(confirmed));assert.equal(confirmed.completed,true);assert.equal(confirmed.action,'invoice.reopened');
+    assert.equal(confirmed.record.amount_paid,0);assert.equal(confirmed.record.followup_state,'paused');assert.equal(confirmed.record.next_follow_up_at,null);
+    assert(['sent','overdue'].includes(confirmed.record.status));assert.equal(confirmed.cashRefund,false);assert.equal(confirmed.paymentHistoryPreserved,true);
+    assert.deepEqual((await db.query('select to_jsonb(p) as row from public.payments p where workspace_id=$1 and invoice_id=$2 order by id',[workspaceId,created.entityId])).rows,original);
+    const reversal=(await db.query('select * from public.payment_reversals where workspace_id=$1 and invoice_id=$2',[workspaceId,created.entityId])).rows;
+    assert.equal(reversal.length,1);assert.equal(reversal[0].actor_id,owner);assert.equal(Number(reversal[0].amount),proposal.reversalAmount);
+    assert.equal((await reopen(db,{...decision,messageId:'reopen-confirm',message:'yes'})).replayed,true);
+    assert.equal((await db.query('select count(*)::int as n from public.payment_reversals')).rows[0].n,1);
+    await asOwner(db);assert.equal((await db.query('select * from public.payment_reversals')).rows.length,1);
+    await assert.rejects(db.query("update public.payments set reference='erase history' where id=$1",[original[0].row.id]));
+    await asOwner(db,stranger);assert.equal((await db.query('select * from public.payment_reversals')).rows.length,0);
+    await assert.rejects(db.query('select public.whatsapp_invoice_reopening($1,$2,$3,$4,$5,$6)',[workspaceId,owner,phone,'reopen-confirm','yes','confirm']));
+  }finally{await db.close();}
+});
+
+async function reopen(db,{workspaceId,ownerId=owner,messageId,message,action,invoiceId=null,proposalId=null,pendingId=null,pendingVersion=null,interactionId=null}){
+  await asService(db);
+  return (await db.query('select public.whatsapp_invoice_reopening($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) as value',
+    [workspaceId,ownerId,phone,messageId,message,action,invoiceId,proposalId,pendingId,pendingVersion,interactionId])).rows[0].value;
+}
+
+async function reopeningFixture(){
+  const fixture=await boot(),{db,workspaceId}=fixture;
+  await db.exec('reset role');await db.exec(await readFile(new URL('../proposals/owner-invoice-reopening.sql',import.meta.url),'utf8'));
+  await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+  const created=await createDirectInvoice(db,workspaceId,{messageId:'financial-create',invoiceNumber:'INV-FINANCIAL',customerName:'John Smith'});
+  assert.equal(created.ok,true,JSON.stringify(created));
+  return {...fixture,created};
+}
+
+test('reopening draft rejects unsafe ledgers and stale, expired or ambiguous consent',async t=>{
+  for(const scenario of ['partial','manual-paid','legacy-mismatch','external','stale','expired','cancel','earlier-consent'])await t.test(scenario,async()=>{
+    const {db,workspaceId,created}=await reopeningFixture();
+    try{
+      await asOwner(db);
+      if(scenario==='manual-paid'){await db.exec('reset role');await db.query("update public.invoices set status='paid' where workspace_id=$1 and id=$2",[workspaceId,created.entityId]);}
+      else if(scenario==='legacy-mismatch'){await db.exec('reset role');await db.query('update public.invoices set amount_paid=20 where workspace_id=$1 and id=$2',[workspaceId,created.entityId]);}
+      else await db.query('select public.record_invoice_payment($1,$2,$3,$4,$5,false)',[workspaceId,created.entityId,20,'test transfer','financial-pay']);
+      if(scenario==='external')await db.query("update public.invoices set metadata=metadata||'{\"accounting_provider\":\"external\"}'::jsonb where workspace_id=$1 and id=$2",[workspaceId,created.entityId]);
+      await asService(db);await addInbound(db,'financial-request','Mark INV-FINANCIAL unpaid');
+      const args={workspaceId,messageId:'financial-request',message:'Mark INV-FINANCIAL unpaid',action:'prepare',invoiceId:created.entityId};
+      assert.equal((await reopen(db,{...args,invoiceId:randomUUID()})).code,'NOT_FOUND');
+      const proposal=await reopen(db,args);
+      if(['legacy-mismatch','external'].includes(scenario)){
+        assert.equal(proposal.code,scenario==='external'?'EXTERNAL_LEDGER':'LEDGER_MISMATCH');
+        assert.equal((await db.query('select count(*)::int n from public.invoice_reopening_proposals')).rows[0].n,0);return;
+      }
+      assert.equal(proposal.ok,true,JSON.stringify(proposal));
+      const pending=(await db.query("select to_jsonb(a) row from public.whatsapp_pending_actions a where workspace_id=$1 and consumed_at is null",[workspaceId])).rows[0].row;
+      await addInbound(db,'financial-decision',scenario==='cancel'?'no':'yes');
+      if(scenario==='stale'){await asOwner(db);await db.query("update public.invoices set notes='new version' where id=$1",[created.entityId]);}
+      if(scenario==='expired'){await db.exec('reset role');await db.query("update public.invoice_reopening_proposals set expires_at=clock_timestamp()-interval '1 second' where id=$1",[proposal.proposalId]);}
+      if(scenario==='earlier-consent'){await db.exec('reset role');await db.query("update public.whatsapp_inbound_events set provider_timestamp=clock_timestamp()-interval '1 day' where provider_message_id='financial-decision'");}
+      const confirmed=await reopen(db,{workspaceId,messageId:'financial-decision',message:scenario==='cancel'?'no':'yes',action:scenario==='cancel'?'cancel':'confirm',proposalId:proposal.proposalId,pendingId:pending.id,pendingVersion:pending.version});
+      if(['stale','expired','earlier-consent'].includes(scenario))assert.equal(confirmed.code,scenario==='expired'?'EXPIRED':'STALE');
+      else if(scenario==='cancel')assert.equal(confirmed.action,'pending.cancelled');
+      else {
+        assert.equal(confirmed.ok,true,JSON.stringify(confirmed));assert.equal(confirmed.reversedAmount,scenario==='manual-paid'?0:20);
+        assert.equal(confirmed.record.amount_paid,0);
+        if(scenario==='partial'){
+          await asOwner(db);await db.query('select public.record_invoice_payment($1,$2,10,$3,$4,false)',[workspaceId,created.entityId,'new transfer','new-transfer']);
+          assert.equal((await db.query('select amount_paid::text paid from public.invoices where id=$1',[created.entityId])).rows[0].paid,'10');
+          await asService(db);await addInbound(db,'reopen-again','Mark INV-FINANCIAL unpaid');
+          assert.equal((await reopen(db,{...args,messageId:'reopen-again'})).reversalAmount,10);
+        }
+      }
+      if(!['partial','manual-paid'].includes(scenario))assert.equal((await db.query('select count(*)::int n from public.payment_reversals')).rows[0].n,0);
+    }finally{await db.close();}
+  });
+});
+
+function financialSupabase(db,workspaceId){
+  return {
+    from(table){
+      assert(['invoices','payments','invoice_reopening_proposals','whatsapp_direct_write_receipts','payment_reversals'].includes(table));
+      const filters=[];let max=51;const read=async()=>{
+        assert(filters.some(([c,v])=>c==='workspace_id'&&v===workspaceId));
+        // IS NULL consumes no bind parameter.
+        const clean=filters.filter(f=>f[2]!=='is');const params=clean.map(f=>f[1]);let n=0;
+        const clauses=filters.map(([column,,op])=>op==='is'?`b.${column} is null`:`b.${column}${op==='in'?'=any(': '='}$${++n}${op==='in'?'::uuid[])':''}`);
+        return (await db.query(`select to_jsonb(b) row from public.${table} b where ${clauses.join(' and ')} limit ${max}`,params)).rows.map(row=>row.row);
+      };
+      const q={select(){return q;},eq(c,v){filters.push([c,v,'eq']);return q;},is(c,v){assert.equal(v,null);filters.push([c,v,'is']);return q;},in(c,v){filters.push([c,v,'in']);return q;},
+        order(){return q;},limit(n){max=n;return q;},range(a,b){assert.equal(a,0);max=b+1;return q;},
+        async maybeSingle(){return {data:(await read())[0]||null,error:null};},then(resolve,reject){return read().then(data=>({data,error:null})).then(resolve,reject);}};
+      return q;
+    },
+    async rpc(name,args){assert.equal(name,'whatsapp_invoice_reopening');const keys=['workspace_id','owner_id','phone','message_id','user_message','action','invoice_id','proposal_id','pending_id','pending_version','interaction_id'];
+      await asService(db);return {data:(await db.query('select public.whatsapp_invoice_reopening($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) value',keys.map(k=>args['p_'+k]))).rows[0].value,error:null};},
+  };
+}
+
+test('reopening draft production workspace tools require signed decision and verify persisted receipt/audit',async()=>{
+  const {db,workspaceId,created}=await reopeningFixture();
+  try{
+    await asOwner(db);await db.query('select public.record_invoice_payment($1,$2,20,$3,$4,false)',[workspaceId,created.entityId,'receipt','tool-pay']);
+    const scope={workspaceId,ownerId:owner,customerId:await verifiedCustomerId(db),phone},supabase=financialSupabase(db,workspaceId),env={WHATSAPP_APP_SECRET:'isolated-fixture-only'};
+    const pendingStore={async loadPendingAction(){await asService(db);return (await db.query('select to_jsonb(a) row from public.whatsapp_pending_actions a where workspace_id=$1 and consumed_at is null',[workspaceId])).rows[0]?.row;}};
+    const make=(message,messageId,pendingAtStart=null)=>createOwnerWorkspaceTools({supabase,scope,message,messageId,authorize:async()=>true,env,interactiveAvailable:true,pending:pendingStore,pendingAtStart,botPreferences:{confirmationMode:'direct'},ownerStore:{async query(){throw Error('Legacy tools must not run');}}});
+    await addInbound(db,'tool-request','Mark INV-FINANCIAL unpaid');
+    const tools=make('Mark INV-FINANCIAL unpaid','tool-request');
+    const preview=await tools.execute('workspaceData',{operation:'update',table:'invoices',filters:[{column:'id',operator:'eq',value:created.entityId}],values:{status:'unpaid'}});
+    assert.equal(preview.ok,true,JSON.stringify(preview));assert.equal(preview.requiresConfirmation,true);assert.equal(preview.completed,undefined);
+    assert.equal(tools.getReplyRequirement().buttonsAvailable,true);
+    const pending=await pendingStore.loadPendingAction(),buttons=createOwnerActionButtons({scope,action:pending,env});
+    assert.deepEqual(buttons.map(b=>b.title),['Reopen invoice','Keep payments']);
+    assert.equal(verifyOwnerActionButton({id:buttons[0].id,scope,action:pending,env}).decision,'confirm');
+    assert.notEqual(verifyOwnerActionButton({id:buttons[0].id,scope:{...scope,workspaceId:randomUUID()},action:pending,env}).decision,'confirm');
+    await addInbound(db,'tool-button','Reopen invoice');await db.query("update public.whatsapp_inbound_events set interaction_id=$1 where provider_message_id='tool-button'",[buttons[0].id]);
+    const decide=make('Reopen invoice','tool-button',pending);
+    const result=await decide.decideButton({interactionId:buttons[0].id,decision:'confirm',pending});
+    assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.completed,true);assert.equal(result.cashRefund,false);
+    const replay=await make('Reopen invoice','tool-button').lookupCompleted();assert.equal(replay.ok,true);assert.equal(replay.action,'invoice.reopened');assert.equal(replay.cashRefund,false);
+    const payments=await make('Show payments','payment-read').execute('workspaceData',{operation:'read',table:'payments'});
+    assert.equal(payments.ok,true,JSON.stringify(payments));assert.equal(payments.rows[0].amount,20);assert.equal(payments.rows[0].net_amount,0);assert.equal(payments.rows[0].reversed_amount,20);
+  }finally{await db.close();}
+});
 
 test('real provider, catalog, resolver and PostgreSQL repair a targeted update after a successful read',async()=>{
   const {db,workspaceId}=await boot();
