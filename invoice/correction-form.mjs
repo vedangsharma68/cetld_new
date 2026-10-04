@@ -43,7 +43,12 @@ export function correctionValues(form, invoice, formData = new FormData(form)) {
     issue_date:invoice.issue_date || invoice.invoice_date,due_date:invoice.due_date,notes:invoice.notes || ''};
   for (const name of ['invoice_number','customer_id','total_amount','currency','subtotal','tax','discount','issue_date','due_date','notes','invoice_direction','seller_name','buyer_name','payment_information']) {
     if (!formData.has(name)) continue;
-    let value = String(formData.get(name) ?? '').trim();
+    const rawValue = String(formData.get(name) ?? '');
+    // Preserve the exact existing displayed value, including old incomplete
+    // extraction or amounts outside today's input limits. Only changed fields
+    // belong in a correction; benign edits must not repair unrelated history.
+    if (rawValue === String(original[name] ?? '')) continue;
+    let value = rawValue.trim();
     if (['total_amount','subtotal','tax','discount'].includes(name)) {
       value = moneyValue(value,name!=='total_amount');
       const before = original[name] == null ? null : Number(original[name]);
@@ -56,6 +61,14 @@ export function correctionValues(form, invoice, formData = new FormData(form)) {
   }
   const rows = form.querySelectorAll('[data-correction-item]');
   if (!form.querySelector('[data-add-item]')) return values;
+  const rawItems = Array.from(rows).map(row => ({
+    ...Object.fromEntries(['description','quantity','unitPrice','amount'].map(field => [field,String(row.querySelector(`[data-item-field="${field}"]`)?.value ?? '')])),
+    ...(row.dataset.confidence == null ? {} : {confidence:String(row.dataset.confidence)}),
+  }));
+  const displayedItems = fields.line_items.map(item => ({description:String(item.description || ''),quantity:String(item.quantity ?? ''),unitPrice:String(item.unitPrice ?? ''),amount:String(item.amount ?? ''),
+    ...(item.confidence == null ? {} : {confidence:String(item.confidence)}),
+  }));
+  if (JSON.stringify(rawItems) === JSON.stringify(displayedItems)) return values;
   const items = readCorrectionLineItems(rows);
   const normalized = fields.line_items.map(item=>({description:item.description,quantity:item.quantity == null?null:Number(item.quantity),unitPrice:item.unitPrice == null?null:Number(item.unitPrice),amount:Number(item.amount),...(item.confidence == null?{}:{confidence:item.confidence})}));
   if (JSON.stringify(items)!==JSON.stringify(normalized)) values.line_items=items;
