@@ -174,9 +174,13 @@ test('workspaceData offers one generic tool and scoped reads expose sanitized al
   assert.deepEqual(supabase.calls[0].filters,[
     ['workspace_id','eq',scope.workspaceId],['name','ilike','%Northstar%'],
   ]);
-  assert.equal(supabase.calls[0].selected,'name,email,phone');
+  assert.equal(supabase.calls[0].selected,'name,email,phone,id,updated_at,metadata');
   assert.deepEqual(result.rows,[{name:'Northstar',email:'billing@northstar.test',phone:'+919999999999'}]);
   assert.doesNotMatch(JSON.stringify(result),/api_key|workspace_id|33333333/);
+  const internal=tool.getNextActionContext().records;
+  assert.equal(internal[0].id,'33333333-3333-4333-8333-333333333333');
+  assert.deepEqual(internal[0].metadata,{whatsapp_owner:false});
+  assert.doesNotMatch(JSON.stringify(internal),/api_key|never return this/);
 });
 
 test('invoice customer-name lookup uses one workspace-scoped joined query',async()=>{

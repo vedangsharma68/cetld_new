@@ -475,7 +475,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     const truncated=rawPageCount>params.limit;
     await ctx.assertAuthorized();
     if(['customers','invoices'].includes(table))nextActionRecords=rows.slice(0,params.limit).map(row=>Object.fromEntries(
-      internal.filter(key=>Object.hasOwn(row,key)).map(key=>[key,structuredClone(row[key])])));
+      internal.filter(key=>Object.hasOwn(row,key)).map(key=>[key,key==='metadata'?{whatsapp_owner:row.metadata?.whatsapp_owner===true}:structuredClone(row[key])])));
     return sanitise({ok:true,rows:output.slice(0,params.limit),truncated,
       ...(truncated?{nextOffset:params.offset+params.limit}:{})},scope);
   };
