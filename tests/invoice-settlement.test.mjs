@@ -200,7 +200,7 @@ test('authenticated members can create and edit ordinary invoice fields without 
   assert.equal(Number(created.amount_paid), 0);
   assert.equal(created.status, 'draft');
   const updated = (await db.query(
-    `update public.invoices set due_date='2026-10-15',notes='edited note',metadata='{"followup_state":"approved","approved_reminder_text":"Invoice update.\\n\\nAlpha"}'::jsonb
+    `update public.invoices set due_date='2026-10-15',notes='edited note',metadata=metadata||'{"followup_state":"approved","approved_reminder_text":"Invoice update.\\n\\nAlpha"}'::jsonb
      where id=$1 returning due_date,notes,metadata,amount_paid,status`,
     [created.id],
   )).rows[0];
