@@ -7,12 +7,11 @@
   "functions": {
     "api/ai.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 60},
     "api/whatsapp.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 300},
-    "api/whatsapp-process.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 300},
-    "api/reminders.js": {"maxDuration": 300}
+    "api/whatsapp-process.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 300}
   },
   "crons": [
     {"path": "/api/whatsapp-process", "schedule": "0 0 * * *"},
-    {"path": "/api/reminders", "schedule": "0 4 * * *"}
+    {"path": "/api/whatsapp-process", "schedule": "0 4 * * *"}
   ],
   "headers": [
     {"source": "/(.*)", "headers": [

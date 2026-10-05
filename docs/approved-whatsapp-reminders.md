@@ -35,9 +35,11 @@ the existing server configuration. No en_US fallback, new credential, billing
 upgrade, or LLM call is used. Missing flags, migration, consent, suppression
 checks, payment verification or account configuration fail closed.
 
-The existing worker can run the scoped tick. /api/reminders is also registered
-as a daily Vercel cron at 04:00 UTC (09:30 Asia/Kolkata), using existing
-CRON_SECRET. Invoice scheduling, local contact windows, owner pause, payment,
+The existing worker can run the scoped tick. /api/whatsapp-process also runs
+the daily reminder cron at 04:00 UTC (09:30 Asia/Kolkata), selected by Vercel's
+x-vercel-cron-schedule header and verified with existing CRON_SECRET. The midnight
+processing job retains its existing behavior. Both jobs share a function to stay
+within the existing Hobby function limit. Invoice scheduling, local contact windows, owner pause, payment,
 reminder limits and preference versions remain authoritative. Daily cron is a
 daily opportunity to send, not minute-level delivery. Faster scheduling requires
 the existing external worker; no paid upgrade is introduced. Only local invoices
