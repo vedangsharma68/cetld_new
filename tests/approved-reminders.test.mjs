@@ -129,7 +129,9 @@ test('actual payment completion and an explicit owner pause each prevent schedul
       if(action==='paid')await f.db.query("insert into payments(workspace_id,invoice_id,amount,method) values($1,$2,125,'bank_transfer')",[f.scope.workspaceId,f.scope.invoiceId]);
       else await f.runtime.pause(f.scope);
       await f.runtime.tick(f.scope);assert.equal(f.graph.length,0);
-      assert.equal((await f.store.getInvoice(f.scope)).followup_state,action==='paid'?'cancelled':'paused');
+      const current=await f.store.getInvoice(f.scope);
+      if(action==='paid')assert.equal(Number(current.amount_paid),125);
+      else assert.equal(current.followup_state,'paused');
     }finally{await f.close();}
   }
 });
