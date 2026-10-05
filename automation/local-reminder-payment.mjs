@@ -1,4 +1,4 @@
-/** Proposed local-only checker. Not selected by the production runtime. */
+/** Optional local checker selected only by the default-disabled reminder mode. */
 export function createLocalReminderPaymentChecker({supabase,ownerId,workspaceId}={}){
   if(!supabase?.rpc||!ownerId||!workspaceId)throw new TypeError('Fixed server owner/workspace and client required');
   return async scope=>{

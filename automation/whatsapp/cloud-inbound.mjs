@@ -46,12 +46,13 @@ export function parseMetaMessages(payload, expectedPhoneNumberId, expectedWabaId
       const media = type === 'image' || type === 'document' ? message?.[type] : null;
       const buttonReply = type === 'interactive' ? message?.interactive?.button_reply : null;
       const listReply = type === 'interactive' ? message?.interactive?.list_reply : null;
-      const interactionId = buttonReply ? buttonReply.id : listReply?.id;
+      const interactionId = buttonReply ? buttonReply.id : listReply?.id
+        || (type==='button'&&typeof message.context?.id==='string'&&message.context.id.length<=252?'rt1.'+message.context.id:undefined);
       // Never reinterpret a provider's visible reply title when its opaque
       // selection reference is absent or malformed.
       if ((buttonReply || listReply) && (typeof interactionId !== 'string'
           || !interactionId.trim() || Buffer.byteLength(interactionId, 'utf8') > MAX_INTERACTION_ID_LENGTH)) continue;
-      const body = type === 'text' ? message?.text?.body : type === 'button' ? message?.button?.text : type === 'interactive' ? (buttonReply?.title || listReply?.title) : media?.caption || '';
+      const body = type === 'text' ? message?.text?.body : type === 'button' ? (/^(stop|pause)$/i.test(message?.button?.payload||'')?message.button.payload:message?.button?.text) : type === 'interactive' ? (buttonReply?.title || listReply?.title) : media?.caption || '';
       if (!id || id.length > 256 || !E164.test(phone) || !type || type.length > 64 || typeof body !== 'string' || body.length > 4000) continue;
       const seconds = Number(message?.timestamp);
       const timestamp = Number.isSafeInteger(seconds) && seconds > 0 ? new Date(seconds * 1000).toISOString() : null;
@@ -315,6 +316,16 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     };
     active();
     const interactionId = event.interaction_id ?? event.interactionId;
+    if(event.message_type==='button'){
+      // A signed reply must reference an actual reminder to this phone. The
+      // server resolves tenant/invoice from its receipt, never from button data.
+      if(typeof interactionId!=='string'||!interactionId.startsWith('rt1.'))return 'unmatched_template_button';
+      const result=dataOrThrow(await supabase.rpc('cetld_core_handle_reminder_button',{
+        p_phone:event.sender_phone,p_context_message_id:interactionId.slice(4),p_message_id:event.provider_message_id,
+        p_action:isOptOut(event.message_text)||/^stop(?: updates| messages| reminders)?$/i.test(event.message_text||'')?'stop':'pause',
+      }),'reminder button');
+      return result?.ok===true?result.status:'unmatched_template_button';
+    }
     // Resolve the verified owner before interpreting STOP/CANCEL or onboarding
     // words. Those strings can be ordinary owner conversation turns; only a
     // non-owner debtor message installs consent barriers and exits the model.

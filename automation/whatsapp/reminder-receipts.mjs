@@ -1,4 +1,4 @@
-/** Review-only receipt backend. Runtime construction remains unchanged. */
+/** Optional receipt backend. Both flags default disabled; SQL is not deployed. */
 export function createFirstPartyReminderReceiptStore({supabase,env=process.env}={}){
   const isEnabled=()=>env.WHATSAPP_REMINDERS_ENABLED==='true'&&env.WHATSAPP_REMINDER_RECEIPTS_ENABLED==='true'
     &&/^\d{5,30}$/.test(env.WHATSAPP_WABA_ID||'')&&/^\d{5,30}$/.test(env.WHATSAPP_PHONE_NUMBER_ID||'')&&typeof supabase?.rpc==='function';
@@ -18,7 +18,7 @@ export function createFirstPartyReminderReceiptStore({supabase,env=process.env}=
  * store. It cannot choose an owner/workspace/claim from recipient arguments. */
 export function createDurableReminderProvider({provider,receiptStore}={}){
   const accepted=new Map();
-  return {async sendReminder(input){
+  return {...(typeof provider?.prepareReminder==='function'?{prepareReminder:input=>provider.prepareReminder(input)}:{}),async sendReminder(input){
     if(receiptStore?.isEnabled?.()!==true)return {status:'blocked',reason:'receipt_backend_disabled'};
     const result=await provider.sendReminder(input);
     if(result.status==='accepted')accepted.set(input.idempotencyKey,{...input,...result});

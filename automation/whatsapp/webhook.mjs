@@ -2,6 +2,7 @@ import {parseMetaStatuses} from './conversation-store.mjs';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { createInboundRuntime, isOptOut, parseMetaMessages } from './cloud-inbound.mjs';
+import {createFirstPartyReminderReceiptStore} from './reminder-receipts.mjs';
 
 const MAX_BODY_BYTES = 256 * 1024;
 
@@ -58,6 +59,7 @@ export function createWhatsAppWebhookHandler({ env = process.env, fetchImpl = gl
     if (runtime) return runtime;
     const supabase = createSupabase(env, fetchImpl);
     return createInboundRuntime({ env, fetchImpl, supabase, logger,
+      reminderReceiptStore:createFirstPartyReminderReceiptStore({env,supabase}),
       onBoundMessage: boundMessageFactory?.({ env, fetchImpl, supabase, logger }) });
   };
   return async function handleWhatsAppWebhook(request, response) {

@@ -7,7 +7,7 @@ import {OWNER_ACTION_CHOICES_UNAVAILABLE_REPLY,normalizeOwnerActionRef} from './
 
 const APPROVED_QA_RECIPIENTS = new Set(['+919871367051', '+919818685252']);
 const E164 = /^\+[1-9]\d{6,14}$/;
-const TEMPLATE_NAME = 'cetld_invoice_update_test';
+import {buildReminderTemplate,selectReminderTemplate} from './reminder-templates.mjs';
 const SERVICE_KINDS = new Set(['normal', 'verification', 'stop_confirmation']);
 const CURRENT_INVOICE_STATUSES = new Set(['sent', 'paid']);
 const SAFE_GUARD_REPLY = "I have your answer, but couldn't phrase it safely for WhatsApp - please check the cetld app for details.";
@@ -114,7 +114,7 @@ export function createWhatsAppOutbound({
   }
 
   async function prepareMessage({workspaceId,to,kind,payload,key,customerId=null,invoiceId=null,audience='customer',ownerActionFallback=null}) {
-    const body=payload.type==='template'?`Hi, this is ${payload.template.components[0].parameters[0].text}. Invoice ${payload.template.components[0].parameters[1].text} has an update. Reply STOP anytime.`:payload.text?.body||payload.interactive?.body?.text||payload.image?.caption||payload.document?.caption||'[Attachment]';
+    const body=payload.type==='template'?buildReminderTemplate(selectReminderTemplate({tone:'professional'}),payload.template.components[0].parameters.map(p=>p.text)).body:payload.text?.body||payload.interactive?.body?.text||payload.image?.caption||payload.document?.caption||'[Attachment]';
     const fallbackRef=ownerActionFallback==null?null:normalizeOwnerActionRef(ownerActionFallback);
     if(ownerActionFallback!=null&&(!fallbackRef||audience!=='owner'||kind!=='normal'||body!==OWNER_ACTION_CHOICES_UNAVAILABLE_REPLY
       ||payload.type!=='text'||!payload.text||payload.interactive))throw new TypeError('invalid owner action fallback');
@@ -252,9 +252,7 @@ export function createWhatsAppOutbound({
     // Graph returns an uncertain outcome; callers must not retry blindly.
     const key=`template:${idempotencyKey}`;
     const payload=await prepareMessage({workspaceId,to,customerId,invoiceId,key,kind:'invoice_update',payload:{
-      type:'template',template:{name:TEMPLATE_NAME,language:{code:'en_US'},components:[
-        {type:'body',parameters:[{type:'text',text:name},{type:'text',text:number}]},
-      ]},
+      type:'template',template:buildReminderTemplate(selectReminderTemplate({tone:'professional'}),[name,number,nonempty(finalEligibility.customer.name,'customerName',256)]).template,
     }});
     const claim = await claimInvoiceUpdate({workspaceId, invoiceId, customerId, phone: to, idempotencyKey: eventKey, expectedUpdatedAt: revision});
     if (claim?.claimed !== true) return block(logger, claim?.reason || 'duplicate_invoice_update', {workspaceId, to, kind: 'invoice_update'});
@@ -312,7 +310,7 @@ export function createWhatsAppOutbound({
         if(SESSION_PRESSURE_CONTENT.test(text))return block(logger,'owner_reply_safety_guard',{workspaceId,to,kind});
       }else try {
         const bounded=typeof body==='string'&&body.length>3790
-          ?body.slice(0,3730)+'\n… View the full details in your dashboard.':body;
+          ?body.slice(0,3730)+'\nÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ View the full details in your dashboard.':body;
         text = neutralText(bounded, kind);
       } catch (error) {
         if (!(error instanceof TypeError) || error.message !== 'collection content is disabled') throw error;

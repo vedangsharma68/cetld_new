@@ -5,9 +5,12 @@ import {authorizeAIWorkspace} from '../../ai/store.mjs';
 import {createWhatsAppOutbound} from './cloud-outbound.mjs';
 import {getSendEligibility} from './consent.mjs';
 import {createWhatsAppInvoiceUpdateStore} from './invoice-update-store.mjs';
+import {readApprovedReminderTemplates} from './template-diagnostic.mjs';
+import {approvedReminderProof} from './reminder-proof.mjs';
 
 const APPROVED_QA_RECIPIENTS = new Set(['+919871367051', '+919818685252']);
-const TEMPLATE_NAME = 'cetld_invoice_update_test';
+import {buildReminderTemplate,selectReminderTemplate} from './reminder-templates.mjs';
+const TEMPLATE_NAME = selectReminderTemplate({tone:'professional'}).name;
 const SENDING_BOT = '+917303338959';
 const TEMPLATE_COST_INR = '0.1150';
 
@@ -32,8 +35,8 @@ function allowedRecipient(env, phone) {
   return APPROVED_QA_RECIPIENTS.has(phone) && configured.has(phone);
 }
 
-function templateText(businessName, invoiceNumber) {
-  return `Hi, this is ${businessName}. Invoice ${invoiceNumber} has an update. Reply STOP anytime.`;
+function templateText(businessName, invoiceNumber, customerName) {
+  return buildReminderTemplate(selectReminderTemplate({tone:'professional'}),[businessName,invoiceNumber,customerName]).body;
 }
 
 function tokenSecret(env) {
@@ -65,7 +68,7 @@ async function loadReview(supabase, env, workspaceId, invoiceId) {
     'id,workspace_id,customer_id,invoice_number,status,updated_at',
     [['workspace_id', workspaceId], ['id', invoiceId]]);
   if (!invoice || invoice.id !== invoiceId || invoice.workspace_id !== workspaceId) throw new APIError(404, 'INVOICE_NOT_FOUND');
-  const customer = await currentRow(supabase, 'customers', 'id,workspace_id,phone',
+  const customer = await currentRow(supabase, 'customers', 'id,workspace_id,name,phone',
     [['workspace_id', workspaceId], ['id', invoice.customer_id]]);
   if (!customer || customer.id !== invoice.customer_id || customer.workspace_id !== workspaceId
     || !allowedRecipient(env, customer.phone)) throw new APIError(409, 'TEST_RECIPIENT_REQUIRED');
@@ -80,7 +83,7 @@ async function loadReview(supabase, env, workspaceId, invoiceId) {
 
 function reviewedValues(workspaceId, {invoice, customer, businessName}) {
   return {workspaceId, invoiceId: invoice.id, customerId: customer.id, phone: customer.phone,
-    businessName, invoiceNumber: invoice.invoice_number, updatedAt: invoice.updated_at};
+    businessName, customerName:customer.name, invoiceNumber: invoice.invoice_number, updatedAt: invoice.updated_at};
 }
 
 /** Authenticated, owner/operator-only review and invoice-update test entry point. */
@@ -91,25 +94,37 @@ export function createWhatsAppInvoiceTestHandler({env = process.env, fetchImpl =
     res.setHeader('Cache-Control', 'no-store');
     try {
       if (!['GET', 'POST'].includes(req.method)) throw new APIError(405, 'METHOD_NOT_ALLOWED');
-      const input = req.method === 'POST' ? requestBody(req, ['workspaceId', 'invoiceId']) : req.query || {};
-      if (Object.keys(input).some(key => !['workspaceId', 'invoiceId'].includes(key))) throw new APIError(400, 'INVALID_INPUT');
+      const input = req.method === 'POST' ? requestBody(req, ['workspaceId', 'invoiceId','action']) : req.query || {};
+      const templateDiagnostic = req.method === 'GET' && input.action === 'templates';
+      const reminderProof = input.action === 'approved-template-test';
+      const fields = templateDiagnostic ? ['workspaceId', 'action', 'recipient', 'language'] : reminderProof ? ['workspaceId','action'] : ['workspaceId', 'invoiceId'];
+      if (Object.keys(input).some(key => !fields.includes(key))) throw new APIError(400, 'INVALID_INPUT');
       const workspaceId = uuid(input.workspaceId);
-      const invoiceId = uuid(input.invoiceId);
+      const invoiceId = templateDiagnostic || reminderProof ? null : uuid(input.invoiceId);
       const user = await authorize(req, workspaceId, {env, fetchImpl});
       if (user.role !== 'owner' || !env.WHATSAPP_TEST_OPERATOR_USER_ID
         || user.userId !== env.WHATSAPP_TEST_OPERATOR_USER_ID) throw new APIError(403, 'TEST_OPERATOR_REQUIRED');
       if (env.WHATSAPP_OUTBOUND_ENABLED !== 'true') throw new APIError(503, 'WHATSAPP_TEST_DISABLED');
+      if (templateDiagnostic) {
+        if (input.recipient !== '+919871367051' || input.language !== 'en'
+          || !allowedRecipient(env, input.recipient)) throw new APIError(409, 'TEST_RECIPIENT_REQUIRED');
+        return res.status(200).json(await readApprovedReminderTemplates({env, fetchImpl}));
+      }
       const supabase = loadSupabase(env, fetchImpl);
+      if(reminderProof){
+        const result=await approvedReminderProof({workspaceId,ownerId:user.userId,env,supabase,fetchImpl,send:req.method==='POST'});
+        return res.status(result.status==='blocked'?409:result.status==='unknown'?202:result.status==='failed'?502:200).json(result);
+      }
       const review = await loadReview(supabase, env, workspaceId, invoiceId);
       const values = reviewedValues(workspaceId, review);
       if (req.method === 'GET') return res.status(200).json({
         test: true, recipient: review.customer.phone, sendingBot: SENDING_BOT,
-        templateName: TEMPLATE_NAME, text: templateText(review.businessName, review.invoice.invoice_number),
+        templateName: TEMPLATE_NAME, text: templateText(review.businessName, review.invoice.invoice_number,review.customer.name),
         estimatedBaseCost: {currency: 'INR', amount: TEMPLATE_COST_INR, beforeTax: true, asOf: '2026-09-30'},
         previewToken: previewToken(env, values),
       });
       verifyPreviewToken(env, req.headers?.['x-whatsapp-test-preview'], values);
-      const idempotencyKey = createHash('sha256').update(`whatsapp-invoice-update-v1\0${workspaceId}\0${invoiceId}\0${review.invoice.updated_at}`).digest('hex');
+      const idempotencyKey = createHash('sha256').update(`whatsapp-invoice-update-approved-v2\0${workspaceId}\0${invoiceId}\0${review.invoice.updated_at}`).digest('hex');
       const outbound = outboundFactory({env, fetchImpl, supabase, logger, ...createWhatsAppInvoiceUpdateStore({supabase})});
       const result = await outbound.sendInvoiceUpdateTemplate({workspaceId, to: review.customer.phone,
         invoiceId, customerId: review.customer.id, businessName: review.businessName,
