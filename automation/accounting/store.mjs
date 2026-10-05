@@ -176,8 +176,21 @@ export class SupabaseAccountingStore {
     }
   }
 
-  async patchActiveInvoice(id, workspaceId, values) {
+  async patchActiveInvoice(id, workspaceId, values, existing) {
+    const direction = existing?.metadata?.invoice_direction;
+    const legacyIncoming = !direction && existing?.external_provider === values.external_provider && existing?.external_invoice_id === values.external_invoice_id;
+    if (direction !== 'receivable' && !legacyIncoming) {
+      throw new AccountingError('ACCOUNTING_INVOICE_DIRECTION_REVIEW', 'Existing accounting invoice direction requires review before synchronization');
+    }
+    values = {...values, metadata: {...existing.metadata, ...values.metadata}};
+    // CETLD assigns its own canonical number at INSERT. The provider's printed
+    // number is retained in source_invoice_number by the existing source trigger.
+    if (existing.metadata?.source_invoice_number) {
+      if (existing.metadata.source_invoice_number !== values.invoice_number) throw new AccountingError('ACCOUNTING_INVOICE_RECONCILIATION_REQUIRED', 'Accounting invoice number changed; reconcile the source before synchronization');
+      values.invoice_number = existing.invoice_number;
+    }
     const params = new URLSearchParams({id: `eq.${id}`, workspace_id: `eq.${workspaceId}`, deleted_at: 'is.null', select: 'id'});
+    if (existing.updated_at) params.set('updated_at', `eq.${existing.updated_at}`);
     const options = {method: 'PATCH', headers: {'Content-Type': 'application/json', Prefer: 'return=representation'}, body: JSON.stringify(values)};
     let rows;
     try {
@@ -187,7 +200,8 @@ export class SupabaseAccountingStore {
       params.delete('deleted_at');
       rows = await this.request(`invoices?${params}`, options);
     }
-    return !Array.isArray(rows) || rows.length > 0;
+    if (!Array.isArray(rows) || rows.length !== 1 || rows[0]?.id !== id) throw new AccountingError('ACCOUNTING_INVOICE_CONFLICT', 'Invoice changed or synchronization could not be verified; retry after review');
+    return true;
   }
 
   async putOAuthState(state) {
@@ -259,6 +273,9 @@ export class SupabaseAccountingStore {
   }
 
   async upsertSyncSnapshots({ userId, workspaceId, provider, customers = [], invoices = [], payments = [] }) {
+    const workspace = await this.request(`workspaces?${new URLSearchParams({select: 'id', id: `eq.${workspaceId}`, owner_id: `eq.${userId}`, limit: '1'})}`);
+    if (!Array.isArray(workspace) || !workspace[0]) throw new AccountingError('ACCOUNTING_WORKSPACE_FORBIDDEN', 'Accounting synchronization requires the workspace owner');
+    if (!['zoho_books', 'quickbooks'].includes(provider)) throw new AccountingError('ACCOUNTING_PROVIDER_INVALID', 'Accounting provider is unsupported');
     const rows = [
       ...customers.map((payload) => ({ owner_id: userId, workspace_id: workspaceId, provider, record_type: 'customer', external_id: String(payload.externalId), payload, synced_at: new Date().toISOString() })),
       ...invoices.map((payload) => ({ owner_id: userId, workspace_id: workspaceId, provider, record_type: 'invoice', external_id: String(payload.externalId), payload, synced_at: new Date().toISOString() })),
@@ -292,7 +309,7 @@ export class SupabaseAccountingStore {
     const deletedInvoiceExternalIds = new Set();
     for (const invoice of invoices) {
       const invoiceExternalId = String(invoice.externalId);
-      const externalCustomerId = String(invoice.raw?.customer_id || '');
+      const externalCustomerId = String(invoice.raw?.customer_id || invoice.raw?.CustomerRef?.value || '');
       let customerId = customersByExternal.get(externalCustomerId);
       if (!customerId && externalCustomerId) {
         const linkedCustomer = await this.request(`customers?${new URLSearchParams({ select: 'id', workspace_id: `eq.${workspaceId}`, external_provider: `eq.${provider}`, external_customer_id: `eq.${externalCustomerId}`, limit: '1' })}`);
@@ -304,20 +321,20 @@ export class SupabaseAccountingStore {
       const normalizedStatus = Number(invoice.balanceMinor) === 0 ? 'paid' : invoice.status === 'void' || invoice.status === 'voided' ? 'void' : invoice.status === 'overdue' ? 'overdue' : invoice.status === 'draft' ? 'draft' : 'sent';
       const values = { workspace_id: workspaceId, customer_id: customerId, invoice_number: String(invoice.number).slice(0, 100), issue_date: invoice.invoiceDate, due_date: invoice.dueDate || null, currency: invoice.currency || 'INR', total_amount: total, amount_paid: paid, status: normalizedStatus, notes: invoice.raw?.notes || null, external_provider: provider, external_invoice_id: invoiceExternalId, last_synced_at: syncedAt, sync_status: 'synced', last_sync_error: null, metadata: { accounting_provider: provider, external_customer_id: externalCustomerId } };
       const invoiceTargetFilters = {workspace_id: `eq.${workspaceId}`, external_provider: `eq.${provider}`, external_invoice_id: `eq.${invoiceExternalId}`};
-      const existing = await this.findInvoiceForSync(invoiceTargetFilters, 'id,workspace_id,external_provider,external_invoice_id,invoice_number');
+      const existing = await this.findInvoiceForSync(invoiceTargetFilters, 'id,workspace_id,external_provider,external_invoice_id,invoice_number,metadata,updated_at');
       if (Array.isArray(existing) && existing[0]) {
         if (isDeletedInvoice(existing[0])) {
           deletedInvoiceExternalIds.add(invoiceExternalId);
           continue;
         }
-        if (!await this.patchActiveInvoice(existing[0].id, workspaceId, values)) {
+        if (!await this.patchActiveInvoice(existing[0].id, workspaceId, values, existing[0])) {
           deletedInvoiceExternalIds.add(invoiceExternalId);
           continue;
         }
         invoiceCount++;
         continue;
       }
-      const sameNumber = await this.findInvoiceForSync({workspace_id: `eq.${workspaceId}`, invoice_number: `eq.${invoice.number}`}, 'id,external_provider,external_invoice_id,total_amount,customer_id');
+      const sameNumber = await this.findInvoiceForSync({workspace_id: `eq.${workspaceId}`, invoice_number: `eq.${invoice.number}`}, 'id,external_provider,external_invoice_id,total_amount,customer_id,metadata,updated_at');
       if (Array.isArray(sameNumber) && sameNumber[0]) {
         if (isDeletedInvoice(sameNumber[0])) {
           deletedInvoiceExternalIds.add(invoiceExternalId);
@@ -325,15 +342,16 @@ export class SupabaseAccountingStore {
         }
         if (sameNumber[0].external_provider && (sameNumber[0].external_provider !== provider || sameNumber[0].external_invoice_id !== String(invoice.externalId))) continue;
         if (Number(sameNumber[0].total_amount) !== Number(values.total_amount) || String(sameNumber[0].customer_id) !== String(customerId)) continue;
-        if (!await this.patchActiveInvoice(sameNumber[0].id, workspaceId, values)) {
+        if (!await this.patchActiveInvoice(sameNumber[0].id, workspaceId, values, sameNumber[0])) {
           deletedInvoiceExternalIds.add(invoiceExternalId);
           continue;
         }
         invoiceCount++;
       } else {
+        values.metadata.invoice_direction = 'receivable';
         let saved;
         try {
-          saved = await this.request('invoices?on_conflict=workspace_id,external_provider,external_invoice_id', { method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([values]) });
+          saved = await this.request('invoices', { method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' }, body: JSON.stringify([values]) });
         } catch (writeError) {
           let confirmedDeleted = false;
           try {
@@ -366,8 +384,16 @@ export class SupabaseAccountingStore {
         const amount = Number.isFinite(Number(appliedAmount)) ? Number(appliedAmount) : externalInvoiceIds.length === 1 ? majorAmount(payment.amountMinor, payment.currency) : null;
         if (!amount || amount <= 0) continue;
         const values = { workspace_id: workspaceId, invoice_id: invoiceId, amount, paid_at: payment.paymentDate || syncedAt, reference: payment.reference || null, external_provider: provider, external_payment_id: externalInvoiceIds.length > 1 ? `${payment.externalId}:${externalInvoiceId}` : String(payment.externalId), last_synced_at: syncedAt, sync_status: 'synced', last_sync_error: null, metadata: { accounting_provider: provider, external_payment_id: String(payment.externalId), external_invoice_id: String(externalInvoiceId) } };
+        const prior = await this.request(`payments?${new URLSearchParams({select: 'id,invoice_id,amount,reference,paid_at', workspace_id: `eq.${workspaceId}`, external_provider: `eq.${provider}`, external_payment_id: `eq.${values.external_payment_id}`, limit: '1'})}`);
+        if (Array.isArray(prior) && prior[0]) {
+          const receipt = prior[0];
+          const sameDate = /^\d{4}-\d{2}-\d{2}$/.test(values.paid_at) ? String(receipt.paid_at).slice(0,10) === values.paid_at : Date.parse(receipt.paid_at) === Date.parse(values.paid_at);
+          if (receipt.invoice_id !== invoiceId || Number(receipt.amount) !== amount || (receipt.reference || null) !== values.reference || !sameDate) throw new AccountingError('ACCOUNTING_PAYMENT_RECONCILIATION_REQUIRED', 'Existing payment facts differ from accounting; reconcile instead of overwriting');
+          paymentCount++;
+          continue;
+        }
         try {
-          await this.request(`payments?on_conflict=workspace_id,external_provider,external_payment_id`, { method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([values]) });
+          await this.request('payments', { method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' }, body: JSON.stringify([values]) });
         } catch (writeError) {
           let confirmedDeleted = false;
           try {

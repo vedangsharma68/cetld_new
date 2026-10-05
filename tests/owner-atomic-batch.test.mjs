@@ -9,7 +9,50 @@ import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs
 import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as scope,DEFAULT_NOW,JOHN_INVOICE_ID} from './fixtures/owner-chat-battery.mjs';
 const logger={info(){},warn(){},error(){}};
 
-test('real provider coalesces two writes after a scoped read, verifies persisted children and recovers one aggregate receipt',async()=>{
+test('serialized Gemini batch marker/common table and finite target sets preserve custom field patches',async()=>{
+  for(const format of ['marker','target-set']){
+    const db=createOwnerChatDatabase();let captured=null,calls=0;
+    const tool=createWorkspaceDataTool({supabase:db.supabase,scope,message:'Update both QA records together',confirmationMode:'direct',authorize:async()=>true,
+      async executeBatchOperation(params){calls++;captured=params;return {ok:false,code:'STALE',rolledBack:true};}});
+    const names=['CETLD QA 20261004 1442','CETLD QA BATCH 20261004 1827'];
+    const values={custom_fields:{check_count:3,qa_status:'verified'}};
+    const args=format==='marker'?{operation:'batch',table:'business_records',operations:names.map(value=>({operation:'update',filters:[{column:'name',operator:'eq',value}],values}))}
+      :{operation:'update',table:'business_records',filters:[{column:'name',operator:'in',value:names}],values};
+    const provider=new AIProvider({primaryModel:'gemini-3.5-flash-lite',fallbackModel:null,geminiApiKey:'isolated',maxAttempts:1,logger,
+      fetchImpl:async(url,init)=>{assert.match(String(url),/generativelanguage/);assert(JSON.parse(init.body).tools);
+        return new Response(JSON.stringify({candidates:[{content:{parts:[{functionCall:{name:'workspaceData',args}}]},finishReason:'STOP'}]}),{status:200});}});
+    const response=await provider.generate({messages:[{role:'user',content:'Update both QA records together'}],tools:[tool.definition],toolChoice:'required'});
+    const call=response.toolCalls[0];
+    const result=await tool.execute(JSON.parse(call.function.arguments));
+    assert.equal(result.code,'STALE');assert.equal(calls,1);assert.equal(captured.operations.length,2);
+    assert.deepEqual(captured.operations.map(item=>item.filters[0].value),names);
+    for(const item of captured.operations)assert.deepEqual(item.values,values);
+  }
+});
+
+test('malformed structured batch repairs once from the actual owner instruction before any dispatch',async()=>{
+  const db=createOwnerChatDatabase();let plans=0,dispatches=0;
+  const child={operation:'update',table:'business_records',filters:[{column:'name',operator:'eq',value:'QA one'}],values:{custom_fields:{check_count:3}}};
+  const tool=createWorkspaceDataTool({supabase:db.supabase,scope,message:'For QA one and QA two set check_count to 3 together',confirmationMode:'direct',authorize:async()=>true,
+    async planRequest(text,context){plans++;assert.equal(text,'For QA one and QA two set check_count to 3 together');assert.equal(context.validationFeedback.validationCode,'BATCH_SHAPE');assert(context.catalog.atomicBatch.allCommitOrAllRollback);
+      return {operations:[child,{...child,filters:[{column:'name',operator:'eq',value:'QA two'}]}]};},
+    async executeBatchOperation(){dispatches++;return {ok:false,code:'STALE',rolledBack:true};}});
+  const result=await tool.execute({operation:'batch',operations:[child]});
+  assert.equal(plans,1);assert.equal(dispatches,1);assert.equal(result.code,'STALE');assert.equal(result.planningRepair.validationCode,'BATCH_SHAPE');
+  assert.equal(result.planningRepair.validationShape.operation,'batch');
+  assert(!JSON.stringify(result.planningRepair.validationShape).includes('QA one'));
+});
+
+test('finite target normalization rejects oversized duplicate and security target sets without dispatch',async()=>{
+  const db=createOwnerChatDatabase();let dispatches=0;
+  const tool=createWorkspaceDataTool({supabase:db.supabase,scope,authorize:async()=>true,async executeBatchOperation(){dispatches++;}});
+  for(const [column,targets] of [['name',['QA','QA']],['name',Array.from({length:11},(_,i)=>'QA'+i)],['workspace_id',[scope.workspaceId,'foreign']]]){
+    assert.equal((await tool.execute({operation:'update',table:'business_records',filters:[{column,operator:'in',value:targets}],values:{name:'changed'}})).ok,false);
+  }
+  assert.equal(dispatches,0);assert.equal(tool.getWriteAttempted(),false);
+});
+
+for(const providerName of ['Cloudflare','Gemini'])test(`${providerName} serialized full turn reads targets, commits verified children and recovers one aggregate receipt`,async()=>{
   const db=createOwnerChatDatabase();db.tables.whatsapp_direct_write_receipts=[];
   const invoices=db.tables.invoices.filter(row=>row.workspace_id===scope.workspaceId).slice(0,2);
   assert.equal(invoices.length,2);const original=invoices.map(row=>row.invoice_number);
@@ -30,15 +73,16 @@ test('real provider coalesces two writes after a scoped read, verifies persisted
   };
   const tools=createOwnerWorkspaceTools({supabase:db.supabase,scope,ownerStore:{async query(){throw Error('Legacy read must not run');}},message:'Renumber both invoices like John',messageId:'isolated-batch',authorize:async()=>true,
     clock:()=>DEFAULT_NOW,botPreferences:{confirmationMode:'direct'},pendingStoreAvailable:false});
-  const provider=new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,logger,
+  const provider=new AIProvider({primaryModel:providerName==='Gemini'?'gemini-3.5-flash-lite':CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',geminiApiKey:'isolated',maxAttempts:1,logger,
     fetchImpl:async(_url,init)=>{
-      generations++;const wire=JSON.parse(init.body);evidence=wire.messages.filter(row=>row.role==='tool').map(row=>JSON.parse(row.content));let message;
+      generations++;const wire=JSON.parse(init.body);evidence=providerName==='Gemini'?wire.contents.flatMap(row=>row.parts).flatMap(part=>{try{return [JSON.parse(part.text)];}catch{return [];}}):wire.messages.filter(row=>row.role==='tool').map(row=>JSON.parse(row.content));let message;
       if(generations===1)message={content:'',tool_calls:[{id:'fresh',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'read',table:'invoices'})}}]};
       else if(generations===2){
-        assert(wire.messages.some(row=>row.role==='tool'&&JSON.parse(row.content).rows?.length));
+        assert(evidence.some(row=>row.rows?.length));
         message={content:'',tool_calls:invoices.map((row,index)=>({id:'rename-'+index,type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'update',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:original[index]}],values:{invoice_number:`INV-2026-000${index+3}`}})}}))};
       }else message={content:'Updated both invoices to INV-2026-0003 and INV-2026-0004.'};
-      return {ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({choices:[{message,finish_reason:'stop'}]})};
+      const body=providerName==='Gemini'?{candidates:[{content:{parts:message.tool_calls?message.tool_calls.map(call=>({functionCall:{name:call.function.name,args:JSON.parse(call.function.arguments)}})):[{text:message.content}]},finishReason:'STOP'}]}:{choices:[{message,finish_reason:'stop'}]};
+      return {ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify(body)};
     }});
   const result=await runOwnerAgent({provider,message:'Renumber both invoices like John',tools});
   assert.equal(result.plannerFailure,undefined,JSON.stringify({result,evidence,rpcCalls}));assert.match(result.answer,/Updated both/);assert.equal(rpcCalls,1);

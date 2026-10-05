@@ -553,6 +553,26 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         return {ok:true,readOnly:true,unchanged:true,stage:currentAction.stage,missingFields:currentAction.missingFields||[],invoice:safeReviewInvoice(currentAction.invoice)};
       }
     }
+    if(currentAction?.type==='invoice_review_draft'&&['incomplete','proposal'].includes(currentAction.stage)
+      &&raw&&Object.keys(raw).length===2&&Object.hasOwn(raw,'invoiceNumber')&&Object.hasOwn(raw,'invoiceNumberIntent')){
+      const number=raw.invoiceNumber,intent=raw.invoiceNumberIntent;
+      if(typeof number!=='string'||!number.trim()||number!==number.trim()||number.length>100||/[\x00-\x1f\x7f]/.test(number)
+        ||intent!=='use_workspace_numbering'||number!=='AUTO')return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
+      await active();
+      const result=await supabase.rpc('whatsapp_override_invoice_review_number',{
+        p_workspace_id:scope.workspaceId,p_owner_id:scope.ownerId,p_phone:scope.phone,
+        p_id:pendingAtStart.id,p_version:pendingAtStart.version,p_provider_message_id:messageId,
+        p_authorization_quote:message,p_number:number,p_intent:intent});
+      if(result.error)return {ok:false,code:'UNAVAILABLE',message:'Invoice number changes are unavailable until the scoped review migration is enabled. No number was changed.'};
+      const outcome=result.data;
+      if(outcome?.ok!==true)return {ok:false,code:outcome?.code||'INVALID',message:SAFE_ERRORS[outcome?.code]||SAFE_ERRORS.INVALID};
+      const updated=outcome.review?.action;
+      if(updated?.invoice?.invoiceNumber!==number)return {ok:false,code:'DATABASE_UNAVAILABLE',message:SAFE_ERRORS.DATABASE_UNAVAILABLE};
+      if(updated.stage==='proposal')setReviewReplyRequirement(updated.invoice);
+      return {ok:true,action:'review_number_updated',stage:updated.stage,invoice:safeReviewInvoice(updated.invoice),
+        originalExtractedNumber:updated.invoiceNumberOverrideAudit.originalExtractedNumber,
+        workspaceNumberAssignedOnSave:true,requiresLaterConfirmation:true,replayed:outcome.replayed===true};
+    }
     if(currentAction?.type!=='invoice_review_draft'||currentAction.stage!=='incomplete')
       return {ok:false,code:'NO_PENDING_ACTION',message:SAFE_ERRORS.NO_PENDING_ACTION};
     const allowed=new Set(['invoiceNumber','customerName','invoiceDate','dueDate','total','currency','direction']);
@@ -623,7 +643,8 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
       return {ok:false,code:'NO_PENDING_ACTION',message:SAFE_ERRORS.NO_PENDING_ACTION};
     if(!pendingStoreAvailable||!pending||typeof pending.loadInvoiceReview!=='function'
       ||typeof pending.transitionInvoiceReview!=='function')return {ok:false,code:'UNAVAILABLE',message:SAFE_ERRORS.UNAVAILABLE};
-    if(action.stage==='proposal'&&action.sourceMessageId&&action.sourceMessageId===messageId)
+    if(action.stage==='proposal'&&((action.sourceMessageId&&action.sourceMessageId===messageId)
+      ||action.invoiceNumberOverrideAudit?.ownerMessageId===messageId))
       return {ok:false,code:'INVALID',message:'A review proposal must be confirmed in a later message.'};
     const invoice=action.invoice||{};
     setReviewReplyRequirement(invoice);
@@ -634,7 +655,10 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
       ||currentReview.action?.type!=='invoice_review_draft'||currentReview.action.stage!==action.stage)
       return {ok:false,code:'STALE',message:SAFE_ERRORS.STALE};
     const idempotencyKey=`wa_invoice_${createHash('sha256').update(`${scope.workspaceId}:${scope.phone}:${current.id}`).digest('hex').slice(0,32)}`;
-    const store=invoiceStoreFactory(scope);
+    const baseStore=invoiceStoreFactory(scope);
+    // The server review audit is inserted atomically with the ledger row.
+    const store=action.invoiceNumberOverrideAudit?{...baseStore,createAssistantInvoice:args=>baseStore.createAssistantInvoice({
+      ...args,reviewNumberAudit:action.invoiceNumberOverrideAudit})}:baseStore;
     let saving=currentReview;
     if(action.stage==='proposal'){
       const claimed=await pending.transitionInvoiceReview({...currentReview,...scope,fromStage:'proposal',action:{...action,stage:'saving'}});
@@ -658,6 +682,16 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     }
     if(savedResult?.saved!==true||!savedResult.invoice?.id)
       return {ok:false,code:'DATABASE_UNAVAILABLE',message:SAFE_ERRORS.DATABASE_UNAVAILABLE};
+    if(action.invoiceNumberOverrideAudit){
+      try{
+        const persisted=await store.findAssistantInvoice({idempotencyKey});
+        const expected=action.invoiceNumberOverrideAudit,actual=persisted?.metadata?.invoice_number_override_audit;
+        if(persisted?.invoice_number!==savedResult.invoice.invoiceNumber
+          ||persisted?.metadata?.printed_invoice_number!==expected.originalExtractedNumber
+          ||!actual||Object.entries(expected).some(([key,value])=>actual[key]!==value))
+          return {ok:false,code:'DATABASE_UNAVAILABLE',message:'The invoice may have saved, but its original-number audit could not be verified. Check its status before retrying.'};
+      }catch{return {ok:false,code:'DATABASE_UNAVAILABLE',message:SAFE_ERRORS.DATABASE_UNAVAILABLE};}
+    }
     let sourceFileAttached=false;
     if(action.sourceMessageId&&typeof sourceMediaReader==='function'){
       try{
@@ -1184,8 +1218,9 @@ function operationDescriptionFrom(value, toolName = null) {
   return null;
 }
 
-export function ownerAgentFailureReply(code, {writeAttempted = false, attemptedOperation = null, quotaProviders = [],proposalOnly=false} = {}) {
+export function ownerAgentFailureReply(code, {writeAttempted = false, attemptedOperation = null, quotaProviders = [],proposalOnly=false,verifiedNoBusinessChange=false} = {}) {
   if(proposalOnly)return 'The preview was saved, but I could not finish its reply. No proposed business change was applied. Ask me to review the pending action, or cancel it.';
+  if(verifiedNoBusinessChange)return 'I could not finish the reply. The requested business change was not applied. Please review the current action and try again.';
   const operation = operationDescriptionFrom(attemptedOperation,attemptedOperation?.toolName);
   const completed=attemptedOperation?.completed===true;
   if(code==='OWNER_AI_QUOTA_EXHAUSTED'){
@@ -1349,6 +1384,11 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
   const proposalOnly=()=>{
     const evidence=ownerEvidence(activeTranscript||[],replyRequirement());
     return evidence.some(result=>result.ok===true&&(result.proposal===true||result.requiresConfirmation===true))
+      &&!evidence.some(result=>completedOwnerResult(result));
+  };
+  const verifiedNoBusinessChange=()=>{
+    const evidence=ownerEvidence(activeTranscript||[],replyRequirement());
+    return evidence.some(result=>result.businessChangeApplied===false||result.rolledBack===true)
       &&!evidence.some(result=>completedOwnerResult(result));
   };
   const toolOperation=toolName=>typeof tools.getAttemptedOperation==='function'
@@ -1681,7 +1721,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         if(operation&&typeof operation==='object'&&lastCompletedOperation&&lastAttemptedToolName===null){
           operation.completed=true;
         }
-        return {answer:ownerAgentFailureReply(finalCode,{writeAttempted:writeMayHaveBeenAttempted(),attemptedOperation:operation,proposalOnly:proposalOnly(),
+        return {answer:ownerAgentFailureReply(finalCode,{writeAttempted:writeMayHaveBeenAttempted(),attemptedOperation:operation,proposalOnly:proposalOnly(),verifiedNoBusinessChange:verifiedNoBusinessChange(),
             quotaProviders:finalError?.quotaProviders}),
           plannerFailure:{code:finalCode},agentDiagnostics:diagnosticSnapshot()};
       }
@@ -1698,7 +1738,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
       activeRound.outcome='error';
       emitRound(activeRound);activeRound=null;
     }
-    return {answer:ownerAgentFailureReply(code,{writeAttempted:writeMayHaveBeenAttempted(),attemptedOperation:failureOperation(),proposalOnly:proposalOnly(),
+    return {answer:ownerAgentFailureReply(code,{writeAttempted:writeMayHaveBeenAttempted(),attemptedOperation:failureOperation(),proposalOnly:proposalOnly(),verifiedNoBusinessChange:verifiedNoBusinessChange(),
         quotaProviders:error?.quotaProviders}),
       plannerFailure:{code},agentDiagnostics:diagnosticSnapshot()};
   }finally{

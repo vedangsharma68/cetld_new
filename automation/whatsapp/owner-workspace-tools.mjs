@@ -16,6 +16,13 @@ export function createOwnerWorkspaceTools(options = {}) {
   let lastTool = null;
   let buttonAction=null;
   let pendingWasRead=false;
+  let accountingBlocked=false;
+  const trackAccountingBlock=result=>{
+    if(['EXTERNAL_ACCOUNTING','EXTERNAL_LEDGER','EXTERNAL_ACCOUNTING_REQUIRED'].includes(result?.code)||result?.reason==='external_accounting'){
+      accountingBlocked=true;buttonAction=null;pendingWasRead=false;
+    }
+    return result;
+  };
   const direct=createOwnerDirectRuntime({...options,adapter:options.directWriteAdapter});
   const reopening=createInvoiceReopeningRuntime(options);
   const safety = createOwnerSafetyTools({...options,signal:controller.signal});
@@ -42,7 +49,7 @@ export function createOwnerWorkspaceTools(options = {}) {
       if (operation === 'analyzeAttachment') return invoke('readInvoiceAttachment');
       if (operation === 'saveAttachment') return invoke('ingestInvoiceAttachment');
       if (operation === 'reviewAttachment') {
-        const names={invoice_number:'invoiceNumber',customer_name:'customerName',issue_date:'invoiceDate',due_date:'dueDate',total_amount:'total',currency:'currency',invoice_direction:'direction',subtotal:'subtotal',tax:'tax',notes:'notes',line_items:'lineItems',customer_email:'clientEmail',customer_phone:'clientPhone'};
+        const names={invoice_number_intent:'invoiceNumberIntent',invoice_number:'invoiceNumber',customer_name:'customerName',issue_date:'invoiceDate',due_date:'dueDate',total_amount:'total',currency:'currency',invoice_direction:'direction',subtotal:'subtotal',tax:'tax',notes:'notes',line_items:'lineItems',customer_email:'clientEmail',customer_phone:'clientPhone'};
         if(Object.keys(values).some(key=>!names[key]))return {ok:false,code:'INVALID',message:'That field cannot be added to this invoice review.'};
         return invoke('continueInvoiceReview',Object.fromEntries(Object.entries(values).map(([key,value])=>[names[key],value])));
       }
@@ -84,12 +91,12 @@ export function createOwnerWorkspaceTools(options = {}) {
           const result=await invoke(name,args);
           return {...result,ok:result?.ok!==false,readOnly:true,operation:'configuration'};
         }
-        const result=await tool.execute(args,context);
+        const result=trackAccountingBlock(await tool.execute(args,context));
         if(args?.operation==='pending')pendingWasRead=result?.ok!==false&&result?.pending===true;
         // Advertise choices only after the server can actually sign them for a
         // current proposal. A model statement is never evidence of a button.
         buttonAction=null;
-        if(options.interactiveAvailable&&(pendingWasRead||tool.getReplyRequirement?.()?.confirmationText||safety.getReplyRequirement()?.confirmationText)){
+        if(!accountingBlocked&&options.interactiveAvailable&&(pendingWasRead||tool.getReplyRequirement?.()?.confirmationText||safety.getReplyRequirement()?.confirmationText)){
           try{
             const action=await options.pending?.loadPendingAction?.({...options.scope});
             if(createOwnerActionButtons({scope:options.scope,action,env:options.env,clock:options.clock}).length)buttonAction=action;
@@ -107,14 +114,15 @@ export function createOwnerWorkspaceTools(options = {}) {
     getWriteAttempted: () => writeAttempted || tool.getWriteAttempted?.() || false,
     getAttemptedOperation: () => lastTool==='getAIProviderConfiguration'?lastTool:tool.getAttemptedOperation?.(),
     getReplyRequirement() {
+      if(accountingBlocked)return null;
       const requirement=tool.getReplyRequirement?.()||safety.getReplyRequirement();
       const operation=tool.getAttemptedOperation?.()?.operation;
       const attachmentReview=['saveAttachment','reviewAttachment'].includes(operation)
         ||(['pending','confirm'].includes(operation)&&options.pendingAtStart?.action?.type==='invoice_review_draft');
       return buttonAction&&!attachmentReview?{...requirement,maxLength:Math.min(requirement?.maxLength||900,900),confirmationText:null,requiresCancel:false,requiresReplyCue:false,buttonsAvailable:true}:requirement;
     },
-    decideButton:async input=>sanitizeWorkspaceToolResult(await (input?.pending?.action?.type==='owner_invoice_reopen'?reopening.decide(input):direct.decideButton(input)),options.scope),
+    decideButton:async input=>sanitizeWorkspaceToolResult(trackAccountingBlock(await (input?.pending?.action?.type==='owner_invoice_reopen'?reopening.decide(input):direct.decideButton(input))),options.scope),
     lookupCompleted:async()=>sanitizeWorkspaceToolResult(await direct.lookupCompleted(),options.scope),
-    async getPendingActionForButtons(){return options.pending?.loadPendingAction?.({...options.scope});},
+    async getPendingActionForButtons(){if(accountingBlocked)return null;return options.pending?.loadPendingAction?.({...options.scope});},
   };
 }

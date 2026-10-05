@@ -1,14 +1,15 @@
 import {createHash} from 'node:crypto';
+import {validateInvoiceCorrection} from './invoice-corrections.mjs';
 
 const OPERATIONS=new Set([
   'invoice.create','invoice.update','invoice.delete','invoice.restore',
   'customer.create','customer.update','customer.delete',
-  'business_record.create','business_record.update',
+  'business_record.create','business_record.update','business_record.delete','business_record.restore',
   'settings.update','ai_settings.update','pending.decide',
 ]);
 
 const TABLES=Object.freeze({
-  business_record:{table:'business_records',select:'id,workspace_id,record_type,name,custom_fields,created_at,updated_at'},
+  business_record:{table:'business_records',select:'id,workspace_id,record_type,name,custom_fields,created_at,updated_at,deleted_at,deleted_by'},
   invoice:{table:'invoices',select:'id,workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,custom_fields,metadata,created_at,updated_at,deleted_at,deleted_by'},
   customer:{table:'customers',select:'id,workspace_id,name,company_name,email,phone,custom_fields,metadata,created_at,updated_at'},
   settings:{table:'workspace_settings',select:'workspace_id,business_name,default_currency,default_timezone,follow_up_preferences,owner_bot_preferences,updated_at'},
@@ -20,9 +21,11 @@ const SAFE_CODES=new Set([
   'ACTION_PENDING','ALREADY_DELETED','AMBIGUOUS','DATABASE_UNAVAILABLE','DENIED','EXPIRED',
   'IN_USE','INVALID','INVALID_AUTHORIZATION','INVOICE_EXISTS','NO_PENDING_ACTION','NOT_FOUND',
   'NO_RECEIPT','PAYMENT_GUARD','REPLAY_MISMATCH','STALE','UNDO_EXPIRED','UNAVAILABLE','WRITE_UNCONFIRMED',
+  'DELIVERY_IN_FLIGHT','ARITHMETIC_MISMATCH','EXTERNAL_ACCOUNTING',
+  'INVALID_FIELDS','INVALID_TOTAL','CONFIRMATION_REQUIRED','STALE_EVENT','TERMINAL',
 ]);
 
-function failure(code){return {ok:false,completed:false,code:SAFE_CODES.has(code)?code:'DATABASE_UNAVAILABLE'};}
+function failure(code){return {ok:false,completed:false,code:SAFE_CODES.has(code)?code:'DATABASE_UNAVAILABLE',...(code==='EXTERNAL_ACCOUNTING'?{requiresConfirmation:false,message:'This invoice is managed by connected accounting. Apply financial changes in that ledger and sync it here. No local change was made.'}:{})};}
 function valueOf(result){return Array.isArray(result?.data)?result.data[0]:result?.data;}
 function validUuid(value){return typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);}
 function validPhone(value){return typeof value==='string'&&/^\+[1-9][0-9]{7,14}$/.test(value);}
@@ -70,12 +73,27 @@ async function readPersistedRecord({supabase,workspaceId,entityType,entityId,out
   return result?.data||null;
 }
 
+function canonical(value){
+  if(Array.isArray(value))return value.map(canonical);
+  if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])]));
+  return value;
+}
+async function verifyCorrectionAudit({supabase,workspaceId,ownerId,record,outcome}){
+  if(!validUuid(outcome?.correctionAuditId)||!record)return false;
+  const result=await supabase.from('invoice_correction_audits').select('id,workspace_id,owner_id,invoice_id,after_snapshot')
+    .eq('workspace_id',workspaceId).eq('owner_id',ownerId).eq('id',outcome.correctionAuditId).maybeSingle();
+  if(result?.error)throw result.error;
+  const audit=result.data;
+  return audit?.workspace_id===workspaceId&&audit.owner_id===ownerId&&audit.invoice_id===record.id
+    &&Object.entries(record).every(([field,value])=>JSON.stringify(canonical(audit.after_snapshot?.[field]))===JSON.stringify(canonical(value)));
+}
+
 /**
  * Server-only mutation adapter. Caller must supply an owner binding from the
  * verified webhook context. Button authorizations must have passed the caller's
  * HMAC verifier; the RPC independently checks their stored pending row/version.
  */
-export function createDirectOwnerWriteAdapter({supabase}={}){
+export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnabled=false}={}){
   if(!supabase?.rpc||!supabase?.from)throw new TypeError('Service-role Supabase client required');
   return Object.freeze({
     async lookupCompleted({workspaceId,ownerId,phone,providerMessageId}={}){
@@ -117,6 +135,7 @@ export function createDirectOwnerWriteAdapter({supabase}={}){
         if(!record||record.workspace_id!==workspaceId||record.id!==outcome.entityId)return failure('WRITE_UNCONFIRMED');
       }else if(!record)return failure('WRITE_UNCONFIRMED');
       if(record.workspace_id!==workspaceId)return failure('WRITE_UNCONFIRMED');
+      if(outcome.correctionAuditId){try{if(!await verifyCorrectionAudit({supabase,workspaceId,ownerId,record,outcome}))return failure('WRITE_UNCONFIRMED');}catch{return failure('WRITE_UNCONFIRMED');}}
       if(outcome.entityType==='pending'){
         if(!record.consumed_at)return failure('WRITE_UNCONFIRMED');
         record={id:record.id,workspace_id:record.workspace_id,actionType:record.action?.type||null,consumed_at:record.consumed_at};
@@ -125,6 +144,8 @@ export function createDirectOwnerWriteAdapter({supabase}={}){
         if(outcome.updatedAt&&record.updated_at!==outcome.updatedAt)return failure('WRITE_UNCONFIRMED');
         if(outcome.entityType==='invoice'&&outcome.action==='invoice.deleted'&&!record.deleted_at)return failure('WRITE_UNCONFIRMED');
         if(outcome.entityType==='invoice'&&outcome.action==='invoice.restored'&&record.deleted_at!==null)return failure('WRITE_UNCONFIRMED');
+        if(outcome.entityType==='business_record'&&outcome.action==='business_record.deleted'&&!record.deleted_at)return failure('WRITE_UNCONFIRMED');
+        if(outcome.entityType==='business_record'&&outcome.action==='business_record.restored'&&record.deleted_at!==null)return failure('WRITE_UNCONFIRMED');
         if(outcome.entityType==='invoice'&&outcome.action==='invoice.paid'&&!isSettledPaidInvoice(record))return failure('WRITE_UNCONFIRMED');
         if(outcome.entityType==='invoice'&&outcome.action==='invoice.reopened'
           &&(minorUnits(record.amount_paid)!==0n||!['sent','overdue'].includes(record.status)))return failure('WRITE_UNCONFIRMED');
@@ -167,9 +188,16 @@ export function createDirectOwnerWriteAdapter({supabase}={}){
       if(authorization.kind==='button'&&authorization.decision==='cancel'&&operation!=='pending.decide')return failure('INVALID');
 
       const idempotencyKey=stableKey({workspaceId,ownerId,phone,providerMessageId,operation,targetId});
+      const correction=invoiceCorrectionsEnabled&&operation==='invoice.update'&&!Object.hasOwn(payload,'status');
+      let correctionValues;
+      if(correction){try{correctionValues=validateInvoiceCorrection(payload);}catch{return failure('INVALID');}}
       let result;
       try{
-        result=await supabase.rpc('whatsapp_apply_direct_owner_write',{
+        result=correction?await supabase.rpc('whatsapp_correct_owner_invoice',{
+          p_workspace_id:workspaceId,p_owner_id:ownerId,p_phone:phone,p_provider_message_id:providerMessageId,
+          p_user_message:authorization.quote,p_idempotency_key:idempotencyKey,p_invoice_id:targetId,
+          p_expected_updated_at:expectedUpdatedAt,p_values:correctionValues,
+        }):await supabase.rpc('whatsapp_apply_direct_owner_write',{
           p_workspace_id:workspaceId,p_owner_id:ownerId,p_phone:phone,
           p_provider_message_id:providerMessageId,p_interaction_id:interactionId,
           p_idempotency_key:idempotencyKey,p_operation:operation,p_target_id:targetId,
@@ -180,8 +208,8 @@ export function createDirectOwnerWriteAdapter({supabase}={}){
           p_pending_version:authorization.kind==='button'?Number(authorization.pendingVersion):null,
           p_payload:payload,
         });
-      }catch{return failure('DATABASE_UNAVAILABLE');}
-      if(result?.error)return failure('DATABASE_UNAVAILABLE');
+      }catch{return failure(correction?'WRITE_UNCONFIRMED':'DATABASE_UNAVAILABLE');}
+      if(result?.error)return failure(correction?'WRITE_UNCONFIRMED':'DATABASE_UNAVAILABLE');
       const outcome=valueOf(result);
       if(outcome?.ok!==true)return failure(outcome?.code);
       const entityType=outcome.entityType;
@@ -199,6 +227,7 @@ export function createDirectOwnerWriteAdapter({supabase}={}){
         if(!record||record.workspace_id!==workspaceId||record.id!==entityId)return failure('WRITE_UNCONFIRMED');
       }else if(!record)return failure('WRITE_UNCONFIRMED');
       if(record.workspace_id!==workspaceId)return failure('WRITE_UNCONFIRMED');
+      if(correction){try{if(!await verifyCorrectionAudit({supabase,workspaceId,ownerId,record,outcome}))return failure('WRITE_UNCONFIRMED');}catch{return failure('WRITE_UNCONFIRMED');}}
       if(entityType==='pending'){
         if(!record.consumed_at)return failure('WRITE_UNCONFIRMED');
         record={id:record.id,workspace_id:record.workspace_id,actionType:record.action?.type||null,consumed_at:record.consumed_at};
@@ -207,6 +236,8 @@ export function createDirectOwnerWriteAdapter({supabase}={}){
         if(outcome.updatedAt&&record.updated_at!==outcome.updatedAt)return failure('WRITE_UNCONFIRMED');
         if(entityType==='invoice'&&outcome.action==='invoice.deleted'&&!record.deleted_at)return failure('WRITE_UNCONFIRMED');
         if(entityType==='invoice'&&outcome.action==='invoice.restored'&&record.deleted_at!==null)return failure('WRITE_UNCONFIRMED');
+        if(entityType==='business_record'&&outcome.action==='business_record.deleted'&&!record.deleted_at)return failure('WRITE_UNCONFIRMED');
+        if(entityType==='business_record'&&outcome.action==='business_record.restored'&&record.deleted_at!==null)return failure('WRITE_UNCONFIRMED');
         if(entityType==='invoice'&&outcome.action==='invoice.paid'&&!isSettledPaidInvoice(record))return failure('WRITE_UNCONFIRMED');
       }
       return {ok:true,completed:true,action:outcome.action,entityType,entityId,record,replayed:outcome.replayed===true};

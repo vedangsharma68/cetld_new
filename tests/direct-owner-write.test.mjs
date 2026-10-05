@@ -66,6 +66,17 @@ test('adapter refuses unconfirmed RPC writes and invalid cross-scope or unsigned
   assert.equal(fixture.calls.some(call=>call.kind==='rpc'),false);
 });
 
+test('invoice correction preserves the server terminal-state refusal without claiming completion',async()=>{
+  const fixture=supabaseFixture({rpcValue:{ok:false,code:'TERMINAL'}});
+  const adapter=createDirectOwnerWriteAdapter({supabase:fixture.client,invoiceCorrectionsEnabled:true});
+  const result=await adapter.apply({workspaceId,ownerId,phone,providerMessageId:'wamid.terminal',
+    authorization:{kind:'instruction',quote:'Update the cancelled invoice notes'},operation:'invoice.update',
+    targetId:entityId,expectedUpdatedAt:updatedAt,payload:{notes:'updated'}});
+  assert.deepEqual(result,{ok:false,completed:false,code:'TERMINAL'});
+  assert.equal(fixture.calls.filter(call=>call.kind==='rpc').length,1);
+  assert.equal(fixture.calls.some(call=>call.kind==='read'),false);
+});
+
 test('adapter never claims success when scoped postwrite verification fails',async()=>{
   const fixture=supabaseFixture({rpcValue:{ok:true,action:'invoice.updated',entityType:'invoice',entityId,updatedAt},record:null});
   const adapter=createDirectOwnerWriteAdapter({supabase:fixture.client});

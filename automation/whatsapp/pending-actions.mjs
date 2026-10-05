@@ -6,6 +6,9 @@ function data(result, operation) {
 export function createWhatsAppPendingActionStore({supabase} = {}) {
   if (!supabase?.from) throw new TypeError('Supabase service client required');
   return Object.freeze({
+    async expireOwnerPending({workspaceId,ownerId,phone,messageId,message}) {
+      return data(await supabase.rpc('whatsapp_expire_owner_pending',{p_workspace_id:workspaceId,p_owner_id:ownerId,p_phone:phone,p_message_id:messageId,p_user_message:message}),'expire owner pending');
+    },
     async beginInvoiceReview({workspaceId, customerId, phone}) {
       const row = data(await supabase.rpc('whatsapp_begin_invoice_review', {
         p_workspace_id: workspaceId, p_customer_id: customerId, p_phone: phone,

@@ -205,7 +205,7 @@ const stopReply = 'Your request has been recorded. You will no longer receive Wh
 
 /** Route only through service-role consent/customer binding; never use a claimed name. */
 export function createInboundRuntime({ env = process.env, fetchImpl = globalThis.fetch, supabase, inbox = new SupabaseInboundInbox(supabase), outbound,
-  onBoundMessage, onOwnerMessage, conversationStore = createConversationStore(supabase), logger = console, clock = () => Date.now() } = {}) {
+  onBoundMessage, onOwnerMessage, conversationStore = createConversationStore(supabase), reminderReceiptStore=null, logger = console, clock = () => Date.now() } = {}) {
   if (!supabase) throw new Error('Supabase service client required');
   let ownerHandler=onOwnerMessage||null;
   const runOwnerMessage=async input=>{
@@ -507,7 +507,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       return inbox.enqueue(messages);
     },
     revokeOptOut,
-    async recordStatuses(items){for(const item of items)await conversationStore?.status(item);},
+    async recordStatuses(items){for(const item of items){await conversationStore?.status(item);await reminderReceiptStore?.status(item);}},
     async processPending() {
       const configuredBudget = Number(env.WHATSAPP_PROCESS_BUDGET_MS);
       const budgetMs = Number.isFinite(configuredBudget) && configuredBudget > 0

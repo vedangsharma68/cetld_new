@@ -52,17 +52,22 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, a
       }
       throw new TypeError('verified WhatsApp scope cannot create another customer');
     },
-    async createAssistantInvoice({customerId: invoiceCustomerId, invoice}) {
+    async createAssistantInvoice({customerId: invoiceCustomerId, invoice, reviewNumberAudit=null}) {
       if(owner){
         if(!rows(await scoped('customers').select('id').eq('workspace_id',workspaceId).eq('id',invoiceCustomerId).limit(1))[0])throw new TypeError('customer scope violation');
       }else if (invoiceCustomerId !== customerId) throw new TypeError('customer scope violation');
+      if(reviewNumberAudit&&(!owner||typeof reviewNumberAudit.originalExtractedNumber!=='string'
+        ||reviewNumberAudit.originalExtractedNumber.length>100||reviewNumberAudit.requestedNumber!==invoice.invoiceNumber
+        ||typeof reviewNumberAudit.ownerMessageId!=='string'||typeof reviewNumberAudit.ownerInstruction!=='string'))
+        throw new TypeError('invalid trusted invoice number audit');
       const result = await scoped('invoices').upsert({workspace_id: workspaceId, customer_id: invoiceCustomerId,
         invoice_number: invoice.invoiceNumber, issue_date: invoice.invoiceDate, due_date: invoice.dueDate,
         currency: invoice.currency, total_amount: invoice.total, notes: invoice.notes || null,
         metadata: {assistant_idempotency_key: invoice.idempotencyKey, invoice_direction: invoice.direction,
           bookkeeping_sync_status: 'pending', followup_state: 'draft', next_follow_up_at: null,
           subtotal: invoice.subtotal, tax: invoice.tax, outstanding_amount: invoice.total,
-          client_name: invoice.clientName, printed_invoice_number: invoice.invoiceNumber === 'AUTO' ? null : invoice.invoiceNumber,
+          client_name: invoice.clientName, printed_invoice_number: reviewNumberAudit?.originalExtractedNumber ?? (invoice.invoiceNumber === 'AUTO' ? null : invoice.invoiceNumber),
+          ...(reviewNumberAudit?{invoice_number_override_audit:reviewNumberAudit}:{}),
           debtor_phone: invoice.clientPhone || null, client_phone: invoice.clientPhone || null,
           client_phone_raw: invoice.clientPhoneRaw || null, client_email: invoice.clientEmail || null,
           line_items: invoice.lineItems || []}}, {onConflict: 'workspace_id,invoice_number', ignoreDuplicates: true}).select('*');

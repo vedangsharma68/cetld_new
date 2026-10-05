@@ -108,7 +108,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         return normalizeOwnerBotPreferences(row?.owner_bot_preferences);
       }catch{return normalizeOwnerBotPreferences({confirmationMode:'buttons'});}
     };
-    const loadPending=async()=>{
+    const loadPending=async(expirationChecked=false)=>{
       let pendingAtStart=null,pendingInitialState=null,available=pendingStoreAvailable;
       const reads=await Promise.allSettled([
         timedContextRead(logger,'pending_action',()=>pending.loadPendingAction({workspaceId,customerId:scope.customerId,phone})),
@@ -122,6 +122,13 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
       else if(reads[1].status==='rejected'||available){
         available=false;
         logger?.error?.('WhatsApp owner pending-action snapshot failed',{code:String(reads[1].reason?.code||'PENDING_UNAVAILABLE').slice(0,60)});
+      }
+      const expiresAt=Date.parse(pendingAtStart?.action?.expiresAt||pendingAtStart?.expires_at||'');
+      if(!expirationChecked&&available&&pendingAtStart&&Number.isFinite(expiresAt)&&expiresAt<=clock().getTime()&&typeof pending.expireOwnerPending==='function'){
+        try{
+          const expired=await timedContextRead(logger,'pending_expiration',()=>pending.expireOwnerPending({workspaceId,ownerId,phone,messageId,message}));
+          if(expired?.ok===true&&expired.expired===true)return loadPending(true);
+        }catch{logger?.warn?.('WhatsApp owner pending expiration unavailable',{code:'PENDING_EXPIRATION_UNAVAILABLE'});}
       }
       return {pendingAtStart,pendingInitialState,available};
     };

@@ -21,6 +21,7 @@ export async function resolveWorkspaceRecord({supabase,scope,table,filters,selec
     let q=supabase.from(table).select(fields+(customer?',customer:customers!invoices_workspace_id_customer_id_fkey!inner(name)':''))
       .eq('workspace_id',scope.workspaceId);
     if(table==='invoices'&&operation!=='restore')q=q.is('deleted_at',null);
+    if(table==='business_records')q=operation==='restore'?q.gt('deleted_at','1970-01-01T00:00:00Z'):q.is('deleted_at',null);
     for(const f of filters){
       const column=f.column==='customer_name'?'customer.name':f.column;
       if(fuzzy&&['name','company_name','customer_name'].includes(f.column)) {

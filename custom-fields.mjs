@@ -9,6 +9,7 @@ export function customFieldsView(fields,escape,label='Custom fields') {
 
 export function businessRecordsView(records,escape,error='') {
   if(error)return `<section class="panel empty"><p>${escape(error)}</p></section>`;
+  records=records?.filter(record=>!record.deleted_at);
   if(!records?.length)return '<section class="panel empty"><h3>No business records yet.</h3><p>Ask your WhatsApp assistant to add a supplier, project, inventory item or another business record.</p></section>';
   return records.map(record=>`<section class="panel"><div class="panel-head"><div><span class="eyebrow">${escape(record.record_type.replaceAll('_',' '))}</span><h2>${escape(record.name)}</h2></div></div><div class="panel-body">${customFieldsView(record.custom_fields,escape)}</div></section>`).join('');
 }

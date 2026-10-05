@@ -20,7 +20,12 @@ function actionMatches(clause, result) {
   if(/\b(?:created|creation)\b/i.test(clause))return /creat/.test(action)||result.outcome==='saved';
   if(/\b(?:reopened|reversed|marked[^.!?]{0,24}unpaid)\b/i.test(clause))return action==='invoice.reopened';
   if(/\b(?:restored|restoration)\b/i.test(clause))return /restor/.test(action);
-  if(/\b(?:marked[^.!?]{0,24}paid|recorded[^.!?]{0,24}payment|payment)\b/i.test(clause))return /paid|payment|reopened/.test(action);
+  const paymentBusinessText=/\bpayment (?:instructions?|information|info)\b/i.test(clause);
+  if(paymentBusinessText&&(!/updat|change|confirmed/.test(action)
+    ||!(Object.hasOwn(result.record||{},'payment_information')||Object.hasOwn(result.record?.custom_fields||{},'payment_information'))))return false;
+  const financialClause=clause.replace(/\bpayment (?:instructions?|information|info)\b/gi,'');
+  if(/\b(?:marked[^.!?]{0,24}paid|recorded[^.!?]{0,24}payment|payment)\b/i.test(financialClause))return /paid|payment|reopened/.test(action);
+  if(paymentBusinessText)return true;
   if(/\b(?:updated|changed|update|change)\b/i.test(clause))return /updat|change|confirmed|reopened/.test(action);
   return true;
 }
@@ -75,8 +80,11 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
     || /\b(?:awaiting|waiting for|needs?|requires?)\b[^.!?]{0,35}\b(?:confirmation|approval)\b/i.test(clause)
     || /^\s*(?:please )?(?:confirm|approve)\b[^.!?]{0,35}\b(?:change|update|payment|invoice|this|it)\b/i.test(clause)
     || /\b(?:confirm|approve|cancel|review)\b[^.!?]{0,40}\bpending (?:action|proposal|change|request)\b/i.test(clause));
-  if(proposalClaims.some(clause=>!/\b(?:not|cannot|can't|couldn't|failed|unable|no)\b/i.test(clause))
-    && !results.some(result=>result.ok!==false&&(result.pending===true||result.proposal===true||result.requiresConfirmation===true)))return 'unverified_proposal';
+  const verifiedProposal=results.some(result=>result.ok!==false&&(result.pending===true||result.proposal===true||result.requiresConfirmation===true));
+  const verifiedPendingBlock=results.some(result=>result.ok===false&&result.code==='PENDING');
+  if(proposalClaims.some(clause=>!/\b(?:not|cannot|can't|couldn't|failed|unable|no)\b/i.test(clause)
+    &&!verifiedProposal&&!(verifiedPendingBlock&&/\bpending (?:action|proposal|change|request)\b/i.test(clause)
+      &&!/\b(?:submitted|created|prepared|proposed)\b/i.test(clause))))return 'unverified_proposal';
   const completed=results.filter(completedOwnerResult);
   if(!completed.length&&(/^(?:done|all done|completed|all set)[.!\s]*$/i.test(text)
     ||/\b(?:the|your|requested) (?:change|deletion|update|payment|action) (?:is|was|has been) (?:now )?(?:complete|completed|confirmed|successful)\b/i.test(text)

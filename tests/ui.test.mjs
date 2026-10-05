@@ -1,3 +1,4 @@
+import {isExternallyManagedInvoice} from '../invoice/business-fields.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -163,13 +164,13 @@ test('Assistant invoice submit executes the save request with values and a retry
 });
 
 test('payment form executes the RPC with the declared reference and bound request key',async()=>{
-  const calls=[],buttonEl={disabled:false},invoice={id:'invoice-1',amount_minor:10000,paid_minor:0,currency:'INR',client:'Client',number:'INV-1',status:'sent'};
+  const calls=[],buttonEl={disabled:false},invoice={id:'invoice-1',invoice_direction:'receivable',amount_minor:10000,paid_minor:0,currency:'INR',client:'Client',number:'INV-1',status:'sent'};
   const form={dataset:{},querySelector(selector){return selector==='[type=submit]'?buttonEl:null},addEventListener(_name,handler){this.submit=handler}};
   class FormValues {get(key){return key==='amount'?'12.34':key==='reference'?'receipt-1':''}}
   const handler=extractedAppFunction('function paymentForm(id){','function draftForm(id)',{
     state:{demo:false,workspace:{id:'workspace-1'},invoices:[invoice]},FormData:FormValues,crypto:{randomUUID:()=> 'payment-key-1234'},
     openDialog(){},$:selector=>selector==='#payment-form'?form:{close(){}},escape:String,money:()=>'',button:()=>'',terminalInvoice:()=>false,
-    remaining,payment,cents,paymentRequestKey,db:{rpc:async(...args)=>{calls.push(args);return{error:null}}},loadData:async()=>{},toast(){},showError(){},
+    remaining,payment,cents,paymentRequestKey,isExternallyManagedInvoice,db:{rpc:async(...args)=>{calls.push(args);return{error:null}}},loadData:async()=>{},toast(){},showError(){},
   });
   handler('invoice-1');
   await form.submit({preventDefault(){},currentTarget:form});

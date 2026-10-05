@@ -7,7 +7,8 @@ const MESSAGES={EXTERNAL_LEDGER:'This invoice is linked to an external accountin
   UNAVAILABLE:'Invoice reopening is temporarily unavailable. No confirmed financial change can be reported.',
   STALE:'The invoice or payment history changed after the preview. Start a fresh reopening request.',
   EXPIRED:'The reopening preview expired. Start a fresh request.',PENDING:'Another owner action is pending. Confirm or cancel it first.'};
-const fail=code=>{const safe=SAFE_CODES.has(code)?code:'UNAVAILABLE';return {ok:false,completed:false,code:safe,...(MESSAGES[safe]?{message:MESSAGES[safe]}:{})};};
+const fail=code=>{const safe=SAFE_CODES.has(code)?code:'UNAVAILABLE';return {ok:false,completed:false,code:safe,
+  ...(safe!=='UNAVAILABLE'?{businessChangeApplied:false}:{}),...(MESSAGES[safe]?{message:MESSAGES[safe]}:{})};};
 // Private server adapter: identity, message, amounts and payment IDs never
 // come from the model. Native decisions must already pass the HMAC verifier.
 export function createInvoiceReopeningRuntime({supabase,scope,message,messageId,authorize}={}){
