@@ -2,8 +2,8 @@ import {createHmac,timingSafeEqual,randomUUID} from 'node:crypto';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const actions=new Set(['select','view_file','edit_details','record_payment','unpaid_invoices','recent_invoices','find_invoice']);
-const recordActions=new Set(['select','view_file','edit_details','record_payment']);
+const actions=new Set(['select','view_file','edit_details','edit_amount','edit_due_date','edit_more','record_payment','unpaid_invoices','recent_invoices','find_invoice']);
+const recordActions=new Set(['select','view_file','edit_details','edit_amount','edit_due_date','edit_more','record_payment']);
 const now=clock=>new Date(clock()).getTime();
 const secret=env=>{const value=env?.WHATSAPP_APP_SECRET||env?.CRON_SECRET;return typeof value==='string'&&value.length?value:null;};
 const cleanLabel=value=>Array.from(String(value||'').replace(/[\u0000-\u001f\u007f-\u009f]/g,' ').trim()).slice(0,20).join('');
@@ -23,6 +23,7 @@ export function normalizeOwnerNextActionRef(value) {
     if(recordActions.has(c.action)) {
       if(!['customers','invoices'].includes(c.table)||!UUID.test(c.id||'')||typeof c.updatedAt!=='string'||!Number.isFinite(Date.parse(c.updatedAt)))return null;
       if(['view_file','record_payment'].includes(c.action)&&c.table!=='invoices')return null;
+      if(['edit_amount','edit_due_date','edit_more'].includes(c.action)&&c.table!=='invoices')return null;
     }else if(c.table!==undefined||c.id!==undefined||c.updatedAt!==undefined)return null;
     choices.push({action:c.action,title:c.title,...(recordActions.has(c.action)?{table:c.table,id:c.id,updatedAt:c.updatedAt}:{})});
   }
@@ -54,7 +55,7 @@ export const NEXT_ACTION_STALE_REPLY='That next action has expired or its detail
 
 async function currentRecord({supabase,scope,choice,authorize}) {
   if(!await authorize(scope))return null;
-  let query=supabase.from(choice.table).select(choice.table==='invoices'?'id,invoice_number,updated_at,status,total_amount,amount_paid':'id,name,updated_at,metadata')
+  let query=supabase.from(choice.table).select(choice.table==='invoices'?'id,invoice_number,updated_at,status,total_amount,amount_paid,currency,due_date':'id,name,updated_at,metadata')
     .eq('workspace_id',scope.workspaceId).eq('id',choice.id);
   if(choice.table==='invoices')query=query.is('deleted_at',null);
   const row=data(await query.maybeSingle());
@@ -134,8 +135,28 @@ export async function runOwnerNextAction({supabase,scope,env=process.env,clock=(
   const label=choice.table==='invoices'?record?.invoice_number:record?.name;
   if(choice.action==='edit_details'){
     if(choice.table==='customers'&&(record.id===scope.customerId||record.metadata?.whatsapp_owner===true))return {answer:NEXT_ACTION_STALE_REPLY};
+    if(choice.table==='invoices'){
+      const choices=[['edit_amount','Amount'],['edit_due_date','Due date'],['edit_more','Other fields']]
+        .map(([action,title])=>({action,title,table:'invoices',id:choice.id,updatedAt:choice.updatedAt}));
+      const reference=refFor(choices,clock),buttons=createOwnerNextButtons({scope,reference,env,clock});
+      return buttons.length?{answer:`Choose which details to edit for ${label}. Nothing has changed yet.`,buttons,ownerNextActionRef:reference}
+        :{answer:`What details should I change for ${label}? Tell me the field and new value. Nothing has changed yet.`};
+    }
     return {answer:`What details should I change for ${label}? Tell me the field and new value. Nothing has changed yet.`};
   }
+  if(choice.action==='edit_amount') {
+    if(!['draft','sent','overdue'].includes(record.status)||Number(record.total_amount)<=Number(record.amount_paid))return {answer:NEXT_ACTION_STALE_REPLY};
+    const [payment,reversal]=await Promise.all([
+      supabase.from('payments').select('id').eq('workspace_id',scope.workspaceId).eq('invoice_id',record.id).limit(1).maybeSingle(),
+      supabase.from('payment_reversals').select('id').eq('workspace_id',scope.workspaceId).eq('invoice_id',record.id).limit(1).maybeSingle(),
+    ]);
+    if(!await authorize(scope))return {answer:NEXT_ACTION_STALE_REPLY};
+    if(payment.error||reversal.error)return {answer:'I could not verify this invoice’s payment history, so I have not started an amount change.'};
+    if(payment.data||reversal.data)return {answer:`I can’t change the total for ${label} because payment or reversal history is attached. Those entries must stay intact; an amount correction needs a separately audited accounting adjustment.`};
+    return {answer:`What should the new total for ${label} be? It is currently ${record.currency||''} ${record.total_amount}. I will check the totals and ask before saving.`};
+  }
+  if(choice.action==='edit_due_date')return {answer:`What should the new due date for ${label} be? It is currently ${record.due_date||'not set'}. Nothing has changed yet.`};
+  if(choice.action==='edit_more')return {answer:`What other details should I change for ${label}? Tell me the field and new value. Nothing has changed yet.`};
   if(choice.action==='record_payment') {
     if(!['draft','sent','overdue'].includes(record.status)||Number(record.total_amount)<=Number(record.amount_paid))return {answer:NEXT_ACTION_STALE_REPLY};
     return {answer:`For invoice ${label}, what payment did you receive? To settle the remaining balance, send "mark invoice ${label} paid". I will check the current balance and your confirmation preference. Nothing has been recorded by this tap.`};

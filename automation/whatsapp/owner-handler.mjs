@@ -200,7 +200,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     if(isOwnerNextButton(scope.interactionId)){
       const blocked=pendingBlocksOwnerNextActions(pendingAtStart)||Boolean(lifecyclePending?.pending)||!pendingStoreAvailable||!lifecycleAvailable;
       const result=await runOwnerNextAction({supabase,scope,env,clock,authorize,tools,pending:blocked});
-      if(!result.media&&Array.from(result.answer||'').length<=1024&&replyStore&&!blocked){
+      if(!result.buttons?.length&&!result.media&&Array.from(result.answer||'').length<=1024&&replyStore&&!blocked){
         try{
           const ownerNextActionRef=await planOwnerNextActions({supabase,scope,context:tools.getNextActionContext?.(),clock,authorize});
           const buttons=createOwnerNextButtons({scope,reference:ownerNextActionRef,env,clock});

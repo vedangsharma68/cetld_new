@@ -114,6 +114,13 @@ function mentionedDates(text) {
 function normalizedOwnerText(value) {
   return String(value||'').normalize('NFKC').replace(/[’‘]/g,"'").replace(/[“”]/g,'"').replace(/\s+/g,' ').trim().toLocaleLowerCase();
 }
+function ownerRequestsInvoiceAttachment(message) {
+  const text=normalizedOwnerText(message);
+  const explicit= /\b(?:log|save|add|create|record|enter)\b.{0,80}\b(?:this|the|attached)?\s*(?:invoice|bill)\b/u.test(text)
+    || /\b(?:invoice|bill)\b.{0,80}\b(?:log|save|add|create|record)\b/u.test(text);
+  if(!explicit)return false;
+  return !/\b(?:don't|do not|never|must not)\s+(?:log|save|add|create|record|enter)\b/u.test(text);
+}
 function mentionsWholePhrase(text,value) {
   const source=normalizedOwnerText(text),needle=normalizedOwnerText(value);
   if(!needle)return false;
@@ -1467,6 +1474,8 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     const turnAnchor={role:'system',content:'Answer this current owner request only: '+JSON.stringify(String(message||''))+'. Earlier turns only resolve references. A new question does not retry an earlier change. Use tool evidence from this turn. getAIProviderConfiguration is only for a current question about your AI configuration; it must not replace a business-data lookup.'};
     definitionNames=new Set(tools.definitions.map(item=>item?.function?.name).filter(name=>typeof name==='string'));
     const providerToolOptions=tools.definitions.length?{tools:tools.definitions,toolChoice:'auto'}:{};
+    const attachmentTool=tools.definitions.find(item=>item?.function?.name==='ingestInvoiceAttachment');
+    let requireAttachmentIngest=attachmentDescriptor?.available===true&&ownerRequestsInvoiceAttachment(message)&&Boolean(attachmentTool);
     const requestProvider=async({messages,toolOptions={},phase='work',maxTokens=1200,temperature=0.2})=>{
       const round={number:++diagnostics.rounds,toolNames:[],toolResults:[],outcome:'ok',safetyIssueCodes:[],logged:false};
       activeRound=round;
@@ -1537,7 +1546,10 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     let firstSuccessfulReadRound=null;
     let readOnlyToolRounds=0;
     for(;;){
-      const {result:lastResult,round,calls}=await requestProvider({messages:[...transcript,turnAnchor],toolOptions:providerToolOptions,maxTokens:512});
+      const requiredAttachmentCall=requireAttachmentIngest;
+      const toolOptions=requiredAttachmentCall?{tools:[attachmentTool],toolChoice:'required'}:providerToolOptions;
+      const {result:lastResult,round,calls}=await requestProvider({messages:[...transcript,turnAnchor],toolOptions,maxTokens:512});
+      if(requiredAttachmentCall&&calls.length)requireAttachmentIngest=false;
       lastAttemptedToolName=null;
       if(!calls.length){
         const draft=String(lastResult?.content||'').trim();
