@@ -41,7 +41,7 @@ for(const repairSucceeds of [true,false])test(`serialized provider final repair 
 test('fresh pending reopening reads restore exact preview requirements and cannot complete a reversal',async()=>{
   const db=createOwnerChatDatabase();
   const pending={id:15,version:1,action:{type:'owner_invoice_reopen',...facts,sourceMessageId:'original',paymentCount:1,expiresAt:'2026-10-05T00:00:00Z'}};
-  const tool=createWorkspaceDataTool({supabase:db.supabase,scope,authorize:async()=>true,pendingAtStart:pending,messageId:'later',message:'review the pending action'});
+  const tool=createWorkspaceDataTool({supabase:db.supabase,scope,clock:()=>new Date('2026-10-04T12:00:00Z'),authorize:async()=>true,pendingAtStart:pending,messageId:'later',message:'review the pending action'});
   const before=structuredClone({invoices:db.tables.invoices,payments:db.tables.payments});
   const result=await tool.execute({operation:'pending'});
   assert.equal(result.requiresConfirmation,true);assert.equal(result.completed,undefined);
