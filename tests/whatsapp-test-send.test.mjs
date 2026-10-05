@@ -12,7 +12,7 @@ const dad = '+919818685252', vedang = '+919871367051';
 function response() { return {code: null, body: null, setHeader() {}, status(code) {this.code = code; return this;}, json(body) {this.body = body; return this;}}; }
 function database(phone = dad, overrides = {}) {
   const rows = {invoices: {id: invoiceId, workspace_id: workspaceId, customer_id: customerId, invoice_number: 'INV-2026-0002', status: 'sent', updated_at: '2026-09-30T10:00:00Z'},
-    customers: {id: customerId, workspace_id: workspaceId, phone},
+    customers: {id: customerId, workspace_id: workspaceId, name:'Fixture customer', phone},
     workspace_settings: {workspace_id: workspaceId, business_name: 'QA Workspace', whatsapp_owner_attested_at: '2026-09-29T10:00:00Z'},
     whatsapp_consents: {workspace_id: workspaceId, customer_id: customerId, phone, categories: ['invoice_updates'], source: 'verbal', revoked_at: null}, ...overrides};
   let claimed = false;
@@ -40,7 +40,7 @@ test('review derives dad recipient and fixed display values without sending or c
   let claims = 0; const rpc = supabase.rpc; supabase.rpc = (...args) => {claims++; return rpc(...args);};
   const res = await preview(handler);
   assert.equal(res.code, 200); assert.equal(res.body.recipient, dad); assert.equal(res.body.sendingBot, '+917303338959');
-  assert.equal(res.body.text, 'Hi, this is QA Workspace. Invoice INV-2026-0002 has an update. Reply STOP anytime.');
+  assert.equal(res.body.text, 'Hi, this is QA Workspace. Invoice INV-2026-0002 for Fixture customer has an update.');
   assert.deepEqual(res.body.estimatedBaseCost, {currency: 'INR', amount: '0.1150', beforeTax: true, asOf: '2026-09-30'});
   assert.equal(sends, 0); assert.equal(claims, 0); assert.ok(res.body.previewToken);
 });
@@ -71,5 +71,5 @@ test('real outbound claims one revision once and an unknown result is not retrie
   const graph = []; const setup = makeHandler({fetchImpl: async (url, options) => {graph.push({url, body: JSON.parse(options.body)}); throw Error('uncertain network');}, logger: {error() {}, warn() {}}});
   const review = await preview(setup.handler), first = await send(setup.handler, review.body.previewToken), second = await send(setup.handler, review.body.previewToken);
   assert.equal(first.code, 202); assert.equal(first.body.status, 'unknown'); assert.equal(second.code, 409); assert.equal(graph.length, 1);
-  assert.equal(graph[0].body.to, dad.slice(1)); assert.equal(graph[0].body.template.name, 'cetld_invoice_update_test');
+  assert.equal(graph[0].body.to, dad.slice(1)); assert.equal(graph[0].body.template.name, 'cetld_invoice_update_v2');
 });

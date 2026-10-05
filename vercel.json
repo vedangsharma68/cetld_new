@@ -10,7 +10,8 @@
     "api/whatsapp-process.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 300}
   },
   "crons": [
-    {"path": "/api/whatsapp-process", "schedule": "0 0 * * *"}
+    {"path": "/api/whatsapp-process", "schedule": "0 0 * * *"},
+    {"path": "/api/whatsapp-process", "schedule": "0 4 * * *"}
   ],
   "headers": [
     {"source": "/(.*)", "headers": [

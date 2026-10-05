@@ -45,7 +45,7 @@ test('owner preferences normalize every server policy field and schedule in owne
   assert.equal(settings.dailySummary, true);
   assert.equal(settings.pauseOnReply, true);
   assert.equal(settings.stopOnPayment, true);
-  assert.match(reminderBody({invoice_number:'INV-1'},settings),/arrange payment/i);
+  assert.match(reminderBody({invoice_number:'INV-1'},settings),/has an update/i);
   assert.deepEqual(settings.weekdays, [1, 2, 3, 4, 5]);
   assert.equal(scheduleInitialFollowUp({ due_date: '2026-09-25' }, settings, now).toISOString(), '2026-09-28T09:00:00.000Z');
   assert.equal(scheduleNextFollowUp(now, settings, 'UTC').toISOString(), '2026-09-24T09:00:00.000Z');

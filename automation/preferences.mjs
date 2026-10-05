@@ -44,6 +44,7 @@ export function normalizeFollowUpPreferences(raw = {}, timezone = 'Asia/Kolkata'
   try { new Intl.DateTimeFormat('en', {timeZone: tz}).format(); } catch { throw new RangeError('Invalid timezone'); }
   return {
     tone: tones.has(input.tone) ? input.tone : 'professional',
+    templateButtons: input.templateButtons === true,
     firstReminderDays: integer(input.firstReminderDays ?? input.first_reminder_days, 3, 0, 90),
     cadenceDays: integer(input.cadenceDays, 3, 1, 90),
     maxReminders: integer(input.maxReminders, 3, 1, 20),
@@ -86,7 +87,7 @@ export function reminderBody(invoice, settings) {
       due_date: settings.dueDate ?? invoice.due_date ?? '',
     }), settings.businessName);
   }
-  if (settings.tone === 'gentle') return brandedReminder(`A gentle reminder that invoice ${number} is still outstanding. If you have already paid, please let us know. Thank you.`,settings.businessName);
-  if (settings.tone === 'firm') return brandedReminder(`Invoice ${number} remains outstanding. Please arrange payment or contact us with an update. If already paid, please share the payment details.`,settings.businessName);
-  return brandedReminder(`A reminder that invoice ${number} remains outstanding. Please let us know if you have already paid.`,settings.businessName);
+  const customer=String(settings.customerName ?? invoice.customer_name ?? invoice.client ?? 'Customer').slice(0,200);
+  if (settings.tone === 'gentle') return brandedReminder(`Hi, this is ${settings.businessName}. A quick note about invoice ${number} for ${customer}. Questions? Just reply here.`,settings.businessName);
+  return brandedReminder(`Hi, this is ${settings.businessName}. Invoice ${number} for ${customer} has an update.`,settings.businessName);
 }

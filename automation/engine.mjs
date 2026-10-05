@@ -43,7 +43,7 @@ export class FollowUpEngine {
     }
     if (!active(invoice)) return {status:'skipped',reason:state(invoice)};
     const now=this.clock(), settings=await this.settingsFor(scope,invoice), timezone=invoice.debtor_timezone || settings.timezone || 'UTC';
-    if(Object.hasOwn(invoice,'total_amount') && (!settings.businessName || brandedReminder(invoice.metadata.approved_reminder_text,settings.businessName)!==invoice.metadata.approved_reminder_text))return {status:'skipped',reason:'business_name_required'};
+    if(!this.provider.prepareReminder && Object.hasOwn(invoice,'total_amount') && (!settings.businessName || brandedReminder(invoice.metadata.approved_reminder_text,settings.businessName)!==invoice.metadata.approved_reminder_text))return {status:'skipped',reason:'business_name_required'};
     const due=value(invoice,'nextFollowUpAt','next_follow_up_at');
     if (!due || new Date(due)>now) return {status:'waiting'};
     if (!isWithinContactHours(now,settings,timezone)) {
@@ -63,7 +63,11 @@ export class FollowUpEngine {
     const [claim]=await this.store.claimDueFollowups({...scope,now:now.toISOString(),limit:1});
     if (!claim) return {status:'waiting',reason:'not_claimed'};
     const key=`reminder:${workspaceId}:${claim.id}`;
-    const body=Object.hasOwn(invoice,'total_amount')?invoice.metadata.approved_reminder_text:(settings.reminderMessage || reminderBody(invoice,settings));
+    let body=Object.hasOwn(invoice,'total_amount')?invoice.metadata.approved_reminder_text:(settings.reminderMessage || reminderBody(invoice,settings));
+    if(this.provider.prepareReminder){
+      try{body=(await this.provider.prepareReminder({...scope,to,settings})).body;}
+      catch{await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'template_facts_unavailable'});return {status:'skipped',reason:'template_facts_unavailable'};}
+    }
     // Persist intent BEFORE checking payment and obtaining final authorization.
     await this.store.recordMessage({...scope,direction:'outbound',kind:'reminder',status:'pending',idempotencyKey:key,payload:{to,body,claimId:claim.id}});
     let refreshed;
@@ -92,7 +96,7 @@ export class FollowUpEngine {
       return {status:'skipped',reason:isPaid(invoice)?'paid':'paused'};
     }
     const finalSettings=await this.settingsFor(scope,invoice);
-    if (Object.hasOwn(invoice,'total_amount') && invoice.metadata?.approved_reminder_text!==body) {
+    if (!this.provider.prepareReminder && Object.hasOwn(invoice,'total_amount') && invoice.metadata?.approved_reminder_text!==body) {
       await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'message_changed'});
       return {status:'skipped',reason:'message_changed'};
     }

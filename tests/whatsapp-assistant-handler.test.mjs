@@ -62,7 +62,7 @@ test('WhatsApp functions have enough execution time for AI-backed replies', asyn
   assert.equal(vercel.functions['api/whatsapp.js'].maxDuration, 300);
   assert.equal(vercel.functions['api/whatsapp-process.js'].maxDuration, 300);
   assert.deepEqual(vercel.regions,['bom1']);
-  assert.deepEqual(vercel.crons, [{path:'/api/whatsapp-process',schedule:'0 0 * * *'}]);
+  assert.deepEqual(vercel.crons, [{path:'/api/whatsapp-process',schedule:'0 0 * * *'},{path:'/api/whatsapp-process',schedule:'0 4 * * *'}]);
 });
 
 test('verified inbound binding is rechecked before the customer-scoped assistant runs', async () => {

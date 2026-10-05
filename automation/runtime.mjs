@@ -7,6 +7,7 @@ import { createAccountingIntegration, SupabaseAccountingStore, TokenCipher, encr
 import { HttpError, required } from './http.mjs';
 import { scheduleInitialFollowUp, nextContactTime, timezoneParts, addLocalDays } from './cadence.mjs';
 import { normalizeFollowUpPreferences } from './preferences.mjs';
+import {createFirstPartyReminderRuntime,firstPartyReminderEnabled} from './first-party-reminder-runtime.mjs';
 
 export function createAccountingRuntime({env=process.env,fetchImpl=fetch}={}) {
   return createAccountingIntegration({
@@ -18,10 +19,11 @@ export function createAccountingRuntime({env=process.env,fetchImpl=fetch}={}) {
     })
   });
 }
-export function createAutomationRuntime({env=process.env,fetchImpl=fetch,store,provider,accounting,clock=()=>new Date()}={}) {
+export function createAutomationRuntime({env=process.env,fetchImpl=fetch,store,provider,accounting,supabase,clock=()=>new Date()}={}) {
   store ||= new CoreAutomationStore({url:required(env,'SUPABASE_URL'),key:required(env,'SUPABASE_SERVICE_ROLE_KEY'),fetchImpl,now:clock});
   async function read(scope) { const invoice=await store.getInvoice(scope);if(!invoice)throw new HttpError(404,'Invoice unavailable');return invoice; }
-  function makeEngine() {
+  function makeEngine(reminders) {
+    if(reminders)return new FollowUpEngine({store,provider:reminders.provider,clock,paymentChecker:reminders.paymentChecker});
     const sender=provider || createWhatsAppProvider({mode:required(env,'WHATSAPP_PROVIDER'),environment:env.NODE_ENV});
     return new FollowUpEngine({store,provider:sender,clock,paymentChecker:async ({invoice,ownerId,workspaceId})=>{
       if (env.WHATSAPP_PROVIDER==='mock' && env.NODE_ENV!=='production' && !invoice.bookkeeping_record_id) return {paidMinor:Number(invoice.paidMinor ?? invoice.paid_minor)};
@@ -76,8 +78,14 @@ export function createAutomationRuntime({env=process.env,fetchImpl=fetch,store,p
     async tick(scope) {
       const summary=await buildDailySummary(scope,true);
       if (env.AUTOMATION_OUTBOUND_ENABLED!=='true') return {processed:0,results:[],disabled:true,summary:summary.enabled?{day:summary.day,counts:summary.counts}:null};
+      let reminders;
+      if(env.WHATSAPP_PROVIDER==='first_party_meta'){
+        if(!firstPartyReminderEnabled(env))return {processed:0,results:[],disabled:true,summary:summary.enabled?{day:summary.day,counts:summary.counts}:null};
+        reminders=createFirstPartyReminderRuntime({env,scope,store,supabase,fetchImpl});
+        await reminders.sweep();
+      }
       const rows=typeof store.listDueInvoices==='function'?await store.listDueInvoices({...scope,now:clock().toISOString()}):await store.request('cetld_invoices',{query:{...store.scopeQuery(scope),select:'id',followup_state:'in.(approved,active,scheduled)',next_follow_up_at:`lte.${clock().toISOString()}`,order:'next_follow_up_at.asc',limit:25}});
-      const engine=makeEngine(), results=[];
+      const engine=makeEngine(reminders), results=[];
       for(const row of rows) {try{results.push({invoiceId:row.id,...await engine.run({...scope,invoiceId:row.id})});}catch{results.push({invoiceId:row.id,status:'blocked'});}}
       return {processed:results.length,results,summary:summary.enabled?{day:summary.day,counts:summary.counts}:null};
     },

@@ -49,7 +49,7 @@ function fakeSupabase({suppressed = false, globallySuppressed = false, consented
           if (table === 'whatsapp_suppressions') return {data: (typeof suppressed === 'function' ? suppressed() : suppressed) ? {suppressed_at: NOW} : null};
           if (table === 'workspace_settings') return {data: {business_name: 'Acme Studio', whatsapp_owner_attested_at: attested ? NOW : null}};
           if (table === 'whatsapp_consents') return {data: consented ? {source: 'inbound_message', categories: ['invoice_updates'], customer_id: 'customer-a', revoked_at: null} : null};
-          if (table === 'customers') return {data: customer ? {id: 'customer-a', phone: PHONE} : null};
+          if (table === 'customers') return {data: customer ? {id: 'customer-a', name:'Fixture customer', phone: PHONE} : null};
           throw new Error(`unexpected table: ${table}`);
         },
       };
@@ -189,8 +189,8 @@ test('template send rechecks current invoice and uses only neutral fixed templat
   assert.equal(active.calls.length, 1);
   const payload = JSON.parse(active.calls[0].options.body);
   assert.equal(payload.to, PHONE.slice(1));
-  assert.equal(payload.template.name, 'cetld_invoice_update_test');
-  assert.deepEqual(payload.template.components[0].parameters.map(item => item.text), ['Acme Studio', 'INV-1']);
+  assert.equal(payload.template.name, 'cetld_invoice_update_v2');
+  assert.deepEqual(payload.template.components[0].parameters.map(item => item.text), ['Acme Studio', 'INV-1','Fixture customer']);
   assert.equal('body' in payload, false);
 });
 

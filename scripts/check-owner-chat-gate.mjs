@@ -34,6 +34,11 @@ export async function writeReleaseManifest({outputPath='owner-chat-build.json'}=
     'automation/whatsapp/invoice-corrections.mjs','invoice/business-fields.mjs','invoice/correction-form.mjs','invoice/correction-client.mjs','styles.css',
     'automation/engine.mjs','automation/core-store.mjs','automation/local-reminder-payment.mjs','automation/accounting/store.mjs',
     'automation/whatsapp/cloud-reminders.mjs','automation/whatsapp/reminder-fingerprint.mjs','automation/whatsapp/reminder-receipts.mjs'];
+  paths.push('automation/runtime.mjs','automation/worker.mjs','automation/first-party-reminder-runtime.mjs',
+    'automation/reminder-cron.mjs','api/whatsapp-process.js','vercel.json','automation/preferences.mjs','followup-preferences-ui.mjs',
+    'automation/whatsapp/reminder-templates.mjs','automation/whatsapp/approved-reminders.mjs',
+    'automation/whatsapp/template-diagnostic.mjs','automation/whatsapp/test-send.mjs','automation/whatsapp/reminder-proof.mjs','automation/whatsapp/webhook.mjs',
+    'supabase/migrations/20261005070000_approved_whatsapp_reminders.sql');
   const files={};for(const path of paths)files[path]=createHash('sha256').update(await readFile(path)).digest('hex');
   let commit=process.env.VERCEL_GIT_COMMIT_SHA||process.env.GITHUB_SHA;
   if(!commit)try{commit=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();}catch{commit=null;}

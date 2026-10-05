@@ -1,8 +1,10 @@
 // Run once from a scheduler every minute. Multiple workers are coordinated by DB claims.
 import { pathToFileURL } from 'node:url';
 import { required, uuid } from './http.mjs';
+import {firstPartyReminderEnabled} from './first-party-reminder-runtime.mjs';
 
 export async function runWorkerOnce({ env = process.env, fetchImpl = fetch } = {}) {
+  if(env.WHATSAPP_PROVIDER==='first_party_meta'&&!firstPartyReminderEnabled(env))return [];
   const endpoint = new URL('/api/automation', required(env, 'AUTOMATION_APP_URL'));
   if (endpoint.protocol !== 'https:') throw new Error('Worker target must use HTTPS');
   const workspaces = JSON.parse(required(env, 'AUTOMATION_WORKSPACES'));
