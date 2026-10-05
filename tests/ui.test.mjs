@@ -132,6 +132,23 @@ test('invoice detail exposes the operator-gated TEST review and one-shot confirm
   assert.doesNotMatch(app, /WHATSAPP_TEST_OPERATOR_USER_ID|WHATSAPP_ACCESS_TOKEN/);
 });
 
+test('reminder preview gates on the signed-in workspace owner, not an unset UI flag', async () => {
+  const requests=[];
+  const preview=extractedAppFunction('async function reminderProofRequest(send=false){','async function reminderProofReview(){',{
+    state:{demo:false,user:{id:'owner-1'},workspace:{id:'workspace-1',owner_id:'owner-1'}},
+    accessToken:async()=>'owner-session-token',fetch:async(url,options)=>{requests.push({url,options});return{ok:true,json:async()=>({test:true,recipient:'+919871367051'})}},
+    URL,URLSearchParams,Error,
+  });
+  assert.equal((await preview()).recipient,'+919871367051');
+  assert.equal(requests.length,1);
+  assert.equal(requests[0].options.method,'GET');
+  const nonOwner=extractedAppFunction('async function reminderProofRequest(send=false){','async function reminderProofReview(){',{
+    state:{demo:false,user:{id:'member-1'},workspace:{id:'workspace-1',owner_id:'owner-1'}},
+    accessToken:async()=>'member-session-token',fetch:async()=>{throw new Error('must not request preview')},URL,URLSearchParams,Error,
+  });
+  await assert.rejects(nonOwner(),/Sign in as the business owner/);
+});
+
 test('payment retries bind the same idempotency key to amount and reference', () => {
   assert.match(app, /paymentRequestKey\(form\.dataset,\{amount,reference\}\)/);
   assert.match(app, /p_reference:reference/);
