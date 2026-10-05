@@ -76,6 +76,18 @@ test('edit/payment taps start information gathering and cannot approve or post a
  assert.match((await runOwnerNextAction({...input,pending:true})).answer,/finish or cancel/);
  db.tables.invoices[0].updated_at='2026-10-04T10:01:00Z';assert.equal((await runOwnerNextAction(input)).answer,NEXT_ACTION_STALE_REPLY);
 });
+test('Edit details opens a scoped menu; amount choice explains historical payment protection and due date remains editable',async()=>{
+ const ref=reference(),db=database({whatsapp_messages:[stored(ref)]});
+ const first=await runOwnerNextAction({...options(db),scope:{...scope,interactionId:mint(ref)[0].id},tools:{execute(){throw Error('Menu actions never write directly')}}});
+ assert.match(first.answer,/Choose which details to edit/);assert.deepEqual(first.buttons.map(button=>button.title),['Amount','Due date','Other fields']);
+ const nested=first.ownerNextActionRef;assert.equal(nested.choices[0].id,invoice.id);assert(nested.choices.every(choice=>choice.table==='invoices'));
+ db.tables.whatsapp_messages.push(stored(nested,{idempotency_key:'reply:invoice-edit-menu'}));
+ db.tables.payments=[{id:randomUUID(),workspace_id:workspaceId,invoice_id:invoice.id}];
+ const amount=await runOwnerNextAction({...options(db),scope:{...scope,interactionId:first.buttons[0].id},tools:{execute(){throw Error('Amount history must block writes')}}});
+ assert.match(amount.answer,/payment or reversal history is attached/);
+ const due=await runOwnerNextAction({...options(db),scope:{...scope,interactionId:first.buttons[1].id},tools:{execute(){throw Error('Due date tap only asks a question')}}});
+ assert.match(due.answer,/new due date/);assert.equal(db.tables.invoices[0].total_amount,100);assert.equal(db.tables.invoices[0].amount_paid,0);
+});
 test('deleted/foreign records, expired choices, spoofed IDs and revoked bindings never execute a tool',async()=>{
  const ref=reference(),button=mint(ref)[0];
  for(const change of [{invoices:[{...invoice,deleted_at:now.toISOString()}]},{invoices:[{...invoice,workspace_id:randomUUID()}]},{whatsapp_messages:[stored(ref,{workspace_id:randomUUID()})]},{whatsapp_messages:[stored(ref,{phone:'+12025550123'})]}]){
@@ -100,7 +112,7 @@ test('same click webhook replays its response without a model call',async()=>{
   lifecycleFactory:()=>({loadPendingDelete:async()=>({ok:true,pending:false})}),historyReader:async()=>[],ownerStoreFactory:()=>({}),
   providerFactory:()=>{modelCalls++;throw Error('A tap must not construct a provider')},logger:{info(){},warn(){},error(){}}});
  const click={...scope,interactionId:mint(ref)[0].id,messageId:'wamid.click',message:'Edit details'};
- const first=await handler(click),retry=await handler(click);assert.match(first.answer,/field and new value/);assert.equal(retry.answer,first.answer);assert.equal(retry.replayed,true);assert.equal(modelCalls,0);
+ const first=await handler(click),retry=await handler(click);assert.match(first.answer,/Choose which details to edit/);assert.deepEqual(first.buttons.map(button=>button.title),['Amount','Due date','Other fields']);assert.equal(retry.answer,first.answer);assert.deepEqual(retry.buttons,first.buttons);assert.equal(retry.replayed,true);assert.equal(modelCalls,0);
 });
 test('a typed read adds contextual choices without an additional model call; failed receipt save removes them',async()=>{
  for(const failed of [false,true]){
