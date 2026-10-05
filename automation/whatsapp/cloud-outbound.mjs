@@ -310,7 +310,7 @@ export function createWhatsAppOutbound({
         if(SESSION_PRESSURE_CONTENT.test(text))return block(logger,'owner_reply_safety_guard',{workspaceId,to,kind});
       }else try {
         const bounded=typeof body==='string'&&body.length>3790
-          ?body.slice(0,3730)+'\nÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ View the full details in your dashboard.':body;
+          ?body.slice(0,3730)+'\n… View the full details in your dashboard.':body;
         text = neutralText(bounded, kind);
       } catch (error) {
         if (!(error instanceof TypeError) || error.message !== 'collection content is disabled') throw error;

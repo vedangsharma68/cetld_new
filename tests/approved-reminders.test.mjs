@@ -126,7 +126,10 @@ test('consent/suppression and allowlist prevent Graph calls and pause the invoic
 test('actual payment completion and an explicit owner pause each prevent scheduled sends',async()=>{
   for(const action of ['paid','pause']){
     const f=await setup();try{
-      if(action==='paid')await f.db.query("insert into payments(workspace_id,invoice_id,amount,method) values($1,$2,125,'bank_transfer')",[f.scope.workspaceId,f.scope.invoiceId]);
+      if(action==='paid'){
+        await f.db.query("insert into payments(workspace_id,invoice_id,amount,method) values($1,$2,125,'bank_transfer')",[f.scope.workspaceId,f.scope.invoiceId]);
+        await f.db.query("update invoices set amount_paid=125,status='paid' where workspace_id=$1 and id=$2",[f.scope.workspaceId,f.scope.invoiceId]);
+      }
       else await f.runtime.pause(f.scope);
       await f.runtime.tick(f.scope);assert.equal(f.graph.length,0);
       const current=await f.store.getInvoice(f.scope);

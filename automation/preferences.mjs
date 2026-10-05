@@ -4,7 +4,7 @@ const REMINDER_TEMPLATE_PLACEHOLDERS = new Set(['business_name', 'customer_name'
 const REMINDER_TEMPLATE_MAX_LENGTH = 1000;
 
 function normalizeReminderPunctuation(value) {
-  return String(value ?? '').replace(/(?:,\s*)?\s*[â€”â€“]\s*/g, ', ').replace(/(?:,\s*,\s*)+/g, ', ').replace(/^\s*,\s*|\s*,\s*$/g, '').trim();
+  return String(value ?? '').replace(/(?:,\s*)?\s*[—–]\s*/g, ', ').replace(/(?:,\s*,\s*)+/g, ', ').replace(/^\s*,\s*|\s*,\s*$/g, '').trim();
 }
 
 export function sanitizeReminderTemplate(value) {
