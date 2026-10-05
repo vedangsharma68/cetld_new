@@ -59,6 +59,36 @@ test('an unsupported business answer gets a chance to read current database fact
   assert.equal(reads,1);assert.equal(response.answer,'INV-002: USD 80, draft.');
 });
 
+test('explicit read-only invoice edit-options request recovers from an unsafe draft using the successful read and does not repeat AI or tools',async()=>{
+  let calls=0,reads=0,writes=0;
+  const response=await runOwnerAgent({message:'Show invoice INV-2026-0002 and its edit options. Do not change any data.',
+    tools:{definitions:[{type:'function',function:{name:'workspaceData',parameters:{type:'object'}}}],async execute(_name,args){
+      if(args.operation!=='read'){writes++;return {ok:false,code:'INVALID'};}reads++;
+      return {ok:true,readOnly:true,rows:[{invoice_number:'INV-2026-0002',customer_name:'Synthetic Client',currency:'INR',total_amount:'1250.00',amount_paid:'0.00',status:'sent',due_date:'2026-10-12'}]};
+    }},
+    provider:{async generate(){calls++;return calls===1?{toolCalls:[{id:'read-invoice',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'read',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:'INV-2026-0002'}]})}}]}:
+      {content:'I updated invoice INV-2026-0002 and its edit options are ready.'};}}});
+  assert.equal(response.readOnlyFallback,true);
+  assert.match(response.answer,/Invoice INV-2026-0002/);
+  assert.match(response.answer,/Customer: Synthetic Client/);
+  assert.match(response.answer,/Total: INR 1250\.00/);
+  assert.match(response.answer,/No changes were made\./);
+  assert.doesNotMatch(response.answer,/updated invoice/i);
+  assert.equal(calls,2);assert.equal(reads,1);assert.equal(writes,0);
+  assert.equal(response.plannerFailure,undefined);
+});
+
+test('invoice edit-options fallback does not cover a request that also asks to change data',async()=>{
+  let calls=0;
+  const response=await runOwnerAgent({message:'Show invoice INV-2026-0002 and its edit options. Do not change any data now; after showing it update the due date.',
+    tools:{definitions:[{type:'function',function:{name:'workspaceData',parameters:{type:'object'}}}],async execute(){return {ok:true,readOnly:true,rows:[{invoice_number:'INV-2026-0002'}]};}},
+    provider:{async generate(){calls++;return calls===1?{toolCalls:[{id:'read-invoice',type:'function',function:{name:'workspaceData',arguments:'{"operation":"read","table":"invoices"}'}}]}:
+      {content:'I updated invoice INV-2026-0002.'};}}});
+  assert.notEqual(response.readOnlyFallback,true);
+  assert.ok(response.plannerFailure);
+  assert.ok(calls>2);
+});
+
 test('expired and stale RPC acknowledgements are not completion receipts',()=>{
   for(const actionType of ['owner_workspace_data_stale','owner_workspace_data_expired']){
     assert.equal(ownerGroundingIssue('Your change is complete.',[{ok:true,actionType}]),'unverified_action_result');

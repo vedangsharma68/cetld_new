@@ -5,6 +5,7 @@ import {createOwnerNextButtons,verifyOwnerNextButton,normalizeOwnerNextActionRef
 import {createOwnerReplyStore} from '../automation/whatsapp/owner-reply-store.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
+import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {PGlite} from '@electric-sql/pglite';
 import {readFile} from 'node:fs/promises';
 const workspaceId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',phone='+919871367051',ownerId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -126,6 +127,22 @@ test('a typed read adds contextual choices without an additional model call; fai
   const output=await handler(scope);assert.equal(agentCalls,1);assert.equal(providerCalls,1);assert.match(output.answer,/INV-1/);
   assert.deepEqual(output.buttons?.map(b=>b.title),failed?undefined:['Edit details','Record payment']);
  }
+});
+test('a grounded read-only recovery sends invoice details with the existing signed edit menu',async()=>{
+ const db=database();let modelCalls=0,readCalls=0,writeCalls=0;
+ const provider={async generate(){modelCalls++;return modelCalls===1?{toolCalls:[{id:'invoice-read',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'read',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:'INV-1'}]})}}]}:
+  {content:'I updated invoice INV-1 and its edit options are ready.'};}};
+ const handler=createOwnerMessageHandler({supabase:db,env,clock,authorize:async()=>true,
+  replyStore:createOwnerReplyStore({supabase:db,env,clock}),
+  pendingActionStoreFactory:()=>({loadPendingAction:async()=>null,loadPendingActionState:async()=>({generation:0})}),
+  lifecycleFactory:()=>({loadPendingDelete:async()=>({ok:true,pending:false})}),historyReader:async()=>[],
+  ownerStoreFactory:()=>({workspaceId,userId:ownerId,role:'owner',query:async()=>[]}),providerFactory:()=>provider,
+  agentFactory:async({tools,message,history})=>{const execute=tools.execute.bind(tools);tools.execute=async(name,args,options)=>{if(args.operation==='read')readCalls++;else writeCalls++;return execute(name,args,options);};return runOwnerAgent({provider,tools,message,history});},
+  logger:{info(){},warn(){},error(){}}});
+ const output=await handler({...scope,message:'Show invoice INV-1 and its edit options. Do not change any data.'});
+ assert.match(output.answer,/Invoice INV-1/);assert.match(output.answer,/No changes were made/);
+ assert.deepEqual(output.buttons?.map(button=>button.title),['Edit details','Record payment']);
+ assert.equal(modelCalls,2);assert.equal(readCalls,1);assert.equal(writeCalls,0);
 });
 test('long replies preserve typed chat without creating invalid interactive bodies',async()=>{
  const db=database(),store=createOwnerReplyStore({supabase:db,env,clock}),ref=reference();
