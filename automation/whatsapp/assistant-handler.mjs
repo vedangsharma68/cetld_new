@@ -313,8 +313,16 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         if (!claimed) return 'A newer photo replaced this review. Nothing from this photo was saved.';
         const key = `wa_invoice_${createHash('sha256').update(`${workspaceId}:${customerId}:${phone}:${token.id}`).digest('hex').slice(0, 32)}`;
         try {
-          const saved = await saveInvoice({store: await invoiceStoreFactory({supabase, workspaceId, customerId}),
-            invoice: validatedInvoice, confirmed: true, idempotencyKey: key, accounting: null, allowMissingDueDate: true});
+          const store=await invoiceStoreFactory({supabase,workspaceId,customerId});
+          const save=()=>saveInvoice({store,invoice:validatedInvoice,confirmed:true,idempotencyKey:key,accounting:null,allowMissingDueDate:true});
+          let saved;
+          try{saved=await save();}
+          catch(saveError){
+            // A lost write acknowledgement is reconciled using the same key.
+            // Retry only after reading back the committed invoice.
+            if(!await store.findAssistantInvoice({idempotencyKey:key}))throw saveError;
+            saved=await save();
+          }
           if (saved?.needsInput || !saved?.invoice) throw new TypeError('invoice save returned no invoice');
           const savedInvoice = {...saved.invoice, clientName: saved.invoice.clientName || validatedInvoice.clientName,
             printedInvoiceNumber: validatedInvoice.invoiceNumber === 'AUTO' ? null : validatedInvoice.invoiceNumber};
@@ -341,6 +349,15 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           }
           return summary;
         } catch (saveError) {
+          let persisted=null,lookupCompleted=false;
+          try{
+            const store=await invoiceStoreFactory({supabase,workspaceId,customerId});
+            persisted=await store.findAssistantInvoice({idempotencyKey:key});lookupCompleted=true;
+          }catch{}
+          if(persisted||!lookupCompleted){
+            logger?.error?.('WhatsApp invoice save requires reconciliation',{workspaceId,code:'SAVE_UNVERIFIED'});
+            return 'The invoice may have saved, but I could not finish verifying it. Check its status before retrying.';
+          }
           await pending.transitionInvoiceReview({...claimed, workspaceId, customerId, phone,
             fromStage: 'saving', action: {...action, stage: 'failed'}}).catch(() => null);
           logger?.error?.('WhatsApp invoice save failed', {workspaceId, code: String(saveError?.code || saveError?.name || 'SAVE_FAILED').slice(0, 80)});

@@ -180,7 +180,9 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     const provider=isOwnerNextButton(scope.interactionId)?null:providerFactory({...config,geminiApiKey:env.GEMINI_API_KEY,openRouterApiKey:env.OPENROUTER_API_KEY,
       zenApiKey:env.OPENCODE_ZEN_API_KEY,cfAccountId:env.CLOUDFLARE_ACCOUNT_ID,cfApiToken:env.CLOUDFLARE_API_TOKEN,
       fetchImpl,timeoutMs:15000,maxAttempts:2,healthStore});
-    const reauthorize=async input=>authorizeTurn(input);
+    // Store adapters invoke authorize() without arguments. Always authorize the
+    // verified turn, never an absent or adapter-supplied replacement scope.
+    const reauthorize=async()=>authorizeTurn(scope);
     const invoiceStore=scopeInput=>invoiceStoreFactory({...scope,...scopeInput,authorize:reauthorize});
     let tools,toolSetupIssue=null;
     onProgress('tools');
