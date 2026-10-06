@@ -112,7 +112,7 @@ function mentionedDates(text) {
   return dates;
 }
 function normalizedOwnerText(value) {
-  return String(value||'').normalize('NFKC').replace(/[’‘]/g,"'").replace(/[“”]/g,'"').replace(/\s+/g,' ').trim().toLocaleLowerCase();
+  return String(value||'').normalize('NFKC').replace(/['`]/g,"'").replace(/[""]/g,'"').replace(/\s+/g,' ').trim().toLocaleLowerCase();
 }
 function ownerRequestsInvoiceAttachment(message) {
   const text=normalizedOwnerText(message);
@@ -141,14 +141,14 @@ function amountCents(value) {
 function mentionsAmount(text,value) {
   const expected=amountCents(value);if(expected===null)return false;
   const source=String(text||'');
-  const numberPattern=/(?:₹|\$|€|£|\b(?:INR|USD|EUR|GBP|Rs\.?)\b\s*)?\s*(\d[\d,]*(?:\.\d{1,2})?)/giu;
+  const numberPattern=/(?:?|\$|?|�|\b(?:INR|USD|EUR|GBP|Rs\.?)\b\s*)?\s*(\d[\d,]*(?:\.\d{1,2})?)/giu;
   for(const match of source.matchAll(numberPattern)){
     const token=Number(match[1].replace(/,/g,''));
     if(!Number.isFinite(token)||Math.round(token*100)!==expected)continue;
     const start=match.index||0;
     const prefix=source.slice(Math.max(0,start-48),start);
     const post=source.slice(start+match[0].length,start+match[0].length+20);
-    const hasCurrency=/\b(?:INR|USD|EUR|GBP|Rs\.?)\s*$/i.test(prefix)||/[₹$€£]\s*$/.test(prefix)
+    const hasCurrency=/\b(?:INR|USD|EUR|GBP|Rs\.?)\s*$/i.test(prefix)||/[?$?�]\s*$/.test(prefix)
       ||/^\s*(?:INR|USD|EUR|GBP|Rs\.?)\b/i.test(post);
     const hasAmountLabel=/\b(?:total|amount|balance|due|price|worth|for)\b(?:\s+(?:is|of|to|at))?[\s:=-]*$/i.test(prefix)
       ||/^\s*(?:is|as)\s+(?:the\s+)?(?:total|amount|price)\b/i.test(post);
@@ -219,7 +219,7 @@ function hasNearbyNegation(text,index) {
   const prefix=source.slice(0,index);
   const boundary=Math.max(prefix.lastIndexOf('.'),prefix.lastIndexOf('!'),prefix.lastIndexOf('?'),prefix.lastIndexOf(';'),prefix.lastIndexOf(','));
   const local=prefix.slice(boundary+1);
-  return /\b(?:not|never|don't|do not|shouldn't|should not|cannot|can't|avoid)\b(?:\s+[\p{L}\p{N}'’-]+){0,3}\s*$/iu.test(local);
+  return /\b(?:not|never|don't|do not|shouldn't|should not|cannot|can't|avoid)\b(?:\s+[\p{L}\p{N}''-]+){0,3}\s*$/iu.test(local);
 }
 function mentionsPositiveWholePhrase(text,value) {
   const source=normalizedOwnerText(text).replace(/[*`]/g,'').replace(/\s+/g,' ');
@@ -285,7 +285,7 @@ function changeValueIsPresent(reply,value,alternatives=null) {
   return choices.some(choice=>typeof choice==='string'&&mentionsPositiveWholePhrase(reply,choice));
 }
 function hasPositiveYesConfirmationCue(reply) {
-  const clauses=normalizedOwnerText(reply).replace(/[*`'"“”]/g,'').split(/[.!?;]/);
+  const clauses=normalizedOwnerText(reply).replace(/[*`'"""]/g,'').split(/[.!?;]/);
   const cue=/\b(?:reply|send|type)\s+(?:the word\s+)?yes\b/gi;
   const negation=/\b(?:not|never|dont|don't|do not|shouldnt|shouldn't|should not|cannot|cant|can't|avoid)\b/i;
   return clauses.some(clause=>{
@@ -303,7 +303,7 @@ function missingRequiredConfirmationFact(reply,facts={}) {
     if(!leaves.length||leaves.some(leaf=>!changeValueIsPresent(reply,leaf.value,leaf.alternatives)))return 'confirmation_change_value';
   }
   if(facts.changeSummary){
-    const normalise=value=>normalizedOwnerText(value).replace(/→/g,'to').replace(/[*`]/g,'').replace(/\s+/g,' ');
+    const normalise=value=>normalizedOwnerText(value).replace(//g,'to').replace(/[*`]/g,'').replace(/\s+/g,' ');
     if(!normalise(reply).includes(normalise(facts.changeSummary)))return 'confirmation_change_summary';
   }
   if(facts.invoiceNumber&& !reply.toLocaleLowerCase().includes(String(facts.invoiceNumber).toLocaleLowerCase()))return 'confirmation_invoice_number';
@@ -327,7 +327,7 @@ function missingRequiredConfirmationFact(reply,facts={}) {
 }
 function ownerOnlyDefinitions() {
   return [
-    definition('getWorkspaceSettings', 'Read the verified owner’s workspace settings, including default currency and follow-up preferences. This is read-only.', {}),
+    definition('getWorkspaceSettings', 'Read the verified owner's workspace settings, including default currency and follow-up preferences. This is read-only.', {}),
     definition('getPendingOwnerAction', 'Read the current verified-owner invoice, payment, settings, deletion proposal, or durable invoice-review draft. Use this to understand a yes, cancellation, draft continuation, or delete confirmation before choosing a tool.', {}),
     definition('findOwnerCustomers', 'Search customer names and company names inside the verified owner workspace and return only safe contact fields. If the result is ambiguous or truncated, ask the owner to narrow it; never guess which contact they mean.', {query:string(160)}, ['query']),
     definition('getAIProviderConfiguration', 'Report the actual configured primary and fallback model IDs and verified providers, plus the model/provider that issued the current tool call. The final answer may be served by another configured fallback, so do not claim this planning model necessarily wrote the final answer. Do not include credentials. This is read-only.', {}),
@@ -346,15 +346,15 @@ function ownerOnlyDefinitions() {
       businessName: {type:['string','null'],maxLength:200},
       patch: {type:'object',properties:{tone:{type:'string',enum:['gentle','professional','firm']},maxReminders:{type:'integer',minimum:1,maximum:20},cadenceDays:{type:'integer',minimum:1,maximum:90},firstReminderDays:{type:'integer',minimum:0,maximum:90},contactStart:{type:'string',pattern:'^([01]\\d|2[0-3]):[0-5]\\d$'},contactEnd:{type:'string',pattern:'^([01]\\d|2[0-3]):[0-5]\\d$'},pauseOnReply:{type:'boolean'},dailySummary:{type:'boolean'}},additionalProperties:false},
     }),
-    definition('continueInvoiceReview', 'Apply only missing required facts explicitly present in the current owner message or recent owner messages after this review began. Use only when getPendingOwnerAction identifies an incomplete draft. Values are checked against the owner’s persisted words and cannot replace facts already read from the attachment. Direction can be receivable only when the owner explicitly confirms this is an invoice the business issued. This does not save the invoice; a later explicit confirmation is required.', {
+    definition('continueInvoiceReview', 'Apply only missing required facts explicitly present in the current owner message or recent owner messages after this review began. Use only when getPendingOwnerAction identifies an incomplete draft. Values are checked against the owner's persisted words and cannot replace facts already read from the attachment. Direction can be receivable only when the owner explicitly confirms this is an invoice the business issued. This does not save the invoice; a later explicit confirmation is required.', {
       invoiceNumber:string(100),customerName:string(255),invoiceDate:{type:'string',format:'date'},dueDate:{type:'string',format:'date'},
       total:{type:'number',exclusiveMinimum:0},currency:{type:'string',minLength:3,maxLength:3},direction:{type:'string',enum:['receivable']},
     }),
-    definition('confirmPendingOwnerChange', 'Apply the pending invoice, payment, invoice creation, or workspace settings proposal only if the owner’s current inbound message is an explicit confirmation. This tool also completes an active invoice-review draft proposal after the owner’s later confirmation. It checks the raw inbound message, expiry, version, and owner scope. Never call to confirm an invoice deletion.', {}),
-    definition('cancelPendingOwnerChange', 'Cancel the pending invoice, payment, invoice creation, or workspace settings proposal only if the owner’s current inbound message is an explicit cancellation. The tool checks the raw inbound message and owner scope.', {}),
-    definition('prepareInvoiceDeletion', 'Prepare deletion for exactly one unambiguous invoice. Follow the lifecycle tool’s requiresExactConfirmation value: if true, show and require the exact uppercase text DELETE followed by the invoice number; if false, ask for a later explicit yes. Never delete multiple invoices.', {target:string(160)}, ['target']),
-    definition('confirmInvoiceDeletion', 'Confirm a pending single-invoice deletion only when the owner’s raw current message satisfies the lifecycle proposal confirmation rule. The tool checks the exact raw inbound message. Never infer confirmation from the model.', {}),
-    definition('cancelInvoiceDeletion', 'Cancel a pending invoice deletion only when the owner’s raw current message explicitly cancels it.', {}),
+    definition('confirmPendingOwnerChange', 'Apply the pending invoice, payment, invoice creation, or workspace settings proposal only if the owner's current inbound message is an explicit confirmation. This tool also completes an active invoice-review draft proposal after the owner's later confirmation. It checks the raw inbound message, expiry, version, and owner scope. Never call to confirm an invoice deletion.', {}),
+    definition('cancelPendingOwnerChange', 'Cancel the pending invoice, payment, invoice creation, or workspace settings proposal only if the owner's current inbound message is an explicit cancellation. The tool checks the raw inbound message and owner scope.', {}),
+    definition('prepareInvoiceDeletion', 'Prepare deletion for exactly one unambiguous invoice. Follow the lifecycle tool's requiresExactConfirmation value: if true, show and require the exact uppercase text DELETE followed by the invoice number; if false, ask for a later explicit yes. Never delete multiple invoices.', {target:string(160)}, ['target']),
+    definition('confirmInvoiceDeletion', 'Confirm a pending single-invoice deletion only when the owner's raw current message satisfies the lifecycle proposal confirmation rule. The tool checks the exact raw inbound message. Never infer confirmation from the model.', {}),
+    definition('cancelInvoiceDeletion', 'Cancel a pending invoice deletion only when the owner's raw current message explicitly cancels it.', {}),
     definition('undoInvoiceDeletion', 'Restore one recently deleted invoice by its canonical invoice number, subject to the lifecycle recovery window and verified owner scope. The current inbound text must itself say UNDO DELETE <number>, UNDO <number>, or RESTORE <number>; a bare yes is never enough.', {invoiceNumber:string(100)}, ['invoiceNumber']),
     definition('ingestInvoiceAttachment', 'Read and process the image or PDF attached to the current owner message using the existing durable invoice review workflow. Call only when the current message has an attachment. The workflow may save a clearly identified issued invoice and retain its source file.', {}),
   ];
@@ -862,7 +862,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         if(!ownerStoreAvailable)return {ok:false,code:'UNAVAILABLE',message:SAFE_ERRORS.UNAVAILABLE};
         if(Object.keys(raw).some(key=>key!=='query')||typeof raw.query!=='string')return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
         const query=raw.query.trim();
-        if(query.length<2||query.length>160||!/^[\p{L}\p{N} .,'’()\-]+$/u.test(query))return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
+        if(query.length<2||query.length>160||!/^[\p{L}\p{N} .,''()\-]+$/u.test(query))return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
         const pattern=`ilike.%${query}%`;
         const [byName,byCompany]=await Promise.all([
           ownerStore.query('customers',{select:'id,name,company_name,email,phone,created_at',filters:{name:pattern},limit:6}),
@@ -1507,7 +1507,8 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     const turnAnchor={role:'system',content:'Answer this current owner request only: '+JSON.stringify(String(message||''))+'. Earlier turns only resolve references. A new question does not retry an earlier change. Use tool evidence from this turn. getAIProviderConfiguration is only for a current question about your AI configuration; it must not replace a business-data lookup.'};
     definitionNames=new Set(tools.definitions.map(item=>item?.function?.name).filter(name=>typeof name==='string'));
     const providerToolOptions=tools.definitions.length?{tools:tools.definitions,toolChoice:'auto'}:{};
-    const attachmentTool=tools.definitions.find(item=>item?.function?.name==='ingestInvoiceAttachment');
+    const attachmentTool=tools.definitions.find(item=>item?.function?.name==='ingestInvoiceAttachment')
+      ||tools.definitions.find(item=>item?.function?.name==='workspaceData');
     let requireAttachmentIngest=attachmentDescriptor?.available===true&&ownerRequestsInvoiceAttachment(message)&&Boolean(attachmentTool);
     const requestProvider=async({messages,toolOptions={},phase='work',maxTokens=1200,temperature=0.2})=>{
       const round={number:++diagnostics.rounds,toolNames:[],toolResults:[],outcome:'ok',safetyIssueCodes:[],logged:false};
@@ -1585,9 +1586,23 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     let readOnlyToolRounds=0;
     for(;;){
       const requiredAttachmentCall=requireAttachmentIngest;
-      const toolOptions=requiredAttachmentCall?{tools:[attachmentTool],toolChoice:'required'}:providerToolOptions;
+      const requiredAttachmentTool=requiredAttachmentCall&&attachmentTool?.function?.name==='workspaceData'
+        ?{...attachmentTool,function:{...attachmentTool.function,
+          description:'Save the owner's current attached invoice using its retained review. Do not supply invoice fields.',
+          parameters:{type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['saveAttachment']}},required:['operation']}}}
+        :attachmentTool;
+      const toolOptions=requiredAttachmentCall?{tools:[requiredAttachmentTool],toolChoice:'required'}:providerToolOptions;
       const {result:lastResult,round,calls}=await requestProvider({messages:[...transcript,turnAnchor],toolOptions,maxTokens:512});
-      if(requiredAttachmentCall&&calls.length)requireAttachmentIngest=false;
+      if(requiredAttachmentCall&&calls.length){
+        requireAttachmentIngest=false;
+        if(attachmentTool?.function?.name==='workspaceData'){
+          // A clear request to log this attached invoice has one server-selected
+          // operation. Ignore model-supplied fields so the consolidated tool
+          // contract cannot turn this into an unsupported invoice.create call.
+          const selected=calls[0];
+          calls.splice(0,calls.length,{...selected,function:{...selected.function,name:'workspaceData',arguments:JSON.stringify({operation:'saveAttachment'})}});
+        }
+      }
       lastAttemptedToolName=null;
       if(!calls.length){
         const draft=String(lastResult?.content||'').trim();
