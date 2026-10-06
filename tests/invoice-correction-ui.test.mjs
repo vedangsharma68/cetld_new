@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {invoiceBusinessFields,invoiceBusinessDetails} from '../invoice/business-fields.mjs';
+import {invoiceBusinessFields,invoiceBusinessDetails,invoiceBalanceFields} from '../invoice/business-fields.mjs';
 import {correctionValues,invoiceCorrectionFormView,readCorrectionLineItems} from '../invoice/correction-form.mjs';
 import {createInvoiceCorrectionClient} from '../invoice/correction-client.mjs';
 import {readFile} from 'node:fs/promises';
@@ -20,11 +20,12 @@ test('business display reads legacy tax minor units and prefers canonical correc
   assert.doesNotMatch(rendered,/secret_token|private/);assert.deepEqual(invoice,before);
 });
 
-test('correction form uses explicit customer binding and locks financial fields after any payment history',()=>{
+test('correction form uses explicit customer binding and allows audited money corrections while keeping classification fixed after any payment history',()=>{
   const html=invoiceCorrectionFormView({...invoice,has_payment_history:true},[{id:'customer-a',name:'John Smith'},{id:'customer-b',name:'Other customer'}],escape);
   assert.match(html,/name="customer_id" required disabled/);
-  assert.match(html,/name="total_amount"[^>]*disabled/);
-  assert.match(html,/name="notes"/);assert.doesNotMatch(html,/data-add-item|name="email"|name="debtor_phone"/);
+  assert.doesNotMatch(html,/name="total_amount"[^>]*disabled/);
+  assert.match(html,/name="currency"[^>]*disabled/);assert.match(html,/overpayment/);assert.match(html,/data-add-item/);
+  assert.match(html,/name="notes"/);assert.doesNotMatch(html,/name="email"|name="debtor_phone"/);
   assert.match(html,/audit history/);assert.match(html,/Original document number: PRINT-1/);
 });
 
@@ -85,4 +86,17 @@ test('payable and unknown-direction invoices cannot open incoming-payment or col
   }
   assert.match(app,/const canAct=x\.invoice_direction==='receivable'/);
   assert.match(app,/state\.invoices\.filter\(x=>x\.invoice_direction==='receivable'&&/);
+});
+
+test('balance projection keeps exact cents and separates outstanding from excess paid',()=>{
+ assert.deepEqual(invoiceBalanceFields({total_amount:'40.30',amount_paid:'40.10'}),{outstanding_amount:.2,overpayment_amount:0});
+ assert.deepEqual(invoiceBalanceFields({total_amount:'40.10',amount_paid:'40.30'}),{outstanding_amount:0,overpayment_amount:.2});
+ assert.deepEqual(invoiceBalanceFields({total_amount:null,amount_paid:4}),{outstanding_amount:null,overpayment_amount:null});
+});
+
+test('dashboard correction failure explains arithmetic and ledger mismatch without claiming success',async()=>{
+ const input={workspaceId:'fixture',invoiceId:'invoice',expectedUpdatedAt:'2026-10-06',requestId:'request',values:{total_amount:30}};
+ for(const [code,pattern] of [['INVALID_TOTAL',/subtotal.*agree/],['LEDGER_MISMATCH',/payments and reversals.*Reconcile/],['EXTERNAL_ACCOUNTING',/connected accounting ledger/]]){
+  await assert.rejects(createInvoiceCorrectionClient({rpc:async()=>({data:{ok:false,code}})})(input),error=>error.code===code&&pattern.test(error.message));
+ }
 });

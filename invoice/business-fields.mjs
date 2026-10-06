@@ -1,4 +1,14 @@
 // Display only: never calculate or replace persisted ledger balances.
+export function invoiceBalanceFields(invoice = {}) {
+  const minor = value => {
+    const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(String(value ?? ''));
+    return match ? BigInt(match[1])*100n+BigInt((match[2] || '').padEnd(2,'0')) : null;
+  };
+  const total = minor(invoice.total_amount), paid = minor(invoice.amount_paid);
+  if (total === null || paid === null) return {outstanding_amount:null,overpayment_amount:null};
+  return {outstanding_amount:Number(total>paid?total-paid:0n)/100,overpayment_amount:Number(paid>total?paid-total:0n)/100};
+}
+
 export function isExternallyManagedInvoice(invoice = {}) {
   const metadata = invoice.metadata || {};
   return [invoice.external_provider,invoice.external_invoice_id,metadata.accounting_provider,metadata.bookkeeping_record_id,

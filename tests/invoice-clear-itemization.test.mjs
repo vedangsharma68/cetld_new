@@ -55,7 +55,8 @@ test('real authenticated SDK/RPC clears itemization while preserving positive to
     await authorize(owner);
     await f.db.query('select public.record_invoice_payment($1,$2,10,$3,$4,false)',[workspaceId,invoice.id,'isolated-payment-fixture','Isolated fixture only']);
     const paid=(await f.db.query('select to_jsonb(i) row from invoices i where id=$1',[invoice.id])).rows[0].row;
-    await assert.rejects(correct({...input,expectedUpdatedAt:paid.updated_at,requestId:randomUUID()}),error=>error.code==='PAYMENT_GUARD');
+    const paidCleared=await correct({...input,expectedUpdatedAt:paid.updated_at,requestId:randomUUID()});
+    assert.equal(paidCleared.record.amount_paid,10);assert.deepEqual(paidCleared.record.metadata.line_items,[]);assert.equal(paidCleared.record.total_amount,100);
     assert.equal(f.errors.length,0,JSON.stringify(f.errors));
   }finally{await f.close();}
 });

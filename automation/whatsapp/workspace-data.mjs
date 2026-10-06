@@ -1,5 +1,5 @@
 import {sanitizeReminderTemplate} from '../preferences.mjs';
-import {isExternallyManagedInvoice} from '../../invoice/business-fields.mjs';
+import {isExternallyManagedInvoice,invoiceBalanceFields} from '../../invoice/business-fields.mjs';
 import {applyPaymentReversals,isMissingReversalStorage} from '../../payment-reversals.mjs';
 import {resolveWorkspaceRecord,validateCustomFields,ownerCalendar} from './workspace-records.mjs';
 import {INVOICE_CORRECTION_FIELDS,INVOICE_BUSINESS_METADATA_FIELDS,INVOICE_EXTENDED_CORRECTION_FIELDS,validateInvoiceCorrection,invoiceBusinessFields} from './invoice-corrections.mjs';
@@ -52,8 +52,8 @@ const TABLES = Object.freeze({
   },
   invoices: {
     label:'Invoices', scope:'workspace',
-    columns:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status','notes','custom_fields','created_at','updated_at',...INVOICE_BUSINESS_METADATA_FIELDS],
-    defaults:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status','custom_fields'],
+    columns:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','outstanding_amount','overpayment_amount','status','notes','custom_fields','created_at','updated_at',...INVOICE_BUSINESS_METADATA_FIELDS],
+    defaults:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','outstanding_amount','overpayment_amount','status','custom_fields'],
     filters:['id','invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status'],
     writeColumns:[...INVOICE_CORRECTION_FIELDS,'customer_email','customer_phone','status'],
   },
@@ -75,7 +75,7 @@ const TYPE_BY_COLUMN = Object.freeze({
   name:'string',company_name:'string',email:'string',phone:'string',business_name:'string',
   default_currency:'string',default_timezone:'string',primary_model:'string',fallback_model:'string',
   invoice_number:'string',customer_name:'string',issue_date:'date',due_date:'date',currency:'string',
-  total_amount:'number',amount_paid:'number',status:'string',notes:'string',amount:'number',paid_at:'date',reversed_amount:'number',net_amount:'number',reversed_at:'date',
+  total_amount:'number',amount_paid:'number',outstanding_amount:'number',overpayment_amount:'number',status:'string',notes:'string',amount:'number',paid_at:'date',reversed_amount:'number',net_amount:'number',reversed_at:'date',
   method:'string',reference:'string',file_name:'string',mime_type:'string',size_bytes:'number',created_at:'date',updated_at:'date',
 });
 
@@ -136,7 +136,7 @@ function catalog(table=null) {
       writeFields:WRITE_SCHEMA[name]||{},
       ...(['business_records','customers'].includes(name)?{writeTargetConstraints:{requiredFor:['update',...(name==='customers'?['delete']:[])],filtersRequired:true,operators:{eq:spec.filters,ilike:spec.filters.filter(field=>['name','company_name'].includes(field))},oneUnambiguousRecord:true}}:{}),
       ...(name==='business_records'?{writeValueConstraints:{create:{required:['record_type','name'],record_type:'lowercase category: one letter followed by up to 63 lowercase letters, digits or underscores',name:'nonempty text, up to 200 characters',custom_fields:'flat object of snake_case business keys and text/number/boolean/null values; extra fields must be nested here'},update:{record_type:'same category format',name:'nonempty text, up to 200 characters',custom_fields:'merges with existing fields'}}}:{}),
-      ...(name==='invoices'?{writeValueConstraints:{update:{status:['paid','unpaid'],unpaid:'Already unpaid is a read-only check. Recorded local payments require a later explicit confirmation to reopen with immutable reversal audit, original receipts preserved, no cash refund, and reminders paused. External or inconsistent ledgers are blocked.',corrections:'Direct owner mode. Typed partial patch; current row and immutable correction audit are verified before reporting success. Preserve original source facts. Any recorded payments/reversals block financial, customer, direction and number edits. Notes/dates/extracted business text stay separate from payment facts.',customer_name:'Reassign to one existing customer in this workspace; partial names allowed only when unambiguous. Never rename a shared customer implicitly.',money:'Nonnegative amounts with at most 2 decimals; total positive. Combined subtotal+tax-discount must match total; line amounts must match subtotal.',line_items:'Array up to 100 of description (1–500 chars), amount, optional quantity (>0, up to 4 decimals), unitPrice, confidence (0–1); quantity × unitPrice must match amount rounded to 2 decimals.',invoice_direction:['receivable','payable'],seller_name:'nullable text up to 255 chars',buyer_name:'nullable text up to 255 chars',payment_information:'nullable business payment instructions up to 2000 chars; never credentials'}}}:{}),
+      ...(name==='invoices'?{writeValueConstraints:{update:{status:['paid','unpaid'],unpaid:'Already unpaid is a read-only check. Recorded local payments require a later explicit confirmation to reopen with immutable reversal audit, original receipts preserved, no cash refund, and reminders paused. External or inconsistent ledgers are blocked.',corrections:'Direct owner mode. Typed partial patch; current row and immutable correction audit are verified before reporting success. Preserve original source facts. Local amount and itemization corrections preserve payments/reversals after verifying their net balance. Outstanding stays nonnegative; excess paid is explicit overpayment, with no automatic refund, transfer or allocation. Payment history keeps currency, customer, direction and number fixed. Connected accounting financial edits are blocked. Notes/dates/extracted business text stay separate from payment facts.',customer_name:'Reassign to one existing customer in this workspace; partial names allowed only when unambiguous. Never rename a shared customer implicitly.',money:'Nonnegative amounts with at most 2 decimals; total positive. Combined subtotal+tax-discount must match total; line amounts must match subtotal.',line_items:'Array up to 100 of description (1–500 chars), amount, optional quantity (>0, up to 4 decimals), unitPrice, confidence (0–1); quantity × unitPrice must match amount rounded to 2 decimals.',invoice_direction:['receivable','payable'],seller_name:'nullable text up to 255 chars',buyer_name:'nullable text up to 255 chars',payment_information:'nullable business payment instructions up to 2000 chars; never credentials'}}}:{}),
       ...(name==='workspace_settings'?{writeValueConstraints:{update:{
         owner_bot_preferences:{description:'Owner assistant style; partial fields merge with saved preferences.',assistantName:'text, 1-50 characters',tone:['concise','friendly','formal'],language:OWNER_BOT_LANGUAGE_OPTIONS.map(item=>item.value),replyLength:['short','balanced','detailed'],confirmationMode:['direct','buttons'],serviceReplySignature:'text, up to 120 characters',customInstruction:'style text, up to 500 characters'},
         follow_up_preferences:{description:'Customer reminder settings; partial fields merge with saved preferences.',tone:['gentle','professional','firm'],reminderTemplate:'up to 1000 characters; tokens {{business_name}}, {{customer_name}}, {{invoice_number}}, {{balance}}, {{due_date}}',allowedWeekdays:'array of weekday numbers 0-6',escalation:['pause','manual_review'],stopOnPayment:true}
@@ -446,7 +446,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
   const readScoped=async ({table,columns,filters,limit,offset,order},internalColumns=[],ctx,{customerName=false,customerFilter=null}={})=>{
     const spec=TABLES[table];
     const selected=columns||spec.defaults;
-    const actual=selected.filter(column=>column!=='customer_name'&&!(table==='invoices'&&INVOICE_BUSINESS_METADATA_FIELDS.includes(column))
+    const actual=selected.filter(column=>column!=='customer_name'&&!(table==='invoices'&&[...INVOICE_BUSINESS_METADATA_FIELDS,'outstanding_amount','overpayment_amount'].includes(column))
       &&!(table==='payments'&&['reversed_amount','net_amount','reversed_at'].includes(column))
       &&!(['payments','invoice_files'].includes(table)&&column==='invoice_number'));
     const selectedWithInternals=[...new Set([...actual,...internalColumns,...(table==='invoices'&&selected.some(column=>INVOICE_BUSINESS_METADATA_FIELDS.includes(column))?['metadata']:[])])];
@@ -540,7 +540,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     const finalColumns=requested.filter(column=>column!=='customer_name'
       &&!(['payments','invoice_files'].includes(table)&&column==='invoice_number'));
     const output=rows.map(row=>{
-      if(table==='invoices')row={...row,...invoiceBusinessFields(row)};
+      if(table==='invoices')row={...row,...invoiceBusinessFields(row),...invoiceBalanceFields(row)};
       const safe=Object.fromEntries(finalColumns.filter(column=>Object.hasOwn(row,column)&&!INTERNAL_KEY.test(column)).map(column=>[column,
         column==='follow_up_preferences'?safeFollowupPreferences(row[column]):row[column]]));
       if(requested.includes('customer_name'))safe.customer_name=row.customer?.name||row.customer?.[0]?.name||null;
@@ -894,7 +894,8 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         ctx.assertLive();await ctx.assertAuthorized();writeAttempted=true;
         const result=await executeDirectOperation(params,ctx);
         await ctx.assertAuthorized();ctx.assertLive();
-        return {...sanitise(result,scope),operation:params.operation,table:params.table,writeAttempted:true};
+        const visible=result?.record&&params.table==='invoices'?{...result,record:{...result.record,...invoiceBalanceFields(result.record)}}:result;
+        return {...sanitise(visible,scope),operation:params.operation,table:params.table,writeAttempted:true};
       }
       if(params.operation==='create'||params.operation==='update'||params.operation==='delete')return await propose(params,ctx);
       if(['restore','analyzeAttachment','saveAttachment','reviewAttachment','sendFile'].includes(params.operation)) {
