@@ -88,6 +88,32 @@ test('attachment analysis survives whole conversation followups and saves once w
   assert.equal(f.persisted.metadata.tax,62.75);assert.equal(f.persisted.amount_paid,0);
 });
 
+test('a clear attachment save is forced through the consolidated workspaceData save operation',async()=>{
+  let rounds=0,saveResult=null,calledArgs=null;
+  const tools={definitions:[{type:'function',function:{name:'workspaceData',description:'Read or change workspace data.',parameters:{type:'object',properties:{operation:{type:'string'}},additionalProperties:false}}}],
+    async execute(name,args){calledArgs={name,args};saveResult={ok:true,completed:true,operation:'saveAttachment',invoice:{invoiceNumber:'INV-17',clientName:'Rob & Joe Traders',total:662.75,currency:'USD'}};return saveResult;},
+    getWriteAttempted:()=>true};
+  const result=await runOwnerAgent({tools,message:'Log this invoice',clock,
+    attachmentDescriptor:{available:true,mimeType:'image/jpeg'},
+    provider:{async generate({messages,tools:offered,toolChoice}){
+      rounds++;
+      if(rounds===1){
+        assert.equal(toolChoice,'required');
+        assert.deepEqual(offered.map(item=>item.function.name),['workspaceData']);
+        assert.deepEqual(offered[0].function.parameters.required,['operation']);
+        assert.deepEqual(offered[0].function.parameters.properties.operation.enum,['saveAttachment']);
+        // Simulate a planner that tries the unsupported invoice.create shape.
+        return call({operation:'create',table:'invoices',values:{line_items:[],invoice_direction:'receivable',payment_terms:'Net 30'}});
+      }
+      saveResult=JSON.parse(messages.findLast(item=>item.role==='tool').content);
+      return {model:'fixture',content:saveResult.completed?'Saved INV-17 for Rob & Joe Traders, USD 662.75.':'The invoice review is saved for follow-up.'};
+    }}});
+  assert.deepEqual(calledArgs,{name:'workspaceData',args:{operation:'saveAttachment'}});
+  assert.ok(saveResult?.ok,JSON.stringify(saveResult));
+  assert.equal(saveResult.completed,true);
+  assert.equal(rounds,2);
+});
+
 test('repeating known review fields is a verified no-op, while changing extracted fields remains guarded',async()=>{
   const f=fixture();await f.tools('Read invoice',f.sourceId,{bytes:f.sourceBytes,mimeType:'application/pdf'}).execute('workspaceData',{operation:'analyzeAttachment'});
   const tools=f.tools('These are fine','fixture-known');

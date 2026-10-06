@@ -1507,7 +1507,8 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     const turnAnchor={role:'system',content:'Answer this current owner request only: '+JSON.stringify(String(message||''))+'. Earlier turns only resolve references. A new question does not retry an earlier change. Use tool evidence from this turn. getAIProviderConfiguration is only for a current question about your AI configuration; it must not replace a business-data lookup.'};
     definitionNames=new Set(tools.definitions.map(item=>item?.function?.name).filter(name=>typeof name==='string'));
     const providerToolOptions=tools.definitions.length?{tools:tools.definitions,toolChoice:'auto'}:{};
-    const attachmentTool=tools.definitions.find(item=>item?.function?.name==='ingestInvoiceAttachment');
+    const attachmentTool=tools.definitions.find(item=>item?.function?.name==='ingestInvoiceAttachment')
+      ||tools.definitions.find(item=>item?.function?.name==='workspaceData');
     let requireAttachmentIngest=attachmentDescriptor?.available===true&&ownerRequestsInvoiceAttachment(message)&&Boolean(attachmentTool);
     const requestProvider=async({messages,toolOptions={},phase='work',maxTokens=1200,temperature=0.2})=>{
       const round={number:++diagnostics.rounds,toolNames:[],toolResults:[],outcome:'ok',safetyIssueCodes:[],logged:false};
@@ -1585,9 +1586,23 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     let readOnlyToolRounds=0;
     for(;;){
       const requiredAttachmentCall=requireAttachmentIngest;
-      const toolOptions=requiredAttachmentCall?{tools:[attachmentTool],toolChoice:'required'}:providerToolOptions;
+      const requiredAttachmentTool=requiredAttachmentCall&&attachmentTool?.function?.name==='workspaceData'
+        ?{...attachmentTool,function:{...attachmentTool.function,
+          description:'Save the owner’s current attached invoice using its retained review. Do not supply invoice fields.',
+          parameters:{type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['saveAttachment']}},required:['operation']}}}
+        :attachmentTool;
+      const toolOptions=requiredAttachmentCall?{tools:[requiredAttachmentTool],toolChoice:'required'}:providerToolOptions;
       const {result:lastResult,round,calls}=await requestProvider({messages:[...transcript,turnAnchor],toolOptions,maxTokens:512});
-      if(requiredAttachmentCall&&calls.length)requireAttachmentIngest=false;
+      if(requiredAttachmentCall&&calls.length){
+        requireAttachmentIngest=false;
+        if(attachmentTool?.function?.name==='workspaceData'){
+          // A clear request to log this attached invoice has one server-selected
+          // operation. Ignore model-supplied fields so the consolidated tool
+          // contract cannot turn this into an unsupported invoice.create call.
+          const selected=calls[0];
+          calls.splice(0,calls.length,{...selected,function:{...selected.function,name:'workspaceData',arguments:JSON.stringify({operation:'saveAttachment'})}});
+        }
+      }
       lastAttemptedToolName=null;
       if(!calls.length){
         const draft=String(lastResult?.content||'').trim();
