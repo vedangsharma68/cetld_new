@@ -8,6 +8,8 @@ import {createOwnerDirectRuntime} from '../automation/whatsapp/owner-direct-runt
 import {createInvoiceCorrectionClient} from '../invoice/correction-client.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 import {authorizeOwnerPhone} from '../automation/whatsapp/owner-binding.mjs';
+import {planOwnerNextActions,createOwnerNextButtons,runOwnerNextAction} from '../automation/whatsapp/owner-next-actions.mjs';
+import {createOwnerReplyStore} from '../automation/whatsapp/owner-reply-store.mjs';
 
 // Production SDK, consolidated workspaceData route, verified owner runtime,
 // persisted receipt readback and the full SQL chain. All HTTP is isolated.
@@ -56,26 +58,44 @@ test('audited total corrections preserve net receipts and reversals across real 
    const readResult=await createWorkspaceDataTool({supabase,scope,authorize:async()=>true}).execute({operation:'read',table:'invoices',columns:['invoice_number','total_amount','amount_paid','outstanding_amount','overpayment_amount'],filters:[{column:'id',operator:'eq',value:id}]});
    assert.deepEqual(readResult.rows,[{invoice_number:(await read(id)).invoice_number,total_amount:90,amount_paid:40,outstanding_amount:50,overpayment_amount:0}]);
   });
-  await t.test('actual default owner handler advertises consolidated tools and routes amount-only edits into audited correction SQL',async()=>{
-   const id=await invoice('HANDLER',{paid:50}),original=await history(id),message='Correct this invoice total to USD 30',messageId='actual-handler-total';
-   await inbound(messageId,message);const outputs=[];
-   const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
+  await t.test('paid edit menu gathers a total without mutation, then the default owner handler verifies its audited correction',async()=>{
+   const id=await invoice('HANDLER',{paid:100}),original=await history(id),message='Correct this invoice total to USD 80',messageId='actual-handler-total';
+   const before=await read(id),env={NODE_ENV:'test',WHATSAPP_APP_SECRET:'isolated-menu-test'};
+   await asService();
+   const authorize=async()=>Boolean(await authorizeOwnerPhone({supabase,...scope}));
+   const reference=await planOwnerNextActions({supabase,scope,authorize,context:{params:{operation:'read',table:'invoices'},result:{ok:true,readOnly:true,rows:[before]},records:[before]}});
+   assert.deepEqual(reference.choices.map(choice=>choice.title),['Edit details']);
+   const replies=createOwnerReplyStore({supabase,env});
+   await replies.save({...scope,messageId:'paid-menu'}, {answer:'Paid invoice details',ownerNextActionRef:reference});
+   const menu=await runOwnerNextAction({supabase,scope:{...scope,interactionId:createOwnerNextButtons({scope,reference,env})[0].id},env,authorize,tools:{execute(){throw Error('Menu tap must not write');}}});
+   assert.deepEqual(menu.buttons.map(button=>button.title),['Amount','Due date','Other fields']);
+   await replies.save({...scope,messageId:'paid-amount-menu'},menu);
+   const amount=await runOwnerNextAction({supabase,scope:{...scope,interactionId:menu.buttons[0].id},env,authorize,tools:{execute(){throw Error('Amount tap must not write');}}});
+   assert.match(amount.answer,/What should the new total/);assert.match(amount.answer,/history will stay intact/);assert.match(amount.answer,/overpayment/);
+   assert.deepEqual(await read(id),before);assert.deepEqual(await history(id),original);
+   assert.equal((await db.query('select count(*)::int n from invoice_correction_audits where invoice_id=$1',[id])).rows[0].n,0);
+   await inbound(messageId,message);const outputs=[];let correctionValues={total_amount:80,currency:'USD'};
+   const handler=createOwnerMessageHandler({supabase,env,logger:{info(){},warn(){},error(){}},
     authorize:input=>authorizeOwnerPhone({supabase,...input}),
     providerFactory:()=>({async generate({messages,tools}){
      if(tools)assert.deepEqual(tools.map(tool=>tool.function.name),['getAIProviderConfiguration','workspaceData']);
      const result=messages.findLast(item=>item.role==='tool');
-     if(!result)return {model:'fixture',toolCalls:[{id:'actual-correction',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'update',table:'invoices',filters:[{column:'id',operator:'eq',value:id}],values:{total_amount:30,currency:'USD'}})}}]};
+     if(!result)return {model:'fixture',toolCalls:[{id:'actual-correction',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'update',table:'invoices',filters:[{column:'id',operator:'eq',value:id}],values:correctionValues})}}]};
      const value=JSON.parse(result.content);outputs.push(value);
-     return {model:'fixture',content:value.completed?'Invoice total corrected to USD 30. Payments remain USD 50; overpayment USD 20.':'The invoice correction failed.'};
+     return {model:'fixture',content:value.completed?'Invoice total corrected to USD 80. Payments remain USD 100; overpayment USD 20.':'The invoice correction failed.'};
     }})});
    const response=await handler({...scope,message,messageId});
    assert.equal(outputs.at(-1)?.completed,true,JSON.stringify({response,outputs,errors:f.errors}));
-   assert.match(response.answer,/overpayment USD 20/);projection(await read(id),30,50);assert.deepEqual(await history(id),original);
+   assert.match(response.answer,/overpayment USD 20/);projection(await read(id),80,100);assert.deepEqual(await history(id),original);
    assert.ok(f.requests.some(request=>request.url.endsWith('/rpc/whatsapp_correct_owner_invoice')));
    assert.equal((await db.query('select count(*)::int n from invoice_correction_audits where invoice_id=$1',[id])).rows[0].n,1);
    const requestCount=f.requests.filter(request=>request.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length;
    const replay=await handler({...scope,message,messageId});assert.equal(replay.replayed,true);
    assert.equal(f.requests.filter(request=>request.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length,requestCount);assert.deepEqual(await history(id),original);
+   const corrected=await read(id);correctionValues={currency:'INR'};
+   await inbound('handler-protected-currency','Change its currency to INR');
+   await handler({...scope,message:'Change its currency to INR',messageId:'handler-protected-currency'});
+   assert.equal(outputs.at(-1).code,'PAYMENT_GUARD');assert.deepEqual(await read(id),corrected);assert.deepEqual(await history(id),original);
   });
   await t.test('full payment and itemization correction retains original payment and protects currency/classification',async()=>{
    const id=await invoice('FULL',{paid:100,metadata:{subtotal:100,tax:0,line_items:[{description:'Original',amount:100}]}}),original=await history(id);

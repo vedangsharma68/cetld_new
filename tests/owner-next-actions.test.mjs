@@ -42,7 +42,7 @@ test('verified invoice results offer only supported current actions and file ava
  db.tables.invoice_files=[{id:randomUUID(),workspace_id:workspaceId,invoice_id:invoice.id}];
  assert.deepEqual((await planOwnerNextActions({...options(db),context})).choices.map(c=>c.title),['View INV-1','Edit details','Record payment']);
  db.tables.invoices[0].status='paid';db.tables.invoices[0].amount_paid=100;
- assert.deepEqual((await planOwnerNextActions({...options(db),context})).choices.map(c=>c.title),['View INV-1']);
+ assert.deepEqual((await planOwnerNextActions({...options(db),context})).choices.map(c=>c.title),['View INV-1','Edit details']);
  assert.equal(await planOwnerNextActions({...options(db),context,pending:true}),null);
  assert.equal(await planOwnerNextActions({...options(db),context:{...context,result:{ok:false,code:'DENIED'}}}),null);
  assert(db.calls.filter(c=>['invoices','invoice_files'].includes(c.table)).every(c=>c.filters.some(([k,v])=>k==='workspace_id'&&v===workspaceId)));
@@ -77,17 +77,18 @@ test('edit/payment taps start information gathering and cannot approve or post a
  assert.match((await runOwnerNextAction({...input,pending:true})).answer,/finish or cancel/);
  db.tables.invoices[0].updated_at='2026-10-04T10:01:00Z';assert.equal((await runOwnerNextAction(input)).answer,NEXT_ACTION_STALE_REPLY);
 });
-test('Edit details opens a scoped menu; amount choice explains historical payment protection and due date remains editable',async()=>{
+test('Edit details preserves history while amount and due-date shortcuts gather information without writes',async()=>{
  const ref=reference(),db=database({whatsapp_messages:[stored(ref)]});
  const first=await runOwnerNextAction({...options(db),scope:{...scope,interactionId:mint(ref)[0].id},tools:{execute(){throw Error('Menu actions never write directly')}}});
  assert.match(first.answer,/Choose which details to edit/);assert.deepEqual(first.buttons.map(button=>button.title),['Amount','Due date','Other fields']);
  const nested=first.ownerNextActionRef;assert.equal(nested.choices[0].id,invoice.id);assert(nested.choices.every(choice=>choice.table==='invoices'));
  db.tables.whatsapp_messages.push(stored(nested,{idempotency_key:'reply:invoice-edit-menu'}));
  db.tables.payments=[{id:randomUUID(),workspace_id:workspaceId,invoice_id:invoice.id}];
- const amount=await runOwnerNextAction({...options(db),scope:{...scope,interactionId:first.buttons[0].id},tools:{execute(){throw Error('Amount history must block writes')}}});
- assert.match(amount.answer,/payment or reversal history is attached/);
+ db.tables.invoices[0].status='paid';db.tables.invoices[0].amount_paid=100;
+ const amount=await runOwnerNextAction({...options(db),scope:{...scope,interactionId:first.buttons[0].id},tools:{execute(){throw Error('Amount tap never writes')}}});
+ assert.match(amount.answer,/What should the new total/);assert.match(amount.answer,/history will stay intact/);assert.match(amount.answer,/overpayment/);assert.match(amount.answer,/Nothing has changed/);
  const due=await runOwnerNextAction({...options(db),scope:{...scope,interactionId:first.buttons[1].id},tools:{execute(){throw Error('Due date tap only asks a question')}}});
- assert.match(due.answer,/new due date/);assert.equal(db.tables.invoices[0].total_amount,100);assert.equal(db.tables.invoices[0].amount_paid,0);
+ assert.match(due.answer,/new due date/);assert.equal(db.tables.invoices[0].total_amount,100);assert.equal(db.tables.invoices[0].amount_paid,100);
 });
 test('deleted/foreign records, expired choices, spoofed IDs and revoked bindings never execute a tool',async()=>{
  const ref=reference(),button=mint(ref)[0];
