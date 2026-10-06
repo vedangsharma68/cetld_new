@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
@@ -110,6 +110,18 @@ test('lost reply receipt reconciles consumed saved review without extracting or 
     assert.equal(f.extractions,1);
     assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,1);
     assert.equal((await f.db.query('select count(*)::int n from invoice_files')).rows[0].n,1);
+  }finally{await f.close();}
+});
+
+test('consumed historical saved review recovers its legacy scoped key without a second invoice',async()=>{
+  const f=await fixture({loseReplyReceipt:true});try{
+    assert.match((await f.turn('legacy-saved-source')).reply.answer,/Saved invoice/);
+    const pending=createWhatsAppPendingActionStore({supabase:f.supabase});
+    const receipt=await pending.loadSavedInvoiceReview({...f.scope,sourceMessageId:'legacy-saved-source'});
+    const key=`wa_invoice_${createHash('sha256').update(`${f.scope.workspaceId}:${f.scope.phone}:${receipt.id}`).digest('hex').slice(0,32)}`;
+    await f.db.query("update invoices set metadata=jsonb_set(metadata,'{assistant_idempotency_key}',to_jsonb($2::text)) where id=$1",[receipt.action.invoice.id,key]);
+    assert.match((await f.turn('legacy-saved-source')).reply.answer,/Saved invoice/);
+    assert.equal(f.extractions,1);assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,1);
   }finally{await f.close();}
 });
 

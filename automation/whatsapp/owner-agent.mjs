@@ -733,7 +733,11 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     if(action?.stage!=='saved'||!action.invoice?.id)return {ok:false,code:'DATABASE_UNAVAILABLE',message:SAFE_ERRORS.DATABASE_UNAVAILABLE};
     const store=invoiceStoreFactory(scope);
     const key=`wa_invoice_${createHash('sha256').update(`${scope.workspaceId}:${scope.customerId}:${scope.phone}:${review.id}`).digest('hex').slice(0,32)}`;
-    const persisted=await store.findAssistantInvoice({idempotencyKey:key});
+    let persisted=await store.findAssistantInvoice({idempotencyKey:key});
+    if(!persisted){
+      const legacyKey=`wa_invoice_${createHash('sha256').update(`${scope.workspaceId}:${scope.phone}:${review.id}`).digest('hex').slice(0,32)}`;
+      persisted=await store.findAssistantInvoice({idempotencyKey:legacyKey});
+    }
     if(!persisted||persisted.id!==action.invoice.id||persisted.workspace_id!==scope.workspaceId)
       return {ok:false,code:'DATABASE_UNAVAILABLE',message:'The saved invoice could not be verified. Check its status before retrying.',review:reviewFacts};
     const invoice={invoiceNumber:persisted.invoice_number,clientName:persisted.metadata?.client_name||action.invoice.clientName,
