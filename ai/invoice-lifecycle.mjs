@@ -9,7 +9,7 @@ const SAFE_CODES = new Set([
   'INVALID_REQUEST', 'OWNER_REQUIRED', 'FEATURE_UNAVAILABLE', 'INVOICE_NOT_FOUND',
   'PROPOSAL_NOT_FOUND', 'ACTION_PENDING', 'ACTION_EXPIRED', 'ACTION_STALE',
   'CONFIRMATION_REQUIRED', 'EXACT_CONFIRMATION_REQUIRED', 'INVALID_CONFIRMATION',
-  'ALREADY_DELETED', 'NOT_DELETED', 'UNDO_EXPIRED', 'INVOICE_AMBIGUOUS', 'REPLAYED', 'DATABASE_UNAVAILABLE',
+  'ALREADY_DELETED', 'NOT_DELETED', 'UNDO_EXPIRED', 'INVOICE_AMBIGUOUS', 'REPLAYED', 'DATABASE_UNAVAILABLE', 'DUPLICATE_INVOICE',
 ]);
 
 function fail(code) {
@@ -21,6 +21,7 @@ function mapRpcError(error) {
   const status = Number(error?.status || error?.statusCode || 0);
   if (['PGRST202', 'PGRST204', '42883', '42P01', '42703'].includes(code) || status === 404) return 'FEATURE_UNAVAILABLE';
   if (code === '42501' || status === 401 || status === 403) return 'OWNER_REQUIRED';
+  if (code === '23505'&&error?.message==='source invoice already exists for customer')return 'DUPLICATE_INVOICE';
   if (code === '23505') return 'ACTION_PENDING';
   if (code === '22023' || code === '23514') return 'INVALID_REQUEST';
   return status >= 500 || !status ? 'DATABASE_UNAVAILABLE' : 'INVALID_REQUEST';

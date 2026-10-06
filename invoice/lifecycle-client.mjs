@@ -19,6 +19,7 @@ const ERROR_MESSAGES = Object.freeze({
   INVALID_REQUEST: 'The invoice change request was not valid. Refresh the ledger and try again.',
   INVOICE_AMBIGUOUS: 'More than one invoice matches that number. Open the exact invoice and try again.',
   DATABASE_UNAVAILABLE: 'Invoice recovery is temporarily unavailable. Refresh the ledger and try again.',
+  DUPLICATE_INVOICE: 'This customer already has an active copy of this invoice. Review it before restoring another copy.',
 });
 
 export function createInvoiceLifecycleClient({

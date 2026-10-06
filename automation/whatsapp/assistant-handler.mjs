@@ -359,8 +359,10 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
             return 'The invoice may have saved, but I could not finish verifying it. Check its status before retrying.';
           }
           await pending.transitionInvoiceReview({...claimed, workspaceId, customerId, phone,
-            fromStage: 'saving', action: {...action, stage: 'failed'}}).catch(() => null);
+            fromStage: 'saving', action: {...action, stage: 'failed',
+              failureCode:saveError?.code==='INVOICE_ALREADY_EXISTS'?'DUPLICATE_INVOICE':'SAVE_FAILED'}}).catch(() => null);
           logger?.error?.('WhatsApp invoice save failed', {workspaceId, code: String(saveError?.code || saveError?.name || 'SAVE_FAILED').slice(0, 80)});
+          if(saveError?.code==='INVOICE_ALREADY_EXISTS')return 'This invoice is already logged for this customer. No duplicate was created.';
           return `The invoice was NOT saved because ${saveError?.code === 'UNSUPPORTED_CURRENCY' ? 'its currency is not supported' : 'cetld could not save it right now'}. Please send the photo again to retry.`;
         }
       } catch (error) {

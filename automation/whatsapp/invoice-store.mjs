@@ -60,6 +60,23 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, a
         ||reviewNumberAudit.originalExtractedNumber.length>100||reviewNumberAudit.requestedNumber!==invoice.invoiceNumber
         ||typeof reviewNumberAudit.ownerMessageId!=='string'||typeof reviewNumberAudit.ownerInstruction!=='string'))
         throw new TypeError('invalid trusted invoice number audit');
+      const printedNumber = reviewNumberAudit?.originalExtractedNumber ?? invoice.invoiceNumber;
+      if(typeof printedNumber==='string'&&printedNumber.trim()&&printedNumber!=='AUTO'){
+        // The numbering trigger generates a fresh internal number for each new
+        // save key, so the upsert conflict alone cannot detect a reuploaded
+        // source invoice. Never reuse or overwrite that invoice's financial state.
+        for(const column of ['metadata->>printed_invoice_number','metadata->>source_invoice_number','invoice_number']){
+          const existing=await activeInvoiceRows(includeDeletedAt=>{
+            let query=scoped('invoices').select('id').eq('workspace_id',workspaceId)
+              .eq('customer_id',invoiceCustomerId).eq(column,printedNumber);
+            if(column==='invoice_number')query=query.is('metadata->>printed_invoice_number',null)
+              .is('metadata->>source_invoice_number',null);
+            if(includeDeletedAt)query=query.is('deleted_at',null);
+            return query.limit(1);
+          });
+          if(existing.length)return null;
+        }
+      }
       const result = await scoped('invoices').upsert({workspace_id: workspaceId, customer_id: invoiceCustomerId,
         invoice_number: invoice.invoiceNumber, issue_date: invoice.invoiceDate, due_date: invoice.dueDate,
         currency: invoice.currency, total_amount: invoice.total, notes: invoice.notes || null,
@@ -71,6 +88,7 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, a
           debtor_phone: invoice.clientPhone || null, client_phone: invoice.clientPhone || null,
           client_phone_raw: invoice.clientPhoneRaw || null, client_email: invoice.clientEmail || null,
           line_items: invoice.lineItems || []}}, {onConflict: 'workspace_id,invoice_number', ignoreDuplicates: true}).select('*');
+      if(result?.error?.code==='23505'&&result.error.message==='source invoice already exists for customer')return null;
       return rows(result)[0] || null;
     },
     async saveDebtorPhone({invoiceId, phone, assumedConsentAt}) {
