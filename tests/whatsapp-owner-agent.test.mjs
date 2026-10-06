@@ -132,7 +132,9 @@ test('explicit invoice attachment logging requires the durable ingest tool and s
   const pending={...pendingStore(),async loadInvoiceReview(){return {action:{type:'invoice_review_draft',stage:'saved',missingFields:[],
     invoice:{id:'00000000-0000-4000-8000-000000000001',invoiceNumber:'INV-1',clientName:'John Smith',total:500,currency:'INR'}}};}};
   const tools=createOwnerAgentTools({supabase:{},scope,ownerStore:{query:async()=>[]},pending,pendingAtStart:null,lifecyclePending:null,
-    invoiceStoreFactory:()=>({}),settingsStore:{},config:{primaryModel:CF_QWEN_MODEL,fallbackModel:'gemini-3.5-flash-lite'},
+    invoiceStoreFactory:()=>({findAssistantInvoice:async()=>({id:'00000000-0000-4000-8000-000000000001',workspace_id:scope.workspaceId,
+      invoice_number:'INV-1',total_amount:500,currency:'INR',metadata:{client_name:'John Smith'}}),
+      latestInvoiceFile:async()=>null}),settingsStore:{},config:{primaryModel:CF_QWEN_MODEL,fallbackModel:'gemini-3.5-flash-lite'},
     message:'Please save the invoice in this attachment',messageId:'wamid.ingest',media:{bytes:Buffer.from('invoice'),mimeType:'application/pdf'},authorize:async()=>true,
     attachmentIngestFactory:()=>async input=>{innerMessage=input.message;return 'Legacy canned success wording that must not be sent.';},logger:{error(){}}});
   const provider={async generate({messages,tools:provided,toolChoice}){

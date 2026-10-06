@@ -9,7 +9,10 @@ Inbound normalization accepts only the provider neutral `{ events: [{ id, from, 
 The Meta Cloud API integration in `cloud-outbound.mjs` is separate from the
 reminder automation provider. It permits only allowlisted neutral invoice
 update tests after all consent, invoice-state, business-name, and durable claim
-checks. `sendReminder` remains unavailable while the Meta debt-collection
-policy review is pending. The signed webhook in `api/whatsapp.js` records
+checks. The approved reminder adapter uses the four registered utility
+templates and remains limited to QA recipients behind consent, pause,
+suppression, and durable dispatch checks. See
+[approved reminders](../../docs/approved-whatsapp-reminders.md) for the live
+proof and delivery requirements. The signed webhook in `api/whatsapp.js` records
 events before acknowledgment and routes all responses through the same
 allowlist and feature-flag checks.

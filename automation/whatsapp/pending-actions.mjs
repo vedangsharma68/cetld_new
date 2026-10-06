@@ -21,6 +21,17 @@ export function createWhatsAppPendingActionStore({supabase} = {}) {
       }), 'load invoice review');
       return (Array.isArray(row) ? row[0] : row) || null;
     },
+    async loadSavedInvoiceReview({workspaceId, customerId, phone, sourceMessageId}) {
+      if(typeof sourceMessageId!=='string'||!sourceMessageId)return null;
+      // A contact follow-up consumes the saved review. Its receipt remains
+      // readable only for this exact attachment and verified conversation.
+      return data(await supabase.from('whatsapp_pending_actions')
+        .select('id,version,workspace_id,customer_id,phone,action,created_at')
+        .eq('workspace_id',workspaceId).eq('customer_id',customerId).eq('phone',phone)
+        .eq('action->>type','invoice_review_draft').eq('action->>stage','saved')
+        .eq('action->>sourceMessageId',sourceMessageId)
+        .order('created_at',{ascending:false}).limit(1).maybeSingle(),'load saved review')||null;
+    },
     async transitionInvoiceReview({id, version, workspaceId, customerId, phone, fromStage, action}) {
       const row = data(await supabase.rpc('whatsapp_transition_invoice_review', {
         p_id: id, p_version: version, p_workspace_id: workspaceId, p_customer_id: customerId,
