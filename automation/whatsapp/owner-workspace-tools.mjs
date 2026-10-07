@@ -33,7 +33,7 @@ export function createOwnerWorkspaceTools(options = {}) {
     return filters[0].value;
   };
   const tool = createWorkspaceDataTool({...options,signal:controller.signal,
-    attachmentAvailable:Boolean(options.media||options.mediaError),
+    attachmentAvailable:Boolean(options.media||options.mediaError||options.pendingAtStart?.action?.type==='invoice_review_draft'&&!options.pendingAtStart.consumed_at&&['incomplete','proposal','saving'].includes(options.pendingAtStart.action.stage)),
     confirmationMode:options.botPreferences?.confirmationMode||'buttons',
     executeDirectOperation:(params,ctx)=>direct.execute(params,ctx),
     executeBatchOperation:(params,ctx)=>direct.executeBatch(params,ctx),
@@ -110,6 +110,7 @@ export function createOwnerWorkspaceTools(options = {}) {
     setServedModel: safety.setServedModel,
     getMedia: safety.getMedia,
     getAttachmentReviewContext:safety.getAttachmentReviewContext,
+    getAttachmentReviewContinuation:safety.getAttachmentReviewContinuation,
     getNextActionContext:tool.getNextActionContext,
     getAttachmentIngested: safety.getAttachmentIngested,
     getWriteAttempted: () => writeAttempted || tool.getWriteAttempted?.() || false,

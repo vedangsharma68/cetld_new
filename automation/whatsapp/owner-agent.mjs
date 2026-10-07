@@ -169,12 +169,26 @@ function mentionsAmount(text,value) {
   }
   return false;
 }
+function ownerCurrencyEvidence(message,value) {
+  if(typeof value!=='string'||/[?]|\b(?:maybe|perhaps|might|whether|later|tomorrow|next)\b/i.test(message))return false;
+  const codes=[...new Set([...String(message).matchAll(/\b[A-Za-z]{3}\b/g)].map(match=>match[0].toUpperCase())
+    .filter(code=>isSupportedCurrency(code)&&mentionsPositiveWholePhrase(message,code)))];
+  const denied=new RegExp('\\b(?:not|never|[a-z]+n[\'’]t|do not|should not|avoid)\\b(?:\\s+[\\p{L}\\p{N}\'’-]+){0,3}\\s+'+value+'\\b','iu');
+  return codes.length===1&&codes[0]===value.toUpperCase()&&!denied.test(message);
+}
+function ownerDirectionEvidence(message) {
+  if(/[?]|\b(?:not|never|[a-z]+n['’]t|maybe|perhaps|might|could|would|if|whether|will)\b[^.!?;]{0,50}\b(?:receivable|issue(?:d)?|created|made|sent (?:it|this|the invoice|the bill))\b/i.test(message))return false;
+  const receivable=/\b(?:this(?: invoice| bill| document| attachment)?|it|the (?:invoice|bill))\s+is\s+(?:an?\s+)?receivable\b/u;
+  return normalizedOwnerText(message).split(/[.!?;,]+|\b(?:and|but)\b/u).some(clause=>
+    (OWNER_DIRECTION_EVIDENCE.test(clause)||receivable.test(clause))
+    && !/\b(?:not|never|don't|didn't|no|maybe|perhaps|might|could|would|if|whether|will|later|tomorrow|next)\b/u.test(clause));
+}
 function ownerFactEvidence(field,value,candidates) {
   for(const candidate of candidates){
     if(!candidate?.messageId||typeof candidate.content!=='string')continue;
     let supported=false;
-    if(field==='currency')supported=typeof value==='string'&&new RegExp(`(?:^|[^A-Za-z])${value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}(?:$|[^A-Za-z])`,'i').test(candidate.content);
-    else if(field==='direction')supported=value==='receivable'&&OWNER_DIRECTION_EVIDENCE.test(candidate.content);
+    if(field==='currency')supported=ownerCurrencyEvidence(candidate.content,value);
+    else if(field==='direction')supported=value==='receivable'&&ownerDirectionEvidence(candidate.content);
     else if(field==='total')supported=mentionsAmount(candidate.content,value);
     else if(field==='invoiceDate'||field==='dueDate')supported=dateIsValid(value)&&mentionedDates(candidate.content).has(value);
     else if(field==='invoiceNumber'||field==='customerName')supported=typeof value==='string'&&mentionsWholePhrase(candidate.content,value);
@@ -569,7 +583,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     if(currentAction?.type==='invoice_review_draft'&&['incomplete','proposal'].includes(currentAction.stage)){
       const keys={invoiceNumber:'invoiceNumber',customerName:'clientName',invoiceDate:'invoiceDate',dueDate:'dueDate',total:'total',currency:'currency',direction:'direction',subtotal:'subtotal',tax:'tax',notes:'notes',lineItems:'lineItems',clientEmail:'clientEmail',clientPhone:'clientPhone'};
       if(raw&&typeof raw==='object'&&!Array.isArray(raw)&&Object.keys(raw).length
-        &&Object.entries(raw).every(([key,value])=>keys[key]&&JSON.stringify(value)===JSON.stringify(currentAction.invoice?.[keys[key]]))){
+        &&Object.entries(raw).every(([key,value])=>keys[key]&&!currentAction.missingFields?.includes(key)&&JSON.stringify(value)===JSON.stringify(currentAction.invoice?.[keys[key]]))){
         const current=await pending.loadInvoiceReview({...scope});
         if(!current||current.id!==pendingAtStart.id||current.version!==pendingAtStart.version)return {ok:false,code:'STALE',message:SAFE_ERRORS.STALE};
         return {ok:true,readOnly:true,unchanged:true,stage:currentAction.stage,missingFields:currentAction.missingFields||[],invoice:safeReviewInvoice(currentAction.invoice)};
@@ -650,9 +664,9 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
       &&dateIsValid(invoice.invoiceDate)&&(invoice.dueDate==null||dateIsValid(invoice.dueDate)&&invoice.dueDate>=invoice.invoiceDate);
     const next={...action,stage:proposalReady?'proposal':'incomplete',invoice,missingFields:[...missing],ownerProvidedFacts,
       currencySource:Object.hasOwn(ownerProvidedFacts,'currency')?'user':action.currencySource??(legacyPhotoCurrency?'photo':null)};
-    if(proposalReady)setReviewReplyRequirement(invoice);
     const saved=await pending.transitionInvoiceReview({...current,...scope,fromStage:'incomplete',action:next});
     if(!saved)return {ok:false,code:'STALE',message:SAFE_ERRORS.STALE};
+    if(proposalReady)setReviewReplyRequirement(invoice);
     return {ok:true,action:'review_updated',stage:next.stage,missingFields:next.missingFields,
       invoice:Object.fromEntries(['invoiceNumber','clientName','total','currency','dueDate']
         .filter(key=>invoice[key]!==undefined&&invoice[key]!==null).map(key=>[key,invoice[key]])),
@@ -1166,7 +1180,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         }
         if(['incomplete','proposal'].includes(action.stage)){
           const incomplete=action.stage==='incomplete';
-          if(incomplete)replyRequirement={attachmentReview:{incomplete:true,validationIssues:action.validationIssues||[],
+          if(incomplete)replyRequirement={attachmentReview:{incomplete:true,missingFields:action.missingFields||[],validationIssues:action.validationIssues||[],
             answer:invoiceReviewClarification({...action,missingFields:action.missingFields||[],validationIssues:action.validationIssues||[]})}};
           return {ok:true,outcome:'review_ready',review:reviewFacts,
             ...(incomplete?{message:replyRequirement.attachmentReview.answer}:{}),
@@ -1198,6 +1212,21 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     try{const result=await execute(name,args);if(name==='continueInvoiceReview'&&result?.ok&&result.readOnly&&result.unchanged)writeAttempted=false;return result;}catch(error){logger?.error?.('WhatsApp owner tool failed',{workspaceId:scope.workspaceId,tool:name,code:safeError(error).code});return safeError(error);}},
     setServedModel(model){servedModel=typeof model==='string'?model:null;},
     getMedia:()=>attachment,getAttachmentIngested:()=>attachmentIngested,
+    getAttachmentReviewContinuation(){
+      const action=pendingAtStart?.action;
+      if(pendingAtStart?.consumed_at||action?.type!=='invoice_review_draft'||action.stage!=='incomplete'
+        ||action.validationIssues?.length||!Array.isArray(action.missingFields)
+        ||/[?]|\b(?:maybe|perhaps|might|if|whether|later|tomorrow|next)\b/i.test(message))return null;
+      const values={};
+      if(action.missingFields.includes('currency')){
+        const codes=[...new Set([...String(message).matchAll(/\b[A-Za-z]{3}\b/g)].map(match=>match[0].toUpperCase())
+          .filter(code=>isSupportedCurrency(code)&&ownerCurrencyEvidence(message,code)))];
+        if(codes.length===1&&(new RegExp('\\b(?:use|currency(?: is| to)?)\\s+'+codes[0]+'\\b','i').test(message)
+          ||new RegExp('^\\s*'+codes[0]+'[.!]?\\s*$','i').test(message)))values.currency=codes[0];
+      }
+      if(action.missingFields.includes('direction')&&ownerDirectionEvidence(message))values.invoice_direction='receivable';
+      return Object.keys(values).length?values:null;
+    },
     getAttachmentReviewContext(){
       const action=pendingAtStart?.action;
       if(pendingAtStart?.consumed_at||action?.type!=='invoice_review_draft'
@@ -1234,6 +1263,10 @@ export function ownerReplySafetyIssue(value,requirement=null) {
   if(requirement?.attachmentReview?.incomplete){
     if(!/\b(?:nothing|no invoice) (?:was |has been )?saved\b|\b(?:not|wasn't|hasn't been) (?:saved|logged)\b/i.test(reply))return 'attachment_review_status';
     if(/\b(?:unavailable|outage|processing failed)\b/i.test(reply))return 'attachment_review_details';
+    if(requirement.attachmentReview.missingFields?.some(field=>['currency','direction'].includes(field))
+      && (!/\b(?:confirm|reply|provide|tell|send|specify)\b/i.test(reply)
+        ||requirement.attachmentReview.missingFields.includes('currency')&&!/\bcurrency\b/i.test(reply)
+        ||requirement.attachmentReview.missingFields.includes('direction')&&!/\b(?:issued|receivable|owes?)\b/i.test(reply)))return 'attachment_review_details';
     if(requirement.attachmentReview.validationIssues?.length
       &&!(/\b(?:amounts?|totals?|subtotal|tax|balance|line items?|breakdown)\b/i.test(reply)
         &&/\b(?:review|verify|corrected|clearer|confirm)\b/i.test(reply)))return 'attachment_review_details';
@@ -1609,6 +1642,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     const attachmentTool=tools.definitions.find(item=>item?.function?.name==='ingestInvoiceAttachment')
       ||tools.definitions.find(item=>item?.function?.name==='workspaceData');
     let requireAttachmentIngest=attachmentDescriptor?.available===true&&ownerRequestsInvoiceAttachment(message)&&Boolean(attachmentTool);
+    let reviewContinuation=!checkpoint&&!requireAttachmentIngest&&attachmentTool?.function?.name==='workspaceData'?tools.getAttachmentReviewContinuation?.():null;
     const requestProvider=async({messages,toolOptions={},phase='work',maxTokens=1200,temperature=0.2})=>{
       const round={number:++diagnostics.rounds,toolNames:[],toolResults:[],outcome:'ok',safetyIssueCodes:[],logged:false};
       activeRound=round;
@@ -1695,7 +1729,11 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
           description:'Save the owner’s current attached invoice using its retained review. Do not supply invoice fields.',
           parameters:{type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['saveAttachment']}},required:['operation']}}}
         :attachmentTool;
-      const toolOptions=requiredAttachmentCall?{tools:[requiredAttachmentTool],toolChoice:'required'}:providerToolOptions;
+      const requiredReview=reviewContinuation;
+      const reviewTool=requiredReview?{...attachmentTool,function:{...attachmentTool.function,
+        description:'Apply the owner-evidenced missing facts to the retained attachment review. This does not save an invoice.',
+        parameters:{type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['reviewAttachment']},table:{type:'string',enum:['invoices']},values:{type:'object',additionalProperties:false,properties:Object.fromEntries(Object.entries(requiredReview).map(([key,value])=>[key,{type:'string',enum:[value]}])),required:Object.keys(requiredReview)}},required:['operation','table','values']}}}:null;
+      const toolOptions=requiredAttachmentCall?{tools:[requiredAttachmentTool],toolChoice:'required'}:requiredReview?{tools:[reviewTool],toolChoice:'required'}:providerToolOptions;
       const {result:lastResult,round,calls}=await requestProvider({messages:[...transcript,turnAnchor],toolOptions,maxTokens:512});
       if(requiredAttachmentCall&&calls.length){
         requireAttachmentIngest=false;
@@ -1706,6 +1744,11 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
           const selected=calls[0];
           calls.splice(0,calls.length,{...selected,function:{...selected.function,name:'workspaceData',arguments:JSON.stringify({operation:'saveAttachment'})}});
         }
+      }
+      if(requiredReview&&calls.length){
+        reviewContinuation=null;
+        const selected=calls[0];
+        calls.splice(0,calls.length,{...selected,function:{...selected.function,name:'workspaceData',arguments:JSON.stringify({operation:'reviewAttachment',table:'invoices',values:requiredReview})}});
       }
       lastAttemptedToolName=null;
       if(!calls.length){

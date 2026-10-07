@@ -983,3 +983,17 @@ test('a payable or uncertain attachment draft cannot become a receivable without
     dueDate:'2026-10-20',currency:'USD',total:300});
   assert.equal(result.ok,false);assert.equal(result.code,'INVALID');assert.equal(pending.current,null);
 });
+
+
+test('retained review routing binds only current positive missing currency and direction facts',async()=>{
+ const review={id:84,version:1,action:{type:'invoice_review_draft',stage:'incomplete',missingFields:['currency','direction'],invoice:{currency:null,direction:'payable'}},consumed_at:null};
+ const toolsFor=message=>createOwnerAgentTools({supabase:{},scope,ownerStore:{query:async()=>[]},pending:{async loadInvoiceReview(){return structuredClone(review);},async transitionInvoiceReview(){throw Error('Negative owner facts must never dispatch a transition');}},pendingAtStart:structuredClone(review),message,messageId:'fixture-facts',authorize:async()=>true,logger:{error(){}}});
+ const plan=message=>toolsFor(message).getAttachmentReviewContinuation();
+ assert.deepEqual(plan('Use USD. This is a receivable from Fixture customer, and it is unpaid. Log it without sending any customer reminders.'),{currency:'USD',invoice_direction:'receivable'});
+ assert.deepEqual(plan('We issued this invoice.'),{invoice_direction:'receivable'});
+ assert.deepEqual(plan('USD'),{currency:'USD'});
+ for(const message of ['This is not a receivable.','We did not issue this invoice.','Maybe this is a receivable.','We might issue this invoice.','This will be a receivable next month.','Do not use USD.','Should I use USD?','Use USD later.','Use USD or INR.','This is a receivable, but we did not issue it.','We issued it, but this is not receivable.','Use USD. Do not use USD.',"Use USD. It isn't USD.",'Use USD. It isn’t USD.',"We issued this invoice, but it isn't a receivable.",'We issued this invoice, but it isn’t a receivable.']){
+  assert.equal(plan(message),null,message);
+  const result=await toolsFor(message).execute('continueInvoiceReview',message.includes('USD')?{currency:'USD'}:{direction:'receivable'});assert.equal(result.code,'INVALID',message);
+ }
+});
