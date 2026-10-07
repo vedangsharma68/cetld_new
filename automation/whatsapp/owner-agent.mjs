@@ -1164,9 +1164,13 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         if(action.stage==='saving')return {ok:false,code:'PENDING',message:'Invoice processing is still in progress. Do not retry the write until its status is checked.',review:reviewFacts};
         if(action.stage==='failed')return {ok:false,code:action.failureCode==='DUPLICATE_INVOICE'?'DUPLICATE_INVOICE':'UNAVAILABLE',
           message:action.failureCode==='DUPLICATE_INVOICE'?'This invoice is already logged for this customer. No duplicate was created.':'The invoice was not saved because processing failed.',review:reviewFacts};
-        if(['EXTRACTION_UNAVAILABLE','INVOICE_REVIEW_UNAVAILABLE'].includes(action.failureCode))return {ok:false,code:'UNAVAILABLE',
-          message:action.failureCode==='EXTRACTION_UNAVAILABLE'?'The invoice extraction service is unavailable right now. Nothing was saved.':'The invoice review could not be prepared right now. Nothing was saved.',
-          outcome:'not_saved',review:reviewFacts};
+        if(['EXTRACTION_UNAVAILABLE','INVOICE_REVIEW_UNAVAILABLE'].includes(action.failureCode)){
+          replyRequirement={attachmentReview:{failureCode:action.failureCode,
+            failureReason:action.failureReason==='TIMEOUT'?'TIMEOUT':'UNAVAILABLE',
+            answer:invoiceReviewClarification(action)}};
+          return {ok:false,code:'UNAVAILABLE',message:replyRequirement.attachmentReview.answer,
+            outcome:'not_saved',review:reviewFacts};
+        }
         const notReceivable=action.invoice?.direction==='payable';
         return {ok:false,code:'INVALID',message:notReceivable?'This document appears to be a bill the business owes; no invoice was saved.':'No invoice was saved from this attachment.',
           outcome:'not_saved',review:reviewFacts};
@@ -1222,6 +1226,11 @@ export function ownerReplySafetyIssue(value,requirement=null) {
     if(requirement.attachmentReview.validationIssues?.length
       &&!(/\b(?:amounts?|totals?|subtotal|tax|balance|line items?|breakdown)\b/i.test(reply)
         &&/\b(?:review|verify|corrected|clearer|confirm)\b/i.test(reply)))return 'attachment_review_details';
+  }
+  if(requirement?.attachmentReview?.failureCode){
+    if(!/\b(?:nothing|no invoice) (?:was |has been )?saved\b|\b(?:not|wasn't|hasn't been) (?:saved|logged)\b/i.test(reply))return 'attachment_review_status';
+    const timeout=requirement.attachmentReview.failureReason==='TIMEOUT';
+    if(timeout?!/\b(?:timed out|timeout)\b/i.test(reply):!/\bunavailable\b/i.test(reply))return 'attachment_review_details';
   }
   return null;
 }

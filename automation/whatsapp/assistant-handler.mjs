@@ -19,6 +19,16 @@ const fieldLabels = {invoiceNumber: 'invoice number', customerName: 'customer na
   direction: 'confirmation that your business issued the invoice'};
 
 export function invoiceReviewClarification(action) {
+  if (action.failureCode === 'EXTRACTION_UNAVAILABLE') {
+    return action.failureReason === 'TIMEOUT'
+      ? 'Invoice extraction timed out. Nothing was saved. Please resend the attachment later to retry.'
+      : 'The invoice extraction service is unavailable right now. Nothing was saved. Please resend the attachment later to retry.';
+  }
+  if (action.failureCode === 'INVOICE_REVIEW_UNAVAILABLE') {
+    return action.failureReason === 'TIMEOUT'
+      ? 'Invoice review timed out. Nothing was saved. Please resend the attachment later to retry.'
+      : 'The invoice review service is unavailable right now. Nothing was saved. Please resend the attachment later to retry.';
+  }
   const details = (action.missingFields || []).map(name => fieldLabels[name]);
   const issues = action.validationIssues || [];
   const moneyIssues = issues.some(code => /SUBTOTAL|TAX|OUTSTANDING|BALANCE|LINE_ITEMS|AMOUNT|TOTAL/.test(code));
@@ -415,12 +425,16 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         }
       } catch (error) {
         const failureCode = extracted ? 'INVOICE_REVIEW_UNAVAILABLE' : 'EXTRACTION_UNAVAILABLE';
+        const failureReason = error?.code === 'TIMEOUT' || error?.name === 'AbortError' ? 'TIMEOUT' : 'UNAVAILABLE';
+        const failureStatus = failureReason === 'TIMEOUT' ? 504
+          : Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : null;
+        const failedReview = {...(review || reviewDraft(extracted, messageId)), stage: 'canceled', failureCode,
+          failureReason, failureStatus};
         logger?.error?.('WhatsApp invoice review failed', {workspaceId, code: failureCode,
-          message: String(error?.message || '').slice(0, 200)});
+          reason: failureReason, status: failureStatus});
         await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
-          action: {...(review || reviewDraft(extracted, messageId)), stage: 'canceled', failureCode}}).catch(() => null);
-        return extracted ? "I couldn't finish preparing that invoice review right now. Please try again. Nothing was saved."
-          : "The invoice extraction service is unavailable right now. Please try again. Nothing was saved.";
+          action: failedReview}).catch(() => null);
+        return invoiceReviewClarification(failedReview);
       }
     }
     let contactPending = null;

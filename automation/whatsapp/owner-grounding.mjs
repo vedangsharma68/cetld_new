@@ -115,7 +115,10 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
   if(amounts.some(match=>!numbers.has(Number((match[1]||match[2]).replaceAll(',','')).toFixed(2))))return 'fresh_database_read_required';
   const source=JSON.stringify(results)+String(message||'');
   const ids=[...text.matchAll(/\bINV[-/][A-Z0-9][A-Z0-9/-]*/gi)].map(m=>m[0]);
-  const invoiceAbsence=/\b(?:(?:could not|couldn't|cannot|can't|unable to)\s+(?:find|locate)\s+(?:(?:the|that|this|an?|any|matching)\s+)?(?:invoice\b|INV[-/])|no matching invoices?\b|invoices?[^.!?\n]{0,65}(?:not found|does not exist|doesn't exist))/i.test(text);
+  const attachmentNotSaved=results.some(result=>result?.ok===false&&result?.review&&result?.outcome==='not_saved');
+  const contextualInvoiceAbsence=attachmentNotSaved
+    &&/\b(?:could not|couldn't|cannot|can't|unable to)\s+(?:find|locate)\s+it\b/i.test(text);
+  const invoiceAbsence=contextualInvoiceAbsence||/\b(?:(?:could not|couldn't|cannot|can't|unable to)\s+(?:find|locate)\s+(?:(?:the|that|this|an?|any|matching)\s+)?(?:invoice\b|INV[-/])|no matching invoices?\b|invoices?[^.!?\n]{0,65}(?:not found|does not exist|doesn't exist))/i.test(text);
   if(invoiceAbsence){
     const reads=results.filter(result=>result?.table==='invoices'&&result?.operation==='read'
       &&(!ids.length||ids.every(id=>id.toLowerCase()===String(result.lookupInvoiceNumber||'').toLowerCase())));
