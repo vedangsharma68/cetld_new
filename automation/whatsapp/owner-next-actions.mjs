@@ -1,5 +1,6 @@
 import {createHmac,timingSafeEqual,randomUUID} from 'node:crypto';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
+import {isExternallyManagedInvoice} from '../../invoice/business-fields.mjs';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const actions=new Set(['select','view_file','edit_details','edit_amount','edit_due_date','edit_more','record_payment','unpaid_invoices','recent_invoices','find_invoice']);
@@ -55,7 +56,7 @@ export const NEXT_ACTION_STALE_REPLY='That next action has expired or its detail
 
 async function currentRecord({supabase,scope,choice,authorize}) {
   if(!await authorize(scope))return null;
-  let query=supabase.from(choice.table).select(choice.table==='invoices'?'id,invoice_number,updated_at,status,total_amount,amount_paid,currency,due_date':'id,name,updated_at,metadata')
+  let query=supabase.from(choice.table).select(choice.table==='invoices'?'id,invoice_number,updated_at,status,total_amount,amount_paid,currency,due_date,metadata,external_provider,external_invoice_id':'id,name,updated_at,metadata')
     .eq('workspace_id',scope.workspaceId).eq('id',choice.id);
   if(choice.table==='invoices')query=query.is('deleted_at',null);
   const row=data(await query.maybeSingle());
@@ -113,7 +114,7 @@ export async function planOwnerNextActions({supabase,scope,context,pending=false
     const file=data(await supabase.from('invoice_files').select('id').eq('workspace_id',scope.workspaceId).eq('invoice_id',row.id).limit(1).maybeSingle());
     if(file)choices.push(choice(row,'view_file',cleanLabel('View '+row.invoice_number)));
   }
-  if(table==='customers'&&row.id!==scope.customerId&&row.metadata?.whatsapp_owner!==true||table==='invoices'&&['draft','sent','overdue'].includes(row.status)&&Number(row.total_amount)>Number(row.amount_paid))choices.push(choice(row,'edit_details','Edit details'));
+  if(table==='customers'&&row.id!==scope.customerId&&row.metadata?.whatsapp_owner!==true||table==='invoices'&&['draft','sent','overdue','paid'].includes(row.status))choices.push(choice(row,'edit_details','Edit details'));
   if(table==='invoices'&&['draft','sent','overdue'].includes(row.status)&&Number(row.total_amount)>Number(row.amount_paid))choices.push(choice(row,'record_payment','Record payment'));
   return await authorize(scope)&&choices.length?refFor(choices,clock):null;
 }
@@ -136,6 +137,7 @@ export async function runOwnerNextAction({supabase,scope,env=process.env,clock=(
   if(choice.action==='edit_details'){
     if(choice.table==='customers'&&(record.id===scope.customerId||record.metadata?.whatsapp_owner===true))return {answer:NEXT_ACTION_STALE_REPLY};
     if(choice.table==='invoices'){
+      if(!['draft','sent','overdue','paid'].includes(record.status))return {answer:NEXT_ACTION_STALE_REPLY};
       const choices=[['edit_amount','Amount'],['edit_due_date','Due date'],['edit_more','Other fields']]
         .map(([action,title])=>({action,title,table:'invoices',id:choice.id,updatedAt:choice.updatedAt}));
       const reference=refFor(choices,clock),buttons=createOwnerNextButtons({scope,reference,env,clock});
@@ -145,15 +147,16 @@ export async function runOwnerNextAction({supabase,scope,env=process.env,clock=(
     return {answer:`What details should I change for ${label}? Tell me the field and new value. Nothing has changed yet.`};
   }
   if(choice.action==='edit_amount') {
-    if(!['draft','sent','overdue'].includes(record.status)||Number(record.total_amount)<=Number(record.amount_paid))return {answer:NEXT_ACTION_STALE_REPLY};
+    if(!['draft','sent','overdue','paid'].includes(record.status))return {answer:NEXT_ACTION_STALE_REPLY};
+    if(isExternallyManagedInvoice(record))return {answer:`${label} is managed by connected accounting. Correct its amount in that ledger and sync it here. Nothing has changed.`};
     const [payment,reversal]=await Promise.all([
       supabase.from('payments').select('id').eq('workspace_id',scope.workspaceId).eq('invoice_id',record.id).limit(1).maybeSingle(),
       supabase.from('payment_reversals').select('id').eq('workspace_id',scope.workspaceId).eq('invoice_id',record.id).limit(1).maybeSingle(),
     ]);
     if(!await authorize(scope))return {answer:NEXT_ACTION_STALE_REPLY};
     if(payment.error||reversal.error)return {answer:'I could not verify this invoice’s payment history, so I have not started an amount change.'};
-    if(payment.data||reversal.data)return {answer:`I can’t change the total for ${label} because payment or reversal history is attached. Those entries must stay intact; an amount correction needs a separately audited accounting adjustment.`};
-    return {answer:`What should the new total for ${label} be? It is currently ${record.currency||''} ${record.total_amount}. I will check the totals and ask before saving.`};
+    const history=payment.data||reversal.data?' Payment and reversal history will stay intact; excess paid will be shown as overpayment, with no automatic refund, transfer or allocation.':'';
+    return {answer:`What should the new total for ${label} be? It is currently ${record.currency||''} ${record.total_amount}.${history} I will verify the ledger and totals and follow your confirmation preference before saving. Nothing has changed yet.`};
   }
   if(choice.action==='edit_due_date')return {answer:`What should the new due date for ${label} be? It is currently ${record.due_date||'not set'}. Nothing has changed yet.`};
   if(choice.action==='edit_more')return {answer:`What other details should I change for ${label}? Tell me the field and new value. Nothing has changed yet.`};
