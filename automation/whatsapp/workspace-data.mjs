@@ -256,6 +256,17 @@ function validateFilter(filter,table) {
   if(operator==='ilike'&&typeof value!=='string')throw new TypeError('invalid pattern');
   return {column,operator,value};
 }
+function repairableReadFilterObject(filters,table){
+  if(!ownObject(filters))return false;
+  try{
+    if(Object.hasOwn(filters,'column')||Object.hasOwn(filters,'field'))validateFilter(filters,table);
+    else{
+      const entries=Object.entries(filters);if(!entries.length||entries.length>8)return false;
+      for(const [column,value]of entries)validateFilter({column,operator:'eq',value},table);
+    }
+    return true;
+  }catch{return false;}
+}
 function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
   if(!ownObject(raw))throw new TypeError('invalid arguments');
   if(containsForbiddenIdentity(raw,scope))throw new TypeError('scope identity supplied');
@@ -936,7 +947,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     // rejected plan once here, before the outer loop caches the final result.
     // Only a server-validated preflight rejection with no dispatch qualifies.
     const structuredBatch=Array.isArray(raw?.operations)||raw?.operation==='batch'||raw?.operation==='update'&&Array.isArray(raw?.filters)&&raw.filters.some(filter=>filter?.operator==='in');
-    const readFilterRepair=raw?.operation==='read'&&Object.hasOwn(TABLES,raw?.table||'')
+    const readFilterRepair=raw?.operation==='read'&&Object.hasOwn(TABLES,raw?.table||'')&&repairableReadFilterObject(raw.filters,raw.table)
       &&result?.validationCode==='FILTER_SHAPE'&&typeof planRequest==='function'&&String(message).trim();
     const repairRequest=typeof raw?.request==='string'?raw:readFilterRepair
       ?{request:String(message).slice(0,1200),operation:'read',table:raw.table}
