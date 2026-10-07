@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePdfInvoiceText } from '../ai/pdf-invoice-parser.mjs';
+import { parsePdfInvoiceText, parsePrintedInvoicePaymentStatus } from '../ai/pdf-invoice-parser.mjs';
 
 const bioplexText = `
 Bioplex
@@ -120,6 +120,21 @@ If you have questions, contact Marianne de la Guillaume, +33 140 260294,
 marianne.guillaume @bioplex.fr
 THANK YOU FOR YOUR BUSINESS!
 `;
+
+test('printed payment-status recognition keeps negations and ignores conditional payment prose',()=>{
+ assert.equal(parsePrintedInvoicePaymentStatus('NOT PAID').status,'unpaid');
+ assert.equal(parsePrintedInvoicePaymentStatus('Payment status: PARTIALLY PAID').status,'partial');
+ assert.equal(parsePrintedInvoicePaymentStatus('PAID\nUNPAID').status,'conflicting');
+ assert.equal(parsePrintedInvoicePaymentStatus('If paid, ignore this invoice.\nPayment due in 30 days.\nPaid by the customer?'),null);
+});
+
+test('printed total remains separate from zero or partial remaining balance',()=>{
+ for(const [status,balance] of [['PAID',0],['PARTIALLY PAID',50]]) {
+  const result=parsePdfInvoiceText(`INVOICE\nInvoice Number: STATUS-118\nFROM: Acme\nBILL TO: Northwind\nQTY DESCRIPTION UNIT PRICE AMOUNT\n1 Service 100.00 100.00\nSubtotal 100.00\nTax 18.00\nTotal 118.00\nTotal Due ${balance}.00\n${status}\nCurrency: USD`);
+  assert.ok(result);assert.equal(result.total.value,118);assert.equal(result.outstandingAmount.value,balance);
+  assert.equal(result.paymentStatus.value,status==='PAID'?'paid':'partial');
+ }
+});
 
 test('parses all 28 printed rows and reconciles subtotal, tax, shipping, and total', () => {
   const result = parsePdfInvoiceText(bioplexText);

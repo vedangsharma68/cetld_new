@@ -236,15 +236,30 @@ function totals(lines) {
     else if (/^\s*(?:DISCOUNT|COUPON)\b/i.test(line)) discounts += Math.abs(amount);
 
     let rank = -1;
-    if (/^\s*(?:AMOUNT|BALANCE|REMAINING)\s+DUE\b/i.test(line)) rank = 5;
+    if (/^\s*(?:AMOUNT|BALANCE|REMAINING)\s+DUE\b/i.test(line)) rank = 1;
     else if (/^\s*(?:GRAND\s+TOTAL|INVOICE\s+TOTAL)\b/i.test(line)) rank = 4;
-    else if (/^\s*TOTAL\s+DUE\b/i.test(line)) rank = 3;
-    else if (/^\s*TOTAL\b/i.test(line)) rank = 2;
+    else if (/^\s*TOTAL\s+DUE\b/i.test(line)) rank = 2;
+    else if (/^\s*TOTAL\b/i.test(line)) rank = 3;
     if (rank >= 0 && rank >= totalRank) { total = amount; totalRank = rank; }
     if (/^\s*(?:AMOUNT|BALANCE|REMAINING)\s+DUE\b|^\s*TOTAL\s+DUE\b/i.test(line)) outstanding = amount;
   }
   if (subtotal === null || total === null) return null;
   return { subtotal, tax, charges, hasCharges, discounts, total, outstanding };
+}
+
+/** Recognize explicit status lines only, including selectable-text watermarks. */
+export function parsePrintedInvoicePaymentStatus(text) {
+  if (typeof text !== 'string') return null;
+  const evidence = [];
+  const statuses = new Set();
+  for (const line of text.replace(/\r\n?/g, '\n').split('\n').map(clean)) {
+    const value = line.replace(/^(?:PAYMENT\s+STATUS|STATUS)\s*[:=-]\s*/i, '').replace(/[.!]$/, '');
+    const status = /^(?:PAID|PAID\s+IN\s+FULL)$/i.test(value) ? 'paid'
+      : /^(?:UNPAID|NOT\s+PAID)$/i.test(value) ? 'unpaid'
+      : /^PARTIALLY\s+PAID$/i.test(value) ? 'partial' : null;
+    if (status) { statuses.add(status); evidence.push(line); }
+  }
+  return statuses.size ? {status: statuses.size === 1 ? [...statuses][0] : 'conflicting', text: evidence.slice(0, 3).join('; ').slice(0, 500), confidence: 0.99} : null;
 }
 
 function findCurrency(lines) {
@@ -315,8 +330,13 @@ export function parsePdfInvoiceText(text, { businessName = '' } = {}) {
     direction: classifyDirection(lines, businessName, buyerBlock, sellerBlock),
   };
 
+  const payment = parsePrintedInvoicePaymentStatus(text);
   return {
     ...scalarFields(values),
+    ...(payment ? {
+      paymentStatus: wrapped(payment.status),
+      paymentStatusEvidence: wrapped(payment.text),
+    } : {}),
     lineItems: { value: lineItems, confidence: 0.99 },
   };
 }
