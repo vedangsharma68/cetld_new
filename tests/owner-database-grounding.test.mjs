@@ -1,5 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+
+test('verified payment history rejects a false absence claim even with a positive current paid balance',()=>{
+  const result={ok:true,readOnly:true,operation:'read',table:'invoices',rows:[{invoice_number:'INV-1',amount_paid:20}],
+    paymentHistory:{ok:true,readOnly:true,rows:[{invoice_number:'INV-1',amount:20,net_amount:20}]}};
+  assert.equal(ownerGroundingIssue('There is no payment history.',[result]),'fresh_database_read_required');
+});
 import {ownerGroundingIssue,ownerEvidence} from '../automation/whatsapp/owner-grounding.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 

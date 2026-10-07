@@ -157,6 +157,30 @@ test('serialized read filters decode only bounded catalog-valid comparisons and 
   assert.equal(result.ok,false);assert.equal(result.validationCode,'FILTER_SHAPE');assert.equal(writes,0);assert.equal(supabase.calls.length,0);
 });
 
+test('explicit invoice history reads attach scoped receipts and withhold facts after authorization loss',async()=>{
+  const invoice={id:'33333333-3333-4333-8333-333333333333',workspace_id:scope.workspaceId,invoice_number:'INV-1',currency:'USD',total_amount:118,amount_paid:0,updated_at:'2026-10-01T00:00:00Z'};
+  const payment={id:'44444444-4444-4444-8444-444444444444',workspace_id:scope.workspaceId,invoice_id:invoice.id,amount:118};
+  const foreign={...payment,id:'55555555-5555-4555-8555-555555555555',workspace_id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',amount:999};
+  const reversal={workspace_id:scope.workspaceId,invoice_id:invoice.id,payment_id:payment.id,amount:118,recorded_at:'2026-10-01T00:00:00Z'};
+  const args={operation:'read',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:'INV-1'}]};
+  const message='Show invoice INV-1 and its payment history. Do not change anything.';
+  const supabase=fakeSupabase({rows:{invoices:[invoice],payments:[payment,foreign],payment_reversals:[reversal]}});
+  const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true,message});
+  const result=await tool.execute(args);
+  assert.equal(result.ok,true);assert.equal(result.paymentHistory.invoiceNumber,'INV-1');assert.equal(result.paymentHistory.currency,'USD');
+  assert.equal(result.paymentHistory.rows.length,1);assert.equal(result.paymentHistory.rows[0].amount,118);
+  assert.equal(result.paymentHistory.rows[0].reversed_amount,118);assert.equal(result.paymentHistory.rows[0].net_amount,0);
+  assert.equal(tool.getWriteAttempted(),false);assert.doesNotMatch(JSON.stringify(result),new RegExp(foreign.workspace_id));
+  const denied=fakeSupabase({rows:{invoices:[invoice],payments:[payment]}});
+  const revoked=await createWorkspaceDataTool({supabase:denied,scope,message,
+    authorize:async()=>!denied.calls.some(call=>call.table==='payments')}).execute(args);
+  assert.equal(revoked.ok,false);assert.equal(revoked.rows,undefined);assert.equal(revoked.paymentHistory,undefined);
+  const changedRows={invoices:[invoice],payments:[payment],payment_reversals:[reversal]},changed=fakeSupabase({rows:changedRows}),originalFrom=changed.from;
+  changed.from=table=>{if(table==='payments')changedRows.invoices=[{...invoice,updated_at:'2026-10-02T00:00:00Z'}];return originalFrom(table);};
+  const stale=await createWorkspaceDataTool({supabase:changed,scope,message,authorize:async()=>true}).execute(args);
+  assert.equal(stale.ok,false);assert.equal(stale.code,'STALE');assert.equal(stale.rows,undefined);assert.equal(stale.paymentHistory,undefined);
+});
+
 test('direct record preflight exposes repairable schema errors without attempting a write',async()=>{
   let writes=0;
   const tool=createWorkspaceDataTool({supabase:fakeSupabase(),scope,authorize:async()=>true,confirmationMode:'direct',message:'Create QA record',messageId:'isolated-preflight',

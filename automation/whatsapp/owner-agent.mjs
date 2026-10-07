@@ -1466,6 +1466,37 @@ function readOnlyInvoiceOptionsFallback(message,evidence=[]){
   return lines.join('\n');
 }
 
+function readOnlyInvoiceHistoryFallback(message,evidence=[]){
+  const text=String(message||'').trim();
+  if(!/^(?:please\s+)?(?:show|view|display)\b/i.test(text)||!/\binvoice\b/i.test(text)
+    ||!/\b(?:payments?\s+(?:history|records)|history\s+of\s+payments?)\b/i.test(text)
+    ||!/\b(?:do not|don't|never)\s+(?:change|modify|update|save|record|send)\b/i.test(text))return null;
+  const affirmative=text.replace(/\b(?:do not|don't|never)\b[^.!?;]{0,100}(?:[.!?;]|$)/gi,' ');
+  if(/\b(?:change|modify|update|save|record|send|create|delete|pay|set|mark)\b/i.test(affirmative))return null;
+  const success=evidence.filter(result=>result?.ok===true);
+  if(!success.length||success.some(result=>result.readOnly!==true))return null;
+  const candidates=[...new Map(success.filter(result=>result.table==='invoices'&&result.operation==='read'
+    &&result.rows?.length===1&&result.truncated!==true&&result.paymentHistory?.ok===true)
+    .map(result=>[JSON.stringify({rows:result.rows,history:result.paymentHistory}),result])).values()];
+  if(candidates.length!==1)return null;
+  const result=candidates[0],history=result.paymentHistory,number=history.invoiceNumber,row=history.invoice;
+  if(history.readOnly!==true||history.table!=='payments'||history.operation!=='read'||!Array.isArray(history.rows)
+    ||!number||row?.invoice_number!==number||history.requestedInvoiceMatched!==true
+    ||result.rows[0].invoice_number!==undefined&&result.rows[0].invoice_number!==number
+    ||history.rows.some(payment=>payment.invoice_number!==number)||!/^[A-Z]{3}$/.test(history.currency))return null;
+  const amount=value=>/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(String(value??''))?`${history.currency} ${value}`:null;
+  if(history.rows.some(payment=>!['amount','reversed_amount','net_amount'].every(key=>amount(payment[key]))))return null;
+  const lines=[`Invoice ${number}`];
+  if(amount(row.total_amount))lines.push(`Total: ${amount(row.total_amount)}`);
+  if(amount(row.amount_paid))lines.push(`Current paid balance: ${amount(row.amount_paid)}`);
+  lines.push(`Payment history: ${history.rows.length}${history.truncated?' or more':''} ${history.rows.length===1&&!history.truncated?'record':'records'} returned.`);
+  for(const payment of history.rows.slice(0,3))lines.push(`Original payment: ${amount(payment.amount)}; Reversed: ${amount(payment.reversed_amount)}; Net: ${amount(payment.net_amount)}.`);
+  if(history.rows.length>3||history.truncated)lines.push('Showing the first three records; more history is available.');
+  lines.push('No changes were made.');
+  const reply=lines.join('\n');
+  return ownerReplySafetyIssue(reply)||ownerGroundingIssue(reply,evidence,message)?null:reply;
+}
+
 export async function runOwnerAgent({provider,config,store,tools,history=[],message,signal,deadlineAt,budgetMs=OWNER_AGENT_MAX_BUDGET_MS,clock=()=>new Date(),timezone='UTC',
   toolSetupIssue=null,historyIssue=null,settingsIssue=null,attachmentDescriptor={available:false},logger=null,traceId=null,
   checkpoint=null,onCheckpoint=null,allowDeferred=false,botPreferences=null,initialToolResults=[]}={}) {
@@ -1680,7 +1711,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         round.outcome='error';round.safetyIssueCodes.push(issue);addSafetyIssue(issue);
         emitRound(round);activeRound=null;
         if(['unverified_action_result','fresh_database_read_required'].includes(issue)&&!writeMayHaveBeenAttempted()){
-          const fallback=readOnlyInvoiceOptionsFallback(message,evidence);
+          const fallback=readOnlyInvoiceOptionsFallback(message,evidence)||readOnlyInvoiceHistoryFallback(message,evidence);
           if(fallback)return resultFor(fallback,{readOnlyFallback:true});
         }
         if(repair===repairLimit){
@@ -1763,7 +1794,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         round.outcome='error';round.safetyIssueCodes.push(issue);addSafetyIssue(issue);
         emitRound(round);activeRound=null;
         if(['unverified_action_result','fresh_database_read_required'].includes(issue)&&!writeMayHaveBeenAttempted()){
-          const fallback=readOnlyInvoiceOptionsFallback(message,evidence);
+          const fallback=readOnlyInvoiceOptionsFallback(message,evidence)||readOnlyInvoiceHistoryFallback(message,evidence);
           if(fallback)return resultFor(fallback,{readOnlyFallback:true});
         }
         transcript.push({role:'assistant',content:String(lastResult?.content||'')});
