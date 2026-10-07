@@ -100,7 +100,7 @@ function definition() {
   // model request; describe exposes it when the model needs unfamiliar fields.
   const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA)},filters:{type:'array',items:{type:'object'}},values:{type:'object'}},required:['operation','table','values']};
   return {type:'function',function:{name:'workspaceData',
-    description:'Data fields/request; describe schema. Attached invoice: saveAttachment extracts/reviews/saves, analyzeAttachment reads; operation only, no table/values/create. Text invoices: invoice_number/customer_name/total_amount/currency/dates; status update only. business_records: record_type/name. custom_fields: snake_case scalars, merged. Customers: name/email/phone. Filters column/operator/value. pending/confirm/cancel',
+    description:'Describe. Invoice update: total_amount/subtotal/tax/discount/line_items; invoice_number eq. Status separate. Attachments: saveAttachment/analyzeAttachment, operation only.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic create/update batch. Read targets; use unique concrete numbers from scoped examples. No status changes/deletes. One patch per target; filters have column/operator/value.'},
@@ -113,13 +113,28 @@ function definition() {
             operator:{type:'string',enum:FILTER_OPERATORS},
             value:{type:['string','number','boolean','null','array'],items:{type:['string','number','boolean','null']}}},
           required:['column','operator','value']}},
-        values:{type:'object'},
+        values:{type:'object',properties:{total_amount:{type:'number'},subtotal:{type:'number'},line_items:{type:'array',items:{type:'object',properties:{description:{type:'string'},amount:{type:'number'}},required:['description','amount']}}}},
         limit:{type:'integer',minimum:1,maximum:MAX_LIMIT},
         offset:{type:'integer',minimum:0,maximum:100000},
         order:{type:'object',additionalProperties:false,
           properties:{column:{type:'string'},direction:{type:'string',enum:['asc','desc']}},required:['column','direction']},
       },
     }}};
+}
+
+function invoiceCorrectionValueSchema(){
+  const money={type:'number',minimum:0,description:'Amount with at most two decimal places; no currency symbols or thousands separators.'};
+  const text={type:'string',minLength:1};
+  return {type:'object',additionalProperties:false,properties:{
+    invoice_number:{...text,maxLength:100},customer_id:{type:'string',format:'uuid'},customer_name:{...text,maxLength:255},
+    issue_date:{type:'string',format:'date'},due_date:{type:['string','null'],format:'date'},currency:{type:'string',pattern:'^[A-Z]{3}$'},
+    total_amount:{...money,exclusiveMinimum:0},subtotal:money,tax:money,discount:money,
+    notes:{type:['string','null'],maxLength:4000},custom_fields:{type:'object',description:'Flat snake_case business fields; no system or payment fields.'},
+    line_items:{type:'array',maxItems:100,items:{type:'object',additionalProperties:false,required:['description','amount'],properties:{
+      description:{...text,maxLength:500},amount:money,quantity:{type:['number','null'],exclusiveMinimum:0,maximum:1000000},
+      unitPrice:{type:['number','null'],minimum:0},confidence:{type:['number','null'],minimum:0,maximum:1}}}},
+    invoice_direction:{type:'string',enum:['receivable','payable']},seller_name:{type:['string','null'],maxLength:255},buyer_name:{type:['string','null'],maxLength:255},payment_information:{type:['string','null'],maxLength:2000},
+  }};
 }
 
 function catalog(table=null) {
@@ -134,6 +149,7 @@ function catalog(table=null) {
     tables:Object.fromEntries(Object.entries(TABLES).filter(([name])=>!table||name===table).map(([name,spec])=>[name,{
       label:spec.label,columns:spec.columns,filters:spec.filters,
       writeFields:WRITE_SCHEMA[name]||{},
+      ...(name==='invoices'?{correctionValuesSchema:invoiceCorrectionValueSchema()}:{}),
       ...(['business_records','customers'].includes(name)?{writeTargetConstraints:{requiredFor:['update',...(name==='customers'?['delete']:[])],filtersRequired:true,operators:{eq:spec.filters,ilike:spec.filters.filter(field=>['name','company_name'].includes(field))},oneUnambiguousRecord:true}}:{}),
       ...(name==='business_records'?{writeValueConstraints:{create:{required:['record_type','name'],record_type:'lowercase category: one letter followed by up to 63 lowercase letters, digits or underscores',name:'nonempty text, up to 200 characters',custom_fields:'flat object of snake_case business keys and text/number/boolean/null values; extra fields must be nested here'},update:{record_type:'same category format',name:'nonempty text, up to 200 characters',custom_fields:'merges with existing fields'}}}:{}),
       ...(name==='invoices'?{writeValueConstraints:{update:{status:['paid','unpaid'],unpaid:'Already unpaid is a read-only check. Recorded local payments require a later explicit confirmation to reopen with immutable reversal audit, original receipts preserved, no cash refund, and reminders paused. External or inconsistent ledgers are blocked.',corrections:'Direct owner mode. Typed partial patch; current row and immutable correction audit are verified before reporting success. Preserve original source facts. Local amount and itemization corrections preserve payments/reversals after verifying their net balance. Outstanding stays nonnegative; excess paid is explicit overpayment, with no automatic refund, transfer or allocation. Payment history keeps currency, customer, direction and number fixed. Connected accounting financial edits are blocked. Notes/dates/extracted business text stay separate from payment facts.',customer_name:'Reassign to one existing customer in this workspace; partial names allowed only when unambiguous. Never rename a shared customer implicitly.',money:'Nonnegative amounts with at most 2 decimals; total positive. Combined subtotal+tax-discount must match total; line amounts must match subtotal.',line_items:'Array up to 100 of description (1–500 chars), amount, optional quantity (>0, up to 4 decimals), unitPrice, confidence (0–1); quantity × unitPrice must match amount rounded to 2 decimals.',invoice_direction:['receivable','payable'],seller_name:'nullable text up to 255 chars',buyer_name:'nullable text up to 255 chars',payment_information:'nullable business payment instructions up to 2000 chars; never credentials'}}}:{}),
@@ -288,6 +304,21 @@ function decodeReadFilters(value,table){
   if(!Array.isArray(decoded)||decoded.length>8)throw new TypeError('invalid filters');
   return decoded.map(filter=>validateFilter(filter,table));
 }
+function exactInvoiceNumberTarget(filters){
+  if(!Array.isArray(filters)||filters.length!==1)return null;
+  const filter=filters[0];
+  return exactKeys(filter,['column','operator','value'])&&filter.column==='invoice_number'&&filter.operator==='eq'
+    &&typeof filter.value==='string'&&filter.value.trim()&&filter.value.length<=100&&!/[\x00-\x1f\x7f]/.test(filter.value)?filter:null;
+}
+function decodeInvoiceCorrectionFilters(value){
+  if(typeof value!=='string')return value;
+  if(value.length>8192)throw new TypeError('invalid filters');
+  let decoded;try{decoded=JSON.parse(value);}catch{throw new TypeError('invalid filters');}
+  // A serialized canonical equality is the same target, never a map, alias,
+  // broad comparison, status action or multi-invoice write.
+  if(!exactInvoiceNumberTarget(decoded))throw new TypeError('invalid filters');
+  return decoded;
+}
 // Existing validation logs receive bounded allowlisted structure, never values
 // or unknown field names. Decoding a string here cannot change execution.
 function filterStructure(value,table,depth=0,decodeString=true){
@@ -360,7 +391,8 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
     const filters=args.filters===undefined?[]:args.filters;
     let normalizedFilters;
     try{
-      const structuredFilters=operation==='read'?decodeReadFilters(filters,table||'invoices'):filters;
+      const structuredFilters=operation==='read'?decodeReadFilters(filters,table||'invoices')
+        :operation==='update'&&table==='invoices'&&ownObject(args.values)&&!Object.hasOwn(args.values,'status')?decodeInvoiceCorrectionFilters(filters):filters;
       if(containsForbiddenIdentity(structuredFilters,scope))throw new TypeError('scope identity supplied');
       if(!Array.isArray(structuredFilters)||structuredFilters.length>8)throw new TypeError('invalid filters');
       normalizedFilters=structuredFilters.map(filter=>validateFilter(filter,table||'invoices'));
@@ -894,6 +926,11 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       try { await ctx.assertAuthorized(); }
       catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
       const params=await normalizeRequest(raw,scope,planRequest,ctx,validationFeedback);
+      if(executionOptions.invoiceCorrectionTarget){
+        const target=exactInvoiceNumberTarget(params.filters);
+        if(params.operation!=='update'||params.table!=='invoices'||Object.hasOwn(params.values||{},'status')
+          ||!target||target.value!==executionOptions.invoiceCorrectionTarget.value)throw new TypeError('invalid invoice correction');
+      }
       if(attachmentAvailable&&(params.operation==='create'&&params.table==='invoices'
         ||params.operation==='batch'&&params.operations.some(item=>item.operation==='create'&&item.table==='invoices')))
         return {...fail('INVALID','Use saveAttachment to extract and review the current invoice attachment, or analyzeAttachment to inspect it without saving. Do not recreate its fields with invoice create. Nothing was saved.'),validationCode:'ATTACHMENT_REVIEW_REQUIRED',writeAttempted:false};
@@ -1015,7 +1052,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       const errors={
         'invalid batch':['BATCH_SHAPE','Atomic batches support 2–10 create/update items in operations, each with table, filters and values. One unambiguous record per item; all commit or all roll back. Nest custom business fields in values.custom_fields. Status changes and deletes are separate operations. No write was attempted.'],
         'invoice action requires exactly one canonical target':['TARGET_REQUIRED','Which invoice do you mean? Send its invoice number or customer name. If that customer has several invoices, I will ask you to choose. No change was made.'],
-        'invalid invoice fields':['INVALID_FIELDS','Those invoice fields are not supported. Use status paid or unpaid separately. Reopening preserves original payments and requires explicit confirmation. No change was made.'],
+        'invalid invoice fields':['INVALID_FIELDS','Use the catalog invoice correction fields: total_amount, subtotal, tax, discount, currency, dates and typed line_items. Keep status paid/unpaid separate. Reopening preserves original payments and requires explicit confirmation. Put the invoice target in filters, not values. No write was attempted.'],
         'invalid invoice correction':['INVALID_FIELDS','Use typed invoice correction fields from this catalog. Money requires at most two decimals; line items require description and amount, with consistent quantity/unitPrice when supplied. Do not write metadata, ledger/security fields or credentials. No write was attempted.'],
         'invalid request':['REQUEST_SHAPE','The assistant combined two request formats. It should send either a description or structured fields. No change was made.'],
         'record action requires identifying filters':['TARGET_REQUIRED','Updates and deletes require filters identifying one existing record, for example name eq with the record name already supplied by the owner. Keep changes in values.custom_fields. Correct the arguments using this catalog and current owner message; no database write was attempted.'],
@@ -1041,15 +1078,22 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     // rejected plan once here, before the outer loop caches the final result.
     // Only a server-validated preflight rejection with no dispatch qualifies.
     const structuredBatch=Array.isArray(raw?.operations)||raw?.operation==='batch'||raw?.operation==='update'&&Array.isArray(raw?.filters)&&raw.filters.some(filter=>filter?.operator==='in');
+    let correctionTarget=null;
+    if(confirmationMode==='direct'&&raw?.operation==='update'&&raw?.table==='invoices'&&ownObject(raw.values)
+      &&Object.keys(raw.values).every(key=>INVOICE_CORRECTION_FIELDS.includes(key))
+      &&result?.validationCode==='INVALID_FIELDS'&&typeof planRequest==='function'&&String(message).trim()){
+      try{correctionTarget=exactInvoiceNumberTarget(decodeInvoiceCorrectionFilters(raw.filters));}catch{}
+    }
     const readFilterRepair=raw?.operation==='read'&&Object.hasOwn(TABLES,raw?.table||'')&&repairableReadFilterObject(raw.filters,raw.table)
       &&result?.validationCode==='FILTER_SHAPE'&&typeof planRequest==='function'&&String(message).trim();
-    const repairRequest=typeof raw?.request==='string'?raw:readFilterRepair
+    const repairRequest=typeof raw?.request==='string'?raw:correctionTarget
+      ?{request:String(message).slice(0,1200),operation:'update',table:'invoices'}:readFilterRepair
       ?{request:String(message).slice(0,1200),operation:'read',table:raw.table}
       :structuredBatch&&typeof planRequest==='function'&&String(message).trim()?{request:String(message).slice(0,1200)}:null;
     const repairAttempted=Boolean(repairRequest&&result?.code==='INVALID'&&result.validationCode&&result.writeAttempted===false&&!writeAttempted);
     if(repairAttempted){
       const rejection={validationCode:result.validationCode,validationShape:result.validationShape,message:result.message};
-      result={...await executeRequest(repairRequest,options,rejection),planningRepair:{validationCode:rejection.validationCode,validationShape:rejection.validationShape}};
+      result={...await executeRequest(repairRequest,correctionTarget?{...options,invoiceCorrectionTarget:correctionTarget}:options,rejection),planningRepair:{validationCode:rejection.validationCode,validationShape:rejection.validationShape,...(correctionTarget?{route:'invoice_correction'}:{})}};
     }
     if(rejectedFilters)result={...result,filterShapeDiagnostic:{...rejectedFilters,repair:{attempted:repairAttempted,
       route:repairAttempted?(readFilterRepair?'read_filters':typeof raw?.request==='string'?'request':'batch'):'none',

@@ -5,6 +5,27 @@ import {PGlite} from '@electric-sql/pglite';
 import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 
+test('serialized invoice correction targets permit only one exact canonical equality and never widen status, scope or other writes',async()=>{
+ const valid=[{column:'invoice_number',operator:'eq',value:'INV-1'}];
+ const bad=[JSON.stringify({invoice_number:'INV-1'}),JSON.stringify([]),JSON.stringify([...valid,...valid]),
+  JSON.stringify([{...valid[0],operator:'ilike'}]),JSON.stringify([{...valid[0],column:'customer_name'}]),
+  JSON.stringify([{...valid[0],workspace_id:scope.workspaceId}]),JSON.stringify([{...valid[0],value:scope.workspaceId}]),
+  JSON.stringify([{...valid[0],value:''}]),JSON.stringify([{...valid[0],value:['INV-1']}]),'['+' '.repeat(8192)+']','[invalid'];
+ for(const filters of bad){
+  const supabase=fakeSupabase();let writes=0,plans=0;
+  const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true,confirmationMode:'direct',message:'Change INV-1 due date to 2026-10-20',
+   planRequest:async()=>{plans++;throw Error('invalid encoded target cannot be replanned');},executeDirectOperation:async()=>{writes++;return {ok:true};}});
+  const result=await tool.execute({operation:'update',table:'invoices',filters,values:{due_date:'2026-10-20'}});
+  assert.equal(result.ok,false);assert.equal(writes,0);assert.equal(plans,0);assert.equal(supabase.calls.length,0);
+ }
+ for(const args of [{operation:'update',table:'invoices',values:{status:'paid'}},{operation:'delete',table:'invoices'},
+  {operation:'restore',table:'invoices'},{operation:'update',table:'customers',values:{name:'Changed'}}]){
+  const supabase=fakeSupabase();let writes=0;
+  const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true,confirmationMode:'direct',executeDirectOperation:async()=>{writes++;return {ok:true};}});
+  const result=await tool.execute({...args,filters:JSON.stringify(valid)});assert.equal(result.ok,false);assert.equal(writes,0);assert.equal(supabase.calls.length,0);
+ }
+});
+
 test('a current attachment refuses generic invoice creation before direct/proposal/batch dispatch',async()=>{
  const values={invoice_number:'INVENTED',customer_name:'Invented customer',total_amount:100,currency:'USD'};
  for(const confirmationMode of ['direct','buttons']){
