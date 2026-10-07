@@ -14,16 +14,27 @@ export async function resolveWorkspaceRecord({supabase,scope,table,filters,selec
   const allowed=table==='invoices'?['id','invoice_number','customer_name']:table==='business_records'?['id','name','record_type']:['id','name','company_name','email','phone'];
   if(!filters.length||filters.some(f=>!allowed.includes(f.column)||!['eq','ilike'].includes(f.operator)
     ||f.operator==='ilike'&&!['name','company_name','customer_name'].includes(f.column)))return {ok:false,code:'INVALID'};
+  const invoiceNumber=table==='invoices'&&filters.some(f=>f.column==='invoice_number');
+  // Printed/source numbers remain server-side selectors. Resolve every exact
+  // spelling, including canonical collisions, before authorizing a write.
+  const numberColumns=invoiceNumber?['invoice_number','metadata->>printed_invoice_number','metadata->>source_invoice_number']:['invoice_number'];
   const queryRows=async fuzzy=>{
+    const candidates=new Map();
+    for(const numberColumn of numberColumns){
+      for(const row of await queryNumberRows(fuzzy,numberColumn))candidates.set(row.id,row);
+    }
+    return [...candidates.values()];
+  };
+  const queryNumberRows=async(fuzzy,numberColumn)=>{
     await assertAuthorized();assertLive();
     const customer=table==='invoices'&&filters.some(f=>f.column==='customer_name');
-    const fields=[...new Set([...select.split(','),...filters.filter(f=>f.column!=='customer_name').map(f=>f.column)])].join(',');
+    const fields=[...new Set(['id',...select.split(','),...filters.filter(f=>f.column!=='customer_name').map(f=>f.column)])].join(',');
     let q=supabase.from(table).select(fields+(customer?',customer:customers!invoices_workspace_id_customer_id_fkey!inner(name)':''))
       .eq('workspace_id',scope.workspaceId);
     if(table==='invoices'&&operation!=='restore')q=q.is('deleted_at',null);
     if(table==='business_records')q=operation==='restore'?q.gt('deleted_at','1970-01-01T00:00:00Z'):q.is('deleted_at',null);
     for(const f of filters){
-      const column=f.column==='customer_name'?'customer.name':f.column;
+      const column=f.column==='customer_name'?'customer.name':f.column==='invoice_number'?numberColumn:f.column;
       if(fuzzy&&['name','company_name','customer_name'].includes(f.column)) {
         // Bounded workspace scan supports JohnSmith as well as John Smith.
         // A truncated candidate set must never authorize a write.
@@ -51,6 +62,7 @@ export async function resolveWorkspaceRecord({supabase,scope,table,filters,selec
       return matchesName(actual,f.value);
     }));
   }
+  if(invoiceNumber&&rows.length>1)return {ok:false,code:'AMBIGUOUS'};
   if(operation==='read'&&rows.length)return {ok:true,rows,row:rows.length===1?rows[0]:null};
   return rows.length===1?{ok:true,row:rows[0]}:{ok:false,code:rows.length?'AMBIGUOUS':'NOT_FOUND'};
 }

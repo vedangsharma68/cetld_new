@@ -267,6 +267,27 @@ function repairableReadFilterObject(filters,table){
     return true;
   }catch{return false;}
 }
+function decodeReadFilters(value,table){
+  if(typeof value!=='string')return value;
+  if(value.length>8192)throw new TypeError('invalid filters');
+  let decoded;
+  try{decoded=JSON.parse(value);}catch{throw new TypeError('invalid filters');}
+  if(ownObject(decoded)){
+    if(Object.hasOwn(decoded,'column')||Object.hasOwn(decoded,'field'))decoded=[decoded];
+    else{
+      const entries=Object.entries(decoded);
+      if(!entries.length||entries.length>8)throw new TypeError('invalid filters');
+      decoded=entries.map(([column,item])=>{
+        if(!ownObject(item))return {column,operator:'eq',value:item};
+        const operators=Object.entries(item);
+        if(operators.length!==1)throw new TypeError('invalid filters');
+        return {column,operator:operators[0][0],value:operators[0][1]};
+      });
+    }
+  }
+  if(!Array.isArray(decoded)||decoded.length>8)throw new TypeError('invalid filters');
+  return decoded.map(filter=>validateFilter(filter,table));
+}
 // Existing validation logs receive bounded allowlisted structure, never values
 // or unknown field names. Decoding a string here cannot change execution.
 function filterStructure(value,table,depth=0,decodeString=true){
@@ -339,8 +360,10 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
     const filters=args.filters===undefined?[]:args.filters;
     let normalizedFilters;
     try{
-      if(!Array.isArray(filters)||filters.length>8)throw new TypeError('invalid filters');
-      normalizedFilters=filters.map(filter=>validateFilter(filter,table||'invoices'));
+      const structuredFilters=operation==='read'?decodeReadFilters(filters,table||'invoices'):filters;
+      if(containsForbiddenIdentity(structuredFilters,scope))throw new TypeError('scope identity supplied');
+      if(!Array.isArray(structuredFilters)||structuredFilters.length>8)throw new TypeError('invalid filters');
+      normalizedFilters=structuredFilters.map(filter=>validateFilter(filter,table||'invoices'));
     }catch(error){
       if(['invalid filters','invalid filter'].includes(error.message))ctx.filterShapeDiagnostic={
         reason:error.message==='invalid filters'?'invalid_filter_container':'invalid_filter_item',
@@ -533,15 +556,30 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     if(relationFilters.length>1)throw new TypeError('combine one related-record filter at a time');
     let filters=params.filters.filter(filter=>!relationFilters.includes(filter));
     let rows;
+    if(table==='invoices'&&filters.some(filter=>filter.column==='invoice_number'&&filter.operator==='eq')) {
+      const identifying=params.filters.filter(filter=>['id','invoice_number','customer_name'].includes(filter.column)&&['eq','ilike'].includes(filter.operator));
+      const found=await resolveWorkspaceRecord({supabase,scope,table,filters:identifying,operation:'read',select:'id,invoice_number',
+        assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
+      if(!found.ok){if(found.code==='NOT_FOUND')return {ok:true,rows:[],truncated:false};return safeError(found);}
+      filters=[...filters.filter(filter=>!(filter.column==='invoice_number'&&filter.operator==='eq')),{column:'id',operator:'eq',value:found.row.id}];
+    }
     if(relationFilters.length) {
       const rf=relationFilters[0];
       if(table==='invoices') {
         // The FK join below keeps customer-name filtering and invoice loading
         // in one workspace-scoped round trip, including the display name.
       } else {
-        await ctx.assertAuthorized();
-        let q=supabase.from('invoices').select('id').eq('workspace_id',scope.workspaceId).is('deleted_at',null);
-        q=applyFilter(q,{...rf,column:'invoice_number'});const rel=await q.limit(MAX_LIMIT+1);await ctx.assertAuthorized();ctx.assertLive();
+        let rel;
+        if(rf.operator==='eq'){
+          const found=await resolveWorkspaceRecord({supabase,scope,table:'invoices',filters:[rf],operation:'read',select:'id,invoice_number',
+            assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
+          if(!found.ok&&found.code!=='NOT_FOUND')return safeError(found);
+          rel={data:found.ok?[found.row]:[]};
+        }else{
+          await ctx.assertAuthorized();
+          let q=supabase.from('invoices').select('id').eq('workspace_id',scope.workspaceId).is('deleted_at',null);
+          q=applyFilter(q,{...rf,column:'invoice_number'});rel=await q.limit(MAX_LIMIT+1);await ctx.assertAuthorized();ctx.assertLive();
+        }
         if(rel?.error)throw rel.error;
         if((rel?.data||[]).length>MAX_LIMIT){await ctx.assertAuthorized();return {ok:true,rows:[],truncated:true,note:'The related invoice filter matches too many records. Narrow it before continuing.'};}
         const ids=(rel?.data||[]).map(row=>row.id).filter(value=>UUID.test(value)).slice(0,MAX_LIMIT);

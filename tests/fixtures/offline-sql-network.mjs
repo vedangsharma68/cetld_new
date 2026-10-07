@@ -63,6 +63,7 @@ export async function createOfflineSqlNetwork({externalFetch}={}){
       }
       const table=name(path),args=[],conditions=[];
       const expr=column=>{
+        if(path==='invoices'&&column==='customer.name')return '(select fixture_customer.name from public.customers fixture_customer where fixture_customer.workspace_id=invoices.workspace_id and fixture_customer.id=invoices.customer_id)';
         const parts=column.split('->>');if(parts.length===1)return name(column);
         if(parts.length!==2||!/^\w+$/.test(parts[1]))throw Error('unsupported fixture json selector');
         return `${name(parts[0])}->>'${parts[1]}'`;
@@ -87,7 +88,7 @@ export async function createOfflineSqlNetwork({externalFetch}={}){
       if(method==='GET'){
         const select=params.get('select')||'*';
         const columns=select==='*'?'*':select.split(',').map(column=>{
-          if(path==='invoices'&&column==='customer:customers!invoices_workspace_id_customer_id_fkey(name)')
+          if(path==='invoices'&&['customer:customers!invoices_workspace_id_customer_id_fkey(name)','customer:customers!invoices_workspace_id_customer_id_fkey!inner(name)'].includes(column))
             return '(select jsonb_build_object(\'name\',fixture_customer.name) from public.customers fixture_customer where fixture_customer.workspace_id=invoices.workspace_id and fixture_customer.id=invoices.customer_id) as customer';
           return expr(column);
         }).join(',');

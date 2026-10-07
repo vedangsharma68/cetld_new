@@ -108,7 +108,7 @@ test('filter diagnostics redact values and unknown keys, bound structure and ret
   const supabase=fakeSupabase();let plans=0;
   const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true,message:'Show one invoice',
     planRequest:async()=>{plans++;return {operation:'read',table:'invoices',filters:[]};}});
-  for(const filters of [null,JSON.stringify([{column:'invoice_number',operator:'eq',value:privateValue}]),
+  for(const filters of [null,JSON.stringify(null),
     JSON.stringify([privateValue.repeat(300)]),privateValue,
     {invoice_number:{eq:privateValue},[privateValue]:privateValue,api_key:privateValue},
     Array.from({length:30},()=>({column:privateValue,operator:privateValue,value:privateValue,[privateValue]:privateValue}))]){
@@ -125,6 +125,36 @@ test('filter diagnostics redact values and unknown keys, bound structure and ret
   assert.deepEqual(repaired.filterShapeDiagnostic.repair,{attempted:true,route:'read_filters',readEligibilityReason:'eligible'});
   assert.doesNotMatch(JSON.stringify(repaired.filterShapeDiagnostic),/Sensitive Customer|sk_live|private_marker/);
   assert.equal(tool.getWriteAttempted(),false);
+});
+
+test('serialized read filters decode only bounded catalog-valid comparisons and never enable writes',async()=>{
+  const record={id:'33333333-3333-4333-8333-333333333333',workspace_id:scope.workspaceId,invoice_number:'INV-1',total_amount:118,amount_paid:0};
+  for(const filters of [
+    [],
+    [{column:'invoice_number',operator:'eq',value:'INV-1'}],
+    {field:'invoice_number',op:'equals',value:'INV-1'},
+    {invoice_number:'INV-1'},
+    {invoice_number:{eq:'INV-1'}},
+  ]){
+    const supabase=fakeSupabase({rows:{invoices:[record]}});let plans=0;
+    const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true,planRequest:async()=>{plans++;throw Error('deterministic decode must not replan');}});
+    const result=await tool.execute({operation:'read',table:'invoices',columns:['invoice_number'],filters:JSON.stringify(filters)});
+    assert.equal(result.ok,true,JSON.stringify(result));assert.deepEqual(result.rows,[{invoice_number:'INV-1'}]);assert.equal(plans,0);
+    assert.equal(tool.getWriteAttempted(),false);assert(supabase.calls.every(call=>call.kind==='query'));
+  }
+  const privateValue='Sensitive Customer sk_live_private_marker';
+  for(const filters of [{},null,{workspace_id:scope.workspaceId},{invoice_number:{eq:'INV-1',neq:'INV-2'}},
+    {unsupported:privateValue},[{column:'invoice_number',operator:'unsafe',value:privateValue}],
+    {invoice_number:{eq:{nested:privateValue}}},Array.from({length:9},()=>({column:'invoice_number',operator:'eq',value:privateValue}))]){
+    const supabase=fakeSupabase(),tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true});
+    const result=await tool.execute({operation:'read',table:'invoices',filters:JSON.stringify(filters)});
+    assert.equal(result.ok,false);assert.equal(supabase.calls.length,0);assert.equal(tool.getWriteAttempted(),false);
+    assert.doesNotMatch(JSON.stringify(result.filterShapeDiagnostic||{}),/Sensitive Customer|sk_live|private_marker/);
+  }
+  const supabase=fakeSupabase();let writes=0;
+  const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true,confirmationMode:'direct',executeDirectOperation:async()=>{writes++;return {ok:true};}});
+  const result=await tool.execute({operation:'update',table:'invoices',filters:JSON.stringify({invoice_number:'INV-1'}),values:{notes:'Unsafe encoded write'}});
+  assert.equal(result.ok,false);assert.equal(result.validationCode,'FILTER_SHAPE');assert.equal(writes,0);assert.equal(supabase.calls.length,0);
 });
 
 test('direct record preflight exposes repairable schema errors without attempting a write',async()=>{
