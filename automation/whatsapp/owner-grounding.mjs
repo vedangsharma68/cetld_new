@@ -115,7 +115,9 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
   const zeroInvoiceBalance=success.some(result=>result.table==='invoices'&&result.readOnly===true
     &&Array.isArray(result.rows)&&result.rows.some(row=>row.amount_paid!==null&&row.amount_paid!==undefined&&Number(row.amount_paid)===0));
   const absentPaymentHistory=/\b(?:no payments?\b[^.!?\n]{0,35}\b(?:made|received|recorded|history)|no (?:payment history|payment records?)\b|payment (?:history|records?)\b[^.!?\n]{0,20}\b(?:empty|absent)|never (?:been )?paid)\b/i.test(text);
-  if(zeroInvoiceBalance&&absentPaymentHistory)return 'fresh_database_read_required';
+  const knownPaymentHistory=success.some(result=>result.readOnly===true&&result.paymentHistory?.ok===true
+    &&result.paymentHistory.readOnly===true&&result.paymentHistory.rows?.length>0);
+  if((zeroInvoiceBalance||knownPaymentHistory)&&absentPaymentHistory)return 'fresh_database_read_required';
   const numbers=numericEvidence(success);
   const amounts=[...text.matchAll(/(?:[$€£₹]|\b(?:USD|INR|EUR|GBP|CHF|AED|SGD|AUD|CAD))\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(?:USD|INR|EUR|GBP|CHF|AED|SGD|AUD|CAD)\b/gi)];
   if(amounts.some(match=>!numbers.has(Number((match[1]||match[2]).replaceAll(',','')).toFixed(2))))return 'fresh_database_read_required';

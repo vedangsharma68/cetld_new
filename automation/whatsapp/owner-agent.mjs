@@ -1479,9 +1479,10 @@ function readOnlyInvoiceHistoryFallback(message,evidence=[]){
     &&result.rows?.length===1&&result.truncated!==true&&result.paymentHistory?.ok===true)
     .map(result=>[JSON.stringify({rows:result.rows,history:result.paymentHistory}),result])).values()];
   if(candidates.length!==1)return null;
-  const result=candidates[0],row=result.rows[0],history=result.paymentHistory,number=history.invoiceNumber;
+  const result=candidates[0],history=result.paymentHistory,number=history.invoiceNumber,row=history.invoice;
   if(history.readOnly!==true||history.table!=='payments'||history.operation!=='read'||!Array.isArray(history.rows)
-    ||!number||row.invoice_number!==number||!text.toLowerCase().includes(String(history.lookupInvoiceNumber||number).toLowerCase())
+    ||!number||row?.invoice_number!==number||history.requestedInvoiceMatched!==true
+    ||result.rows[0].invoice_number!==undefined&&result.rows[0].invoice_number!==number
     ||history.rows.some(payment=>payment.invoice_number!==number)||!/^[A-Z]{3}$/.test(history.currency))return null;
   const amount=value=>/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(String(value??''))?`${history.currency} ${value}`:null;
   if(history.rows.some(payment=>!['amount','reversed_amount','net_amount'].every(key=>amount(payment[key]))))return null;

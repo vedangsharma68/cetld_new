@@ -79,7 +79,7 @@ test('default owner tool returns verified history after cached invoice repeats a
   assert.equal(reopened.completed,true,JSON.stringify(reopened));
   const snapshot=async()=> (await db.query("select jsonb_build_object('invoice',(select to_jsonb(i) from invoices i where id=$1),'payments',(select jsonb_agg(to_jsonb(p)) from payments p where invoice_id=$1),'reversals',(select jsonb_agg(to_jsonb(r)) from payment_reversals r where invoice_id=$1)) value",[own.id])).rows[0].value;
   const historyBefore=await snapshot();includeHistory=true;
-  const history=await turn('printed-history','Show invoice PRINTED-2026-17 for Correct Customer and its payment history. Do not change anything.',{operation:'read',table:'invoices',columns:['invoice_number','customer_name','total_amount','currency','amount_paid'],filters:JSON.stringify({invoice_number:{eq:'PRINTED-2026-17'},customer_name:{eq:'Correct Customer'}})});
+  const history=await turn('printed-history','Show invoice PRINTED-2026-17 for Correct Customer and its payment history. Do not change anything.',{operation:'read',table:'invoices',columns:['customer_name'],filters:JSON.stringify({customer_name:{eq:'Correct Customer'}})});
   assert.equal(results.at(-1).rows.length,1);
   assert.equal(history.plannerFailure,undefined);assert.match(history.answer,/Reversed: USD 118/);assert.match(history.answer,/Net: USD 0/);assert.doesNotMatch(history.answer,/no payment history|could not prepare/i);assert.deepEqual(await snapshot(),historyBefore);
   assert.deepEqual((await db.query('select to_jsonb(i) value from invoices i where id=$1',[foreign.id])).rows[0].value,foreignBefore);

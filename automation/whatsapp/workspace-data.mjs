@@ -589,7 +589,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     }
     const internal=[];
     if(table==='invoices')internal.push('id','invoice_number','updated_at','status','total_amount','amount_paid');
-    if(table==='invoices'&&/\b(?:payments?\s+(?:history|records)|history\s+of\s+payments?)\b/i.test(message))internal.push('currency');
+    if(table==='invoices'&&/\b(?:payments?\s+(?:history|records)|history\s+of\s+payments?)\b/i.test(message))internal.push('currency','metadata');
     if(table==='customers')internal.push('id','name','updated_at','metadata');
     if(['payments','invoice_files'].includes(table))internal.push('invoice_id');
     if(table==='payments')internal.push('id','workspace_id','amount');
@@ -643,8 +643,11 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         filters:[{column:'invoice_id',operator:'eq',value:rows[0].id}],limit:MAX_LIMIT,offset:0,order:null},ctx,{verifiedHistory:true});
       const current=await findRelatedRows('invoices','id',[rows[0].id],'id,updated_at',ctx);
       if(current.length!==1||!rows[0].updated_at||current[0].updated_at!==rows[0].updated_at)return safeError({code:'STALE'});
+      const aliases=[rows[0].invoice_number,rows[0].metadata?.printed_invoice_number,rows[0].metadata?.source_invoice_number];
+      const requestedInvoiceMatched=aliases.some(value=>typeof value==='string'&&value.length>0&&value.length<=160
+        &&new RegExp(`(?:^|[^\\p{L}\\p{N}])${value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}(?=$|[^\\p{L}\\p{N}])`,'iu').test(message));
       paymentHistory={...history,operation:'read',table:'payments',readOnly:true,invoiceNumber:rows[0].invoice_number,currency:rows[0].currency,
-        lookupInvoiceNumber:params.filters.find(filter=>filter.column==='invoice_number'&&filter.operator==='eq')?.value||null};
+        requestedInvoiceMatched,invoice:{invoice_number:rows[0].invoice_number,currency:rows[0].currency,total_amount:rows[0].total_amount,amount_paid:rows[0].amount_paid}};
       await ctx.assertAuthorized();ctx.assertLive();
     }
     return sanitise({ok:true,rows:output.slice(0,params.limit),truncated,
