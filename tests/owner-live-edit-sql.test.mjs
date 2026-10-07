@@ -15,7 +15,7 @@ test('native repeated rejected reads log only filter structure without invoking 
     const invoice=await createInvoice(db,scope.workspaceId,customerId,'INV-2026-0001',100);
     const before=(await db.query('select to_jsonb(i) value from invoices i where id=$1',[invoice.id])).rows[0].value;
     const privateValue='Synthetic Customer secret_marker_729';
-    const shapes=[null,JSON.stringify([{column:'invoice_number',operator:'eq',value:privateValue}]),{invoice_number:{eq:privateValue},[privateValue]:privateValue}];
+    const shapes=[null,JSON.stringify(null),{invoice_number:{eq:privateValue},[privateValue]:privateValue}];
     for(const [index,filters]of shapes.entries()){
       const message=`Show invoice ${invoice.invoice_number} and its edit options. Do not change any data.`,messageId=`diagnostic-gap-${index}`;
       await addInbound(db,messageId,message);
@@ -34,6 +34,7 @@ test('native repeated rejected reads log only filter structure without invoking 
       const toolLogs=logs.filter(row=>row.label==='WhatsApp owner tool call');assert.equal(toolLogs.length,1);
       const diagnostic=toolLogs[0].data.filterShapeDiagnostic;
       assert.equal(diagnostic.structure.type,filters===null?'null':typeof filters);
+      assert.deepEqual(JSON.parse(toolLogs[0].data.filterShapeStructure),diagnostic.structure);
       assert.equal(diagnostic.repair.attempted,false);assert.equal(diagnostic.repair.readEligibilityReason,'filter_object_not_catalog_valid');
       assert.doesNotMatch(JSON.stringify(logs),/Synthetic Customer|secret_marker_729/);
       assert.equal(toolLogs[0].data.validationCode,'FILTER_SHAPE');
