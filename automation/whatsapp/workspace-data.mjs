@@ -100,7 +100,7 @@ function definition() {
   // model request; describe exposes it when the model needs unfamiliar fields.
   const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA)},filters:{type:'array',items:{type:'object'}},values:{type:'object'}},required:['operation','table','values']};
   return {type:'function',function:{name:'workspaceData',
-    description:'Read/change owner data. Structured fields or request text; describe lists fields. business_records create needs record_type/name; updates need filters. custom_fields: flat snake_case keys, text/number/boolean/null; merged on update. Customers: name/email/phone. Invoices: invoice_number/customer_name/total_amount/status. Filters: column/operator/value. pending reads proposals; confirm/cancel decide.',
+    description:'Data fields/request; describe schema. Attached invoice: saveAttachment extracts/reviews/saves, analyzeAttachment reads; operation only, no table/values/create. Text invoices: invoice_number/customer_name/total_amount/currency/dates; status update only. business_records: record_type/name. custom_fields: snake_case scalars, merged. Customers: name/email/phone. Filters column/operator/value. pending/confirm/cancel',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic create/update batch. Read targets; use unique concrete numbers from scoped examples. No status changes/deletes. One patch per target; filters have column/operator/value.'},
@@ -129,7 +129,7 @@ function catalog(table=null) {
     atomicBatch:{argument:'operations',minItems:2,maxItems:10,itemFields:['operation','table','filters','values'],operations:['create','update'],oneUnambiguousRecordPerItem:true,allCommitOrAllRollback:true,customFields:'Nest additional business facts in each item values.custom_fields.',excluded:['status changes','deletes','confirmations','invoice extended corrections (customer, items, tax/subtotal/discount, direction and extracted facts)']},
     businessRecordLifecycle:{mode:'direct',delete:'Recoverable deletion; retains all business facts. No values allowed.',restore:'Restore one record deleted by the current owner within 30 days; use its name or ID. No values allowed.',reads:'Deleted records are hidden by default; read with deleted_at gt a supplied timestamp to inspect retained deleted records.'},
     attachmentOperations:{analyzeAttachment:'Read the current attachment and retain its source facts in a durable review without saving an invoice.',
-      saveAttachment:'Save the current attachment or this owner\'s current retained attachment review. Reuse its known facts; do not recreate it from chat text.',
+      saveAttachment:'Extract/review/save the current attachment or this owner\'s current retained attachment review. Supply operation only, without table or invoice values. Reuse its known facts; do not recreate it with invoice create or chat fields.',
       reviewAttachment:'Supply missing owner-evidenced facts or acknowledge unchanged known fields. Only invoice_number may be explicitly overridden to workspace numbering: include invoice_number_intent use_workspace_numbering with invoice_number AUTO. Concrete number or pattern replacement is unsupported. The workspace sequence assigns the unique ledger number on save and original extraction is audited. Other extracted fields cannot be overwritten.'},
     tables:Object.fromEntries(Object.entries(TABLES).filter(([name])=>!table||name===table).map(([name,spec])=>[name,{
       label:spec.label,columns:spec.columns,filters:spec.filters,
@@ -470,7 +470,7 @@ function validateAdapterSettingsValues(values) {
 }
 
 export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,getRuntimeConfig,planRequest,authorize,executeBatchOperation,
-  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,executeInvoiceReopening=null,executeReopeningDecision=null,confirmationMode='buttons',timezone='UTC'}={}) {
+  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,executeInvoiceReopening=null,executeReopeningDecision=null,confirmationMode='buttons',timezone='UTC',attachmentAvailable=false}={}) {
   if(!supabase?.from||typeof scope?.workspaceId!=='string')throw new TypeError('Supabase and verified workspace scope required');
   let replyRequirement=null;
   let writeAttempted=false;
@@ -837,6 +837,9 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       try { await ctx.assertAuthorized(); }
       catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
       const params=await normalizeRequest(raw,scope,planRequest,ctx,validationFeedback);
+      if(attachmentAvailable&&(params.operation==='create'&&params.table==='invoices'
+        ||params.operation==='batch'&&params.operations.some(item=>item.operation==='create'&&item.table==='invoices')))
+        return {...fail('INVALID','Use saveAttachment to extract and review the current invoice attachment, or analyzeAttachment to inspect it without saving. Do not recreate its fields with invoice create. Nothing was saved.'),validationCode:'ATTACHMENT_REVIEW_REQUIRED',writeAttempted:false};
       if(params.operation==='batch'){
         attemptedOperation={operation:'batch'};
         if(confirmationMode!=='direct'||typeof executeBatchOperation!=='function')return fail('INVALID','Atomic batches require direct owner instructions.');

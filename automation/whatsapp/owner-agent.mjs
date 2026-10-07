@@ -116,7 +116,18 @@ function normalizedOwnerText(value) {
   return String(value||'').normalize('NFKC').replace(/[’‘]/g,"'").replace(/[“”]/g,'"').replace(/\s+/g,' ').trim().toLocaleLowerCase();
 }
 function ownerRequestsInvoiceAttachment(message) {
-  const text=normalizedOwnerText(message);
+  // A restriction on customer reminders does not decline invoice logging.
+  // Remove only complete reminder-only clauses for this authorization check;
+  // the unchanged owner message still reaches the model and all safety tools.
+  const reminderOnly=/^(?:please\s+)?(?:(?:don't|do not|never|must not|shouldn't|should not|avoid)\s+(?:send(?:ing)?|schedule|scheduling|trigger(?:ing)?|deliver(?:ing)?)\s+(?:(?:any|customer|payment|invoice|automatic|overdue|follow[- ]?up)\s+)*reminders?|no\s+(?:(?:customer|payment|invoice|automatic|overdue|follow[- ]?up)\s+)*reminders?)(?:\s+to\s+(?:(?:any|the|my|our|these|those)\s+)?customers?)?(?:\s+(?:please|now|yet|for now|right now))?$/u;
+  const clauses=normalizedOwnerText(message).split(/[.!?;,]+|\b(?:and|but)\b/u).map(clause=>clause.trim()).filter(Boolean);
+  const retained=clauses.filter(clause=>!reminderOnly.test(clause));
+  const directRequest=/^(?:(?:please|pls|kindly)\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|i\s+(?:want|need|would like)\s+you\s+to\s+)?(?:log|save|add|create|record|enter)\s+(?:(?:(?:this|the|that|an?|my|our)\s+)?(?:(?:sample|attached|new|uploaded|tax|gst|vat|scanned|sales|supplier)\s+)*(?:invoice|bill)\b|(?:this|it)(?:\s+(?:attachment|image|photo|picture|pdf|document|file))?$|(?:the\s+)?attached(?:\s+(?:attachment|image|photo|picture|pdf|document|file))?$)/u;
+  // This exception authorizes a current, unconditional request only. Keep
+  // temporal/approval qualifiers for clarification, regardless of paraphrase.
+  const deferred=/\b(?:later|tomorrow|next|if|after|when|once|until|before|approval|confirmation|(?:on|by|in|at)\s+(?:(?:this|the)\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|october|november|december|\d+))\b/u;
+  if(retained.length!==clauses.length&&(!retained.some(clause=>directRequest.test(clause))||retained.some(clause=>deferred.test(clause))))return false;
+  const text=retained.join('. ');
   const explicit= /\b(?:log|save|add|create|record|enter)\b.{0,80}\b(?:this|the|attached)?\s*(?:invoice|bill)\b/u.test(text)
     || /\b(?:invoice|bill)\b.{0,80}\b(?:log|save|add|create|record)\b/u.test(text)
     || /^(?:(?:please|pls|kindly|can you|could you|would you)\s+)?(?:log|save|add|create|record|enter)\s+(?:(?:this|it)(?:\s+(?:attachment|image|photo|picture|pdf|document|file))?|(?:the\s+)?attached(?:\s+(?:attachment|image|photo|picture|pdf|document|file))?)(?:\s+(?:please|for me))?[.!?]*$/u.test(text);
