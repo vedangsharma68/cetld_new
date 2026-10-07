@@ -548,7 +548,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     if(result?.error)throw Object.assign(new Error('workspace data relation lookup failed'),{code:result.error.code||'UNAVAILABLE'});
     return Array.isArray(result?.data)?result.data:[];
   };
-  const read=async (params,ctx)=>{
+  const read=async (params,ctx,{verifiedHistory=false}={})=>{
     const table=params.table,spec=TABLES[table],requested=params.columns||spec.defaults;
     const relationFilters=params.filters.filter(filter=>
       (table==='invoices'&&filter.column==='customer_name')
@@ -589,6 +589,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     }
     const internal=[];
     if(table==='invoices')internal.push('id','invoice_number','updated_at','status','total_amount','amount_paid');
+    if(table==='invoices'&&/\b(?:payments?\s+(?:history|records)|history\s+of\s+payments?)\b/i.test(message))internal.push('currency');
     if(table==='customers')internal.push('id','name','updated_at','metadata');
     if(['payments','invoice_files'].includes(table))internal.push('invoice_id');
     if(table==='payments')internal.push('id','workspace_id','amount');
@@ -616,6 +617,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         .eq('workspace_id',scope.workspaceId).in('payment_id',rows.map(row=>row.id)).limit(MAX_LIMIT+1);
       await ctx.assertAuthorized();ctx.assertLive();
       if(audit?.error&&!isMissingReversalStorage(audit.error))throw audit.error;
+      if(verifiedHistory&&(audit?.error||(audit?.data||[]).length>MAX_LIMIT))throw Object.assign(new Error('payment reversal history unavailable'),{code:'UNAVAILABLE'});
       rows=applyPaymentReversals(rows,audit?.error?[]:audit?.data||[],scope.workspaceId);
     }
     const finalColumns=requested.filter(column=>column!=='customer_name'
@@ -632,7 +634,21 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     await ctx.assertAuthorized();
     if(['customers','invoices'].includes(table))nextActionRecords=rows.slice(0,params.limit).map(row=>Object.fromEntries(
       internal.filter(key=>Object.hasOwn(row,key)).map(key=>[key,key==='metadata'?{whatsapp_owner:row.metadata?.whatsapp_owner===true}:structuredClone(row[key])])));
+    let paymentHistory;
+    if(table==='invoices'&&rows.length===1&&params.offset===0
+      &&/\b(?:payments?\s+(?:history|records)|history\s+of\s+payments?)\b/i.test(message)){
+      // The target ID comes from this authorized invoice read, not model scope
+      // or conversation history. Keep immutable receipts and reversal evidence.
+      const history=await read({operation:'read',table:'payments',columns:['invoice_number','amount','reversed_amount','net_amount','paid_at'],
+        filters:[{column:'invoice_id',operator:'eq',value:rows[0].id}],limit:MAX_LIMIT,offset:0,order:null},ctx,{verifiedHistory:true});
+      const current=await findRelatedRows('invoices','id',[rows[0].id],'id,updated_at',ctx);
+      if(current.length!==1||!rows[0].updated_at||current[0].updated_at!==rows[0].updated_at)return safeError({code:'STALE'});
+      paymentHistory={...history,operation:'read',table:'payments',readOnly:true,invoiceNumber:rows[0].invoice_number,currency:rows[0].currency,
+        lookupInvoiceNumber:params.filters.find(filter=>filter.column==='invoice_number'&&filter.operator==='eq')?.value||null};
+      await ctx.assertAuthorized();ctx.assertLive();
+    }
     return sanitise({ok:true,rows:output.slice(0,params.limit),truncated,
+      ...(paymentHistory?{paymentHistory}:{}),
       ...(truncated?{nextOffset:params.offset+params.limit}:{})},scope);
   };
   const rpc=async(name,args,ctx)=>{
