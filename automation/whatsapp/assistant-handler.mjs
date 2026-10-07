@@ -297,7 +297,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         extracted = await extract({provider: extractionProvider, ...media,
           businessName: workspace?.business_name || '', signal, deadlineAt: extractionDeadlineAt, logger});
         active();
-        if (extracted?.direction?.value === 'payable' && extracted.direction.confidence >= 0.75) {
+        if (audience !== 'owner' && extracted?.direction?.value === 'payable' && extracted.direction.confidence >= 0.75) {
           await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
             action: {...reviewDraft(extracted,messageId), stage: 'canceled'}});
           return 'This looks like a bill your business owes, so nothing was saved.';
@@ -316,8 +316,8 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           extracted?.dueDate?.confidence >= 0.75 ? extracted.dueDate.value : null,
           extracted?.paymentTerms?.value || extracted?.notes?.value || '');
         if (due.source.startsWith('derived')) assumptions.push(`due date ${due.source}`);
-        if (currencyResult.assumed) assumptions.push(currencyResult.source);
-        if (extracted?.direction?.value !== 'receivable' || extracted.direction.confidence < 0.75) {
+        if (currencyResult.assumed && audience !== 'owner') assumptions.push(currencyResult.source);
+        if (audience !== 'owner' && (extracted?.direction?.value !== 'receivable' || extracted.direction.confidence < 0.75)) {
           assumptions.push('direction assumed to be an invoice you issued');
         }
         const invoice = {invoiceNumber: extracted?.invoiceNumber?.value || 'AUTO', clientName: extracted?.customerName?.value ?? null,
@@ -346,10 +346,22 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
             validationIssues.push(validationError.code);
           }
         }
+        if (audience === 'owner') {
+          // An attached bill/ambiguous dollar symbol needs owner clarification,
+          // not cancellation or an inferred receivable/currency. Keep source
+          // facts in the same review; continuation still requires owner evidence.
+          const unresolved = reviewDraft(extracted, messageId).missingFields;
+          if (unresolved.includes('currency')) {
+            missing.push('currency'); invoice.currency = extracted?.currency?.value ?? null;
+          }
+          if (unresolved.includes('direction')) {
+            missing.push('direction'); invoice.direction = extracted?.direction?.value ?? 'uncertain';
+          }
+        }
         if (missing.length || validationIssues.length) {
-          review = {...reviewDraft(extracted, messageId), invoice, missingFields: missing,
+          review = {...reviewDraft(extracted, messageId), invoice, missingFields: [...new Set(missing)],
             validationIssues: [...new Set(validationIssues)], failureCode: 'INVOICE_REVIEW_INCOMPLETE',
-            currencySource: 'photo', currencyEvidence: currencyResult.source,
+            currencySource: missing.includes('currency') ? null : 'photo', currencyEvidence: missing.includes('currency') ? null : currencyResult.source,
             dueDateSource: due.source, assumptions, warnings: extracted?.warnings || []};
           const stored = await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone,
             fromStage: 'extracting', action: review});
