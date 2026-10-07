@@ -403,6 +403,11 @@ test('REST lifecycle error handling never exposes raw provider or database text'
   assert.deepEqual(result, {ok: false, code: 'DATABASE_UNAVAILABLE'});
 });
 
+test('lifecycle source conflict reports a safe duplicate code without exposing SQL detail',async()=>{
+  const service=createInvoiceLifecycleService({rpc:async()=>({error:{code:'23505',message:'source invoice already exists for customer'}})});
+  assert.deepEqual(await service.capabilities({workspaceId:WS1,actor:{kind:'authenticated_owner',userId:OWNER1}}),{ok:false,code:'DUPLICATE_INVOICE'});
+});
+
 test('migration contains scoped owner, consent, stale, confirmation, restore, read, payment, and reminder guards', async () => {
   const sql = await readFile(new URL('../supabase/migrations/20261002090000_invoice_soft_delete.sql', import.meta.url), 'utf8');
   assert.match(sql, /deleted_at timestamptz/);

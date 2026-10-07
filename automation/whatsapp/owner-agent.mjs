@@ -35,6 +35,7 @@ const SAFE_ERRORS = Object.freeze({
   ALREADY_DELETED: 'This invoice is already deleted.',
   UNDO_EXPIRED: 'This invoice is outside its 30-day restore window.',
   DATABASE_UNAVAILABLE: 'The invoice service is temporarily unavailable.',
+  DUPLICATE_INVOICE: 'This customer already has an active copy of this invoice. Review it before creating or restoring another copy.',
   REPLAYED: 'This request was already processed.',
   INVOICE_EXISTS: 'That invoice number is already in use. Choose a different number.',
 });
@@ -194,7 +195,7 @@ function safeLifecycleResult(result) {
     const code = ({INVOICE_NOT_FOUND:'NOT_FOUND', PROPOSAL_NOT_FOUND:'NO_PENDING_ACTION', ACTION_PENDING:'PENDING',
       ACTION_EXPIRED:'EXPIRED', ACTION_STALE:'STALE', OWNER_REQUIRED:'DENIED', EXACT_CONFIRMATION_REQUIRED:'EXACT_DELETE_CONFIRMATION_REQUIRED',
       INVALID_CONFIRMATION:'EXACT_DELETE_CONFIRMATION_REQUIRED', FEATURE_UNAVAILABLE:'UNAVAILABLE', DATABASE_UNAVAILABLE:'DATABASE_UNAVAILABLE',
-      UNDO_EXPIRED:'UNDO_EXPIRED',NOT_DELETED:'NOT_FOUND',ALREADY_DELETED:'ALREADY_DELETED',INVOICE_AMBIGUOUS:'AMBIGUOUS',REPLAYED:'REPLAYED'})[result?.code] || 'UNKNOWN';
+      DUPLICATE_INVOICE:'DUPLICATE_INVOICE',UNDO_EXPIRED:'UNDO_EXPIRED',NOT_DELETED:'NOT_FOUND',ALREADY_DELETED:'ALREADY_DELETED',INVOICE_AMBIGUOUS:'AMBIGUOUS',REPLAYED:'REPLAYED'})[result?.code] || 'UNKNOWN';
     return {ok: false, code, message: SAFE_ERRORS[code]};
   }
   const output = {ok: true, action: result.action};
@@ -689,6 +690,11 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     }catch(error){
       let existing=null;
       try{existing=await store.findAssistantInvoice({invoiceNumber:invoice.invoiceNumber,idempotencyKey});}catch{}
+      if(!existing&&error?.code==='INVOICE_ALREADY_EXISTS'){
+        await pending.transitionInvoiceReview({...saving,...scope,fromStage:'saving',
+          action:{...action,stage:'failed',failureCode:'DUPLICATE_INVOICE'}}).catch(()=>null);
+        return {ok:false,code:'DUPLICATE_INVOICE',message:'This invoice is already logged for this customer. No duplicate was created.'};
+      }
       if(!existing)return {ok:false,code:'DATABASE_UNAVAILABLE',message:'The invoice save could not be verified yet. Check its status before trying again.'};
       try{savedResult=await saveAssistantInvoice({store,invoice,confirmed:true,idempotencyKey,accounting:null,allowMissingDueDate:true});}
       catch{return {ok:false,code:'DATABASE_UNAVAILABLE',message:'The invoice may have saved, but I could not finish verifying it. Check its status before retrying.'};}
@@ -1144,7 +1150,8 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         if(['incomplete','proposal'].includes(action.stage))return {ok:true,outcome:'review_ready',review:reviewFacts,
           details:'The attachment produced a durable review, but no saved invoice result is recorded.'};
         if(action.stage==='saving')return {ok:false,code:'PENDING',message:'Invoice processing is still in progress. Do not retry the write until its status is checked.',review:reviewFacts};
-        if(action.stage==='failed')return {ok:false,code:'UNAVAILABLE',message:'The invoice was not saved because processing failed.',review:reviewFacts};
+        if(action.stage==='failed')return {ok:false,code:action.failureCode==='DUPLICATE_INVOICE'?'DUPLICATE_INVOICE':'UNAVAILABLE',
+          message:action.failureCode==='DUPLICATE_INVOICE'?'This invoice is already logged for this customer. No duplicate was created.':'The invoice was not saved because processing failed.',review:reviewFacts};
         const notReceivable=action.invoice?.direction==='payable';
         return {ok:false,code:'INVALID',message:notReceivable?'This document appears to be a bill the business owes; no invoice was saved.':'No invoice was saved from this attachment.',
           outcome:'not_saved',review:reviewFacts};

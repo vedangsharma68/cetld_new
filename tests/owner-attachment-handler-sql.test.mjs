@@ -136,3 +136,16 @@ test('expired failed review cannot resume but a fresh attachment can replace it 
     assert.equal(f.extractions,1);
   }finally{await f.close();}
 });
+
+test('fresh upload of the same printed customer invoice refuses a duplicate through the real owner toolset',async()=>{
+  const f=await fixture();try{
+    assert.match((await f.turn('original-source')).reply.answer,/Saved invoice/);
+    await f.turn('same-invoice-new-provider-id');
+    const refusal=f.results.at(-1);
+    assert.equal(refusal.ok,false);assert.equal(refusal.code,'DUPLICATE_INVOICE');
+    assert.match(refusal.message,/already logged/);
+    assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,1);
+    assert.equal((await f.db.query('select count(*)::int n from invoice_files')).rows[0].n,1);
+    assert.equal(f.extractions,2);
+  }finally{await f.close();}
+});
