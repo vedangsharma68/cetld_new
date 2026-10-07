@@ -267,6 +267,30 @@ function repairableReadFilterObject(filters,table){
     return true;
   }catch{return false;}
 }
+// Existing validation logs receive bounded allowlisted structure, never values
+// or unknown field names. Decoding a string here cannot change execution.
+function filterStructure(value,table,depth=0,decodeString=true){
+  const type=value===null?'null':Array.isArray(value)?'array':typeof value;
+  const out={type};
+  const fields=TABLES[table]?.filters||[];
+  const approved=new Set(['column','field','operator','op','value',...fields,...FILTER_OPERATORS]);
+  if(Array.isArray(value)){
+    out.length=Math.min(value.length,9);out.truncated=value.length>8;
+    if(depth===0)out.items=value.slice(0,8).map(item=>filterStructure(item,table,1,false));
+  }else if(ownObject(value)){
+    const keys=Object.keys(value);
+    out.keys=keys.filter(key=>approved.has(key)).slice(0,8);
+    out.unknownKeyCount=Math.min(keys.filter(key=>!approved.has(key)).length,9);
+    out.truncated=keys.length>8;
+    for(const key of ['column','field'])if(Object.hasOwn(value,key))out[key]=fields.includes(value[key])?value[key]:'unsupported';
+    for(const key of ['operator','op'])if(Object.hasOwn(value,key))out[key]=FILTER_OPERATORS.includes(value[key])||['=','equals'].includes(value[key])?value[key]:'unsupported';
+    if(Object.hasOwn(value,'value'))out.valueType=value.value===null?'null':Array.isArray(value.value)?'array':typeof value.value;
+    if(depth===0)out.entries=keys.slice(0,8).map(key=>({key:approved.has(key)?key:'unsupported',structure:filterStructure(value[key],table,1,false)}));
+  }else if(type==='string'&&depth===0&&decodeString&&value.length<=8192){
+    try{out.encodedJSON=filterStructure(JSON.parse(value),table,0,false);}catch{out.encodedJSON={type:'invalid_json'};}
+  }
+  return out;
+}
 function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
   if(!ownObject(raw))throw new TypeError('invalid arguments');
   if(containsForbiddenIdentity(raw,scope))throw new TypeError('scope identity supplied');
@@ -313,8 +337,16 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
     if(table&&!['read','create','update','delete','restore','reviewAttachment','sendFile','describe'].includes(operation))throw new TypeError('invalid table operation');
     if(['pending','confirm','cancel','describe'].includes(operation)&&Object.keys(args).some(key=>!['operation',...(operation==='describe'?['table']:[])].includes(key)))throw new TypeError('unexpected operation fields');
     const filters=args.filters===undefined?[]:args.filters;
-    if(!Array.isArray(filters)||filters.length>8)throw new TypeError('invalid filters');
-    const normalizedFilters=filters.map(filter=>validateFilter(filter,table||'invoices'));
+    let normalizedFilters;
+    try{
+      if(!Array.isArray(filters)||filters.length>8)throw new TypeError('invalid filters');
+      normalizedFilters=filters.map(filter=>validateFilter(filter,table||'invoices'));
+    }catch(error){
+      if(['invalid filters','invalid filter'].includes(error.message))ctx.filterShapeDiagnostic={
+        reason:error.message==='invalid filters'?'invalid_filter_container':'invalid_filter_item',
+        structure:filterStructure(filters,table||'invoices')};
+      throw error;
+    }
     const columns=args.columns===undefined?null:args.columns;
     if(columns!==null&&(!Array.isArray(columns)||columns.length<1||columns.length>20
       ||columns.some(column=>typeof column!=='string'||!TABLES[table]?.columns.includes(column))))throw new TypeError('invalid columns');
@@ -937,12 +969,14 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         'invalid text field':['INVALID_VALUE','Record text fields must be nonempty, within the catalog length limits and contain no control characters. No database write was attempted.'],
       };
       const detail=errors[error.message];
-      return detail?{ok:false,code:'INVALID',validationCode:detail[0],validationShape:shape,writeAttempted:false,message:detail[1]}:fail();
+      return detail?{ok:false,code:'INVALID',validationCode:detail[0],validationShape:shape,writeAttempted:false,message:detail[1],
+        ...(detail[0]==='FILTER_SHAPE'&&ctx.filterShapeDiagnostic?{filterShapeDiagnostic:ctx.filterShapeDiagnostic}:{})}:fail();
     }
   };
   const execute=async(raw,options)=>{
     nextActionParams=null;nextActionResult=null;nextActionRecords=null;
     let result=await executeRequest(raw,options);
+    const rejectedFilters=result?.filterShapeDiagnostic;
     // The model may repeat the same natural-language tool call. Repair its
     // rejected plan once here, before the outer loop caches the final result.
     // Only a server-validated preflight rejection with no dispatch qualifies.
@@ -952,10 +986,17 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     const repairRequest=typeof raw?.request==='string'?raw:readFilterRepair
       ?{request:String(message).slice(0,1200),operation:'read',table:raw.table}
       :structuredBatch&&typeof planRequest==='function'&&String(message).trim()?{request:String(message).slice(0,1200)}:null;
-    if(repairRequest&&result?.code==='INVALID'&&result.validationCode&&result.writeAttempted===false&&!writeAttempted){
+    const repairAttempted=Boolean(repairRequest&&result?.code==='INVALID'&&result.validationCode&&result.writeAttempted===false&&!writeAttempted);
+    if(repairAttempted){
       const rejection={validationCode:result.validationCode,validationShape:result.validationShape,message:result.message};
       result={...await executeRequest(repairRequest,options,rejection),planningRepair:{validationCode:rejection.validationCode,validationShape:rejection.validationShape}};
     }
+    if(rejectedFilters)result={...result,filterShapeDiagnostic:{...rejectedFilters,repair:{attempted:repairAttempted,
+      route:repairAttempted?(readFilterRepair?'read_filters':typeof raw?.request==='string'?'request':'batch'):'none',
+      readEligibilityReason:raw?.operation!=='read'?'not_read':!Object.hasOwn(TABLES,raw?.table||'')?'table_not_allowed'
+        :!repairableReadFilterObject(raw.filters,raw.table)?'filter_object_not_catalog_valid'
+        :typeof planRequest!=='function'?'planner_unavailable':!String(message).trim()?'owner_message_unavailable'
+        :readFilterRepair?'eligible':'validation_not_eligible'}}};
     if(['EXTERNAL_ACCOUNTING','EXTERNAL_LEDGER','EXTERNAL_ACCOUNTING_REQUIRED'].includes(result?.code)){
       replyRequirement=null;nextActionParams=null;nextActionRecords=null;
       result={...safeError(result),writeAttempted:result.writeAttempted??writeAttempted};
