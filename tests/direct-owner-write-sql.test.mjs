@@ -265,7 +265,7 @@ test('invoice corrections reject foreign scopes, protected fields, stale events,
   assert.equal((await db.query("select has_function_privilege('authenticated','app.apply_owner_invoice_correction(uuid,uuid,uuid,timestamptz,jsonb,text,text)','execute') yes")).rows[0].yes,false);
  }finally{await db.close();}
 });
-test('dashboard corrections authenticate owner, replay independently, reject financial history and retain payment bytes for benign edits',async()=>{
+test('dashboard corrections authenticate owner, replay independently, freeze paid classification and retain payment bytes for benign edits',async()=>{
  const {db,workspaceId}=await boot();try{
   await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
   const made=await createDirectInvoice(db,workspaceId,{messageId:'dashboard-correction-create',customerName:'John'});
@@ -273,7 +273,7 @@ test('dashboard corrections authenticate owner, replay independently, reject fin
   let invoice=(await db.query('select * from public.invoices where id=$1',[made.entityId])).rows[0];
   const payments=(await db.query('select to_jsonb(p) value from public.payments p where invoice_id=$1',[made.entityId])).rows;
   const call=async(values,request=randomUUID(),expected=invoice.updated_at)=>(await db.query('select public.owner_correct_invoice($1,$2,$3,$4,$5::jsonb) value',[workspaceId,invoice.id,expected,request,JSON.stringify(values)])).rows[0].value;
-  for(const values of [{total_amount:60},{currency:'USD'},{customer_id:invoice.customer_id},{invoice_direction:'payable'},{line_items:[]},{subtotal:55},{tax:0},{discount:0},{invoice_number:'NEW'}])assert.equal((await call(values)).code,'PAYMENT_GUARD');
+  for(const values of [{currency:'USD'},{customer_id:invoice.customer_id},{invoice_direction:'payable'},{invoice_number:'NEW'}])assert.equal((await call(values)).code,'PAYMENT_GUARD');
   const request=randomUUID();const values={notes:'Paid invoice explanatory correction',due_date:'2026-11-04',seller_name:'Correct supplier',custom_fields:{project_code:'OWN-19'}};
   const result=await call(values,request);assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.record.amount_paid,20);assert.equal(result.record.total_amount,55);
   assert.equal((await call(values,request)).replayed,true);assert.equal((await call({notes:'stale'})).code,'STALE');
@@ -671,7 +671,7 @@ async function boot({crlfLegacyWorkspaceData=false,supabaseDefaultGrants=false,s
   if(supabaseDefaultGrants)await db.exec('alter default privileges in schema public grant all on tables to service_role');
   const migrations=(await readdir(new URL('../supabase/migrations/',import.meta.url))).filter(name=>name.endsWith('.sql')).sort();
   for(const name of migrations){
-    if(skipClassificationGuard&&name==='20261004214000_invoice_history_classification_guard.sql')continue;
+    if(skipClassificationGuard&&['20261004214000_invoice_history_classification_guard.sql','20261006163000_owner_invoice_total_corrections.sql'].includes(name))continue;
     if(crlfLegacyWorkspaceData&&name==='20261003141000_direct_owner_write.sql'){
       const current=(await db.query(`select
         pg_catalog.pg_get_functiondef('public.whatsapp_workspace_data_propose(uuid,uuid,text,text,text,text,uuid,timestamptz,jsonb,text,bigint,bigint,bigint)'::regprocedure) as propose,

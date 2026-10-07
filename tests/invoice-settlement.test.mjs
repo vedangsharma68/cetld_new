@@ -41,9 +41,14 @@ before(async () => {
     create table storage.objects(id uuid default gen_random_uuid(),bucket_id text,name text);
     alter table storage.objects enable row level security;`);
   const deferredIntegrityMigrations = [];
+  const deferredCorrectionMigrations = [];
   for (const name of (await readdir(new URL('../supabase/migrations/', import.meta.url))).filter(name => name.endsWith('.sql')).sort()) {
     const migration = await readFile(new URL(`../supabase/migrations/${name}`, import.meta.url), 'utf8');
     if (name === '20260925140000_secure_invoice_settlement_and_currency_guards.sql' || name === '20260925150000_exact_invoice_money_and_delete_guards.sql') { deferredIntegrityMigrations.push(migration); continue; }
+    // This fixture temporarily retains the old numeric typemod to seed legacy
+    // invoices. Install the correction trigger and later dependent migrations
+    // only after those deferred column type changes have finished.
+    if (name >= '20261006163000_owner_invoice_total_corrections.sql') { deferredCorrectionMigrations.push(migration); continue; }
     await db.exec(migration.replace('create extension if not exists pgcrypto;', ''));
   }
   const finalPaymentDefinition=(await db.query("select pg_get_functiondef('public.record_invoice_payment(uuid,uuid,numeric,text,text,boolean)'::regprocedure) definition")).rows[0].definition;
@@ -99,6 +104,7 @@ before(async () => {
   // Earlier migrations are replayed only to seed legacy numeric fixtures. The
   // tests must still execute the final, direction-guarded payment RPC.
   await withOwner(() => db.exec(finalPaymentDefinition));
+  for (const migration of deferredCorrectionMigrations) await withOwner(() => db.exec(migration));
 });
 
 after(async () => db.close());
