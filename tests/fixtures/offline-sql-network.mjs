@@ -86,7 +86,11 @@ export async function createOfflineSqlNetwork({externalFetch}={}){
       let result;
       if(method==='GET'){
         const select=params.get('select')||'*';
-        const columns=select==='*'?'*':select.split(',').map(expr).join(',');
+        const columns=select==='*'?'*':select.split(',').map(column=>{
+          if(path==='invoices'&&column==='customer:customers!invoices_workspace_id_customer_id_fkey(name)')
+            return '(select jsonb_build_object(\'name\',fixture_customer.name) from public.customers fixture_customer where fixture_customer.workspace_id=invoices.workspace_id and fixture_customer.id=invoices.customer_id) as customer';
+          return expr(column);
+        }).join(',');
         const order=params.get('order')?` order by ${params.get('order').split(',').map(item=>{
           const [column,direction='asc']=item.split('.');if(!['asc','desc'].includes(direction))throw Error('unsupported fixture order');return `${expr(column)} ${direction}`;
         }).join(',')}`:'';

@@ -1622,7 +1622,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         if(!issue){emitRound(round);activeRound=null;return resultFor(normalizeOwnerReply(draft));}
         round.outcome='error';round.safetyIssueCodes.push(issue);addSafetyIssue(issue);
         emitRound(round);activeRound=null;
-        if(issue==='unverified_action_result'&&!writeMayHaveBeenAttempted()){
+        if(['unverified_action_result','fresh_database_read_required'].includes(issue)&&!writeMayHaveBeenAttempted()){
           const fallback=readOnlyInvoiceOptionsFallback(message,evidence);
           if(fallback)return resultFor(fallback,{readOnlyFallback:true});
         }
@@ -1696,7 +1696,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         }
         round.outcome='error';round.safetyIssueCodes.push(issue);addSafetyIssue(issue);
         emitRound(round);activeRound=null;
-        if(issue==='unverified_action_result'&&!writeMayHaveBeenAttempted()){
+        if(['unverified_action_result','fresh_database_read_required'].includes(issue)&&!writeMayHaveBeenAttempted()){
           const fallback=readOnlyInvoiceOptionsFallback(message,evidence);
           if(fallback)return resultFor(fallback,{readOnlyFallback:true});
         }

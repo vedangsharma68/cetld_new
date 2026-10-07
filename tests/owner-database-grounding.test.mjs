@@ -3,6 +3,19 @@ import assert from 'node:assert/strict';
 import {ownerGroundingIssue,ownerEvidence} from '../automation/whatsapp/owner-grounding.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 
+test('invoice absence needs a checked lookup and cannot contradict a current row',()=>{
+  const reply="I couldn't find the invoice INV-2026-0002.",message='Show invoice INV-2026-0002';
+  for(const result of [{ok:false,code:'INVALID',validationCode:'FILTER_SHAPE'},{ok:false,code:'UNAVAILABLE'}])
+    assert.equal(ownerGroundingIssue(reply,[result],message),'fresh_database_read_required');
+  const read={ok:true,operation:'read',table:'invoices',lookupInvoiceNumber:'INV-2026-0002',readOnly:true,rows:[],truncated:false};
+  assert.equal(ownerGroundingIssue(reply,[read],message),null);
+  assert.equal(ownerGroundingIssue(reply,[{...read,lookupInvoiceNumber:'INV-2026-0099'}],message),'fresh_database_read_required');
+  assert.equal(ownerGroundingIssue(reply,[{...read,rows:[{invoice_number:'INV-2026-0002'}]}],message),'fresh_database_read_required');
+  assert.equal(ownerGroundingIssue(reply,[{ok:false,operation:'read',table:'invoices',lookupInvoiceNumber:'INV-2026-0002',code:'NOT_FOUND'}],message),null);
+  assert.equal(ownerGroundingIssue("I couldn't check that invoice right now.",[{ok:false,code:'UNAVAILABLE'}],message),null);
+  assert.equal(ownerGroundingIssue("I couldn't find a due date on that invoice.",[{...read,rows:[{invoice_number:'INV-2026-0002'}]}],message),null);
+});
+
 test('a no-save review status is distinct from an unverified completed action',()=>{
   assert.equal(ownerGroundingIssue('Nothing was saved.',[{ok:true,outcome:'review_ready'}]),null);
   assert.equal(ownerGroundingIssue('No invoice was saved.',[{ok:true,outcome:'review_ready'}]),null);

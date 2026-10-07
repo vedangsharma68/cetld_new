@@ -115,6 +115,16 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
   if(amounts.some(match=>!numbers.has(Number((match[1]||match[2]).replaceAll(',','')).toFixed(2))))return 'fresh_database_read_required';
   const source=JSON.stringify(results)+String(message||'');
   const ids=[...text.matchAll(/\bINV[-/][A-Z0-9][A-Z0-9/-]*/gi)].map(m=>m[0]);
+  const invoiceAbsence=/\b(?:(?:could not|couldn't|cannot|can't|unable to)\s+(?:find|locate)\s+(?:(?:the|that|this|an?|any|matching)\s+)?(?:invoice\b|INV[-/])|no matching invoices?\b|invoices?[^.!?\n]{0,65}(?:not found|does not exist|doesn't exist))/i.test(text);
+  if(invoiceAbsence){
+    const reads=results.filter(result=>result?.table==='invoices'&&result?.operation==='read'
+      &&(!ids.length||ids.every(id=>id.toLowerCase()===String(result.lookupInvoiceNumber||'').toLowerCase())));
+    const present=success.some(result=>Array.isArray(result.rows)&&result.rows.some(row=>row?.invoice_number
+      &&(!ids.length||ids.some(id=>id.toLowerCase()===String(row.invoice_number).toLowerCase()))));
+    const checkedAbsence=reads.some(result=>result.ok===false&&result.code==='NOT_FOUND'
+      ||result.ok===true&&result.readOnly===true&&Array.isArray(result.rows)&&!result.rows.length&&result.truncated!==true);
+    if(present||!checkedAbsence)return 'fresh_database_read_required';
+  }
   // Conversation history can resolve a reference, but cannot prove current data.
   if(ids.some(id=>!source.toLowerCase().includes(id.toLowerCase()))
     &&!(/\b(?:which|clarify|mean|could not|couldn't|cannot|can't|unable|not found|no matching)\b/i.test(text)))return 'fresh_database_read_required';
