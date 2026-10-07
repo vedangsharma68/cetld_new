@@ -162,3 +162,31 @@ test('consolidated total-only correction preserves payment history and records o
     assert.deepEqual(f.errors,[]);
   }finally{await f.close();}
 });
+
+test('malformed update filters return a structured validation result instead of throwing after workspaceData catches validation',async()=>{
+  const f=await fixture();
+  try{
+    const {db,supabase,scope}=f;
+    for(const [index,filters] of [
+      ['object',{column:'invoice_number',operator:'eq',value:'INV-2026-0002'}],
+      ['string','invoice_number eq INV-2026-0002'],
+      ['null',null],
+    ].entries()){
+      const messageId=`malformed-live-edit-filters-${index}`,message='chnage the amount in john smiths invoice to 6670 inr';
+      await addInbound(db,messageId,message);
+      let actualToolResult;
+      const {handler,calls}=handlerWithNativeCall(supabase,scope,{messageId,args:{operation:'update',table:'invoices',
+        filters,values:{total_amount:6670,currency:'INR'}},onFinal:value=>{actualToolResult=value;}});
+      const result=await handler({...scope,messageId,message});
+      assert.equal(result.plannerFailure,undefined,JSON.stringify({filters,result}));
+      assert.equal(actualToolResult?.ok,false,JSON.stringify({filters,result,actualToolResult,errors:f.errors}));
+      assert.equal(actualToolResult?.code,'INVALID',JSON.stringify({filters,actualToolResult}));
+      assert.equal(actualToolResult?.validationCode,'FILTER_SHAPE',JSON.stringify({filters,actualToolResult}));
+      assert.equal(actualToolResult?.writeAttempted,false,JSON.stringify({filters,actualToolResult}));
+      assert.equal(calls(),2);
+    }
+    assert.equal((await db.query('select count(*)::int n from public.invoices where workspace_id=$1',[scope.workspaceId])).rows[0].n,0);
+    assert.equal(f.requests.some(request=>request.url.endsWith('/rpc/whatsapp_correct_owner_invoice')),false);
+    assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});

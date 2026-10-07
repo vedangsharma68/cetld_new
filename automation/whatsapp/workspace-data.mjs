@@ -913,6 +913,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         'invalid request':['REQUEST_SHAPE','The assistant combined two request formats. It should send either a description or structured fields. No change was made.'],
         'record action requires identifying filters':['TARGET_REQUIRED','Updates and deletes require filters identifying one existing record, for example name eq with the record name already supplied by the owner. Keep changes in values.custom_fields. Correct the arguments using this catalog and current owner message; no database write was attempted.'],
         'invalid filter':['FILTER_SHAPE','Each filter requires column, operator and value from this catalog. Updates need one unambiguous record, using eq (or ilike for names). Correct the arguments from the owner message; no database write was attempted.'],
+        'invalid filters':['FILTER_SHAPE','Filters must be an array of objects, each with column, operator and value from this catalog. Correct the arguments from the current owner message; no database write was attempted.'],
         'invalid write fields':['INVALID_FIELDS','Use the supported write fields in this catalog. Additional business facts must be nested inside custom_fields. Correct the tool arguments using the owner message already supplied; no database write was attempted.'],
         'record name required':['REQUIRED_FIELDS','Creating this record requires a nonempty name. Business records also require record_type. Use the owner message already supplied and the returned catalog; no database write was attempted.'],
         'invalid record category':['INVALID_CATEGORY','Business records require record_type as a lowercase category with letters, digits or underscores. Use the owner category already supplied; no database write was attempted.'],
@@ -930,7 +931,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     // The model may repeat the same natural-language tool call. Repair its
     // rejected plan once here, before the outer loop caches the final result.
     // Only a server-validated preflight rejection with no dispatch qualifies.
-    const structuredBatch=Array.isArray(raw?.operations)||raw?.operation==='batch'||raw?.operation==='update'&&raw?.filters?.some(filter=>filter?.operator==='in');
+    const structuredBatch=Array.isArray(raw?.operations)||raw?.operation==='batch'||raw?.operation==='update'&&Array.isArray(raw?.filters)&&raw.filters.some(filter=>filter?.operator==='in');
     const repairRequest=typeof raw?.request==='string'?raw:structuredBatch&&typeof planRequest==='function'&&String(message).trim()?{request:String(message).slice(0,1200)}:null;
     if(repairRequest&&result?.code==='INVALID'&&result.validationCode&&result.writeAttempted===false&&!writeAttempted){
       const rejection={validationCode:result.validationCode,validationShape:result.validationShape,message:result.message};

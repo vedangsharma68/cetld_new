@@ -636,7 +636,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     const proposalReady=missing.size===0&&invoice.direction==='receivable'&&isSupportedCurrency(invoice.currency)
       &&typeof invoice.invoiceNumber==='string'&&invoice.invoiceNumber.trim()
       &&typeof invoice.clientName==='string'&&invoice.clientName.trim()&&amountCents(invoice.total)!==null
-      &&dateIsValid(invoice.invoiceDate)&&dateIsValid(invoice.dueDate)&&invoice.dueDate>=invoice.invoiceDate;
+      &&dateIsValid(invoice.invoiceDate)&&(invoice.dueDate==null||dateIsValid(invoice.dueDate)&&invoice.dueDate>=invoice.invoiceDate);
     const next={...action,stage:proposalReady?'proposal':'incomplete',invoice,missingFields:[...missing],ownerProvidedFacts,
       currencySource:Object.hasOwn(ownerProvidedFacts,'currency')?'user':action.currencySource??(legacyPhotoCurrency?'photo':null)};
     if(proposalReady)setReviewReplyRequirement(invoice);

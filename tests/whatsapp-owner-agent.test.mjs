@@ -14,6 +14,21 @@ const customerId='00000000-0000-4000-8000-000000000003';
 const phone='+919871367051';
 const scope={workspaceId,ownerId,customerId,phone,messageId:'wamid.test'};
 
+test('an incomplete photo can retain an optional missing due date when the owner supplies its missing customer',async()=>{
+  const current={id:91,version:1,created_at:new Date().toISOString(),action:{type:'invoice_review_draft',stage:'incomplete',
+    sourceMessageId:'original-photo',currencySource:'photo',missingFields:['customerName'],validationIssues:[],
+    invoice:{invoiceNumber:'PRINTED-91',clientName:null,invoiceDate:'2026-10-01',dueDate:null,total:100,currency:'USD',direction:'receivable'}}};
+  let retained;
+  const pending={async loadInvoiceReview(){return structuredClone(current);},async transitionInvoiceReview(input){retained=input.action;return {...current,action:retained,version:2};}};
+  const tools=createOwnerAgentTools({supabase:{},scope,ownerStore:{async query(){throw Error('No lookup required');}},pending,pendingAtStart:current,pendingInitialState:current,
+    invoiceStoreFactory(){throw Error('A proposal cannot save an invoice');},authorize:async()=>true,
+    message:'The customer is Fixture Customer',messageId:'supplied-customer',logger:{error(){}}});
+  const result=await tools.execute('continueInvoiceReview',{customerName:'Fixture Customer'});
+  assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.stage,'proposal');assert.equal(result.requiresLaterConfirmation,true);
+  assert.equal(retained.invoice.dueDate,null);assert.equal(retained.sourceMessageId,'original-photo');
+  assert.equal(retained.ownerProvidedFacts.customerName.sourceMessageId,'supplied-customer');
+});
+
 test('a thrown workspace tool retains safe exception and requested-operation evidence without retrying a financial write',async()=>{
   const logs=[];let writes=0;
   const tools={definitions:[{type:'function',function:{name:'workspaceData',parameters:{type:'object'}}}],
