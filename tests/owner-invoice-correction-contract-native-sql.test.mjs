@@ -55,6 +55,41 @@ async function fixture(){
 // Native default owner/provider HTTP, consolidated tool, SDK and SQL. The exact
 // serialized canonical filter shape was observed live; malformed field values
 // below are reconstructions because production intentionally logs no values.
+test('serialized correction values and filters select the native audited route and expose only safe transport types',async()=>{
+ const f=await fixture();try{
+  const turn=await f.run(body=>{
+   if(body.tools&&!body.messages.some(m=>m.role==='tool'))return toolCall({operation:'update',table:'invoices',filters:JSON.stringify(target),values:JSON.stringify({due_date:'2026-10-20'})});
+   return completion('Invoice QA-CONTRACT-001 due date changed to 2026-10-20.');
+  },'serialized-both','Change QA-CONTRACT-001 due date to 2026-10-20.');
+  const result=turn.outputs.at(-1);assert.equal(result.completed,true,JSON.stringify(result));
+  assert.equal(result.correctionTransport.valuesType,'string');assert.equal(result.correctionTransport.decodedValuesType,'object');
+  assert.equal(result.correctionTransport.valuesDecoded,true);assert.equal(result.correctionTransport.filtersDecoded,true);
+  assert.equal(result.correctionTransport.exactTarget,true);assert.equal(result.correctionTransport.route,'invoice_correction');
+  assert.equal((await f.read(f.ids[0])).due_date,'2026-10-20');assert.equal(await f.count('invoice_correction_audits'),1);
+  assert.equal(f.requests.filter(r=>r.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length,1);
+  const diagnostic=turn.logs.find(row=>row.label==='WhatsApp owner tool call').data.correctionTransport;
+  assert.deepEqual(diagnostic,result.correctionTransport);assert.doesNotMatch(JSON.stringify(diagnostic),/QA-CONTRACT|2026-10-20|Consulting/);
+  await turn.handler(turn.turn);assert.equal(await f.count('invoice_correction_audits'),1);await f.assertNoCustomerWrites();
+ }finally{await f.close();}
+});
+
+test('missing correction values gets one current-message plan with the original serialized target before native persistence',async()=>{
+ const f=await fixture();try{
+  let plans=0;
+  const message='Change QA-CONTRACT-001 due date to 2026-10-20.';
+  const turn=await f.run(body=>{
+   if(body.response_format){plans++;assert.equal(body.messages.at(-1).content,message);return completion(JSON.stringify({operation:'update',table:'invoices',filters:target,values:{due_date:'2026-10-20'}}));}
+   if(body.tools&&!body.messages.some(m=>m.role==='tool'))return toolCall({operation:'update',table:'invoices',filters:JSON.stringify(target)});
+   return completion('Invoice QA-CONTRACT-001 due date changed to 2026-10-20.');
+  },'missing-values',message);
+  const result=turn.outputs.at(-1);assert.equal(plans,1);assert.equal(result.completed,true,JSON.stringify(result));
+  assert.equal(result.planningRepair.route,'invoice_correction');assert.equal(result.correctionTransport.valuesType,'undefined');
+  assert.deepEqual(result.correctionTransport.valueFields,[]);assert.equal(result.correctionTransport.filtersDecoded,true);
+  assert.equal((await f.read(f.ids[0])).due_date,'2026-10-20');assert.equal(await f.count('invoice_correction_audits'),1);
+  assert.equal(f.requests.filter(r=>r.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length,1);await f.assertNoCustomerWrites();
+ }finally{await f.close();}
+});
+
 test('serialized canonical invoice correction target saves a due date once through the native production toolset',async()=>{
  const f=await fixture();try{
   let calls=0;

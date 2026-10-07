@@ -319,6 +319,27 @@ function decodeInvoiceCorrectionFilters(value){
   if(!exactInvoiceNumberTarget(decoded))throw new TypeError('invalid filters');
   return decoded;
 }
+function decodeInvoiceCorrectionValues(value){
+  if(typeof value!=='string')return value;
+  if(Buffer.byteLength(value,'utf8')>32768)throw new TypeError('invalid invoice correction');
+  let decoded;try{decoded=JSON.parse(value);}catch{throw new TypeError('invalid invoice correction');}
+  if(!ownObject(decoded)||!exactKeys(decoded,INVOICE_CORRECTION_FIELDS))throw new TypeError('invalid invoice correction');
+  return decoded;
+}
+function correctionTransportShape(args,values=args.values){
+  const type=value=>value===null?'null':Array.isArray(value)?'array':typeof value;
+  const fields=ownObject(values)?Object.keys(values):[];
+  let inspectedFilters=args.filters;
+  if(typeof inspectedFilters==='string'&&inspectedFilters.length<=8192)try{inspectedFilters=JSON.parse(inspectedFilters);}catch{}
+  const candidate=Array.isArray(inspectedFilters)&&inspectedFilters.length===1&&ownObject(inspectedFilters[0])?inspectedFilters[0]:null;
+  return {valuesType:type(args.values),filtersType:type(args.filters),decodedValuesType:type(values),valuesDecoded:typeof args.values==='string'&&ownObject(values),
+    valueFields:fields.slice(0,20).map(field=>INVOICE_CORRECTION_FIELDS.includes(field)||field==='status'?field:'unsupported'),
+    unknownValueFieldCount:Math.min(fields.filter(field=>!INVOICE_CORRECTION_FIELDS.includes(field)&&field!=='status').length,21),
+    statusPresent:ownObject(values)&&Object.hasOwn(values,'status'),filtersDecoded:false,route:'not_selected',
+    exactTarget:Boolean(exactInvoiceNumberTarget(inspectedFilters)),targetValueType:type(candidate?.value),
+    targetValueLength:typeof candidate?.value==='string'?Math.min(candidate.value.length,101):null,
+    targetNonempty:typeof candidate?.value==='string'&&Boolean(candidate.value.trim())};
+}
 // Existing validation logs receive bounded allowlisted structure, never values
 // or unknown field names. Decoding a string here cannot change execution.
 function filterStructure(value,table,depth=0,decodeString=true){
@@ -388,11 +409,28 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
     if(!table&&!noTableOps.includes(operation))throw new TypeError('table required');
     if(table&&!['read','create','update','delete','restore','reviewAttachment','sendFile','describe'].includes(operation))throw new TypeError('invalid table operation');
     if(['pending','confirm','cancel','describe'].includes(operation)&&Object.keys(args).some(key=>!['operation',...(operation==='describe'?['table']:[])].includes(key)))throw new TypeError('unexpected operation fields');
+    let values=args.values===undefined?{}:args.values;
+    let correctionTransport=null;
+    if(operation==='update'&&table==='invoices'){
+      correctionTransport=correctionTransportShape(args,values);ctx.recordCorrectionTransport?.(correctionTransport);
+      try{values=decodeInvoiceCorrectionValues(values);}catch(error){correctionTransport.route='invalid_values_encoding';throw error;}
+      Object.assign(correctionTransport,correctionTransportShape(args,values));
+      if(containsForbiddenIdentity(values,scope))throw new TypeError('scope identity supplied');
+      correctionTransport.route=!ownObject(values)?'invalid_values_container':Object.hasOwn(values,'status')?'status_operation':'invoice_correction';
+    }
     const filters=args.filters===undefined?[]:args.filters;
     let normalizedFilters;
     try{
       const structuredFilters=operation==='read'?decodeReadFilters(filters,table||'invoices')
-        :operation==='update'&&table==='invoices'&&ownObject(args.values)&&!Object.hasOwn(args.values,'status')?decodeInvoiceCorrectionFilters(filters):filters;
+        :operation==='update'&&table==='invoices'&&ownObject(values)&&!Object.hasOwn(values,'status')?decodeInvoiceCorrectionFilters(filters):filters;
+      if(correctionTransport){
+        correctionTransport.filtersDecoded=typeof filters==='string'&&Array.isArray(structuredFilters);
+        const candidate=Array.isArray(structuredFilters)&&structuredFilters.length===1?structuredFilters[0]:null;
+        correctionTransport.exactTarget=Boolean(exactInvoiceNumberTarget(structuredFilters));
+        correctionTransport.targetValueType=candidate?.value===null?'null':Array.isArray(candidate?.value)?'array':typeof candidate?.value;
+        correctionTransport.targetValueLength=typeof candidate?.value==='string'?Math.min(candidate.value.length,101):null;
+        correctionTransport.targetNonempty=typeof candidate?.value==='string'&&Boolean(candidate.value.trim());
+      }
       if(containsForbiddenIdentity(structuredFilters,scope))throw new TypeError('scope identity supplied');
       if(!Array.isArray(structuredFilters)||structuredFilters.length>8)throw new TypeError('invalid filters');
       normalizedFilters=structuredFilters.map(filter=>validateFilter(filter,table||'invoices'));
@@ -405,7 +443,6 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
     const columns=args.columns===undefined?null:args.columns;
     if(columns!==null&&(!Array.isArray(columns)||columns.length<1||columns.length>20
       ||columns.some(column=>typeof column!=='string'||!TABLES[table]?.columns.includes(column))))throw new TypeError('invalid columns');
-    const values=args.values===undefined?{}:args.values;
     if(!ownObject(values))throw new TypeError('invalid values');
     if(table==='business_records'&&['delete','restore'].includes(operation)&&Object.keys(values).length)throw new TypeError('invalid write fields');
     if(table==='invoices'&&['create','update','reviewAttachment'].includes(operation)
@@ -531,6 +568,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
   let writeAttempted=false;
   let attemptedOperation=null;
   let nextActionParams=null,nextActionResult=null,nextActionRecords=null;
+  let correctionTransport=null;
   const externalFinancialFields=new Set(['invoice_number','customer_id','customer_name','line_items','subtotal','tax','discount','total_amount','currency','invoice_direction']);
   const externalPreflight=async(params,ctx)=>{
     if(params.table!=='invoices'||params.operation!=='update'||!Object.keys(params.values||{}).some(key=>externalFinancialFields.has(key)||key==='status'&&params.values.status==='paid'))return null;
@@ -913,6 +951,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     const deadlines=[deadlineAt,executionOptions?.deadlineAt].map(asEpoch).filter(Number.isFinite);
     const effectiveDeadline=deadlines.length?Math.min(...deadlines):null;
     const ctx={signal:combinedSignal,deadlineAt:effectiveDeadline,
+      recordCorrectionTransport(shape){if(!correctionTransport)correctionTransport=shape;},
       assertLive(){
         if(signals.some(item=>item.aborted))throw Object.assign(new Error(),{code:'OWNER_LOOP_TIMEOUT'});
         if(effectiveDeadline!==null&&Date.now()>=effectiveDeadline)throw Object.assign(new Error(),{code:'OWNER_LOOP_TIMEOUT'});
@@ -1071,7 +1110,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     }
   };
   const execute=async(raw,options)=>{
-    nextActionParams=null;nextActionResult=null;nextActionRecords=null;
+    nextActionParams=null;nextActionResult=null;nextActionRecords=null;correctionTransport=null;
     let result=await executeRequest(raw,options);
     const rejectedFilters=result?.filterShapeDiagnostic;
     // The model may repeat the same natural-language tool call. Repair its
@@ -1079,8 +1118,10 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     // Only a server-validated preflight rejection with no dispatch qualifies.
     const structuredBatch=Array.isArray(raw?.operations)||raw?.operation==='batch'||raw?.operation==='update'&&Array.isArray(raw?.filters)&&raw.filters.some(filter=>filter?.operator==='in');
     let correctionTarget=null;
-    if(confirmationMode==='direct'&&raw?.operation==='update'&&raw?.table==='invoices'&&ownObject(raw.values)
-      &&Object.keys(raw.values).every(key=>INVOICE_CORRECTION_FIELDS.includes(key))
+    let correctionValues=null;
+    if(raw?.operation==='update'&&raw?.table==='invoices')try{correctionValues=decodeInvoiceCorrectionValues(raw.values===undefined?{}:raw.values);}catch{}
+    if(confirmationMode==='direct'&&raw?.operation==='update'&&raw?.table==='invoices'&&ownObject(correctionValues)
+      &&Object.keys(correctionValues).every(key=>INVOICE_CORRECTION_FIELDS.includes(key))
       &&result?.validationCode==='INVALID_FIELDS'&&typeof planRequest==='function'&&String(message).trim()){
       try{correctionTarget=exactInvoiceNumberTarget(decodeInvoiceCorrectionFilters(raw.filters));}catch{}
     }
@@ -1106,6 +1147,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       result={...safeError(result),writeAttempted:result.writeAttempted??writeAttempted};
     }
     nextActionResult=result;
+    if(correctionTransport)result={...result,correctionTransport};
     return result?.code==='INVALID'?{...result,...(!result.validationCode&&result.outcome!=='review_incomplete'?{message:'Use request text alone, or the structured fields in this catalog. Do not combine request with filters, values or columns. pending/confirm/cancel take no table or values.'}:{}),catalog:catalog(typeof raw?.table==='string'&&Object.hasOwn(TABLES,raw.table)?raw.table:null)}:result;
   };
   return Object.freeze({definition:definition(),execute,getReplyRequirement:()=>replyRequirement?{...replyRequirement}:null,
