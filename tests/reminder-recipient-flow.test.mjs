@@ -22,6 +22,15 @@ const env={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE
   CLOUDFLARE_ACCOUNT_ID:'isolated-account',CLOUDFLARE_API_TOKEN:'isolated-model-token'};
 const logger={error(){},warn(){},log(){}};
 function response(){return {code:200,body:null,setHeader(){},status(value){this.code=value;return this},json(value){this.body=value;return this},send(value){this.body=value;return this}};}
+function workspaceResults(calls){
+  return calls.flatMap(call=>call.messages.filter(message=>message.role==='user'&&message.content.includes('Workspace results:\n'))
+    .flatMap(message=>JSON.parse(message.content.split('Workspace results:\n')[1])));
+}
+function hasResultValue(value,expected){
+  if(Array.isArray(value))return value.some(item=>hasResultValue(item,expected));
+  if(value&&typeof value==='object')return Object.values(value).some(item=>hasResultValue(item,expected));
+  return value===expected||(typeof expected==='number'&&typeof value==='string'&&/^\d+(?:\.\d+)?$/.test(value)&&Number(value)===expected);
+}
 
 async function setup(){
   let modelArgs={},modelMode='read',graphMode='accepted',reminderMode='accepted',graphCalls=[],modelCalls=[],hook=null;
@@ -116,13 +125,16 @@ test('real worker, API, SQL claims and reminder engine send one scoped mock remi
 
 test('signed recipient webhook runs real customer handler/outbound, pauses without inventing payment and isolates other customers',async()=>{
   const f=await setup();try{
+    // A timestamp can contain the foreign amount's digits without leaking its record.
+    await f.db.query("update invoices set created_at='2026-10-07T10:24:30.999Z' where id=$1",[f.scope.invoiceId]);
     const ownNumber=(await f.db.query('select invoice_number from invoices where id=$1',[f.scope.invoiceId])).rows[0].invoice_number;
     const reply=await f.receive('What is my invoice status?');assert.equal(reply.processed.completed,1);
     const row=await f.store.getInvoice(f.scope);assert.equal(row.followup_state,'paused');assert.equal(row.next_follow_up_at,null);assert.equal(Number(row.amount_paid),0);
     assert.equal((await f.db.query('select count(*)::int as n from payments')).rows[0].n,0);
-    const tools=f.modelCalls.flatMap(call=>call.messages.filter(message=>message.role==='user'&&message.content.includes('Workspace results:')).map(message=>message.content));
-    assert(tools.some(content=>content.includes(ownNumber)),JSON.stringify(f.modelCalls));
-    assert(!tools.some(content=>content.includes('Foreign private recipient')||content.includes('999')));
+    const tools=workspaceResults(f.modelCalls);
+    assert(JSON.stringify(tools).includes('2026-10-07T10:24:30.999'),JSON.stringify(tools));
+    assert(hasResultValue(tools,ownNumber),JSON.stringify(f.modelCalls));
+    assert(!hasResultValue(tools,'Foreign private recipient')&&!hasResultValue(tools,'PRIVATE-SECRET')&&!hasResultValue(tools,999));
     const final=(await f.db.query("select * from whatsapp_messages where direction='outbound'")).rows;
     assert.equal(final.length,1);assert.equal(final[0].status,'accepted');assert.equal(final[0].customer_id,f.customerId);assert.equal(final[0].audience,'customer');
     assert(f.graphCalls.some(call=>call.type==='text'&&call.to===phone.slice(1)));
@@ -130,8 +142,8 @@ test('signed recipient webhook runs real customer handler/outbound, pauses witho
     await f.receive('Change the invoice amount to 1');assert.equal(f.modelCalls.length,modelsBefore);
     assert.equal(Number((await f.store.getInvoice(f.scope)).total_amount),125);
     f.model({customerId:f.foreignCustomer});await f.receive('Show the other customer invoices');
-    const foreignResult=f.modelCalls.at(-1).messages.filter(message=>message.role==='user'&&message.content.includes('Workspace results:')).map(message=>message.content).join('');
-    assert(!foreignResult.includes('Foreign private recipient')&&!foreignResult.includes('999'));
+    const foreignResult=workspaceResults([f.modelCalls.at(-1)]);
+    assert(!hasResultValue(foreignResult,'Foreign private recipient')&&!hasResultValue(foreignResult,'PRIVATE-SECRET')&&!hasResultValue(foreignResult,999));
     f.model({},'owner-tool');await f.receive('Show the business settings');
     assert(f.modelCalls.filter(call=>call.tools).every(call=>!call.tools.some(tool=>tool.function?.name==='workspaceData')));
     assert(!f.requests.some(request=>/whatsapp_apply_direct_owner_write|whatsapp_workspace_data_propose/.test(request.url)));

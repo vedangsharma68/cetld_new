@@ -14,6 +14,37 @@ const customerId='00000000-0000-4000-8000-000000000003';
 const phone='+919871367051';
 const scope={workspaceId,ownerId,customerId,phone,messageId:'wamid.test'};
 
+test('an incomplete photo can retain an optional missing due date when the owner supplies its missing customer',async()=>{
+  const current={id:91,version:1,created_at:new Date().toISOString(),action:{type:'invoice_review_draft',stage:'incomplete',
+    sourceMessageId:'original-photo',currencySource:'photo',missingFields:['customerName'],validationIssues:[],
+    invoice:{invoiceNumber:'PRINTED-91',clientName:null,invoiceDate:'2026-10-01',dueDate:null,total:100,currency:'USD',direction:'receivable'}}};
+  let retained;
+  const pending={async loadInvoiceReview(){return structuredClone(current);},async transitionInvoiceReview(input){retained=input.action;return {...current,action:retained,version:2};}};
+  const tools=createOwnerAgentTools({supabase:{},scope,ownerStore:{async query(){throw Error('No lookup required');}},pending,pendingAtStart:current,pendingInitialState:current,
+    invoiceStoreFactory(){throw Error('A proposal cannot save an invoice');},authorize:async()=>true,
+    message:'The customer is Fixture Customer',messageId:'supplied-customer',logger:{error(){}}});
+  const result=await tools.execute('continueInvoiceReview',{customerName:'Fixture Customer'});
+  assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.stage,'proposal');assert.equal(result.requiresLaterConfirmation,true);
+  assert.equal(retained.invoice.dueDate,null);assert.equal(retained.sourceMessageId,'original-photo');
+  assert.equal(retained.ownerProvidedFacts.customerName.sourceMessageId,'supplied-customer');
+});
+
+test('a thrown workspace tool retains safe exception and requested-operation evidence without retrying a financial write',async()=>{
+  const logs=[];let writes=0;
+  const tools={definitions:[{type:'function',function:{name:'workspaceData',parameters:{type:'object'}}}],
+    async execute(){writes++;const error=new TypeError('customer secret Bearer secret-token-value');
+      error.stack='TypeError: customer secret\n at execute (file:///var/task/automation/whatsapp/workspace-data.mjs:831:21)';throw error;},
+    getWriteAttempted:()=>true};
+  const result=await runOwnerAgent({tools,message:'change invoice amount',logger:{info(label,data){logs.push({label,data});}},
+    provider:{async generate(){return {model:CF_QWEN_MODEL,toolCalls:[{id:'isolated-throw',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'update',table:'invoices',values:{total_amount:6670,currency:'INR'}})}}]};}}});
+  assert.equal(writes,1);assert.equal(result.plannerFailure.code,'OWNER_AGENT_TOOL_FAILED');
+  assert.match(result.answer,/check your workspace|check its status/i);
+  const call=logs.find(row=>row.label==='WhatsApp owner tool call').data;
+  assert.equal(call.operation,'update');assert.equal(call.table,'invoices');
+  assert.deepEqual(call.exception,{errorName:'TypeError',exceptionCode:'UNKNOWN',applicationFrame:'automation/whatsapp/workspace-data.mjs:831:21'});
+  assert.doesNotMatch(JSON.stringify(logs),/secret|token|6670/);
+});
+
 function memorySupabase({models={primary_model:CF_QWEN_MODEL,fallback_model:'gemini-3.5-flash-lite'}}={}) {
   const tables={
     whatsapp_owner_verifications:[{workspace_id:workspaceId,requested_by:ownerId,verified_at:'2026-10-02T00:00:00Z',created_at:'2026-10-02T00:00:00Z',phone}],
@@ -174,7 +205,8 @@ test('a read-only or explicitly declined attachment request does not force invoi
 
 test('an adversarial ingest tool call cannot turn a bare yes or cancel into invoice processing',async()=>{
   let innerCalls=0;
-  for(const message of ['YES','cancel','']){
+  for(const message of ['YES','cancel','',"Don't log this invoice",'Do not save it','Just tell me the total','Log the deletion from earlier',
+    'I do not want you to save this invoice',"Can you log this invoice? No, don't",'I prefer not to save this invoice','Save this invoice, but not yet']){
     const pending={...pendingStore(),async loadInvoiceReview(){throw new Error('must not be reached');}};
     const tools=createOwnerAgentTools({supabase:{},scope,ownerStore:{query:async()=>[]},pending,pendingAtStart:null,lifecyclePending:null,
       invoiceStoreFactory:()=>({}),settingsStore:{},config:{primaryModel:CF_QWEN_MODEL,fallbackModel:'gemini-3.5-flash-lite'},

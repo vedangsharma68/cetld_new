@@ -145,8 +145,8 @@ test('production extraction advances an incomplete OCR draft to vision and propo
   assert.match(answer, /^Logged invoice INV-10/);
 });
 
-test('incomplete media returns bounded review guidance and stores no proposal', async () => {
-  let stored = 0, visionCalls = 0;
+test('incomplete media asks for missing facts and retains an incomplete review without a proposal', async () => {
+  let stored = 0, visionCalls = 0, retained;
   const supabase = {from(table) { return {select() { return this; }, eq() { return this; }, async maybeSingle() {
     if (table === 'workspace_ai_settings') return {data: {primary_model: 'space-bunny-free', fallback_model: null}};
     if (table === 'workspace_settings') return {data: {business_name: 'Seller'}};
@@ -162,14 +162,16 @@ test('incomplete media returns bounded review guidance and stores no proposal', 
   }};
   const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase, providerFactory: () => provider,
     channelFactory: () => ({ask: async () => ({answer: 'text reply'})}),
-    pendingActionStoreFactory: () => mediaReviewStore({push() { stored++; }}),
+    pendingActionStoreFactory: () => mediaReviewStore({push(input) { stored++; retained=input.action; }}),
     extract: options => extractInvoice({...options, imageExtractor: async () =>
       parseOfflineInvoiceText('Subtotal 100.00\nTotal 100.00', {ocrConfidence: 92})})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([137,80,78,71,13,10,26,10,0]),
     mimeType: 'image/png', fileName: 'unclear.png'}});
-  assert.match(answer, /clearer photo.*Nothing was saved/i);
+  assert.match(answer, /confirm the customer name, total.*Nothing was saved/i);
   assert.equal(visionCalls, 1);
   assert.equal(stored, 1);
+  assert.equal(retained.stage,'incomplete');
+  assert.deepEqual(retained.missingFields,['customerName','total']);
 });
 
 test('Vercel traces OCR assets into both WhatsApp functions', async () => {

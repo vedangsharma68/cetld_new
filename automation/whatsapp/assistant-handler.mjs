@@ -18,11 +18,37 @@ const fieldLabels = {invoiceNumber: 'invoice number', customerName: 'customer na
   dueDate: 'due date', total: 'total', currency: 'explicit currency code (for example INR or USD)',
   direction: 'confirmation that your business issued the invoice'};
 
-function clarification(extracted) {
-  const missing = requiredInvoiceFields.filter(name => extracted?.[name]?.value == null
-    || extracted[name].confidence < 0.75 || (name === 'direction' && extracted[name].value !== 'receivable'));
-  const details = missing.map(name => fieldLabels[name]);
-  return `I could only prepare a partial review. Please reply with ${details.join(', ')}. I won't save anything until I can show you a complete proposal and you explicitly confirm it.`;
+export function invoiceReviewClarification(action) {
+  const details = (action.missingFields || []).map(name => fieldLabels[name]);
+  const issues = action.validationIssues || [];
+  const moneyIssues = issues.some(code => /SUBTOTAL|TAX|OUTSTANDING|BALANCE|LINE_ITEMS|AMOUNT|TOTAL/.test(code));
+  const mismatch = issues.includes('INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX');
+  return ['I could only prepare a partial review.',
+    mismatch ? 'The subtotal plus tax does not match the total, so the amount breakdown needs review.' : null,
+    moneyIssues ? 'Please verify the amounts and send a corrected invoice or a clearer photo showing the subtotal, tax, total, outstanding balance, and any printed adjustments.' : null,
+    details.length ? `Please confirm the ${details.join(', ')}.` : null,
+    !moneyIssues && !details.length ? 'Please send a clearer photo so I can verify the invoice details.' : null,
+    'Nothing was saved.'].filter(Boolean).join(' ');
+}
+
+function extractionValidationIssues(extracted) {
+  const uncertain = new Set([...(extracted?.uncertainFields || []), ...(extracted?.missingFields || [])]);
+  const issues = [];
+  for (const [field, label] of [['subtotal','SUBTOTAL'], ['tax','TAX'], ['total','TOTAL'], ['outstandingAmount','OUTSTANDING_AMOUNT']]) {
+    const fact = extracted?.[field];
+    // Missing currency also marks otherwise readable money uncertain. Currency
+    // inference below remains responsible for that case; it cannot resolve low
+    // confidence or contradictory printed amounts.
+    if (fact?.value != null && (fact.confidence < 0.75 || extracted?.currency?.value && uncertain.has(field))) {
+      issues.push(`UNCERTAIN_${label}`);
+    }
+  }
+  const items = extracted?.lineItems?.value;
+  if (Array.isArray(items) && items.length && (extracted.lineItems.confidence < 0.75
+    || uncertain.has('lineItems') || items.some(item => item.confidence != null && item.confidence < 0.75))) {
+    issues.push('UNCERTAIN_LINE_ITEMS');
+  }
+  return issues;
 }
 
 function invoiceProposal(extracted) {
@@ -242,6 +268,8 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       const token = await pending.beginInvoiceReview({workspaceId, customerId, phone});
       if (token?.action?.stage === 'saving') return 'That invoice is already being saved. Please wait for it to finish before sending a replacement photo.';
       if (mediaError) return "I couldn't fetch that photo. The earlier invoice review was discarded; please resend the photo.";
+      let extracted = null;
+      let review = null;
       try {
         const {data: workspace, error: workspaceError} = await supabase.from('workspace_settings').select('business_name,default_currency')
           .eq('workspace_id', workspaceId).maybeSingle();
@@ -256,19 +284,13 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         // Reserve invocation time for validation, pending-action persistence,
         // the scoped reply claim/send, and durable completion.
         const extractionDeadlineAt = Math.min(Number.isFinite(deadlineAt) ? deadlineAt : Infinity, Date.now() + 28_000);
-        const extracted = await extract({provider: extractionProvider, ...media,
+        extracted = await extract({provider: extractionProvider, ...media,
           businessName: workspace?.business_name || '', signal, deadlineAt: extractionDeadlineAt, logger});
         active();
         if (extracted?.direction?.value === 'payable' && extracted.direction.confidence >= 0.75) {
           await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
             action: {...reviewDraft(extracted,messageId), stage: 'canceled'}});
           return 'This looks like a bill your business owes, so nothing was saved.';
-        }
-        if (!extracted?.customerName?.value || extracted.customerName.confidence < 0.75
-          || extracted?.total?.value == null || extracted.total.confidence < 0.75 || extracted.total.value <= 0) {
-          await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
-            action: {...reviewDraft(extracted,messageId), stage: 'canceled'}});
-          return "I couldn't reliably read the customer name and total. Please send a clearer photo. Nothing was saved.";
         }
         const currencyResult = inferInvoiceCurrency(extracted, extracted?.rawText || '', workspace?.default_currency || 'INR');
         if (currencyResult.unsupportedCurrency) {
@@ -288,15 +310,41 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         if (extracted?.direction?.value !== 'receivable' || extracted.direction.confidence < 0.75) {
           assumptions.push('direction assumed to be an invoice you issued');
         }
-        const invoice = {invoiceNumber: extracted?.invoiceNumber?.value || 'AUTO', clientName: extracted.customerName.value,
+        const invoice = {invoiceNumber: extracted?.invoiceNumber?.value || 'AUTO', clientName: extracted?.customerName?.value ?? null,
           clientEmail: extracted?.clientEmail?.value ?? null, clientPhone: extracted?.clientPhone?.value ?? null,
           clientPhoneRaw: extracted?.clientPhoneRaw?.value ?? null,
           invoiceDate, dueDate: due.dueDate, subtotal: extracted?.subtotal?.value ?? null,
-          tax: extracted?.tax?.value ?? null, total: extracted.total.value,
-          outstanding: extracted?.outstandingAmount?.value ?? extracted.total.value,
+          tax: extracted?.tax?.value ?? null, total: extracted?.total?.value ?? null,
+          outstanding: extracted?.outstandingAmount?.value ?? extracted?.total?.value ?? null,
           currency: currencyResult.currency, notes: extracted?.notes?.value ?? null, alreadyPaid: false,
           direction: 'receivable', lineItems: extracted?.lineItems?.value || []};
-        const validatedInvoice = approvedInvoice(invoice);
+        const validationIssues = extractionValidationIssues(extracted);
+        const missing = ['customerName', 'total'].filter(field => extracted?.[field]?.value == null
+          || extracted[field].confidence < 0.75 || field === 'total' && extracted[field].value <= 0);
+        let validatedInvoice;
+        try { validatedInvoice = approvedInvoice(invoice); }
+        catch (validationError) {
+          // Successful extraction with incomplete or conflicting invoice facts
+          // is a review outcome, not an unavailable extraction provider.
+          if (validationError?.status !== 422) throw validationError;
+          const field = {CLIENT_REQUIRED:'customerName', INVOICE_NUMBER_REQUIRED:'invoiceNumber',
+            INVOICE_DATE_REQUIRED:'invoiceDate', INVALID_DUE_DATE:'dueDate', CURRENCY_REQUIRED:'currency',
+            INVOICE_TOTAL_REQUIRED:'total', INVOICE_TOTAL_MUST_BE_POSITIVE:'total',
+            INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX:'total'}[validationError.code];
+          if (field && !missing.includes(field)) missing.push(field);
+          if (!field || validationError.code === 'INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX') {
+            validationIssues.push(validationError.code);
+          }
+        }
+        if (missing.length || validationIssues.length) {
+          review = {...reviewDraft(extracted, messageId), invoice, missingFields: missing,
+            validationIssues: [...new Set(validationIssues)], failureCode: 'INVOICE_REVIEW_INCOMPLETE',
+            currencySource: 'photo', currencyEvidence: currencyResult.source,
+            dueDateSource: due.source, assumptions, warnings: extracted?.warnings || []};
+          const stored = await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone,
+            fromStage: 'extracting', action: review});
+          return stored ? invoiceReviewClarification(review) : 'A newer photo replaced this review. Nothing from this photo was saved.';
+        }
         active();
         // The database only allows extracting -> proposal -> saving, and requires
         // currencySource to be the marker 'photo' or 'user'. The readable evidence
@@ -366,11 +414,13 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           return `The invoice was NOT saved because ${saveError?.code === 'UNSUPPORTED_CURRENCY' ? 'its currency is not supported' : 'cetld could not save it right now'}. Please send the photo again to retry.`;
         }
       } catch (error) {
-        logger?.error?.('WhatsApp invoice extraction failed', {workspaceId,
+        const failureCode = extracted ? 'INVOICE_REVIEW_UNAVAILABLE' : 'EXTRACTION_UNAVAILABLE';
+        logger?.error?.('WhatsApp invoice review failed', {workspaceId, code: failureCode,
           message: String(error?.message || '').slice(0, 200)});
         await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
-          action: {type: 'invoice_review_draft', stage: 'canceled'}}).catch(() => null);
-        return "I couldn't reliably read that invoice. Please send a clearer photo. Nothing was saved.";
+          action: {...(review || reviewDraft(extracted, messageId)), stage: 'canceled', failureCode}}).catch(() => null);
+        return extracted ? "I couldn't finish preparing that invoice review right now. Please try again. Nothing was saved."
+          : "The invoice extraction service is unavailable right now. Please try again. Nothing was saved.";
       }
     }
     let contactPending = null;
@@ -549,7 +599,8 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       }
       const candidate = CURRENCY_REPLY.exec(message)?.[1]?.toUpperCase();
       const currency = candidate && isSupportedCurrency(candidate) ? candidate : null;
-      if (action.stage === 'incomplete' && action.missingFields?.length === 1 && action.missingFields[0] === 'currency') {
+      if (action.stage === 'incomplete' && !action.validationIssues?.length
+        && action.missingFields?.length === 1 && action.missingFields[0] === 'currency') {
         if (!currency) return 'Please reply with a supported 3-letter currency code, such as USD or INR.';
         const invoice = approvedInvoice({...action.invoice, currency});
         const next = {...action, stage: 'proposal', invoice, missingFields: [], currencySource: 'user'};

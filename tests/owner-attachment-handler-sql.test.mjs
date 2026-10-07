@@ -8,9 +8,11 @@ import {authorizeOwnerPhone} from '../automation/whatsapp/owner-binding.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 import {createWhatsAppInvoiceStore} from '../automation/whatsapp/invoice-store.mjs';
 import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistant-handler.mjs';
+import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
+import {extractInvoice} from '../ai/extraction.mjs';
 
 const phone='+919871367051';
-async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseReplyReceipt=false}={}){
+async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseReplyReceipt=false,caption='log this invoice',history=[],nativeWire=false,extractionWire=null}={}){
   const f=await createOfflineSqlNetwork(),ownerId=randomUUID();
   await f.db.query('insert into auth.users(id) values($1)',[ownerId]);
   await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
@@ -26,6 +28,7 @@ async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseRep
     notes:'Net 30',paymentTerms:'Net 30',lineItems:[{description:'Fixture service',quantity:1,unitPrice:6190,amount:6190}]})
     .map(([key,value])=>[key,{value,confidence:.99}]));
   const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
+    ...(history.length?{historyReader:async()=>history}:{}),
     ...(loseReplyReceipt?{replyStore:null}:{}),
     invoiceStoreFactory:verified=>{
       const store=createWhatsAppInvoiceStore({supabase:f.supabase,...verified,audience:'owner'});
@@ -38,8 +41,27 @@ async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseRep
     authorize:input=>{assert.ok(input?.workspaceId&&input?.ownerId&&input?.customerId&&input?.phone);
       return authorizeOwnerPhone({supabase:f.supabase,...input});},
     toolsFactory:options=>createOwnerWorkspaceTools({...options,
-      attachmentIngestFactory:input=>createWhatsAppBoundMessageHandler({...input,extract:async()=>{extractions++;return structuredClone(extracted);}})}),
-    providerFactory:()=>({async generate({messages,tools,toolChoice}){
+      attachmentIngestFactory:input=>createWhatsAppBoundMessageHandler({...input,extract:async request=>{
+        extractions++;
+        return extractionWire?extractInvoice({...request,imageExtractor:async()=>null,
+          provider:{async generateStructured(call){return {data:call.validate(structuredClone(extractionWire)),model:'gemini-3.5-flash-lite'};}}}):structuredClone(extracted);
+      }})}),
+    providerFactory:()=>nativeWire?new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,
+      cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,logger:{info(){},warn(){},error(){}},
+      fetchImpl:async(_url,input)=>{
+        const wire=JSON.parse(input.body),result=wire.messages.findLast(item=>item.role==='tool');
+        let message;
+        if(!result){
+          assert.equal(wire.tool_choice,'required');assert.deepEqual(wire.tools.map(tool=>tool.function.name),['workspaceData']);
+          // The production provider tried to log an earlier deletion. Even a
+          // well-formed native call must be bound to the current attachment.
+          message={content:'',tool_calls:[{id:'stale-context-log',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'create',table:'business_records',values:{record_type:'log',name:'Deleted duplicate invoice INV-OLD'}})}}]};
+        }else{
+          const value=JSON.parse(result.content);results.push(value);
+          message={content:value.completed?`Saved invoice ${value.review.invoice.invoiceNumber} for Fixture customer, USD 6190.`:'The invoice could not be logged due to temporary unavailability.'};
+        }
+        return new Response(JSON.stringify({choices:[{message,finish_reason:message.tool_calls?'tool_calls':'stop'}]}),{status:200,headers:{'content-type':'application/json'}});
+      }}):({async generate({messages,tools,toolChoice}){
       const result=messages.findLast(item=>item.role==='tool');
       if(!result){
         assert.equal(toolChoice,'required');assert.deepEqual(tools.map(tool=>tool.function.name),['workspaceData']);
@@ -50,12 +72,53 @@ async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseRep
       return {model:'fixture',content:value.completed?`Saved invoice ${value.review.invoice.invoiceNumber} for Fixture customer, USD 6190.`:'I could not log the invoice because the processing failed.'};
     }})});
   async function turn(id,mimeType='image/jpeg'){
-    const bytes=Buffer.from('isolated invoice source '+mimeType);
-    await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'123456',$2,$3,'log this invoice','processing') on conflict(provider_message_id) do nothing",[id,phone,mimeType==='application/pdf'?'document':'image']);
-    return {reply:await handler({...scope,message:'log this invoice',messageId:id,media:{bytes,mimeType,fileName:mimeType==='application/pdf'?'fixture.pdf':'fixture.jpg'}}),bytes};
+    const bytes=extractionWire?Buffer.from([255,216,255,0,0,0]):Buffer.from('isolated invoice source '+mimeType);
+    await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'123456',$2,$3,$4,'processing') on conflict(provider_message_id) do nothing",[id,phone,mimeType==='application/pdf'?'document':'image',caption]);
+    return {reply:await handler({...scope,message:caption,messageId:id,media:{bytes,mimeType,fileName:mimeType==='application/pdf'?'fixture.pdf':'fixture.jpg'}}),bytes};
   }
   return {...f,scope,handler,turn,results,get extractions(){return extractions;}};
 }
+
+for(const caption of ['log this','please save it','record the attached'])test(`current attachment caption '${caption}' cannot log an earlier deletion through native Cloudflare calls and real SQL`,async()=>{
+  const f=await fixture({caption,nativeWire:true,history:[{role:'user',content:'delete it'},{role:'assistant',content:'Deleted duplicate invoice INV-OLD.'}]});
+  try{
+    const {reply}=await f.turn('attachment-current-caption');
+    assert.equal(reply.plannerFailure,undefined,JSON.stringify(reply));
+    assert.match(reply.answer,/Saved invoice INV-2026-0001/);
+    assert.equal(f.extractions,1);
+    assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,1);
+    assert.equal((await f.db.query('select count(*)::int n from invoice_files')).rows[0].n,1);
+    assert.equal((await f.db.query('select count(*)::int n from business_records')).rows[0].n,0);
+    assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});
+
+test('actual extraction wire and default owner toolset retain contradictory amounts and replace a false outage reply with the review reason',async()=>{
+  const facts={invoiceNumber:'0852',customerName:'Fixture customer',invoiceDate:'2026-10-01',dueDate:'2026-10-01',subtotal:100,tax:10,total:115,
+    outstandingAmount:115,currency:null,direction:'receivable',clientEmail:null,clientPhone:null,clientPhoneRaw:null,notes:'Shipping 5',currencySource:null,addressHint:null,paymentTerms:'Due on receipt'};
+  const extractionWire={...Object.fromEntries(Object.entries(facts).flatMap(([name,value])=>[[name,value],[name+'Confidence',value===null?0:.99]])),
+    lineItems:[{description:'Printed service',quantity:1,unitPrice:100,amount:100,confidence:.99}],lineItemsConfidence:.99};
+  const f=await fixture({nativeWire:true,extractionWire});try{
+    const {reply}=await f.turn('inconsistent-attachment');
+    assert.equal(reply.plannerFailure,undefined,JSON.stringify(reply));
+    assert.match(reply.answer,/subtotal plus tax does not match the total/);
+    assert.match(reply.answer,/Nothing was saved/);
+    assert.doesNotMatch(reply.answer,/unavailable|processing failed/i);
+    const pending=createWhatsAppPendingActionStore({supabase:f.supabase}),review=await pending.loadInvoiceReview(f.scope);
+    assert.equal(review.action.stage,'incomplete');assert.equal(review.action.sourceMessageId,'inconsistent-attachment');
+    assert.equal(review.action.invoice.subtotal,100);assert.equal(review.action.invoice.tax,10);assert.equal(review.action.invoice.total,115);
+    assert.ok(review.action.validationIssues.includes('INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX'));
+    const tools=createOwnerWorkspaceTools({supabase:f.supabase,scope:f.scope,pending,pendingAtStart:review,pendingInitialState:review,
+      ownerStore:{async query(){throw Error('An inconsistent review must not read unrelated records');}},
+      invoiceStoreFactory:()=>{throw Error('An inconsistent review must not construct a write store');},
+      authorize:async()=>true,message:'The total is 115; save it',messageId:'inconsistent-follow-up',logger:{error(){}}});
+    const continued=await tools.execute('workspaceData',{operation:'reviewAttachment',table:'invoices',values:{total_amount:115}});
+    assert.equal(continued.ok,false);assert.equal(continued.code,'INVALID');assert.match(continued.message,/amount breakdown/);
+    assert.equal((await tools.execute('workspaceData',{operation:'saveAttachment'})).ok,false);
+    for(const table of ['invoices','invoice_files','business_records','payments'])assert.equal((await f.db.query(`select count(*)::int n from ${table}`)).rows[0].n,0);
+    assert.equal(f.extractions,1);assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});
 
 for(const mimeType of ['image/jpeg','application/pdf'])test(`real owner handler and SQL log ${mimeType}, persist source and replay once with missing-phone follow-up`,async()=>{
   const f=await fixture();try{

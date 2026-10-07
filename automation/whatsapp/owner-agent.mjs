@@ -9,7 +9,7 @@ import {createOwnerScopedStore} from '../../ai/whatsapp-channel.mjs';
 import {createWhatsAppInvoiceStore} from './invoice-store.mjs';
 import {createWhatsAppPendingActionStore} from './pending-actions.mjs';
 import {createOwnerSettingsStore, describeSettingsChange} from './owner-settings.mjs';
-import {createWhatsAppBoundMessageHandler,reviewDraft} from './assistant-handler.mjs';
+import {createWhatsAppBoundMessageHandler,reviewDraft,invoiceReviewClarification} from './assistant-handler.mjs';
 import {extractInvoice} from '../../ai/extraction.mjs';
 import {isSupportedCurrency} from '../../currency-contract.mjs';
 
@@ -118,9 +118,10 @@ function normalizedOwnerText(value) {
 function ownerRequestsInvoiceAttachment(message) {
   const text=normalizedOwnerText(message);
   const explicit= /\b(?:log|save|add|create|record|enter)\b.{0,80}\b(?:this|the|attached)?\s*(?:invoice|bill)\b/u.test(text)
-    || /\b(?:invoice|bill)\b.{0,80}\b(?:log|save|add|create|record)\b/u.test(text);
+    || /\b(?:invoice|bill)\b.{0,80}\b(?:log|save|add|create|record)\b/u.test(text)
+    || /^(?:(?:please|pls|kindly|can you|could you|would you)\s+)?(?:log|save|add|create|record|enter)\s+(?:(?:this|it)(?:\s+(?:attachment|image|photo|picture|pdf|document|file))?|(?:the\s+)?attached(?:\s+(?:attachment|image|photo|picture|pdf|document|file))?)(?:\s+(?:please|for me))?[.!?]*$/u.test(text);
   if(!explicit)return false;
-  return !/\b(?:don't|do not|never|must not)\s+(?:log|save|add|create|record|enter)\b/u.test(text);
+  return !/\b(?:don't|do not|never|must not|shouldn't|should not|avoid)\b|\bnot\s+(?:now|yet|to\s+(?:log|save|add|create|record|enter))\b|(?:^|[.!?;,])\s*no\b/u.test(text);
 }
 function mentionsWholePhrase(text,value) {
   const source=normalizedOwnerText(text),needle=normalizedOwnerText(value);
@@ -552,6 +553,8 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     const currentAction=pendingAtStart?.action;
     if(!pendingStoreAvailable||!pending||typeof pending.loadInvoiceReview!=='function'
       ||typeof pending.transitionInvoiceReview!=='function')return {ok:false,code:'UNAVAILABLE',message:SAFE_ERRORS.UNAVAILABLE};
+    if(currentAction?.type==='invoice_review_draft'&&currentAction.validationIssues?.length)
+      return {ok:false,code:'INVALID',outcome:'review_incomplete',message:invoiceReviewClarification(currentAction)};
     if(currentAction?.type==='invoice_review_draft'&&['incomplete','proposal'].includes(currentAction.stage)){
       const keys={invoiceNumber:'invoiceNumber',customerName:'clientName',invoiceDate:'invoiceDate',dueDate:'dueDate',total:'total',currency:'currency',direction:'direction',subtotal:'subtotal',tax:'tax',notes:'notes',lineItems:'lineItems',clientEmail:'clientEmail',clientPhone:'clientPhone'};
       if(raw&&typeof raw==='object'&&!Array.isArray(raw)&&Object.keys(raw).length
@@ -633,7 +636,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     const proposalReady=missing.size===0&&invoice.direction==='receivable'&&isSupportedCurrency(invoice.currency)
       &&typeof invoice.invoiceNumber==='string'&&invoice.invoiceNumber.trim()
       &&typeof invoice.clientName==='string'&&invoice.clientName.trim()&&amountCents(invoice.total)!==null
-      &&dateIsValid(invoice.invoiceDate)&&dateIsValid(invoice.dueDate)&&invoice.dueDate>=invoice.invoiceDate;
+      &&dateIsValid(invoice.invoiceDate)&&(invoice.dueDate==null||dateIsValid(invoice.dueDate)&&invoice.dueDate>=invoice.invoiceDate);
     const next={...action,stage:proposalReady?'proposal':'incomplete',invoice,missingFields:[...missing],ownerProvidedFacts,
       currencySource:Object.hasOwn(ownerProvidedFacts,'currency')?'user':action.currencySource??(legacyPhotoCurrency?'photo':null)};
     if(proposalReady)setReviewReplyRequirement(invoice);
@@ -647,6 +650,8 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
 
   async function confirmInvoiceReview(current=pendingAtStart) {
     const action=current?.action;
+    if(action?.type==='invoice_review_draft'&&action.validationIssues?.length)
+      return {ok:false,code:'INVALID',outcome:'review_incomplete',message:invoiceReviewClarification(action)};
     if(action?.type!=='invoice_review_draft'||!['proposal','saving'].includes(action.stage))
       return {ok:false,code:'NO_PENDING_ACTION',message:SAFE_ERRORS.NO_PENDING_ACTION};
     if(!pendingStoreAvailable||!pending||typeof pending.loadInvoiceReview!=='function'
@@ -1120,8 +1125,8 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
           return confirmInvoiceReview(current);
         }
         if(!media&&!mediaError)return {ok:false,code:'INVALID',message:'There is no image or PDF attached to this message.'};
-        if(!String(message||'').trim()||YES.test(message)||CANCEL.test(message))
-          return {ok:false,code:'INVALID',message:'A bare attachment or pending-action reply does not authorize invoice processing.'};
+        if(!ownerRequestsInvoiceAttachment(message))
+          return {ok:false,code:'INVALID',message:'The current message must explicitly ask to log the attached invoice. A bare attachment, declined save or pending-action reply does not authorize invoice processing.'};
         if(typeof pending.loadInvoiceReview!=='function')return {ok:false,code:'UNAVAILABLE',message:SAFE_ERRORS.UNAVAILABLE};
         attachmentIngested=true;
         const handler=attachmentIngestFactory({supabase,env,fetchImpl,providerFactory,
@@ -1142,16 +1147,26 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         const action=review?.action;
         if(!action||action.type!=='invoice_review_draft')return {ok:false,code:'UNAVAILABLE',message:SAFE_ERRORS.UNAVAILABLE};
         const reviewFacts=action?{stage:action.stage,missingFields:Array.isArray(action.missingFields)?action.missingFields:[],
+          ...(action.validationIssues?.length?{validationIssues:action.validationIssues}:{}),
           ...(action.invoice?{invoice:Object.fromEntries(['invoiceNumber','clientName','clientEmail','clientPhone','invoiceDate','dueDate','subtotal','tax','total','outstanding','currency','notes','direction','lineItems']
             .filter(key=>action.invoice[key]!==undefined).map(key=>[key,action.invoice[key]]))}:{})}:null;
         if(action.stage==='saved'&&action.invoice?.id){
           return verifiedAttachmentReceipt(review,reviewFacts);
         }
-        if(['incomplete','proposal'].includes(action.stage))return {ok:true,outcome:'review_ready',review:reviewFacts,
-          details:'The attachment produced a durable review, but no saved invoice result is recorded.'};
+        if(['incomplete','proposal'].includes(action.stage)){
+          const incomplete=action.stage==='incomplete';
+          if(incomplete)replyRequirement={attachmentReview:{incomplete:true,validationIssues:action.validationIssues||[],
+            answer:invoiceReviewClarification({...action,missingFields:action.missingFields||[],validationIssues:action.validationIssues||[]})}};
+          return {ok:true,outcome:'review_ready',review:reviewFacts,
+            ...(incomplete?{message:replyRequirement.attachmentReview.answer}:{}),
+            details:'The attachment produced a durable review, but no saved invoice result is recorded.'};
+        }
         if(action.stage==='saving')return {ok:false,code:'PENDING',message:'Invoice processing is still in progress. Do not retry the write until its status is checked.',review:reviewFacts};
         if(action.stage==='failed')return {ok:false,code:action.failureCode==='DUPLICATE_INVOICE'?'DUPLICATE_INVOICE':'UNAVAILABLE',
           message:action.failureCode==='DUPLICATE_INVOICE'?'This invoice is already logged for this customer. No duplicate was created.':'The invoice was not saved because processing failed.',review:reviewFacts};
+        if(['EXTRACTION_UNAVAILABLE','INVOICE_REVIEW_UNAVAILABLE'].includes(action.failureCode))return {ok:false,code:'UNAVAILABLE',
+          message:action.failureCode==='EXTRACTION_UNAVAILABLE'?'The invoice extraction service is unavailable right now. Nothing was saved.':'The invoice review could not be prepared right now. Nothing was saved.',
+          outcome:'not_saved',review:reviewFacts};
         const notReceivable=action.invoice?.direction==='payable';
         return {ok:false,code:'INVALID',message:notReceivable?'This document appears to be a bill the business owes; no invoice was saved.':'No invoice was saved from this attachment.',
           outcome:'not_saved',review:reviewFacts};
@@ -1201,6 +1216,13 @@ export function ownerReplySafetyIssue(value,requirement=null) {
   if(missingFact)return missingFact;
   if(requirement?.requiresCancel&&!/\bcancel\b/i.test(reply))return 'cancel_instruction';
   if(requirement?.requiresReplyCue&&!/\b(?:reply|send|type)\b/i.test(reply))return 'reply_instruction';
+  if(requirement?.attachmentReview?.incomplete){
+    if(!/\b(?:nothing|no invoice) (?:was |has been )?saved\b|\b(?:not|wasn't|hasn't been) (?:saved|logged)\b/i.test(reply))return 'attachment_review_status';
+    if(/\b(?:unavailable|outage|processing failed)\b/i.test(reply))return 'attachment_review_details';
+    if(requirement.attachmentReview.validationIssues?.length
+      &&!(/\b(?:amounts?|totals?|subtotal|tax|balance|line items?|breakdown)\b/i.test(reply)
+        &&/\b(?:review|verify|corrected|clearer|confirm)\b/i.test(reply)))return 'attachment_review_details';
+  }
   return null;
 }
 
@@ -1230,6 +1252,15 @@ function logToolCode(result) {
   if(result?.ok===true)return 'OK';
   const code=result?.code;
   return typeof code==='string'&&OWNER_AGENT_LOG_CODES.has(code)?code:'UNKNOWN';
+}
+
+function toolExceptionDiagnostics(error) {
+  // Never log exception messages or argument values: both may contain owner
+  // data. Preserve only the runtime class, known code and application frame.
+  const errorName=['Error','TypeError','ReferenceError','RangeError','SyntaxError','AbortError'].includes(error?.name)?error.name:'Error';
+  const exceptionCode=OWNER_AGENT_LOG_CODES.has(error?.code)?error.code:'UNKNOWN';
+  const frame=String(error?.stack||'').match(/\b((?:automation\/whatsapp|ai|invoice)\/[a-z0-9-]+\.mjs:\d+:\d+)\b/i)?.[1];
+  return {errorName,exceptionCode,...(frame?{applicationFrame:frame}:{})};
 }
 
 function workspaceOperationDescription(operation, table = null, toolName = null) {
@@ -1595,7 +1626,12 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
           const fallback=readOnlyInvoiceOptionsFallback(message,evidence);
           if(fallback)return resultFor(fallback,{readOnlyFallback:true});
         }
-        if(repair===repairLimit)throw Object.assign(new Error('Owner reply did not pass output validation'),{code:'OWNER_REPLY_REPAIR_FAILED',reason:issue});
+        if(repair===repairLimit){
+          const fallback=requirement?.attachmentReview?.answer;
+          if(typeof fallback==='string'&&!ownerReplySafetyIssue(fallback,requirement)&&!ownerGroundingIssue(fallback,evidence,message,requirement||{}))
+            return resultFor(fallback,{attachmentReviewFallback:true});
+          throw Object.assign(new Error('Owner reply did not pass output validation'),{code:'OWNER_REPLY_REPAIR_FAILED',reason:issue});
+        }
         finalMessages.push({role:'assistant',content:String(result?.content||'')},turnAnchor,{role:'user',content:replyRepairInstruction(issue,requirement)});
       }
       throw Object.assign(new Error('Owner reply repair limit reached'),{code:'OWNER_REPLY_REPAIR_FAILED'});
@@ -1734,12 +1770,18 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
           await saveCheckpoint();
           executedTool=true;
           const toolStartedAt=Date.now();
-          try{output=await bounded(()=>tools.execute(name,args,{signal:workController.signal,deadlineAt:workDeadlineAt}),'tool','work');}
+          let exception=null;
+          try{output=await bounded(async()=>{
+            try{return await tools.execute(name,args,{signal:workController.signal,deadlineAt:workDeadlineAt});}
+            catch(error){exception=toolExceptionDiagnostics(error);throw error;}
+          },'tool','work');}
           finally{try{logger?.info?.('WhatsApp owner tool call',{traceId:scopedTrace,toolName:safeToolName(name),durationMs:Date.now()-toolStartedAt,code:logToolCode(output),
+            ...(exception?{exception}:{}),
             ...(['TARGET_REQUIRED','INVALID_FIELDS','REQUEST_SHAPE','REQUIRED_FIELDS','INVALID_CATEGORY','INVALID_VALUE','FILTER_SHAPE'].includes(output?.validationCode)?{validationCode:output.validationCode}:{}),
             ...(name==='workspaceData'&&output?.validationShape?{validationShape:output.validationShape}:{}),
             ...(name==='workspaceData'&&output?.planningRepair?{planningRepair:output.planningRepair}:{}),
-            ...(name==='workspaceData'?{operation:output?.operation||null,table:output?.table||null,rowCount:Array.isArray(output?.rows)?output.rows.length:null}:{}),
+            ...(name==='workspaceData'?{operation:output?.operation||(exception&&['read','create','update','batch','delete','restore','pending','confirm','cancel','describe','analyzeAttachment','saveAttachment','reviewAttachment','sendFile'].includes(args?.operation)?args.operation:null),
+              table:output?.table||(exception&&['workspace_settings','workspace_ai_settings','invoices','customers','payments','invoice_files','business_records'].includes(args?.table)?args.table:null),rowCount:Array.isArray(output?.rows)?output.rows.length:null}:{}),
           });}catch{}}
           inFlightTool=null;
           uncertainWrite=null;
