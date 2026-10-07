@@ -941,7 +941,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       result={...safeError(result),writeAttempted:result.writeAttempted??writeAttempted};
     }
     nextActionResult=result;
-    return result?.code==='INVALID'?{...result,...(!result.validationCode?{message:'Use request text alone, or the structured fields in this catalog. Do not combine request with filters, values or columns. pending/confirm/cancel take no table or values.'}:{}),catalog:catalog(typeof raw?.table==='string'&&Object.hasOwn(TABLES,raw.table)?raw.table:null)}:result;
+    return result?.code==='INVALID'?{...result,...(!result.validationCode&&result.outcome!=='review_incomplete'?{message:'Use request text alone, or the structured fields in this catalog. Do not combine request with filters, values or columns. pending/confirm/cancel take no table or values.'}:{}),catalog:catalog(typeof raw?.table==='string'&&Object.hasOwn(TABLES,raw.table)?raw.table:null)}:result;
   };
   return Object.freeze({definition:definition(),execute,getReplyRequirement:()=>replyRequirement?{...replyRequirement}:null,
     getNextActionContext:()=>nextActionParams&&nextActionResult?{params:nextActionParams,result:nextActionResult,records:nextActionRecords}:null,

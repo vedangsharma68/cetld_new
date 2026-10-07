@@ -12,7 +12,8 @@ test('release evidence fingerprints the custom-field renderer and scoped record 
     const outputPath=path.join(directory,'manifest.json');
     await writeReleaseManifest({outputPath});
     const evidence=JSON.parse(await readFile(outputPath,'utf8'));
-    for(const module of ['custom-fields.mjs','automation/whatsapp/workspace-records.mjs','automation/whatsapp/owner-next-actions.mjs']) {
+    for(const module of ['custom-fields.mjs','automation/whatsapp/workspace-records.mjs','automation/whatsapp/owner-next-actions.mjs',
+      'automation/whatsapp/assistant-handler.mjs','automation/whatsapp/invoice-store.mjs','ai/extraction.mjs','ai/invoice-ops.mjs']) {
       assert.equal(evidence.files[module],createHash('sha256').update(await readFile(module)).digest('hex'));
     }
   } finally {await rm(directory,{recursive:true,force:true});}

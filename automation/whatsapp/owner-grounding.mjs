@@ -1,6 +1,7 @@
 // Output safety: an assistant sentence is not a database receipt.
 const COMPLETION = /\b(?:deleted|removed|created|saved|updated|changed|restored|reopened|reversed|recorded|sent|cancelled|canceled|reset|completed|marked[^.!?]{0,24}paid)\b/i;
 const NEGATIVE = /\b(?:not|never|cannot|can't|couldn't|could not|haven't|hasn't|wasn't|weren't|didn't|did not|unable|failed|pending|propos(?:al|ed)|would|will|can|could|should|if|once|before|after|to be|to delete|to update|to change|to send)\b/i;
+const NO_RESULT = /\b(?:nothing|no (?:invoice|payment|record|file|change|action))\s+(?:was|were|has been|have been|is|has)\s+(?:saved|logged|created|recorded|changed|updated|sent|applied|completed)\b/gi;
 const COMMITTED = new Set(['deleted','restored','invoice_created','settings_updated','customer_created','customer_updated','customer_deleted','updated','created','paid','cancelled','canceled','review_updated']);
 const COMMITTED_TYPES=new Set(['owner_invoice_update','owner_invoice_payment','owner_invoice_create','owner_settings_update','owner_workspace_data_confirmed','owner_workspace_data_cancelled']);
 const normalize=value=>String(value||'').replace(/[\u201c\u201d]/g,'"').replace(/\u2019/g,"'");
@@ -91,7 +92,8 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
     ||/\bI (?:have )?confirmed (?:the |that )?(?:deletion|payment|change)\b/i.test(text)))return 'unverified_action_result';
   // Check each sentence independently: a negative sentence cannot excuse a
   // different unsupported success claim in the same reply.
-  const claims=text.split(/[.!?\n]+/).filter(part=>COMPLETION.test(part)&&!NEGATIVE.test(part)
+  const claims=text.split(/[.!?\n]+/).map(part=>part.replace(NO_RESULT,''))
+    .filter(part=>COMPLETION.test(part)&&!NEGATIVE.test(part)
     &&(!/\bcompleted\b/i.test(part)||/\b(?:update|change|deletion|payment|creation|restoration|action)\b/i.test(part))
     &&(/^\s*(?:deleted|removed|created|saved|updated|changed|restored|reopened|reversed|recorded|sent|cancelled|canceled|reset)\b/i.test(part)
       ||/\b(?:I|we|I've|we've)\s+(?:(?:have|already|now|successfully|just|also)\s+)*(?:deleted|removed|created|saved|updated|changed|restored|reopened|reversed|recorded|sent|cancelled|canceled|reset|marked|completed)\b/i.test(part)

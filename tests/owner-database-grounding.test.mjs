@@ -3,6 +3,14 @@ import assert from 'node:assert/strict';
 import {ownerGroundingIssue,ownerEvidence} from '../automation/whatsapp/owner-grounding.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 
+test('a no-save review status is distinct from an unverified completed action',()=>{
+  assert.equal(ownerGroundingIssue('Nothing was saved.',[{ok:true,outcome:'review_ready'}]),null);
+  assert.equal(ownerGroundingIssue('No invoice was saved.',[{ok:true,outcome:'review_ready'}]),null);
+  assert.equal(ownerGroundingIssue('No problem, I saved the invoice.',[]),'unverified_action_result');
+  assert.equal(ownerGroundingIssue('Nothing was saved. I saved the invoice.',[]),'unverified_action_result');
+  assert.equal(ownerGroundingIssue('Nothing was saved, I updated the invoice.',[]),'unverified_action_result');
+});
+
 test('button instructions require transport-backed choices, never model or history claims',()=>{
   const reply='Please tap the button to confirm the deletion of invoice INV-002.';
   assert.equal(ownerGroundingIssue(reply,[{ok:false,code:'INVALID'}],'INV-002'),'unverified_buttons');

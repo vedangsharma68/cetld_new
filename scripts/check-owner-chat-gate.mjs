@@ -35,6 +35,7 @@ export async function writeReleaseManifest({outputPath='owner-chat-build.json'}=
     'automation/engine.mjs','automation/core-store.mjs','automation/local-reminder-payment.mjs','automation/accounting/store.mjs',
     'automation/whatsapp/cloud-reminders.mjs','automation/whatsapp/reminder-fingerprint.mjs','automation/whatsapp/reminder-receipts.mjs'];
   paths.push('automation/runtime.mjs','automation/worker.mjs','automation/first-party-reminder-runtime.mjs',
+    'automation/whatsapp/assistant-handler.mjs','automation/whatsapp/invoice-store.mjs','ai/extraction.mjs','ai/invoice-ops.mjs',
     'automation/reminder-cron.mjs','api/whatsapp-process.js','vercel.json','automation/preferences.mjs','followup-preferences-ui.mjs',
     'automation/whatsapp/reminder-templates.mjs','automation/whatsapp/approved-reminders.mjs',
     'automation/whatsapp/template-diagnostic.mjs','automation/whatsapp/test-send.mjs','automation/whatsapp/reminder-proof.mjs','automation/whatsapp/webhook.mjs',
