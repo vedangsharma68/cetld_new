@@ -844,7 +844,11 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         const result=await handlePending(params.operation,ctx);
         return params.operation==='pending'?readResult(result):result;
       }
-      if(params.operation==='read')return readResult(await read(params,ctx));
+      if(params.operation==='read'){
+        const target=params.table==='invoices'&&params.filters.length===1&&params.filters[0].column==='invoice_number'
+          &&params.filters[0].operator==='eq'?params.filters[0].value:null;
+        return {...readResult(await read(params,ctx)),...(typeof target==='string'?{lookupInvoiceNumber:target}:{})};
+      }
       if(params.table==='invoices'&&params.operation==='update'&&params.values.status==='unpaid'){
         if(Object.keys(params.values).length!==1)return fail('INVALID','Check unpaid status separately from other invoice changes.');
         const found=await resolveWorkspaceRecord({supabase,scope,table:'invoices',filters:params.filters,operation:'update',
@@ -932,7 +936,11 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     // rejected plan once here, before the outer loop caches the final result.
     // Only a server-validated preflight rejection with no dispatch qualifies.
     const structuredBatch=Array.isArray(raw?.operations)||raw?.operation==='batch'||raw?.operation==='update'&&Array.isArray(raw?.filters)&&raw.filters.some(filter=>filter?.operator==='in');
-    const repairRequest=typeof raw?.request==='string'?raw:structuredBatch&&typeof planRequest==='function'&&String(message).trim()?{request:String(message).slice(0,1200)}:null;
+    const readFilterRepair=raw?.operation==='read'&&Object.hasOwn(TABLES,raw?.table||'')
+      &&result?.validationCode==='FILTER_SHAPE'&&typeof planRequest==='function'&&String(message).trim();
+    const repairRequest=typeof raw?.request==='string'?raw:readFilterRepair
+      ?{request:String(message).slice(0,1200),operation:'read',table:raw.table}
+      :structuredBatch&&typeof planRequest==='function'&&String(message).trim()?{request:String(message).slice(0,1200)}:null;
     if(repairRequest&&result?.code==='INVALID'&&result.validationCode&&result.writeAttempted===false&&!writeAttempted){
       const rejection={validationCode:result.validationCode,validationShape:result.validationShape,message:result.message};
       result={...await executeRequest(repairRequest,options,rejection),planningRepair:{validationCode:rejection.validationCode,validationShape:rejection.validationShape}};

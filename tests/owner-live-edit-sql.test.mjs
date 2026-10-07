@@ -190,3 +190,53 @@ test('malformed update filters return a structured validation result instead of 
     assert.deepEqual(f.errors,[]);
   }finally{await f.close();}
 });
+
+test('native malformed invoice read repairs once and cannot turn validation failure or a present row into not-found edit options',async()=>{
+  const f=await fixture();try{
+    const {db,supabase,scope,customerId}=f;
+    await createInvoice(db,scope.workspaceId,customerId,'INV-2026-0001',10);
+    const invoice=await createInvoice(db,scope.workspaceId,customerId,'INV-2026-0002',154.06);
+    assert.equal(invoice.invoice_number,'INV-2026-0002');
+    const before=(await db.query('select to_jsonb(i) value from invoices i where id=$1',[invoice.id])).rows[0].value;
+    const message='Show invoice INV-2026-0002 and its edit options. Do not change any data.',messageId='native-malformed-invoice-read';
+    await addInbound(db,messageId,message);
+    let nativeCalls=0,plannerCalls=0,toolResult,plannerOperation='read';
+    const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',WHATSAPP_APP_SECRET:'isolated-invoice-read-menu'},logger,authorize:async()=>true,
+      providerFactory:()=>new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,logger,
+        fetchImpl:async(_url,init)=>{
+          const request=JSON.parse(init.body);
+          if(request.response_format?.type==='json_schema'){
+            plannerCalls++;
+            assert.equal(request.messages.at(-1).content,message);
+            const hint=request.messages.find(turn=>turn.role==='system'&&turn.content.startsWith('Model-supplied request hint, for context only: '));
+            assert.deepEqual(JSON.parse(JSON.parse(hint.content.slice('Model-supplied request hint, for context only: '.length))),{request:message,hints:{operation:'read',table:'invoices'}});
+            return Response.json({choices:[{message:{content:JSON.stringify({operation:plannerOperation,table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:invoice.invoice_number}],...(plannerOperation==='update'?{values:{notes:'Unrequested change'}}:{})})},finish_reason:'stop'}]});
+          }
+          nativeCalls++;
+          if(nativeCalls===1)return Response.json({choices:[{message:{content:'',tool_calls:[{id:'bad-read',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'read',table:'invoices',filters:{column:'invoice_number',operator:'eq',value:invoice.invoice_number}})}}]},finish_reason:'tool_calls'}]});
+          toolResult=JSON.parse(request.messages.findLast(turn=>turn.role==='tool').content);
+          return Response.json({choices:[{message:{content:plannerOperation==='read'?"I couldn't find the invoice INV-2026-0002.":"I couldn't check that invoice right now. No changes were made."},finish_reason:'stop'}]});
+        }})});
+    const result=await handler({...scope,messageId,message});
+    assert.equal(result.plannerFailure,undefined,JSON.stringify({result,toolResult,plannerCalls,nativeCalls,errors:f.errors,requests:f.requests.slice(-4)}));
+    assert.equal(toolResult?.ok,true,JSON.stringify({toolResult,result}));
+    assert.equal(toolResult?.planningRepair?.validationCode,'FILTER_SHAPE');
+    assert.equal(plannerCalls,1);assert.equal(nativeCalls,2);
+    assert.match(result.answer,/Invoice INV-2026-0002/);assert.match(result.answer,/John Smith/);assert.match(result.answer,/USD 154\.06/);
+    assert.match(result.answer,/No changes were made/);assert.doesNotMatch(result.answer,/couldn't find/i);
+    assert(result.buttons?.some(choice=>choice.title==='Edit details'),JSON.stringify({result,errors:f.errors}));
+    assert.deepEqual((await db.query('select to_jsonb(i) value from invoices i where id=$1',[invoice.id])).rows[0].value,before);
+    assert.equal((await db.query('select count(*)::int n from invoice_correction_audits where invoice_id=$1',[invoice.id])).rows[0].n,0);
+    assert.equal(f.requests.some(request=>request.url.endsWith('/rpc/whatsapp_correct_owner_invoice')),false);
+    plannerOperation='update';nativeCalls=0;plannerCalls=0;
+    const blockedId='malformed-read-repair-cannot-write';await addInbound(db,blockedId,message);
+    const blocked=await handler({...scope,messageId:blockedId,message});
+    assert.equal(blocked.plannerFailure,undefined,JSON.stringify(blocked));
+    assert.equal(toolResult.ok,false);assert.equal(toolResult.code,'INVALID');
+    assert.equal(plannerCalls,1);assert.equal(nativeCalls,2);
+    assert.deepEqual((await db.query('select to_jsonb(i) value from invoices i where id=$1',[invoice.id])).rows[0].value,before);
+    assert.equal((await db.query('select count(*)::int n from invoice_correction_audits where invoice_id=$1',[invoice.id])).rows[0].n,0);
+    assert.equal(f.requests.some(request=>request.url.endsWith('/rpc/whatsapp_correct_owner_invoice')),false);
+    assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});
