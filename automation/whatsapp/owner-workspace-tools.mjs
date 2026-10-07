@@ -33,6 +33,7 @@ export function createOwnerWorkspaceTools(options = {}) {
     return filters[0].value;
   };
   const tool = createWorkspaceDataTool({...options,signal:controller.signal,
+    attachmentAvailable:Boolean(options.media||options.mediaError),
     confirmationMode:options.botPreferences?.confirmationMode||'buttons',
     executeDirectOperation:(params,ctx)=>direct.execute(params,ctx),
     executeBatchOperation:(params,ctx)=>direct.executeBatch(params,ctx),

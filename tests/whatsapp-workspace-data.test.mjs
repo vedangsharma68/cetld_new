@@ -4,6 +4,24 @@ import {readFile} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
 import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
+
+test('a current attachment refuses generic invoice creation before direct/proposal/batch dispatch',async()=>{
+ const values={invoice_number:'INVENTED',customer_name:'Invented customer',total_amount:100,currency:'USD'};
+ for(const confirmationMode of ['direct','buttons']){
+  const supabase=fakeSupabase();let dispatched=0;
+  const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true,attachmentAvailable:true,confirmationMode,
+    planRequest:async()=>({operation:'create',table:'invoices',values}),
+    executeDirectOperation:async()=>{dispatched++;throw Error('must not dispatch');},
+    executeBatchOperation:async()=>{dispatched++;throw Error('must not dispatch');}});
+  for(const args of [{operation:'create',table:'invoices',values},{request:'Log the attached invoice'},
+    {operations:[{operation:'create',table:'customers',values:{name:'Uncommitted'}},{operation:'create',table:'invoices',values}]}]){
+   const result=await tool.execute(args);assert.equal(result.validationCode,'ATTACHMENT_REVIEW_REQUIRED');
+   assert.match(result.message,/saveAttachment.*analyzeAttachment/);
+   assert.equal(result.ok,false);assert.equal(result.writeAttempted,false);assert.equal(tool.getWriteAttempted(),false);
+  }
+  assert.equal(dispatched,0);assert.equal(supabase.calls.length,0);
+ }
+});
 import {VERIFIED_MODEL_CATALOG} from '../ai/provider.mjs';
 import {ownerCalendar,validateCustomFields} from '../automation/whatsapp/workspace-records.mjs';
 import {ownerGroundingIssue} from '../automation/whatsapp/owner-grounding.mjs';

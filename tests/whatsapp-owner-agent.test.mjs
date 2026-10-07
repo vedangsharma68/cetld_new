@@ -206,7 +206,17 @@ test('a read-only or explicitly declined attachment request does not force invoi
 test('an adversarial ingest tool call cannot turn a bare yes or cancel into invoice processing',async()=>{
   let innerCalls=0;
   for(const message of ['YES','cancel','',"Don't log this invoice",'Do not save it','Just tell me the total','Log the deletion from earlier',
-    'I do not want you to save this invoice',"Can you log this invoice? No, don't",'I prefer not to save this invoice','Save this invoice, but not yet']){
+    'I do not want you to save this invoice',"Can you log this invoice? No, don't",'I prefer not to save this invoice','Save this invoice, but not yet',
+    'Do not save this invoice. No customer reminders.','Log this invoice, but do not save it. Do not send reminders.',
+    'No reminders. Just tell me the total.','Do not log this invoice or send reminders.',
+    'No reminders. Should I log this invoice?','No reminders. I might log this invoice later.',
+    'No reminders. I will log this invoice later.','No reminders. Tell me how to log this invoice.',
+    'No reminders. Please log this invoice after I approve.','No reminders. Log this invoice later.',
+    'No reminders. Log this invoice only if I confirm.','No reminders. Please save this invoice tomorrow.',
+    'No reminders. Please log this invoice after I get your approval.','No reminders. Please save this invoice when I have confirmation.',
+    'No reminders. Please save this invoice on Friday.','No reminders. Please log this invoice next year.',
+    'No reminders. Please save this invoice on 2026-10-09.','No reminders. Please save this invoice in 2 hours.',
+    'No reminders. Log notes from this invoice.','No reminders. Save the customer from this invoice.']){
     const pending={...pendingStore(),async loadInvoiceReview(){throw new Error('must not be reached');}};
     const tools=createOwnerAgentTools({supabase:{},scope,ownerStore:{query:async()=>[]},pending,pendingAtStart:null,lifecyclePending:null,
       invoiceStoreFactory:()=>({}),settingsStore:{},config:{primaryModel:CF_QWEN_MODEL,fallbackModel:'gemini-3.5-flash-lite'},
