@@ -1164,9 +1164,13 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         if(action.stage==='saving')return {ok:false,code:'PENDING',message:'Invoice processing is still in progress. Do not retry the write until its status is checked.',review:reviewFacts};
         if(action.stage==='failed')return {ok:false,code:action.failureCode==='DUPLICATE_INVOICE'?'DUPLICATE_INVOICE':'UNAVAILABLE',
           message:action.failureCode==='DUPLICATE_INVOICE'?'This invoice is already logged for this customer. No duplicate was created.':'The invoice was not saved because processing failed.',review:reviewFacts};
-        if(['EXTRACTION_UNAVAILABLE','INVOICE_REVIEW_UNAVAILABLE'].includes(action.failureCode))return {ok:false,code:'UNAVAILABLE',
-          message:action.failureCode==='EXTRACTION_UNAVAILABLE'?'The invoice extraction service is unavailable right now. Nothing was saved.':'The invoice review could not be prepared right now. Nothing was saved.',
-          outcome:'not_saved',review:reviewFacts};
+        if(['EXTRACTION_UNAVAILABLE','INVOICE_REVIEW_UNAVAILABLE'].includes(action.failureCode)){
+          replyRequirement={attachmentReview:{failureCode:action.failureCode,
+            failureReason:action.failureReason==='TIMEOUT'?'TIMEOUT':'UNAVAILABLE',
+            answer:invoiceReviewClarification(action)}};
+          return {ok:false,code:'UNAVAILABLE',message:replyRequirement.attachmentReview.answer,
+            outcome:'not_saved',review:reviewFacts};
+        }
         const notReceivable=action.invoice?.direction==='payable';
         return {ok:false,code:'INVALID',message:notReceivable?'This document appears to be a bill the business owes; no invoice was saved.':'No invoice was saved from this attachment.',
           outcome:'not_saved',review:reviewFacts};
@@ -1222,6 +1226,11 @@ export function ownerReplySafetyIssue(value,requirement=null) {
     if(requirement.attachmentReview.validationIssues?.length
       &&!(/\b(?:amounts?|totals?|subtotal|tax|balance|line items?|breakdown)\b/i.test(reply)
         &&/\b(?:review|verify|corrected|clearer|confirm)\b/i.test(reply)))return 'attachment_review_details';
+  }
+  if(requirement?.attachmentReview?.failureCode){
+    if(!/\b(?:nothing|no invoice) (?:was |has been )?saved\b|\b(?:not|wasn't|hasn't been) (?:saved|logged)\b/i.test(reply))return 'attachment_review_status';
+    const timeout=requirement.attachmentReview.failureReason==='TIMEOUT';
+    if(timeout?!/\b(?:timed out|timeout)\b/i.test(reply):!/\bunavailable\b/i.test(reply))return 'attachment_review_details';
   }
   return null;
 }
@@ -1389,8 +1398,11 @@ function readOnlyInvoiceOptionsFallback(message,evidence=[]){
   if(!invoiceNumber)return null;
   const successful=evidence.filter(result=>result?.ok===true);
   if(!successful.length||successful.some(result=>result.readOnly!==true))return null;
-  const matches=successful.flatMap(result=>Array.isArray(result.rows)?result.rows:[])
-    .filter(row=>String(row?.invoice_number||'').toLocaleLowerCase()===invoiceNumber.toLocaleLowerCase());
+  // Cached tool repeats are the same receipt, not additional matching records.
+  // Conflicting snapshots still produce multiple matches and fail closed.
+  const matches=[...new Map(successful.flatMap(result=>Array.isArray(result.rows)?result.rows:[])
+    .filter(row=>String(row?.invoice_number||'').toLocaleLowerCase()===invoiceNumber.toLocaleLowerCase())
+    .map(row=>[JSON.stringify(row),row])).values()];
   if(matches.length!==1)return null;
   const row=matches[0];
   const field=value=>String(value??'').replace(/[\u0000-\u001f\u007f]/g,' ').replace(/\s+/g,' ').trim().slice(0,160);
@@ -1404,7 +1416,7 @@ function readOnlyInvoiceOptionsFallback(message,evidence=[]){
   if(customer)lines.push(`Customer: ${customer}`);
   if(status)lines.push(`Status: ${status}`);
   if(total)lines.push(`Total: ${currency?currency+' ':''}${total}`);
-  if(paid)lines.push(`Paid: ${currency?currency+' ':''}${paid}`);
+  if(paid)lines.push(`Current paid balance: ${currency?currency+' ':''}${paid}`);
   if(dueDate)lines.push(`Due date: ${dueDate}`);
   lines.push('No changes were made.');
   return lines.join('\n');
