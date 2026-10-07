@@ -110,6 +110,12 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
     if(/reset/.test(match)&&!completed.some(r=>r.action==='memory_reset'))return 'unverified_action_result';
   }
   const success=results.filter(r=>r.ok!==false);
+  // amount_paid is the current net allocation. A full reversal can make it
+  // zero while the immutable original receipt still exists.
+  const zeroInvoiceBalance=success.some(result=>result.table==='invoices'&&result.readOnly===true
+    &&Array.isArray(result.rows)&&result.rows.some(row=>row.amount_paid!==null&&row.amount_paid!==undefined&&Number(row.amount_paid)===0));
+  const absentPaymentHistory=/\b(?:no payments?\b[^.!?\n]{0,35}\b(?:made|received|recorded|history)|no (?:payment history|payment records?)\b|payment (?:history|records?)\b[^.!?\n]{0,20}\b(?:empty|absent)|never (?:been )?paid)\b/i.test(text);
+  if(zeroInvoiceBalance&&absentPaymentHistory)return 'fresh_database_read_required';
   const numbers=numericEvidence(success);
   const amounts=[...text.matchAll(/(?:[$€£₹]|\b(?:USD|INR|EUR|GBP|CHF|AED|SGD|AUD|CAD))\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(?:USD|INR|EUR|GBP|CHF|AED|SGD|AUD|CAD)\b/gi)];
   if(amounts.some(match=>!numbers.has(Number((match[1]||match[2]).replaceAll(',','')).toFixed(2))))return 'fresh_database_read_required';

@@ -1398,8 +1398,11 @@ function readOnlyInvoiceOptionsFallback(message,evidence=[]){
   if(!invoiceNumber)return null;
   const successful=evidence.filter(result=>result?.ok===true);
   if(!successful.length||successful.some(result=>result.readOnly!==true))return null;
-  const matches=successful.flatMap(result=>Array.isArray(result.rows)?result.rows:[])
-    .filter(row=>String(row?.invoice_number||'').toLocaleLowerCase()===invoiceNumber.toLocaleLowerCase());
+  // Cached tool repeats are the same receipt, not additional matching records.
+  // Conflicting snapshots still produce multiple matches and fail closed.
+  const matches=[...new Map(successful.flatMap(result=>Array.isArray(result.rows)?result.rows:[])
+    .filter(row=>String(row?.invoice_number||'').toLocaleLowerCase()===invoiceNumber.toLocaleLowerCase())
+    .map(row=>[JSON.stringify(row),row])).values()];
   if(matches.length!==1)return null;
   const row=matches[0];
   const field=value=>String(value??'').replace(/[\u0000-\u001f\u007f]/g,' ').replace(/\s+/g,' ').trim().slice(0,160);
@@ -1413,7 +1416,7 @@ function readOnlyInvoiceOptionsFallback(message,evidence=[]){
   if(customer)lines.push(`Customer: ${customer}`);
   if(status)lines.push(`Status: ${status}`);
   if(total)lines.push(`Total: ${currency?currency+' ':''}${total}`);
-  if(paid)lines.push(`Paid: ${currency?currency+' ':''}${paid}`);
+  if(paid)lines.push(`Current paid balance: ${currency?currency+' ':''}${paid}`);
   if(dueDate)lines.push(`Due date: ${dueDate}`);
   lines.push('No changes were made.');
   return lines.join('\n');

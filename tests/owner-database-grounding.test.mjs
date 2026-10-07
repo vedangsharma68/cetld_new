@@ -99,6 +99,16 @@ test('explicit read-only invoice edit-options request recovers from an unsafe dr
   assert.equal(response.plannerFailure,undefined);
 });
 
+test('invoice edit-options fallback rejects conflicting snapshots of the same invoice',async()=>{
+  let calls=0,reads=0;
+  const response=await runOwnerAgent({message:'Show invoice INV-2026-0002 and its edit options. Do not change any data.',
+    tools:{definitions:[{type:'function',function:{name:'workspaceData',parameters:{type:'object'}}}],async execute(){
+      reads++;return {ok:true,readOnly:true,rows:[{invoice_number:'INV-2026-0002',total_amount:reads===1?100:200,amount_paid:0,currency:'USD'}]};
+    }},provider:{async generate(){calls++;return calls<=2?{toolCalls:[{id:`read-${calls}`,type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'read',table:'invoices',limit:calls})}}]}:
+      {content:'I updated invoice INV-2026-0002.'};}}});
+  assert.equal(reads,2);assert.notEqual(response.readOnlyFallback,true);assert.ok(response.plannerFailure);
+});
+
 test('invoice edit-options fallback does not cover a request that also asks to change data',async()=>{
   let calls=0;
   const response=await runOwnerAgent({message:'Show invoice INV-2026-0002 and its edit options. Do not change any data now; after showing it update the due date.',
