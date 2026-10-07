@@ -76,7 +76,8 @@ test('uses a shallow provider wire contract and deterministically restores every
   assert.equal(invoiceExtractionResponseSchema.properties.invoiceNumber.properties, undefined);
   assert.deepEqual(adaptInvoiceExtractionWireResponse(wire), {...normalized,
     currencySource: {value: null, confidence: 0}, addressHint: {value: null, confidence: 0},
-    paymentTerms: {value: null, confidence: 0}});
+    paymentTerms: {value: null, confidence: 0}, paymentStatus: {value: null, confidence: 0},
+    paymentStatusEvidence: {value: null, confidence: 0}});
   assert.deepEqual(validateInvoiceExtractionWireResponse(wire), validateInvoiceExtractionResponse(normalized));
   assert.throws(() => validateInvoiceExtractionWireResponse({...wire, injected: 'malicious'}), /unknown fields/);
   assert.throws(() => validateInvoiceExtractionWireResponse({...wire, direction: 'incoming'}), /direction must be/);
@@ -96,7 +97,7 @@ test('wire output preserves absent evidence as null and uncertain without droppi
   assert.equal(result.outstandingAmount.value, null);
   assert.equal(result.reviewRequired, true);
   assert.deepEqual(Object.keys(result).sort(), [...Object.keys(response()), 'currencySource', 'addressHint',
-    'paymentTerms', 'reviewRequired', 'uncertainFields', 'warnings'].sort());
+    'paymentTerms', 'paymentStatus', 'paymentStatusEvidence', 'reviewRequired', 'uncertainFields', 'warnings'].sort());
 });
 
 test('accepts explicit USD and EUR currency codes', async () => {
@@ -240,4 +241,22 @@ test('keeps unreadable line-item numbers null and marks itemization uncertain', 
 
 test('provider response schema requires only properties it defines', () => {
   for (const key of invoiceExtractionResponseSchema.required) assert.ok(Object.hasOwn(invoiceExtractionResponseSchema.properties, key), `required ${key} missing from properties`);
+});
+
+test('payment status preserves explicit evidence and requires review without inventing receipts', async () => {
+  assert.ok(invoiceExtractionResponseSchema.required.includes('paymentStatus'));
+  for (const [status,outstanding] of [['paid',118],['paid',0],['partial',50],['conflicting',118]]) {
+    const result=await run(response({paymentStatus:{value:status,confidence:0.4},paymentStatusEvidence:{value:'Printed payment status',confidence:0.4},outstandingAmount:{value:outstanding,confidence:.99}}));
+    assert.equal(result.paymentStatus.value,status);assert.equal(result.outstandingAmount.value,outstanding);
+    assert.ok(result.uncertainFields.includes('paymentStatus'));assert.match(result.warnings.join(' '),/payment|receipt/i);
+  }
+  const unpaid=await run(response({paymentStatus:{value:'unpaid',confidence:.99},paymentStatusEvidence:{value:'NOT PAID',confidence:.99}}));
+  assert.equal(unpaid.uncertainFields.includes('paymentStatus'),false);
+  const unsupportedUnpaid=await run(response({paymentStatus:{value:'unpaid',confidence:.99},paymentStatusEvidence:{value:null,confidence:0}}));
+  assert.ok(unsupportedUnpaid.uncertainFields.includes('paymentStatus'));
+  for (const status of ['unpaid',null]) {
+    const opposed=await run(response({paymentStatus:{value:status,confidence:.99},paymentStatusEvidence:{value:'PAID watermark',confidence:.99}}));
+    assert.equal(opposed.paymentStatus.value,status?'conflicting':'paid');assert.ok(opposed.uncertainFields.includes('paymentStatus'));
+  }
+  await assert.rejects(run(response({paymentStatus:{value:'settled automatically',confidence:.99}})),/paymentStatus must be/);
 });

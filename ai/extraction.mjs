@@ -1,6 +1,6 @@
 import {SUPPORTED_TWO_DECIMAL_CURRENCIES} from '../currency-contract.mjs';
 import {extractPdfText} from './pdf-text.mjs';
-import {parsePdfInvoiceText} from './pdf-invoice-parser.mjs';
+import {parsePdfInvoiceText, parsePrintedInvoicePaymentStatus} from './pdf-invoice-parser.mjs';
 import {extractInvoiceFromImage} from './image-text.mjs';
 
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -9,12 +9,13 @@ const CONFIDENCE_THRESHOLD = 0.75;
 const FIELD_NAMES = [
   'invoiceNumber', 'customerName', 'invoiceDate', 'dueDate', 'subtotal', 'tax',
   'total', 'outstandingAmount', 'currency', 'clientPhone', 'clientPhoneRaw', 'clientEmail', 'notes', 'direction',
-  'currencySource', 'addressHint', 'paymentTerms',
+  'currencySource', 'addressHint', 'paymentTerms', 'paymentStatus', 'paymentStatusEvidence',
 ];
 const SCALAR_FIELDS = FIELD_NAMES;
 const LINE_ITEM_FIELDS = ['description', 'quantity', 'unitPrice', 'amount', 'confidence'];
 const WIRE_SCALAR_FIELDS = FIELD_NAMES.flatMap(name => [name, `${name}Confidence`]);
-const OPTIONAL_WIRE_FIELDS = new Set(['currencySource', 'addressHint', 'paymentTerms'].flatMap(name => [name, `${name}Confidence`]));
+const OPTIONAL_FIELDS = ['currencySource', 'addressHint', 'paymentTerms', 'paymentStatus', 'paymentStatusEvidence'];
+const OPTIONAL_WIRE_FIELDS = new Set(OPTIONAL_FIELDS.flatMap(name => [name, `${name}Confidence`]));
 
 export const INVOICE_EXTRACTION_MAX_TOKENS = 8192;
 
@@ -24,11 +25,11 @@ const nullable = (type) => ({ anyOf: [{ type }, { type: 'null' }] });
 // Gemini documents that large or deeply nested schemas can be rejected and recommends
 // simplifying names, nesting, and constraints:
 // https://ai.google.dev/gemini-api/docs/generate-content/structured-output
-// Keep this provider contract shallow; the unchanged local validator below remains the authority.
+// Keep this provider contract shallow; the local validator below remains the authority.
 export const invoiceExtractionResponseSchema = {
   type: 'object',
   additionalProperties: false,
-  required: [...WIRE_SCALAR_FIELDS.filter(name => !OPTIONAL_WIRE_FIELDS.has(name)), 'lineItems', 'lineItemsConfidence'],
+  required: [...WIRE_SCALAR_FIELDS.filter(name => !OPTIONAL_WIRE_FIELDS.has(name) || name.startsWith('paymentStatus')), 'lineItems', 'lineItemsConfidence'],
   properties: {
     invoiceNumber: nullable('string'), invoiceNumberConfidence: {type: 'number'},
     customerName: nullable('string'), customerNameConfidence: {type: 'number'},
@@ -47,6 +48,8 @@ export const invoiceExtractionResponseSchema = {
     currencySource: nullable('string'), currencySourceConfidence: {type: 'number'},
     addressHint: nullable('string'), addressHintConfidence: {type: 'number'},
     paymentTerms: nullable('string'), paymentTermsConfidence: {type: 'number'},
+    paymentStatus: {anyOf: [{type: 'string', enum: ['paid', 'unpaid', 'partial', 'conflicting']}, {type: 'null'}]}, paymentStatusConfidence: {type: 'number'},
+    paymentStatusEvidence: nullable('string'), paymentStatusEvidenceConfidence: {type: 'number'},
     lineItems: {type: 'array', items: {type: 'object', additionalProperties: false, required: LINE_ITEM_FIELDS, properties: {
       description: {type: 'string'}, quantity: nullable('number'), unitPrice: nullable('number'),
       amount: nullable('number'), confidence: {type: 'number'},
@@ -71,7 +74,7 @@ function exactKeys(value, keys, label) {
 /** Convert the shallow provider wire object to the strict internal validator shape. */
 export function adaptInvoiceExtractionWireResponse(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('wire response must be an object');
-  const optional = new Set(['currencySource', 'addressHint', 'paymentTerms'].flatMap(name => [name, `${name}Confidence`]));
+  const optional = OPTIONAL_WIRE_FIELDS;
   const expected = new Set([...WIRE_SCALAR_FIELDS, 'lineItems', 'lineItemsConfidence']);
   const required = [...expected].filter(name => !optional.has(name));
   if (required.some(name => !Object.hasOwn(raw, name)) || Object.keys(raw).some(name => !expected.has(name))) {
@@ -150,6 +153,7 @@ export function invoiceExtractionPrompt(businessName = '') {
     'Infer currency from printed currency codes and symbols together with addresses, country names, phone country codes, and tax identifiers (including GST, GSTIN, PAN, and postal codes). CETLD supports INR, USD, EUR, GBP, AED, SGD, AUD, CAD, and CHF. If an unsupported currency such as JPY, KWD, or BHD is printed, return that code so local validation can reject it clearly. A bare $ without country evidence is ambiguous: return null. Put a short description of the printed evidence in currencySource, the relevant printed address/country/phone/tax text in addressHint, and printed payment terms such as Net 30 in paymentTerms. Monetary amounts may have no more than two decimal places.',
     'Return clientEmail exactly when a client/bill-to email address is explicitly printed; otherwise return null. Never infer an email address.',
     'Return clientPhone only when the complete number is explicitly present in valid E.164 form including its + country code. Return a printed client phone that is not valid E.164 in clientPhoneRaw instead. Never put the same number in both fields and never invent a country prefix.',
+    'Read payment-status stamps and watermarks as evidence. Return paymentStatus paid for an explicit PAID or PAID IN FULL marking, unpaid for UNPAID or NOT PAID, partial for PARTIALLY PAID, and conflicting for contradictory printed status markings. Return null when no payment status is explicitly printed; never infer a payment status from an amount or payment terms. Copy the short printed status and balance evidence into paymentStatusEvidence. Preserve the original invoice total separately from its remaining amount due, including a zero balance. Never erase a PAID marking because a positive Total Due is also printed, and never invent a payment receipt.',
     'Return short useful notes only when explicitly printed; otherwise return null. Extract up to 100 printed line items with description, quantity, unitPrice, and amount; return an empty array when none are legible. Set confidence per field and line item from 0 to 1 based only on legibility and direct support.',
     'Use the flat response fields exactly as specified. For every scalar field, put its evidence value in that field and its evidence confidence in the matching field whose name ends with Confidence. Use lineItemsConfidence for the lineItems array. Missing evidence must use null with confidence 0; direction must be uncertain when evidence does not establish it. Do not fabricate a value or confidence.',
   ].join(' ');
@@ -182,7 +186,7 @@ function makeMessages({ bytes, mimeType, fileName, businessName, pdfText }) {
 
 export function validateInvoiceExtractionResponse(raw, {verifiedPrintedAdjustments = false} = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('response must be an object');
-  const legacyFields = FIELD_NAMES.filter(name => !['currencySource', 'addressHint', 'paymentTerms'].includes(name));
+  const legacyFields = FIELD_NAMES.filter(name => !OPTIONAL_FIELDS.includes(name));
   const keys = Object.keys(raw);
   if (legacyFields.some(name => !keys.includes(name)) || !keys.includes('lineItems')
     || keys.some(name => ![...FIELD_NAMES, 'lineItems'].includes(name))) fail('response has missing or unknown fields');
@@ -196,6 +200,7 @@ export function validateInvoiceExtractionResponse(raw, {verifiedPrintedAdjustmen
     const confidence = finiteConfidence(item.confidence, name);
     let value = field(item.value, name === 'subtotal' || name === 'tax' || name === 'total' || name === 'outstandingAmount' ? 'number' : 'string', name, warnings);
     if (name === 'direction' && !['receivable','payable','uncertain'].includes(value)) fail('direction must be receivable, payable, or uncertain');
+    if (name === 'paymentStatus' && value !== null && !['paid','unpaid','partial','conflicting'].includes(value)) fail('paymentStatus must be paid, unpaid, partial, conflicting, or null');
 
     if ((name === 'invoiceDate' || name === 'dueDate') && value !== null && !validIsoDate(value)) {
       value = null;
@@ -224,7 +229,7 @@ export function validateInvoiceExtractionResponse(raw, {verifiedPrintedAdjustmen
       }
     }
 
-    if (!['currencySource', 'addressHint', 'paymentTerms', 'clientPhoneRaw'].includes(name)
+    if (![...OPTIONAL_FIELDS, 'clientPhoneRaw'].includes(name)
       && (value === null || confidence < CONFIDENCE_THRESHOLD || (name === 'direction' && value === 'uncertain'))) uncertainFields.add(name);
     result[name] = { value, confidence };
   }
@@ -247,6 +252,30 @@ export function validateInvoiceExtractionResponse(raw, {verifiedPrintedAdjustmen
   const subtotal = result.subtotal.value;
   const tax = result.tax.value;
   const total = result.total.value;
+  // Evidence is source data, never permission to create a payment. Preserve
+  // explicit markers even if the provider's status field omits/opposes them.
+  const paymentText = result.paymentStatusEvidence.value || '';
+  const evidenceStatuses = new Set();
+  if (/\b(?:UNPAID|NOT\s+PAID)\b/i.test(paymentText)) evidenceStatuses.add('unpaid');
+  if (/\bPARTIALLY\s+PAID\b/i.test(paymentText)) evidenceStatuses.add('partial');
+  if (/\bPAID\b/i.test(paymentText.replace(/\b(?:UNPAID|NOT\s+PAID|PARTIALLY\s+PAID)\b/gi, ''))) evidenceStatuses.add('paid');
+  if (evidenceStatuses.size) {
+    const evidenceStatus = evidenceStatuses.size === 1 ? [...evidenceStatuses][0] : 'conflicting';
+    const reportedStatus = result.paymentStatus.value;
+    result.paymentStatus = {value: reportedStatus && reportedStatus !== evidenceStatus ? 'conflicting' : evidenceStatus,
+      confidence: reportedStatus ? Math.min(result.paymentStatus.confidence, result.paymentStatusEvidence.confidence) : result.paymentStatusEvidence.confidence};
+  }
+  if (result.paymentStatus.value === 'unpaid' && (!evidenceStatuses.has('unpaid') || result.paymentStatus.confidence < CONFIDENCE_THRESHOLD)) {
+    warnings.push('Unpaid status lacks sufficiently certain printed evidence; verify the original before saving.');
+    uncertainFields.add('paymentStatus');
+  }
+  if (result.paymentStatus.value === 'conflicting' || result.paymentStatus.value === 'paid' && result.outstandingAmount.value > 0) {
+    warnings.push('Printed payment status conflicts with the outstanding balance or another status marking; verify the original before saving.');
+    uncertainFields.add('paymentStatus');
+  } else if (['paid', 'partial'].includes(result.paymentStatus.value)) {
+    warnings.push('Printed payment status needs payment-record review; no receipt may be inferred from the document.');
+    uncertainFields.add('paymentStatus');
+  }
   if (total !== null && result.outstandingAmount.value !== null && result.outstandingAmount.value > total) {
     warnings.push('Outstanding amount exceeds total.');
     uncertainFields.add('outstandingAmount');
@@ -347,7 +376,19 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
   active();
   const payload = makeMessages({ bytes, mimeType, fileName, businessName, pdfText });
   let sanitized;
-  const validate = (data) => (sanitized = validateInvoiceExtractionWireResponse(data));
+  const printedPayment = pdfText ? parsePrintedInvoicePaymentStatus(pdfText) : null;
+  const validate = (data) => {
+    const normalized = adaptInvoiceExtractionWireResponse(data);
+    // Validate the provider contract before combining independent printed
+    // evidence. A model omission cannot erase a selectable PDF's PAID stamp.
+    if (printedPayment) {
+      validateInvoiceExtractionResponse(normalized);
+      const reported = normalized.paymentStatus.value;
+      normalized.paymentStatus = {value: reported && reported !== printedPayment.status ? 'conflicting' : printedPayment.status, confidence: printedPayment.confidence};
+      normalized.paymentStatusEvidence = {value: printedPayment.text, confidence: printedPayment.confidence};
+    }
+    return (sanitized = validateInvoiceExtractionResponse(normalized));
+  };
   let response;
   try {
     response = await provider.generateStructured({

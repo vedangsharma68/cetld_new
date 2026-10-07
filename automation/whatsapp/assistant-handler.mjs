@@ -33,17 +33,28 @@ export function invoiceReviewClarification(action) {
   const issues = action.validationIssues || [];
   const moneyIssues = issues.some(code => /SUBTOTAL|TAX|OUTSTANDING|BALANCE|LINE_ITEMS|AMOUNT|TOTAL/.test(code));
   const mismatch = issues.includes('INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX');
+  const paymentConflict = issues.includes('PAYMENT_STATUS_CONFLICT');
+  const paymentReview = paymentConflict || issues.includes('PAYMENT_RECORD_REQUIRES_REVIEW') || issues.includes('UNCERTAIN_PAYMENT_STATUS');
   return ['I could only prepare a partial review.',
+    paymentConflict ? action.paymentEvidence?.status === 'paid'
+      ? 'A printed PAID marking conflicts with the outstanding balance.'
+      : 'The printed payment status conflicts with the outstanding balance or another status marking.' : null,
+    paymentReview ? 'Please verify the payment status and balance against the original and send a corrected invoice or a clearer photo. No payment was recorded.' : null,
     mismatch ? 'The subtotal plus tax does not match the total, so the amount breakdown needs review.' : null,
+    mismatch && /\b(?:shipping|handling|freight|delivery|surcharge|discount)\b/i.test(action.invoice?.notes || '') ? 'The printed shipping, charges, or discounts must be reviewed as part of that breakdown.' : null,
     moneyIssues ? 'Please verify the amounts and send a corrected invoice or a clearer photo showing the subtotal, tax, total, outstanding balance, and any printed adjustments.' : null,
     details.length ? `Please confirm the ${details.join(', ')}.` : null,
-    !moneyIssues && !details.length ? 'Please send a clearer photo so I can verify the invoice details.' : null,
+    !moneyIssues && !details.length && !paymentReview ? 'Please send a clearer photo so I can verify the invoice details.' : null,
     'Nothing was saved.'].filter(Boolean).join(' ');
 }
 
 function extractionValidationIssues(extracted) {
   const uncertain = new Set([...(extracted?.uncertainFields || []), ...(extracted?.missingFields || [])]);
   const issues = [];
+  const paymentStatus = extracted?.paymentStatus;
+  if (paymentStatus?.value === 'conflicting' || paymentStatus?.value === 'paid' && extracted?.outstandingAmount?.value > 0) issues.push('PAYMENT_STATUS_CONFLICT');
+  else if (['paid', 'partial'].includes(paymentStatus?.value)) issues.push('PAYMENT_RECORD_REQUIRES_REVIEW');
+  else if (paymentStatus?.value && (paymentStatus.confidence < 0.75 || uncertain.has('paymentStatus'))) issues.push('UNCERTAIN_PAYMENT_STATUS');
   for (const [field, label] of [['subtotal','SUBTOTAL'], ['tax','TAX'], ['total','TOTAL'], ['outstandingAmount','OUTSTANDING_AMOUNT']]) {
     const fact = extracted?.[field];
     // Missing currency also marks otherwise readable money uncertain. Currency
@@ -94,6 +105,8 @@ export function reviewDraft(extracted, sourceMessageId = null) {
   const hasPhotoCurrency=typeof extracted?.currency?.value==='string'&&extracted.currency.confidence>=0.75
     &&isSupportedCurrency(extracted.currency.value);
   return {type: 'invoice_review_draft', stage: 'incomplete', invoice,
+    ...(extracted?.paymentStatus?.value ? {paymentEvidence: {status: extracted.paymentStatus.value,
+      text: extracted.paymentStatusEvidence?.value ?? null, confidence: extracted.paymentStatus.confidence}} : {}),
     missingFields: missingFields(extracted), currencySource: hasPhotoCurrency?'photo':null,sourceMessageId};
 }
 
