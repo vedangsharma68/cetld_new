@@ -8,6 +8,44 @@ import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mj
 const phone='+919871367051';
 const logger={info(){},warn(){},error(){}};
 
+test('native repeated rejected reads log only filter structure without invoking ineligible repair or reaching the invoice',async()=>{
+  // These shapes reproduce the observed failure signature, not historical raw arguments.
+  const f=await fixture();try{
+    const {db,supabase,scope,customerId}=f;
+    const invoice=await createInvoice(db,scope.workspaceId,customerId,'INV-2026-0001',100);
+    const before=(await db.query('select to_jsonb(i) value from invoices i where id=$1',[invoice.id])).rows[0].value;
+    const privateValue='Synthetic Customer secret_marker_729';
+    const shapes=[null,JSON.stringify([{column:'invoice_number',operator:'eq',value:privateValue}]),{invoice_number:{eq:privateValue},[privateValue]:privateValue}];
+    for(const [index,filters]of shapes.entries()){
+      const message=`Show invoice ${invoice.invoice_number} and its edit options. Do not change any data.`,messageId=`diagnostic-gap-${index}`;
+      await addInbound(db,messageId,message);
+      const logs=[];let calls=0,plans=0;
+      const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',WHATSAPP_APP_SECRET:'isolated-read-diagnostic'},authorize:async()=>true,
+        logger:{info(label,data){logs.push({label,data});},warn(){},error(){}},
+        providerFactory:()=>new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,logger,
+          fetchImpl:async(_url,init)=>{
+            const request=JSON.parse(init.body);calls++;
+            if(request.response_format?.type==='json_schema'){plans++;throw Error('Ineligible repair must not invoke the planner');}
+            if(calls<=3)return Response.json({choices:[{message:{content:'',tool_calls:[{id:`repeat-${calls}`,type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'read',table:'invoices',filters})}}]},finish_reason:'tool_calls'}]});
+            return Response.json({choices:[{message:{content:`I couldn't find invoice ${invoice.invoice_number}.`},finish_reason:'stop'}]});
+          }})});
+      const result=await handler({...scope,messageId,message});
+      assert.match(result.answer,/could not prepare a safe reply/);assert.equal(plans,0);assert.equal(calls,5);
+      const toolLogs=logs.filter(row=>row.label==='WhatsApp owner tool call');assert.equal(toolLogs.length,1);
+      const diagnostic=toolLogs[0].data.filterShapeDiagnostic;
+      assert.equal(diagnostic.structure.type,filters===null?'null':typeof filters);
+      assert.equal(diagnostic.repair.attempted,false);assert.equal(diagnostic.repair.readEligibilityReason,'filter_object_not_catalog_valid');
+      assert.doesNotMatch(JSON.stringify(logs),/Synthetic Customer|secret_marker_729/);
+      assert.equal(toolLogs[0].data.validationCode,'FILTER_SHAPE');
+      assert.deepEqual(toolLogs[0].data.validationShape,{operation:'read',table:'invoices',filters:[],valueFields:[]});
+    }
+    assert.deepEqual((await db.query('select to_jsonb(i) value from invoices i where id=$1',[invoice.id])).rows[0].value,before);
+    assert.equal((await db.query('select count(*)::int n from invoice_correction_audits where invoice_id=$1',[invoice.id])).rows[0].n,0);
+    assert.equal(f.requests.some(request=>request.url.endsWith('/rpc/whatsapp_correct_owner_invoice')),false);
+    assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});
+
 async function fixture(){
   const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID();
   await db.query('insert into auth.users(id) values($1)',[ownerId]);

@@ -85,6 +85,30 @@ const scope = Object.freeze({
   phone:'+919871367051',
 });
 
+test('filter diagnostics redact values and unknown keys, bound structure and retain repair eligibility',async()=>{
+  const privateValue='Sensitive Customer sk_live_private_marker';
+  const supabase=fakeSupabase();let plans=0;
+  const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true,message:'Show one invoice',
+    planRequest:async()=>{plans++;return {operation:'read',table:'invoices',filters:[]};}});
+  for(const filters of [null,JSON.stringify([{column:'invoice_number',operator:'eq',value:privateValue}]),
+    JSON.stringify([privateValue.repeat(300)]),privateValue,
+    {invoice_number:{eq:privateValue},[privateValue]:privateValue,api_key:privateValue},
+    Array.from({length:30},()=>({column:privateValue,operator:privateValue,value:privateValue,[privateValue]:privateValue}))]){
+    const result=await tool.execute({operation:'read',table:'invoices',filters});
+    assert.equal(result.validationCode,'FILTER_SHAPE');
+    const diagnostic=result.filterShapeDiagnostic,encoded=JSON.stringify(diagnostic);
+    assert.equal(diagnostic.reason,'invalid_filter_container');
+    assert.deepEqual(diagnostic.repair,{attempted:false,route:'none',readEligibilityReason:'filter_object_not_catalog_valid'});
+    assert.doesNotMatch(encoded,/Sensitive Customer|sk_live|private_marker|api_key/);
+    assert(encoded.length<5000);assert.equal(plans,0);assert.equal(supabase.calls.length,0);
+  }
+  const repaired=await tool.execute({operation:'read',table:'invoices',filters:{column:'invoice_number',operator:'eq',value:privateValue}});
+  assert.equal(repaired.ok,true);assert.equal(plans,1);
+  assert.deepEqual(repaired.filterShapeDiagnostic.repair,{attempted:true,route:'read_filters',readEligibilityReason:'eligible'});
+  assert.doesNotMatch(JSON.stringify(repaired.filterShapeDiagnostic),/Sensitive Customer|sk_live|private_marker/);
+  assert.equal(tool.getWriteAttempted(),false);
+});
+
 test('direct record preflight exposes repairable schema errors without attempting a write',async()=>{
   let writes=0;
   const tool=createWorkspaceDataTool({supabase:fakeSupabase(),scope,authorize:async()=>true,confirmationMode:'direct',message:'Create QA record',messageId:'isolated-preflight',
