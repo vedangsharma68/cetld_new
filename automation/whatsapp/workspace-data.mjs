@@ -100,7 +100,7 @@ function definition() {
   // model request; describe exposes it when the model needs unfamiliar fields.
   const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA)},filters:{type:'array',items:{type:'object'}},values:{type:'object'}},required:['operation','table','values']};
   return {type:'function',function:{name:'workspaceData',
-    description:'Read/change business data; describe gives the catalog. Invoice corrections: update invoices, one invoice_number eq filter, typed values total_amount/subtotal/tax/discount/currency/dates/line_items. Keep the corrected breakdown consistent; line items require description and amount, optional quantity and unitPrice. Status paid/unpaid is a separate operation. Attached invoices: saveAttachment extracts/reviews/saves, analyzeAttachment reads; operation only, no table/values/create. Extra business facts: custom_fields. Filters are arrays of column/operator/value objects. pending/confirm/cancel',
+    description:'Describe. Invoice update: total_amount/subtotal/tax/discount/line_items; invoice_number eq. Status separate. Attachments: saveAttachment/analyzeAttachment, operation only.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic create/update batch. Read targets; use unique concrete numbers from scoped examples. No status changes/deletes. One patch per target; filters have column/operator/value.'},
@@ -113,7 +113,7 @@ function definition() {
             operator:{type:'string',enum:FILTER_OPERATORS},
             value:{type:['string','number','boolean','null','array'],items:{type:['string','number','boolean','null']}}},
           required:['column','operator','value']}},
-        values:{type:'object',properties:invoiceCorrectionValueSchema().properties,description:'Invoice corrections use these typed fields; other tables use describe. Do not put identifiers in values to target an update. Do not combine status with correction fields.'},
+        values:{type:'object',properties:{total_amount:{type:'number'},subtotal:{type:'number'},line_items:{type:'array',items:{type:'object',properties:{description:{type:'string'},amount:{type:'number'}},required:['description','amount']}}}},
         limit:{type:'integer',minimum:1,maximum:MAX_LIMIT},
         offset:{type:'integer',minimum:0,maximum:100000},
         order:{type:'object',additionalProperties:false,
@@ -1079,7 +1079,8 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     // Only a server-validated preflight rejection with no dispatch qualifies.
     const structuredBatch=Array.isArray(raw?.operations)||raw?.operation==='batch'||raw?.operation==='update'&&Array.isArray(raw?.filters)&&raw.filters.some(filter=>filter?.operator==='in');
     let correctionTarget=null;
-    if(raw?.operation==='update'&&raw?.table==='invoices'&&ownObject(raw.values)&&!Object.hasOwn(raw.values,'status')
+    if(confirmationMode==='direct'&&raw?.operation==='update'&&raw?.table==='invoices'&&ownObject(raw.values)
+      &&Object.keys(raw.values).every(key=>INVOICE_CORRECTION_FIELDS.includes(key))
       &&result?.validationCode==='INVALID_FIELDS'&&typeof planRequest==='function'&&String(message).trim()){
       try{correctionTarget=exactInvoiceNumberTarget(decodeInvoiceCorrectionFilters(raw.filters));}catch{}
     }

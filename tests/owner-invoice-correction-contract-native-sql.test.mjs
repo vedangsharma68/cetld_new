@@ -62,7 +62,7 @@ test('serialized canonical invoice correction target saves a due date once throu
    calls++;
    if(body.tools&&!body.messages.some(m=>m.role==='tool')){
     const schema=body.tools.find(t=>t.function.name==='workspaceData').function;
-    assert.match(schema.description,/Invoice corrections/);assert.doesNotMatch(schema.description,/status update only/);
+    assert.match(schema.description,/Invoice update/);assert.doesNotMatch(schema.description,/status update only/);
     assert.equal(schema.parameters.properties.values.properties.subtotal.type,'number');
     return toolCall({operation:'update',table:'invoices',filters:JSON.stringify(target),values:{due_date:'2026-10-20'}});
    }
