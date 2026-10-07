@@ -5,6 +5,26 @@ import {PGlite} from '@electric-sql/pglite';
 import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 
+test('correction container decoding remains bounded, rejects protected fields and logs no values or unknown field names',async()=>{
+ const filters=JSON.stringify([{column:'invoice_number',operator:'eq',value:'INV-1'}]);
+ for(const values of [JSON.stringify({status:'paid'}),JSON.stringify({status:'draft',due_date:'2026-10-20'}),
+  JSON.stringify({metadata:{amount_paid:5}}),JSON.stringify({workspace_id:'private_foreign_identity'}),JSON.stringify({api_secret:'private_secret_marker'}),
+  JSON.stringify([{due_date:'2026-10-20'}]),'null','"nested JSON string"','{invalid',' '.repeat(32769),null,[]]){
+  const supabase=fakeSupabase();let writes=0,plans=0;
+  const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true,confirmationMode:'direct',message:'Change INV-1 due date to 2026-10-20',
+   planRequest:async()=>{plans++;throw Error('protected/malformed containers must not select a write plan');},executeDirectOperation:async()=>{writes++;return {ok:true};}});
+  const result=await tool.execute({operation:'update',table:'invoices',filters,values});
+  assert.equal(result.ok,false);assert.equal(writes,0);assert.equal(plans,0);assert.equal(supabase.calls.length,0);
+  assert.doesNotMatch(JSON.stringify(result.correctionTransport),/private_foreign_identity|private_secret_marker|api_secret|amount_paid|2026-10-20/);
+ }
+ for(const value of ['', 'x'.repeat(101)]){
+  const supabase=fakeSupabase(),tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true,confirmationMode:'direct'});
+  const result=await tool.execute({operation:'update',table:'invoices',filters:JSON.stringify([{column:'invoice_number',operator:'eq',value}]),values:{due_date:'2026-10-20'}});
+  assert.equal(result.ok,false);assert.equal(result.correctionTransport.exactTarget,false);
+  assert.equal(result.correctionTransport.targetValueLength,value.length);assert.equal(supabase.calls.length,0);
+ }
+});
+
 test('serialized invoice correction targets permit only one exact canonical equality and never widen status, scope or other writes',async()=>{
  const valid=[{column:'invoice_number',operator:'eq',value:'INV-1'}];
  const bad=[JSON.stringify({invoice_number:'INV-1'}),JSON.stringify([]),JSON.stringify([...valid,...valid]),

@@ -1879,6 +1879,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
             ...(name==='workspaceData'&&output?.filterShapeDiagnostic?{filterShapeDiagnostic:output.filterShapeDiagnostic,
               filterShapeStructure:JSON.stringify(output.filterShapeDiagnostic.structure)}:{}),
             ...(name==='workspaceData'&&output?.planningRepair?{planningRepair:output.planningRepair}:{}),
+            ...(name==='workspaceData'&&output?.correctionTransport?{correctionTransport:output.correctionTransport}:{}),
             ...(name==='workspaceData'?{operation:output?.operation||(exception&&['read','create','update','batch','delete','restore','pending','confirm','cancel','describe','analyzeAttachment','saveAttachment','reviewAttachment','sendFile'].includes(args?.operation)?args.operation:null),
               table:output?.table||(exception&&['workspace_settings','workspace_ai_settings','invoices','customers','payments','invoice_files','business_records'].includes(args?.table)?args.table:null),rowCount:Array.isArray(output?.rows)?output.rows.length:null}:{}),
           });}catch{}}
