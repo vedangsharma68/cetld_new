@@ -1288,7 +1288,7 @@ const OWNER_AGENT_READ_ONLY_TABLES = new Set([
 ]);
 const QUOTA_PROVIDER_NAMES = new Set(['cloudflare','google','openrouter','opencode-zen']);
 const OWNER_AGENT_LOG_CODES = new Set([
-  ...Object.keys(SAFE_ERRORS),'UNKNOWN_TOOL','OK','OWNER_LOOP_TIMEOUT','OWNER_AGENT_TOOL_FAILED','CURRENT_REQUEST_MISMATCH',
+  ...Object.keys(SAFE_ERRORS),'UNKNOWN_TOOL','OK','OWNER_LOOP_TIMEOUT','OWNER_AGENT_TOOL_FAILED','CURRENT_REQUEST_MISMATCH','INVALID_TOTAL',
 ]);
 
 function isReadOnlyToolRequest(toolName,args,metadata=null) {

@@ -25,7 +25,7 @@ const SAFE_CODES=new Set([
   'INVALID_FIELDS','INVALID_TOTAL','LEDGER_MISMATCH','CONFIRMATION_REQUIRED','STALE_EVENT','TERMINAL',
 ]);
 
-function failure(code){return {ok:false,completed:false,...(code==='LEDGER_MISMATCH'?{message:'Recorded payments and reversals do not match this invoice balance. Reconcile the ledger before correcting amounts. No change was made.'}:{}),code:SAFE_CODES.has(code)?code:'DATABASE_UNAVAILABLE',...(code==='EXTERNAL_ACCOUNTING'?{requiresConfirmation:false,message:'This invoice is managed by connected accounting. Apply financial changes in that ledger and sync it here. No local change was made.'}:{})};}
+function failure(code){return {ok:false,completed:false,...(code==='INVALID_TOTAL'?{message:'The invoice total must be positive and equal subtotal plus tax minus discount. Any line items must add up to subtotal. Provide the corrected amounts together. No change was made.'}:{}),...(code==='LEDGER_MISMATCH'?{message:'Recorded payments and reversals do not match this invoice balance. Reconcile the ledger before correcting amounts. No change was made.'}:{}),code:SAFE_CODES.has(code)?code:'DATABASE_UNAVAILABLE',...(code==='EXTERNAL_ACCOUNTING'?{requiresConfirmation:false,message:'This invoice is managed by connected accounting. Apply financial changes in that ledger and sync it here. No local change was made.'}:{})};}
 function valueOf(result){return Array.isArray(result?.data)?result.data[0]:result?.data;}
 function validUuid(value){return typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);}
 function validPhone(value){return typeof value==='string'&&/^\+[1-9][0-9]{7,14}$/.test(value);}
