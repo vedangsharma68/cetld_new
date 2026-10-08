@@ -351,6 +351,39 @@ test('structured JSON uses Gemini schema configuration and returns validated dat
   assert.deepEqual(result.data,{value:'clean'});assert.equal(result.model,DEFAULT_EXTRACTION_MODEL);assert.equal(result.usedFallback,false);
 });
 
+test('opted-in Gemini planning JSON mode omits only the upstream schema and still rejects malformed output',async()=>{
+  const wires=[];
+  const ai=provider(async(_url,init)=>{wires.push(JSON.parse(init.body));return gemini('{"value":"clean"}')},{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null});
+  const input={messages:[{role:'user',content:'Return JSON data'}],name:'dynamic_plan',schema:{type:'object',properties:{value:{}}},geminiJsonMode:true,validate:value=>typeof value.value==='string'?{value:value.value}:undefined};
+  assert.deepEqual((await ai.generateStructured(input)).data,{value:'clean'});
+  assert.equal(wires[0].generationConfig.responseMimeType,'application/json');
+  assert.equal(Object.hasOwn(wires[0].generationConfig,'responseJsonSchema'),false);
+  assert.equal(Object.hasOwn(wires[0],'geminiJsonMode'),false);
+  for(const text of ['not JSON','{"value":123}']){
+    const invalid=provider(async()=>gemini(text),{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null});
+    await assert.rejects(invalid.generateStructured(input),error=>error.code==='INVALID_OUTPUT');
+  }
+});
+
+test('Gemini planning option stays private on Cloudflare and preserves its strict schema',async()=>{
+  let sent;
+  const ai=provider(async(_url,init)=>{sent=JSON.parse(init.body);return openRouter('{"value":"clean"}')},{primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'fixture',cfApiToken:'fixture'});
+  const schema={type:'object',properties:{value:{type:'string'}}};
+  await ai.generateStructured({messages:[{role:'user',content:'Return JSON'}],name:'sample',schema,geminiJsonMode:true,validate:value=>value});
+  assert.equal(Object.hasOwn(sent,'geminiJsonMode'),false);assert.deepEqual(sent.response_format.json_schema.schema,schema);
+});
+
+test('quota-skipped Cloudflare planning falls back to Gemini JSON mode without an upstream schema',async()=>{
+  let calls=0;
+  const ai=provider(async(url,init)=>{calls++;assert.equal(new URL(url).hostname,'generativelanguage.googleapis.com');
+    const body=JSON.parse(init.body);assert.equal(body.generationConfig.responseMimeType,'application/json');assert.equal(Object.hasOwn(body.generationConfig,'responseJsonSchema'),false);
+    return gemini('{"value":"clean"}');
+  },{primaryModel:CF_PRIMARY_MODEL,fallbackModel:CF_BACKUP_MODEL,cfAccountId:'fixture',cfApiToken:'fixture',
+    healthStore:{async getUnavailableUntil(identity){return identity.provider==='cloudflare'?Date.now()+60000:null;},async markUnavailable(){}}});
+  const result=await ai.generateStructured({messages:[{role:'user',content:'Return JSON'}],name:'dynamic_plan',schema:{type:'object'},geminiJsonMode:true,validate:value=>value});
+  assert.equal(calls,1);assert.equal(result.usedFallback,true);assert.equal(result.model,GEMINI_FALLBACK_MODEL);assert.deepEqual(result.data,{value:'clean'});
+});
+
 test('malformed or oversized structured output is rejected when fallback is disabled',async()=>{
   let calls=0;
   const malformed=provider(async()=>{calls++;return gemini('not json')},{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null});

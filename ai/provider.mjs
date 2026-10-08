@@ -349,7 +349,7 @@ function parseDataUrl(url) {
   if (!match) throw invalidArgument();
   return {mimeType: match[1], data: match[2]};
 }
-function geminiRequest(messages, {tools, tool_choice: toolChoice, response_format: responseFormat, max_tokens: maxTokens, temperature} = {}) {
+function geminiRequest(messages, {tools, tool_choice: toolChoice, response_format: responseFormat, max_tokens: maxTokens, temperature, geminiJsonMode=false} = {}) {
   const system = [];
   const contents = [];
   for (const message of messages) {
@@ -373,7 +373,7 @@ function geminiRequest(messages, {tools, tool_choice: toolChoice, response_forma
   if (typeof temperature === 'number') generationConfig.temperature = temperature;
   if (responseFormat?.type === 'json_schema') {
     generationConfig.responseMimeType = 'application/json';
-    generationConfig.responseJsonSchema = responseFormat.json_schema?.schema;
+    if(geminiJsonMode!==true)generationConfig.responseJsonSchema = responseFormat.json_schema?.schema;
   }
   const body = {contents, generationConfig};
   if (system.length) body.systemInstruction = {parts: [{text: system.join('\n\n')}]};
@@ -658,7 +658,8 @@ export class AIProvider {
   }
 
   async #request(model, messages, options, usedFallback) {
-    const {signal, deadlineAt, ...wireOptions} = options;
+    // This server-only compatibility option must never reach another provider.
+    const {signal, deadlineAt, geminiJsonMode, ...wireOptions} = options;
     if (isCfModel(model)) {
       if (!this.#cfApiToken || !this.#cfAccountId) throw new AIError('API_KEY_MISSING', 503);
       const cfWireOptions = {...wireOptions};
@@ -729,7 +730,7 @@ export class AIProvider {
     return this.#fetch(`${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.#geminiApiKey)}`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: safeJsonStringify(geminiRequest(messages, wireOptions)),
+      body: safeJsonStringify(geminiRequest(messages, {...wireOptions,geminiJsonMode})),
     }, async response => {
       const body = await readBoundedJson(response);
       if (!response.ok || body?.error) throw responseStatusError(response, body, 'google');
