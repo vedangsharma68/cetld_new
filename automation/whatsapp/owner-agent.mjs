@@ -1,5 +1,5 @@
 import {verifyOwnerPaymentReceipt,ownerPartialPaymentAvailable} from './owner-payment-readback.mjs';
-import {requestedOwnerPayment} from './owner-payment-intent.mjs';
+import {requestedOwnerPayment,ownerPaymentAmountMentioned} from './owner-payment-intent.mjs';
 import {isExternallyManagedInvoice} from '../../invoice/business-fields.mjs';
 import {requestedInvoiceDateChange,requestedInvoiceMoneyChange} from './invoice-corrections.mjs';
 import {internalToolEnvelope} from '../../ai/tool-calls.mjs';
@@ -1032,7 +1032,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         if(raw.amount!==undefined||raw.currency!==undefined){
           const intent=requestedOwnerPayment(message);
           if(!intent||Object.keys(raw).some(key=>!['target','amount','currency'].includes(key))||raw.target!==intent.invoiceNumber||raw.amount!==intent.amount||raw.currency!==intent.currency)
-            return {ok:false,code:'INVALID',message:'A partial payment requires a current explicit invoice, amount and currency instruction. No payment was recorded.'};
+            return {ok:false,code:'PAYMENT_GUARD',validationCode:'PAYMENT_INSTRUCTION_REQUIRED',message:'A partial payment requires a current explicit invoice, amount and currency instruction. No proposal or payment was recorded.'};
           await active();
           if(!await ownerPartialPaymentAvailable(supabase))return {ok:false,code:'UNAVAILABLE',message:'Exact amount payments are not available. No proposal or payment was recorded; do not use full settlement.'};
           const found=await resolveWorkspaceRecord({supabase,scope,table:'invoices',operation:'update',filters:[{column:'invoice_number',operator:'eq',value:raw.target},...(intent.customerName?[{column:'customer_name',operator:'eq',value:intent.customerName}]:[])],select:'id,invoice_number,customer_id,updated_at,currency,total_amount,amount_paid,status,metadata,external_provider,external_invoice_id',assertAuthorized:active});
@@ -1048,7 +1048,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
           const proposed=await stage(action);
           return proposed.ok?{...proposed,paymentAmount:raw.amount,currency:raw.currency,outstandingAmount:action.outstandingAmount}:proposed;
         }
-        if(requestedOwnerPayment(message))return {ok:false,code:'PAYMENT_GUARD',message:'This request specifies an exact amount. Use the amount and currency payment proposal; no payment was recorded.'};
+        if(ownerPaymentAmountMentioned(message))return {ok:false,code:'PAYMENT_GUARD',message:'This message mentions a partial or amount payment. Supply one invoice number, amount and currency; full settlement was blocked. No payment was recorded.'};
         if(typeof raw.target!=='string'||Object.keys(raw).some(key=>key!=='target'))return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
         const resolved=await resolveInvoice(raw.target);
         if(resolved.error)return {ok:false,code:resolved.error,message:SAFE_ERRORS[resolved.error]};

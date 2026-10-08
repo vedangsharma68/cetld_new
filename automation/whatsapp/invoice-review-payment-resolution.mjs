@@ -8,8 +8,12 @@ export function invoiceReviewUnpaidResolution({action,message,messageId}) {
     ||invoice.outstanding!==invoice.total||!messageId||typeof message!=='string')return null;
   const text=message.normalize('NFKC').replace(/[’‘]/g,"'");
   if(/[?"“”`]|(?:^|\s)'|\b(?:not|never|isn't|wasn't|aren't|don't|didn't|cannot|can't|maybe|perhaps|might|could|would|if|whether|later|tomorrow|next|someone|says|said|quoted)\b/i.test(text))return null;
+  const explicitUnpaid=/\b(?:it|this(?: invoice)?|the invoice)\s+is\s+unpaid\b/i.test(text)
+    ||/\bno payment has been received\b/i.test(text)&&/\bsave (?:it|this(?: invoice)?|the invoice) as an unpaid draft\b/i.test(text);
+  const affirmative=text.replace(/\bno payment has been received\b/gi,'');
+  if(/\bpayment (?:has been|was|is) received\b|\breceived (?:a |the )?payment\b/i.test(affirmative))return null;
   if(!/\b(?:my business|our business|we|i)\s+(?:have\s+)?issued\b/i.test(text)
-    ||! /\b(?:it|this(?: invoice)?|the invoice)\s+is\s+unpaid\b/i.test(text)
+    ||!explicitUnpaid
     ||! /\b(?:the\s+)?PAID\s+(?:stamp|marking|watermark)\s+is\s+(?:incorrect|wrong|false)\b/i.test(text))return null;
   if(/\b(?:it|this(?: invoice)?|the invoice)\s+is\s+(?:already\s+)?paid\b|\bPAID\s+(?:stamp|marking|watermark)\s+is\s+(?:correct|right|true)\b/i.test(text))return null;
   if([...text.matchAll(/\bfull\s+[A-Z]{3}\s+\d+(?:\.\d{1,2})?\s+(?:is\s+)?still\s+due\b/gi)].length!==1)return null;

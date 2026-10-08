@@ -8,6 +8,8 @@ const {createOfflineSqlNetwork}=await import(new URL('tests/fixtures/offline-sql
 const {createOwnerMessageHandler}=await import(new URL('automation/whatsapp/owner-handler.mjs',base));
 const {AIProvider}=await import(new URL('ai/provider.mjs',base));
 const prompt='Record a USD 500 test payment against invoice SB-10442 for Northwind Systems LLC. This is only a dummy bookkeeping entry. Keep customer messages and reminders off.';
+const livePrompt='Record a USD 500 partial payment for the dummy invoice SB-10442 for Northwind Systems LLC. Keep customer messages and reminders off.';
+const newMigration='20261008153500_owner_live_clarification_evidence.sql';
 const leadingPrompt='For test invoice INV-2026-6769 for Northwind Systems LLC, record a partial payment of USD 500. This is a dummy bookkeeping entry only; keep messages and reminders off.';
 const target=[{column:'invoice_number',operator:'eq',value:'SB-10442'}];
 const proposal={operation:'create',table:'payments',filters:target,values:{amount:500,currency:'USD'}};
@@ -167,7 +169,7 @@ test('failed post-write readback never claims completion or executes a second pa
 
 test('forward migration is idempotent, refuses installed drift and preserves existing routine ACLs', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
  const {readFile}=await import('node:fs/promises');const sql=await readFile(new URL('supabase/migrations/20261008031733_owner_partial_payment_confirmation.sql',base),'utf8');
- const f=await fixture();try{
+ const f=await fixture({excludeMigrations:[newMigration]});try{
   const routines=async()=> (await f.db.query("select proname,md5(prosrc) hash,proacl::text acl,has_function_privilege('anon',oid,'EXECUTE') anon,has_function_privilege('authenticated',oid,'EXECUTE') authenticated,has_function_privilege('service_role',oid,'EXECUTE') service from pg_proc where proname in ('whatsapp_confirm_owner_invoice_action','whatsapp_apply_direct_owner_write','owner_payment_instruction') order by proname")).rows;
   const before=await routines(),state=await f.snapshot();
   await f.db.exec('set role service_role');assert.equal((await f.db.query('select whatsapp_owner_partial_payment_capability() value')).rows[0].value.ok,true);await f.db.exec('reset role');
@@ -185,7 +187,7 @@ test('forward migration is idempotent, refuses installed drift and preserves exi
 });
 
 test('new runtime on old production SQL fails closed without any partial proposal or full settlement', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
- const f=await fixture({invoiceNumber:'INV-2026-6769',excludeMigrations:['20261008031733_owner_partial_payment_confirmation.sql']});try{
+ const f=await fixture({invoiceNumber:'INV-2026-6769',excludeMigrations:['20261008031733_owner_partial_payment_confirmation.sql',newMigration]});try{
   const before=await f.snapshot();
   for(const [id,message,operation]of [['old-schema-propose',prompt,proposal],['old-schema-leading',leadingPrompt,{...proposal,filters:[{column:'invoice_number',operator:'eq',value:'INV-2026-6769'}]}]]){
    await f.inbound(id,message);const run=handlerFor(f,{readTwice:true,readTarget:operation.filters,operation});const reply=await run.handler({...f.scope,messageId:id,message});
@@ -218,5 +220,51 @@ test('a genuine signed amount proposal confirms through the button adapter and p
   assert.equal(legacy.outputs.at(-1).proposal,true);const full=(await f.db.query("select * from whatsapp_pending_actions where consumed_at is null")).rows[0];assert.deepEqual(full.action.changes,{status:'paid'});
   await f.inbound('legacy-paid-confirm','yes');const fullResult=(await f.db.query('select whatsapp_confirm_owner_invoice_action($1,$2,$3,$4,$5,$6,true) value',[f.scope.workspaceId,f.scope.ownerId,f.scope.phone,full.id,full.version,'legacy-paid-confirm'])).rows[0].value;assert.equal(fullResult.ok,true);
   const final=await f.snapshot();assert.equal(final.payments.length,2);assert.equal(final.payments.find(p=>p.settle_remaining).amount,451.52);assert.equal(final.invoices.find(i=>i.id===f.ids[0]).amount_paid,951.52);assert.equal(final.invoices.find(i=>i.id===f.ids[0]).status,'paid');assert.equal(final.outbound,0);
+ }finally{await f.close();}
+});
+
+test('exact live partial-payment wording uses the production native routing and immutable source SQL',async()=>{
+ const f=await fixture({invoiceNumber:'INV-2026-6769'});try{
+  const {requestedOwnerPayment,ownerPaymentAmountMentioned}=await import(new URL('automation/whatsapp/owner-payment-intent.mjs',base));
+  assert.deepEqual(requestedOwnerPayment(livePrompt),{amount:500,currency:'USD',invoiceNumber:'SB-10442',customerName:'Northwind Systems LLC'});
+  for(const text of [livePrompt,livePrompt.replace('partial payment','payment'),livePrompt.replace('the dummy invoice','invoice'),
+    'He said "'+livePrompt+'"','Do not '+livePrompt,livePrompt+' Instead pay USD 600.',livePrompt.replace('USD 500','USD 500 or EUR 500')]){
+   assert.deepEqual((await f.db.query('select app.owner_payment_instruction($1) value',[text])).rows[0].value,requestedOwnerPayment(text));
+  }
+  const before=await f.snapshot();await f.inbound('live-phrase-propose',livePrompt);
+  const run=handlerFor(f,{readTwice:true});const reply=await run.handler({...f.scope,messageId:'live-phrase-propose',message:livePrompt});
+  assert.equal(run.outputs[0].rows.length,7);assert.equal(run.outputs[1].rows.length,1);assert.equal(run.outputs.at(-1).proposal,true,JSON.stringify({reply,outputs:run.outputs}));
+  assert.deepEqual(await f.snapshot(),before);const pending=(await f.db.query("select * from whatsapp_pending_actions where consumed_at is null")).rows[0];
+  assert.deepEqual(pending.action.changes,{amount:500,currency:'USD'});assert.equal(pending.action.sourceMessageId,'live-phrase-propose');assert.equal(pending.action.requestedInvoiceNumber,'SB-10442');
+  await f.inbound('live-phrase-confirm','yes');const confirm=handlerFor(f,{confirmation:true});await confirm.handler({...f.scope,messageId:'live-phrase-confirm',message:'yes'});
+  assert.equal(confirm.outputs.at(-1).completed,true,JSON.stringify(confirm.outputs));assert.equal(confirm.outputs.at(-1).outstandingAmount,451.52);
+  const after=await f.snapshot(),invoice=after.invoices.find(i=>i.id===f.ids[0]);assert.equal(invoice.amount_paid,500);assert.equal(invoice.total_amount,951.52);assert.equal(invoice.status,'draft');assert.equal(after.payments.length,1);assert.equal(after.payments[0].amount,500);assert.equal(after.payments[0].settle_remaining,false);assert.deepEqual(after.files,before.files);assert.equal(after.outbound,0);assert.deepEqual(after.invoices.filter(i=>i.id!==f.ids[0]),before.invoices.filter(i=>i.id!==f.ids[0]));
+  assert.deepEqual(f.errors,[]);
+ }finally{await f.close();}
+});
+test('unsupported partial and amount wording cannot stage or confirm full settlement',async()=>{
+ const f=await fixture();try{
+  const {requestedOwnerPayment,ownerPaymentAmountMentioned}=await import(new URL('automation/whatsapp/owner-payment-intent.mjs',base));
+  const before=await f.snapshot();
+  for(const [index,text]of ['Record a USD 500 partial payment for invoice SB-10442, please.','Record a partial payment of 500 for invoice SB-10442.','Log a payment of USD 500 for this invoice.','He said "'+livePrompt+'"',livePrompt+' Instead pay USD 600.'].entries()){
+   assert.equal(requestedOwnerPayment(text),null);assert.equal(ownerPaymentAmountMentioned(text),true);
+   assert.equal((await f.db.query('select app.owner_payment_amount_mentioned($1) value',[text])).rows[0].value,true);
+   const id='unsupported-amount-'+index;await f.inbound(id,text);const run=handlerFor(f,{operation:{operation:'update',table:'invoices',filters:target,values:{status:'paid'}}});await run.handler({...f.scope,messageId:id,message:text});assert.equal(run.outputs.at(-1).ok,false);assert.equal(run.outputs.at(-1).proposal,undefined);
+   // Simulate a legacy/misrouted proposal bypassing runtime: SQL must independently deny it.
+   await f.db.query("update whatsapp_pending_actions set consumed_at=now() where consumed_at is null");
+   const invoice=(await f.db.query('select * from invoices where id=$1',[f.ids[0]])).rows[0];
+   const action={type:'owner_invoice_payment',invoiceId:invoice.id,invoiceNumber:invoice.invoice_number,expectedUpdatedAt:new Date(invoice.updated_at).toISOString(),changes:{status:'paid'},sourceMessageId:id};
+   const pending=(await f.db.query("insert into whatsapp_pending_actions(workspace_id,customer_id,phone,action,source,generation) values($1,$2,$3,$4,'whatsapp',$5) returning *",[f.scope.workspaceId,f.scope.customerId,f.scope.phone,action,900])).rows[0];
+   await f.inbound(id+'-confirm','yes');const result=(await f.db.query('select whatsapp_confirm_owner_invoice_action($1,$2,$3,$4,$5,$6,true) value',[f.scope.workspaceId,f.scope.ownerId,f.scope.phone,pending.id,pending.version,id+'-confirm'])).rows[0].value;
+   assert.equal(result.ok,false,JSON.stringify(result));assert.deepEqual(await f.snapshot(),before);
+  }
+ }finally{await f.close();}
+});
+test('previous version-2 SQL cannot expose a confirmable new wording proposal',async()=>{
+ const f=await fixture({excludeMigrations:[newMigration]});try{
+  assert.deepEqual((await f.db.query('select whatsapp_owner_partial_payment_capability() value')).rows[0].value,{ok:true,version:2});
+  assert.equal((await f.db.query('select app.owner_payment_instruction($1) value',[livePrompt])).rows[0].value,null,'the installed version-2 source parser rejects the exact live wording');
+  const before=await f.snapshot();await f.inbound('v2-live',livePrompt);const run=handlerFor(f);await run.handler({...f.scope,messageId:'v2-live',message:livePrompt});
+  assert.equal(run.outputs.at(-1).code,'UNAVAILABLE');assert.equal(run.outputs.some(o=>o.proposal),false);assert.deepEqual(await f.snapshot(),before);assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions')).rows[0].n,0);
  }finally{await f.close();}
 });
