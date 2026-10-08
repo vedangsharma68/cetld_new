@@ -7,7 +7,7 @@ import {createOwnerSafetyTools} from '../automation/whatsapp/owner-agent.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 
-test('native Gemini owner clarifies the false PAID stamp, currency and issuer on the same review before a later save',async()=>{
+for(const installedLineEndings of ['LF','CRLF'])test(`native Gemini owner clarifies the false PAID stamp from ${installedLineEndings} installed SQL before a later save`,async()=>{
  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+15555550125';
  try{
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -65,8 +65,11 @@ test('native Gemini owner clarifies the false PAID stamp, currency and issuer on
   const valid=candidate('sql-positive',instruction);
   const routineSecurity=async()=>(await db.query("select proowner,proacl,prosecdef,proconfig from pg_proc where oid='public.whatsapp_transition_invoice_review(bigint,bigint,uuid,uuid,text,text,jsonb)'::regprocedure")).rows[0];
   const security=await routineSecurity();
-  await db.exec(await readFile(new URL('../supabase/migrations/20261002110000_whatsapp_invoice_review_fact_continuation.sql',import.meta.url),'utf8'));
+  const originalSql=await readFile(new URL('../supabase/migrations/20261002110000_whatsapp_invoice_review_fact_continuation.sql',import.meta.url),'utf8');
+  await db.exec(installedLineEndings==='CRLF'?originalSql.replaceAll('\n','\r\n'):originalSql);
   await db.exec(await readFile(new URL('../supabase/migrations/20261007193000_invoice_review_json_expression_precedence.sql',import.meta.url),'utf8'));
+  const installedHash=(await db.query("select md5(prosrc) source_md5 from pg_proc where oid='public.whatsapp_transition_invoice_review(bigint,bigint,uuid,uuid,text,text,jsonb)'::regprocedure")).rows[0].source_md5;
+  assert.equal(installedHash,installedLineEndings==='CRLF'?'be56f8a9d0344bea9c74b425846d015e':'3073ffde75cc1168a4f74688a52fa30b');
   await assert.rejects(transition(valid),/invalid invoice review fact update/,'the deployed contract cannot clear validationIssues');
   await db.exec(await readFile(new URL('../supabase/migrations/20261008025552_invoice_review_unpaid_stamp_resolution.sql',import.meta.url),'utf8'));
   assert.deepEqual(await routineSecurity(),security,'forward migration preserves routine owner, grants, search path and security mode');

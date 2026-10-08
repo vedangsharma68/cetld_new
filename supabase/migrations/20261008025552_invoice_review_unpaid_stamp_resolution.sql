@@ -3,14 +3,20 @@
 begin;
 
 -- Refuse unknown installed source before replacing anything. The allowed
--- bodies are the approved PR88 continuation and this exact forward fix.
+-- bodies are the approved PR88 continuation and this exact forward fix,
+-- each with either all LF or all CRLF line endings. Unknown source fails closed.
 do $source_guard$
 declare
   v_source text;
 begin
   select p.prosrc into strict v_source from pg_catalog.pg_proc p
     where p.oid='public.whatsapp_transition_invoice_review(bigint,bigint,uuid,uuid,text,text,jsonb)'::regprocedure;
-  if pg_catalog.md5(v_source) not in ('3073ffde75cc1168a4f74688a52fa30b','f39fc6258f46e3fe933f87b77aadea2a') then
+  if pg_catalog.md5(v_source) not in (
+    '3073ffde75cc1168a4f74688a52fa30b', -- approved predecessor, LF
+    'be56f8a9d0344bea9c74b425846d015e', -- approved predecessor, CRLF
+    'f39fc6258f46e3fe933f87b77aadea2a', -- exact forward fix, LF
+    'e037e6cdba625a819dd0293d0706140d'  -- exact forward fix, CRLF
+  ) then
     raise exception 'Unexpected invoice review source; no changes applied';
   end if;
 end
