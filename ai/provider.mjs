@@ -1,10 +1,12 @@
 import {randomUUID} from 'node:crypto';
 import {providerHealthIdentity} from './provider-health.mjs';
 import {normalizeProviderToolCalls} from './tool-calls.mjs';
+import {zenResponsesRequest, zenResponsesResult, zenChatMessages, stripNativeProviderMetadata} from './zen-responses.mjs';
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const ZEN_CHAT_COMPLETIONS_URL = 'https://opencode.ai/zen/v1/chat/completions';
+const ZEN_RESPONSES_URL = 'https://opencode.ai/zen/v1/responses';
 const DEFAULT_TIMEOUT_MS = 16_000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_CONTENT_CHARS = 256 * 1024;
@@ -14,7 +16,10 @@ function assertServerRuntime() {
 }
 
 export const ZEN_PRIMARY_MODEL = globalThis.process?.env?.ZEN_PRIMARY_MODEL || 'space-bunny-free';
-export const ZEN_FALLBACK_MODEL = globalThis.process?.env?.ZEN_FALLBACK_MODEL || 'longcat-2.5-preview-free';
+export const ZEN_FALLBACK_MODEL = globalThis.process?.env?.ZEN_FALLBACK_MODEL || null;
+export const ZEN_MIMO_MODEL = 'mimo-v2.6-flash-free';
+export const ZEN_MUSE_MODEL = 'muse-spark-1.3-contributor-free';
+export const isRetiredModelId = value => value === 'longcat-2.5-preview-free';
 export const GEMINI_FALLBACK_MODEL = 'gemini-3.5-flash';
 export const DEFAULT_MODEL = ZEN_PRIMARY_MODEL;
 export const DEFAULT_FALLBACK_MODEL = ZEN_FALLBACK_MODEL;
@@ -36,11 +41,14 @@ export function cloudflareBreakerState() { return {...cfBreaker, open: Date.now(
 export const OPENROUTER_FREE_MODEL = 'openrouter/free';
 export const DEFAULT_EXTRACTION_FALLBACK_MODEL = GEMINI_FALLBACK_MODEL;
 const BOTH_MODEL_ROLES = Object.freeze(['primary','fallback']);
-const catalogEntry = (id,label,provider,roles=BOTH_MODEL_ROLES,supportsTools=true) =>
-  Object.freeze({id,label,provider,roles:Object.freeze([...roles]),supportsTools});
+const catalogEntry = (id,label,provider,roles=BOTH_MODEL_ROLES,supportsTools=true,capabilities={}) =>
+  Object.freeze({id,label,provider,roles:Object.freeze([...roles]),supportsTools,...capabilities});
 export const VERIFIED_MODEL_CATALOG = Object.freeze([
-  catalogEntry(ZEN_PRIMARY_MODEL,'Space Bunny Free','opencode-zen',['primary']),
-  catalogEntry(ZEN_FALLBACK_MODEL,'LongCat 2.5 Preview Free','opencode-zen',['fallback']),
+  catalogEntry('space-bunny-free','Space Bunny Free','opencode-zen',['primary']),
+  catalogEntry(ZEN_MIMO_MODEL,'MiMo V2.6 Flash Free','opencode-zen',BOTH_MODEL_ROLES,true,
+    {protocol:'chat-completions',supportsVision:true,visionVerification:'upstream-documented',supportsRequiredToolChoice:true}),
+  catalogEntry(ZEN_MUSE_MODEL,'Muse Spark 1.3 Contributor Free','opencode-zen',BOTH_MODEL_ROLES,true,
+    {protocol:'responses',supportsVision:true,visionVerification:'upstream-documented',supportsRequiredToolChoice:false}),
   catalogEntry(CF_PRIMARY_MODEL,'Llama 3.3 70B Instruct (Cloudflare)','cloudflare'),
   catalogEntry(CF_BACKUP_MODEL,'Llama 4 Scout (Cloudflare)','cloudflare'),
   catalogEntry(CF_MISTRAL_MODEL,'Mistral Small 3.1 24B (Cloudflare)','cloudflare'),
@@ -83,7 +91,7 @@ export function isGeminiModelId(value) {
 function catalogRoles(value) { return VERIFIED_MODEL_CATALOG.find(entry=>entry.id===value)?.roles || []; }
 export function isPrimaryModelId(value) { return catalogRoles(value).includes('primary'); }
 export function isFallbackModelId(value) { return catalogRoles(value).includes('fallback'); }
-function isZenModelId(value) { return value === ZEN_PRIMARY_MODEL || value === ZEN_FALLBACK_MODEL; }
+function isZenModelId(value) { return VERIFIED_MODEL_CATALOG.some(entry=>entry.id===value&&entry.provider==='opencode-zen'); }
 export function isModelId(value) {
   return value === OPENROUTER_FREE_MODEL || isPrimaryModelId(value) || isFallbackModelId(value);
 }
@@ -98,8 +106,12 @@ function defaultFallbackFor(primary) {
 }
 
 export function sanitizeModelSettings({primaryModel, fallbackModel} = {}) {
-  const primary = isPrimaryModelId(primaryModel) ? primaryModel : DEFAULT_MODEL;
+  const primary = isPrimaryModelId(primaryModel) || isRetiredModelId(primaryModel) ? primaryModel : DEFAULT_MODEL;
+  // Preserve retired saved choices as data. The candidate router suppresses them;
+  // a catalog refresh must never activate an unselected replacement model.
+  if (isRetiredModelId(fallbackModel)) return {primaryModel: primary, fallbackModel};
   if (fallbackModel === null) return {primaryModel: primary, fallbackModel: null};
+  if (isRetiredModelId(primary)) return {primaryModel:primary,fallbackModel:isFallbackModelId(fallbackModel)?fallbackModel:null};
   const preferredFallback = fallbackModel === undefined ? defaultFallbackFor(primary) : fallbackModel;
   let fallback = isFallbackModelId(preferredFallback) && preferredFallback !== primary
     ? preferredFallback : defaultFallbackFor(primary);
@@ -454,7 +466,7 @@ export class AIProvider {
   } = {}) {
     assertServerRuntime();
     if (!['chat', 'extraction'].includes(requestPurpose)) throw invalidArgument();
-    if (!isPrimaryModelId(primaryModel) || (fallbackModel !== null && (!isFallbackModelId(fallbackModel) || fallbackModel === primaryModel))) throw new AIError('INVALID_MODEL', 400);
+    if ((!isPrimaryModelId(primaryModel)&&!isRetiredModelId(primaryModel)) || (fallbackModel !== null && ((!isFallbackModelId(fallbackModel)&&!isRetiredModelId(fallbackModel)) || fallbackModel === primaryModel))) throw new AIError('INVALID_MODEL', 400);
     this.requestPurpose = requestPurpose;
     this.primaryModel = primaryModel;
     this.fallbackModel = fallbackModel;
@@ -482,6 +494,7 @@ export class AIProvider {
       if (toolChoice !== undefined) requestOptions.tool_choice = toolChoice;
     } else if (tools !== undefined && !Array.isArray(tools)) throw invalidArgument();
     const candidates = this.#candidates();
+    if(!candidates.length)throw new AIError('INVALID_MODEL',400);
     let lastError;
     let consideredLegs=0;
     let quotaLegs=0;
@@ -518,11 +531,12 @@ export class AIProvider {
   }
 
   #candidates() {
+    if(isRetiredModelId(this.primaryModel))return this.fallbackModel&&!isRetiredModelId(this.fallbackModel)?[this.fallbackModel]:[];
     let candidates = [this.primaryModel];
     if (this.requestPurpose === 'extraction') {
       if (this.fallbackModel) {
         candidates.push(this.fallbackModel);
-        candidates.push(GEMINI_FALLBACK_MODEL, ZEN_PRIMARY_MODEL, ZEN_FALLBACK_MODEL);
+        candidates.push(GEMINI_FALLBACK_MODEL, ZEN_PRIMARY_MODEL);
       }
     } else if (this.primaryModel === CF_PRIMARY_MODEL) {
       const defaultCfFallback = this.fallbackModel === null || this.fallbackModel === CF_BACKUP_MODEL || this.fallbackModel === GEMINI_FALLBACK_MODEL;
@@ -543,7 +557,7 @@ export class AIProvider {
       candidates.push(this.fallbackModel);
       candidates.push(GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL);
     }
-    return [...new Set(candidates)];
+    return [...new Set(candidates)].filter(model=>model&&!isRetiredModelId(model));
   }
 
   async generateStructured({messages, schema, name, validate, maxTokens, ...options} = {}) {
@@ -697,7 +711,7 @@ export class AIProvider {
   async #request(model, messages, options, usedFallback) {
     // This server-only compatibility option must never reach another provider.
     const {signal, deadlineAt, geminiJsonMode, ...wireOptions} = options;
-    const ordinaryMessages=messages.map(({googleParts,googleBatchCoalesced,...message})=>message);
+    const ordinaryMessages=messages.map(stripNativeProviderMetadata);
     if (isCfModel(model)) {
       if (!this.#cfApiToken || !this.#cfAccountId) throw new AIError('API_KEY_MISSING', 503);
       const cfWireOptions = {...wireOptions};
@@ -732,10 +746,27 @@ export class AIProvider {
     }
     if (isZenModelId(model)) {
       if (!this.#zenApiKey) throw new AIError('API_KEY_MISSING', 503);
+      if(model===ZEN_MUSE_MODEL)return this.#fetch(ZEN_RESPONSES_URL,{
+        method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${this.#zenApiKey}`},
+        body:safeJsonStringify(zenResponsesRequest(model,messages,wireOptions,{invalidArgument})),
+      },async response=>{
+        const body=await readBoundedJson(response);
+        if(!response.ok||body?.error||['failed','cancelled'].includes(body?.status))throw responseStatusError(response,body,'opencode-zen',response.ok?502:response.status);
+        return zenResponsesResult(body,model,usedFallback,{invalidResponse:()=>new AIError('INVALID_RESPONSE')});
+      },{signal,deadlineAt});
+      const zenWireOptions={...wireOptions};
+      if(model===ZEN_MIMO_MODEL){
+        if(zenWireOptions.max_tokens!==undefined){zenWireOptions.max_completion_tokens=zenWireOptions.max_tokens;delete zenWireOptions.max_tokens;}
+        // A different provider's history has no MiMo reasoning to replay.
+        // Disable thinking for that transcript instead of inventing reasoning.
+        if(messages.some(message=>message.role==='assistant'&&message.tool_calls?.length
+          &&(message.zenChatModel!==model||typeof message.zenChatReasoningContent!=='string')))
+          zenWireOptions.thinking={type:'disabled'};
+      }
       return this.#fetch(ZEN_CHAT_COMPLETIONS_URL, {
         method: 'POST',
         headers: {'Content-Type': 'application/json', Authorization: `Bearer ${this.#zenApiKey}`},
-        body: safeJsonStringify({...wireOptions, model, messages:ordinaryMessages, stream: false}),
+        body: safeJsonStringify({...zenWireOptions, model, messages:model===ZEN_MIMO_MODEL?zenChatMessages(model,messages,{invalidArgument}):ordinaryMessages, stream: false}),
       }, async response => {
         const body = await readBoundedJson(response);
         if (!response.ok || body?.error) throw responseStatusError(response, body, 'opencode-zen');
@@ -745,7 +776,9 @@ export class AIProvider {
         const content = typeof message.content === 'string' ? message.content : Array.isArray(message.content) ? message.content.map(part => part?.text || '').join('') : '';
         const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
         if (!content && !toolCalls.length) throw new AIError('INVALID_RESPONSE');
-        return {content, finishReason: choice.finish_reason || null, toolCalls, model, usedFallback};
+        return {content, finishReason: choice.finish_reason || null, toolCalls, model, usedFallback,
+          ...(model===ZEN_MIMO_MODEL&&toolCalls.length?{zenChatToolCalls:structuredClone(toolCalls),zenChatModel:model,
+            ...(typeof message.reasoning_content==='string'?{zenChatReasoningContent:message.reasoning_content}:{})}:{})};
       }, {signal, deadlineAt});
     }
     if (model === OPENROUTER_FREE_MODEL) {

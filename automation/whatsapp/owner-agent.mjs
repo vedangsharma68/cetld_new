@@ -1955,7 +1955,14 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         }catch{}
       }
       transcript.push({role:'assistant',content:String(lastResult?.content||''),tool_calls:calls,
-        ...(Array.isArray(lastResult?.googleParts)?{googleParts:lastResult.googleParts,...(googleBatchCoalesced?{googleBatchCoalesced:true}:{})}:{})});
+        ...(Array.isArray(lastResult?.googleParts)?{googleParts:lastResult.googleParts,...(googleBatchCoalesced?{googleBatchCoalesced:true}:{})}:{}),
+        ...(Array.isArray(lastResult?.zenResponsesOutput)&&typeof lastResult?.zenResponsesModel==='string'
+          ?{zenResponsesOutput:lastResult.zenResponsesOutput,zenResponsesModel:lastResult.zenResponsesModel,
+            ...(googleBatchCoalesced?{zenResponsesBatchCoalesced:true}:{})}:{}),
+        ...(Array.isArray(lastResult?.zenChatToolCalls)&&typeof lastResult?.zenChatModel==='string'
+          ?{...(typeof lastResult.zenChatReasoningContent==='string'?{zenChatReasoningContent:lastResult.zenChatReasoningContent}:{}),zenChatModel:lastResult.zenChatModel,
+            ...(Array.isArray(lastResult.zenChatToolCalls)?{zenChatToolCalls:lastResult.zenChatToolCalls}:{}),
+            ...(googleBatchCoalesced?{zenChatBatchCoalesced:true}:{})}:{})});
       const parsed=[];
       for(const call of calls){
         const name=call?.function?.name;

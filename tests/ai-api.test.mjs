@@ -5,7 +5,7 @@ import {createAIHandler} from '../ai/routes.mjs';
 import {readFile} from 'node:fs/promises';
 import {answerWorkspaceQuestion} from '../ai/assistant.mjs';
 import {AIProvider,CF_BACKUP_MODEL,CF_GLM_MODEL,CF_GPT_OSS_MODEL,CF_MISTRAL_MODEL,CF_PRIMARY_MODEL,CF_QWEN_MODEL,
-  DEFAULT_EXTRACTION_MODEL,DEFAULT_FALLBACK_MODEL,DEFAULT_MODEL,GEMINI_FALLBACK_MODEL,ZEN_FALLBACK_MODEL} from '../ai/provider.mjs';
+  DEFAULT_EXTRACTION_MODEL,DEFAULT_FALLBACK_MODEL,DEFAULT_MODEL,GEMINI_FALLBACK_MODEL,ZEN_FALLBACK_MODEL,ZEN_MIMO_MODEL,ZEN_MUSE_MODEL} from '../ai/provider.mjs';
 const A='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', B='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', U='11111111-1111-4111-8111-111111111111', F='22222222-2222-4222-8222-222222222222';
 const env={SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUBLISHABLE_KEY:'public-test-key'};
 
@@ -81,8 +81,8 @@ test('models endpoint separates Space Bunny primary, extraction, and ordered fal
   const res=response();await handler({method:'GET',query:{action:'models'}},res);
   assert.equal(res.code,200);
   const cloudflare=[CF_PRIMARY_MODEL,CF_BACKUP_MODEL,CF_MISTRAL_MODEL,CF_GPT_OSS_MODEL,CF_QWEN_MODEL,CF_GLM_MODEL];
-  assert.deepEqual(res.data.models,[DEFAULT_MODEL,...cloudflare,GEMINI_FALLBACK_MODEL,DEFAULT_EXTRACTION_MODEL]);
-  assert.deepEqual(res.data.fallbackModels,[ZEN_FALLBACK_MODEL,...cloudflare,GEMINI_FALLBACK_MODEL,DEFAULT_EXTRACTION_MODEL]);
+  assert.deepEqual(res.data.models,[DEFAULT_MODEL,ZEN_MIMO_MODEL,ZEN_MUSE_MODEL,...cloudflare,GEMINI_FALLBACK_MODEL,DEFAULT_EXTRACTION_MODEL]);
+  assert.deepEqual(res.data.fallbackModels,[ZEN_MIMO_MODEL,ZEN_MUSE_MODEL,...cloudflare,GEMINI_FALLBACK_MODEL,DEFAULT_EXTRACTION_MODEL]);
   assert.deepEqual(res.data.extractionModels,[DEFAULT_EXTRACTION_MODEL]);
   assert.equal(res.data.openRouterFallback,false);
   assert.ok(verified.some(([id])=>id===DEFAULT_MODEL));
@@ -94,7 +94,7 @@ test('settings API validates models, permissions, and unknown fields before savi
   const store={role:'owner',getSettings:async()=>({primary_model:DEFAULT_MODEL}),saveSettings:async s=>{saves++;return s;}};
   const handler=createAIHandler({authorize:async()=>store,verify:async id=>verified.push(id)});
   const req={method:'PUT',query:{action:'settings'},body:{workspaceId:A,primary_model:DEFAULT_MODEL,fallback_model:DEFAULT_FALLBACK_MODEL}};
-  const res=response();await handler(req,res);assert.equal(res.code,200);assert.equal(saves,1);assert.equal(verified.length,2);
+  const res=response();await handler(req,res);assert.equal(res.code,200);assert.equal(saves,1);assert.equal(verified.length,DEFAULT_FALLBACK_MODEL?2:1);
   const bad=response();await handler({...req,body:{...req.body,apiKey:'forbidden'}},bad);assert.equal(bad.code,400);assert.equal(saves,1);
   store.role='member';const denied=response();await handler(req,denied);assert.equal(denied.code,403);
   const unavailable=createAIHandler({authorize:async()=>({...store,role:'owner'}),verify:async()=>{throw new Error('upstream secret');}});

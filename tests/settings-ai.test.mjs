@@ -50,14 +50,14 @@ test('offers the requested Cloudflare and Gemini models in both pickers with rea
     assert.ok(settings.AI_MODEL_LABELS[model], `${model} has a readable label`);
   }
   assert.ok(settings.AI_MODELS.indexOf('space-bunny-free') < settings.AI_MODELS.indexOf(requestedModels[0]));
-  assert.ok(settings.AI_FALLBACK_MODELS.indexOf('longcat-2.5-preview-free') < settings.AI_FALLBACK_MODELS.indexOf(requestedModels[0]));
+  assert.ok(!settings.AI_FALLBACK_MODELS.includes('longcat-2.5-preview-free'));
 });
 
 test('live verified model overrides are appended without changing the existing defaults', () => {
   const primary = settings.mergeAIModelOptions(settings.AI_MODELS, ['zen/custom-primary']);
   const fallback = settings.mergeAIModelOptions(settings.AI_FALLBACK_MODELS, ['zen/custom-fallback']);
   assert.equal(primary[0][0], 'space-bunny-free');
-  assert.equal(fallback[0][0], 'longcat-2.5-preview-free');
+  assert.equal(fallback[0][0], requestedModels[0]);
   assert.ok(primary.some(([code]) => code === 'zen/custom-primary'));
   assert.ok(fallback.some(([code]) => code === 'zen/custom-fallback'));
   assert.deepEqual(settings.buildAISettingsPayload('workspace-123', {
@@ -244,4 +244,24 @@ test('the Settings page renders and binds the same production model picker helpe
   assert.match(app, /resetAIModelAvailability\(state\);state\.authMode='login'/);
   assert.match(app, /event==='SIGNED_OUT'&&!state\.demo\)\{\+\+loadEpoch;resetAIModelAvailability\(state\)/);
   assert.doesNotMatch(app, /OPENROUTER_API_KEY/);
+});
+
+
+test('new free vision choices are selectable while retired LongCat stays visible only as saved unavailable selection', () => {
+  for(const id of ['mimo-v2.6-flash-free','muse-spark-1.3-contributor-free']) {
+    assert.ok(settings.AI_MODELS.includes(id));assert.ok(settings.AI_FALLBACK_MODELS.includes(id));
+  }
+  const retired='longcat-2.5-preview-free';
+  assert.ok(!settings.AI_MODELS.includes(retired));
+  assert.ok(!settings.mergeAIModelOptions(settings.AI_FALLBACK_MODELS,[retired]).some(([id])=>id===retired));
+  const loaded=settings.normalizeAISettings({primary_model:requestedModels[0],fallback_model:retired});
+  assert.equal(loaded.fallback_model,retired);
+  const rendered=optionsFromMarkup(settings.renderAIModelOptions(retired,settings.AI_FALLBACK_MODELS,{allowNone:true}));
+  assert.ok(rendered.find(option=>option.value===retired).selected);
+  assert.ok(rendered.find(option=>option.value===retired).disabled);
+  const primary=fakeSelect(requestedModels[0],settings.AI_MODELS);
+  const fallback=fakeSelect(retired,['',...settings.AI_FALLBACK_MODELS,retired]);
+  settings.bindAIModelPickers(primary,fallback);
+  assert.equal(fallback.value,retired);assert.ok(fallback.option(retired).disabled);
+  assert.throws(()=>settings.buildAISettingsPayload('workspace-123',loaded));
 });
