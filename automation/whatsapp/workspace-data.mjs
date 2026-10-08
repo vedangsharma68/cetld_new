@@ -101,10 +101,10 @@ function definition() {
   // model request; describe exposes it when the model needs unfamiliar fields.
   const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA).filter(table=>table!=='payments')},filters:{type:'array',items:{type:'object'}},values:{type:'object'}},required:['operation','table','values']};
   return {type:'function',function:{name:'workspaceData',
-    description:'Describe. Invoice update: total_amount/subtotal/tax/discount/line_items; invoice_number eq. Status separate. Partial payment: payments create, invoice_number eq target, amount and currency values; later confirmation required. Attachments: saveAttachment/analyzeAttachment, operation only.',
+    description:'Invoice: total_amount/subtotal/tax/discount/line_items; status separate. payments create: amount/currency, invoice_number eq; confirm later. Attachments: saveAttachment/analyzeAttachment; operation only.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
-        operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic create/update batch. Read unique targets. No status/deletes. One patch per target.'},
+        operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic batch.'},
         request:{type:'string',minLength:1,maxLength:1200},
         operation:{type:'string',enum:OPERATIONS},
         table:{type:'string',enum:Object.keys(TABLES)},
