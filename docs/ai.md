@@ -41,8 +41,13 @@ the target **non-production** database before integration testing. The forward
 migration normalizes legacy rows before enforcing the provider-specific model
 contract. This branch does not apply migrations remotely or deploy production.
 
-Workspace answers use the saved primary and fallback models. Existing default
-selections remain OpenCode Zen `space-bunny-free` and `longcat-2.5-preview-free`.
+Workspace answers use the saved primary and fallback models. Existing Cloudflare
+and Gemini active defaults remain unchanged. OpenCode Zen also supports the
+free aliases `mimo-v2.6-flash-free` and `muse-spark-1.3-contributor-free`.
+MiMo uses `/zen/v1/chat/completions`; Muse uses `/zen/v1/responses`.
+Zen credential-presence checks do not verify live model availability or
+generation. Retired saved LongCat selections may remain visible as unavailable;
+generation skips retired entries and fails closed if only retired choices remain.
 Both pickers also offer Cloudflare Llama 3.3, Llama 4 Scout, Mistral Small 3.1,
 GPT OSS 20B, Qwen3 30B A3B, GLM 4.7 Flash, and Gemini 3.5 Flash and Flash Lite.
 The browser labels for GPT OSS, Qwen3, and GLM map to their canonical Cloudflare
@@ -56,11 +61,18 @@ temporary rate-limit error after those attempts; no key or provider response
 body is returned. Cloudflare failures continue through the existing Gemini
 recovery chain, and the Cloudflare circuit breaker remains active. Invoice
 extraction continues to use its dedicated Gemini configuration. The Zen model
-IDs can be overridden server-side with `ZEN_PRIMARY_MODEL` and `ZEN_FALLBACK_MODEL`.
+IDs can be overridden server-side with `ZEN_PRIMARY_MODEL` and
+`ZEN_FALLBACK_MODEL`. The example leaves the fallback override blank so it does
+not introduce a new default model.
 
 Provider references: [Cloudflare model catalog](https://developers.cloudflare.com/workers-ai/models/),
 [Cloudflare OpenAI compatibility](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/),
 and [Cloudflare model search API](https://developers.cloudflare.com/api/resources/ai/subresources/models/methods/list/).
+MiMo image understanding is described in [Xiaomi's usage guide](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/multimodal-understanding/image-understanding),
+with [Meta's model documentation](https://dev.meta.ai/docs/models) and
+[OpenCode Zen documentation](https://opencode.ai/docs/zen/). Vision support is
+based on documented model capabilities; gateway image requests have not been
+live-tested.
 
 `AIProvider.generate()` / `generateStructured()` are the shared server abstraction
 for extraction and assistant planning. Authentication errors advance to the
@@ -73,13 +85,13 @@ The model selects tools; it cannot supply authoritative financial values.
 `GET /api/ai?action=settings&workspaceId=<uuid>` returns:
 
 ```json
-{"workspace_id":"...","primary_model":"space-bunny-free","fallback_model":"longcat-2.5-preview-free"}
+{"workspace_id":"...","primary_model":"space-bunny-free","fallback_model":null}
 ```
 
 `PUT /api/ai?action=settings`, JSON body:
 
 ```json
-{"workspaceId":"...","primary_model":"space-bunny-free","fallback_model":"longcat-2.5-preview-free"}
+{"workspaceId":"...","primary_model":"space-bunny-free","fallback_model":null}
 ```
 
 Owner/admin only; both IDs are checked against their provider catalogs. Members can read.
@@ -101,11 +113,11 @@ are needed. With no settings row, owner chat keeps its current Cloudflare Llama
 3.3 primary and Gemini Flash fallback. An explicitly disabled fallback remains
 disabled as a user selection; provider safety recovery follows its existing policy.
 
-Before using the new model selections, review and apply
-`supabase/migrations/20261002060000_workspace_ai_model_choices.sql` to the target
-database. It expands model checks without rewriting saved rows or changing RLS.
-This migration is generated only and has not been executed, including locally.
-The migration-executing tests are excluded from this change's verification.
+The direct workspace settings path supports the free Zen aliases documented
+above. The existing WhatsApp proposal SQL path has a separate older model
+allowlist and does not support these aliases; use the typed Workspace AI
+Settings page/API for those model selections. No new migration is needed for
+the direct settings path.
 
 ## Invoice extraction (review required, never auto-saved)
 

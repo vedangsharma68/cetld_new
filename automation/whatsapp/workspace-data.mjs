@@ -967,6 +967,9 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       try { await ctx.assertAuthorized(); }
       catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
       const params=await normalizeRequest(raw,scope,planRequest,ctx,validationFeedback);
+      if((params.operation==='batch'?params.operations:[params]).some(item=>item.table==='workspace_ai_settings'
+        &&['mimo-v2.6-flash-free','muse-spark-1.3-contributor-free'].some(id=>Object.values(item.values||{}).includes(id))))
+        return fail('SETTINGS_REQUIRED','Choose this model in Settings → Advanced AI settings. WhatsApp model changes do not support it yet.');
       if(executionOptions.invoiceCorrectionTarget){
         const target=exactInvoiceNumberTarget(params.filters);
         if(params.operation!=='update'||params.table!=='invoices'||Object.hasOwn(params.values||{},'status')

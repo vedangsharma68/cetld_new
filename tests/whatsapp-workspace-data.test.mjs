@@ -535,8 +535,8 @@ test('generic customer writes are single-record confirmation proposals with serv
 });
 
 test('AI model changes require server catalog roles and confirm only on a later exact owner message',async()=>{
-  const primary=VERIFIED_MODEL_CATALOG.find(entry=>entry.roles.includes('primary')&&entry.id!== 'space-bunny-free').id;
-  const fallback=VERIFIED_MODEL_CATALOG.find(entry=>entry.roles.includes('fallback')&&entry.id!==primary).id;
+  const primary=VERIFIED_MODEL_CATALOG.find(entry=>entry.roles.includes('primary')&&entry.provider!=='opencode-zen').id;
+  const fallback=VERIFIED_MODEL_CATALOG.find(entry=>entry.roles.includes('fallback')&&entry.provider!=='opencode-zen'&&entry.id!==primary).id;
   const supabase=fakeSupabase({rows:{workspace_ai_settings:[{
     workspace_id:scope.workspaceId,primary_model:'space-bunny-free',fallback_model:'longcat-2.5-preview-free',
     updated_at:'2026-10-01T00:00:00Z',
@@ -631,8 +631,8 @@ test('reads use stable scoped pagination and expose a next offset when a page is
 });
 
 test('partial AI model changes merge against the sanitized active runtime pair',async()=>{
-  const primary=VERIFIED_MODEL_CATALOG.find(entry=>entry.roles.includes('primary')&&entry.id!=='space-bunny-free').id;
-  const runtimeFallback=VERIFIED_MODEL_CATALOG.find(entry=>entry.roles.includes('fallback')&&entry.id!==primary).id;
+  const primary=VERIFIED_MODEL_CATALOG.find(entry=>entry.roles.includes('primary')&&entry.provider!=='opencode-zen').id;
+  const runtimeFallback=VERIFIED_MODEL_CATALOG.find(entry=>entry.roles.includes('fallback')&&entry.provider!=='opencode-zen'&&entry.id!==primary).id;
   const supabase=fakeSupabase({rows:{workspace_ai_settings:[]},rpcResult:{ok:true}});
   const pending={async loadPendingActionState(){return {generation:0,id:null,version:null};}};
   const tool=createWorkspaceDataTool({supabase,scope,message:'Use this primary',messageId:'wamid.request',pending,
@@ -857,5 +857,19 @@ test('workspaceData SQL migration scopes proposals, applies a confirmed customer
       [scope.workspaceId,'NewCo'])).rows[0].count,1);
   } finally {
     await db.close();
+  }
+});
+
+
+test('new Zen model changes guide owners to Settings before any unsupported WhatsApp SQL write, including batches',async()=>{
+  for(const id of ['mimo-v2.6-flash-free','muse-spark-1.3-contributor-free'])for(const mode of ['direct','buttons']){
+    const supabase=fakeSupabase();let writes=0;
+    const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>true,confirmationMode:mode,
+      executeDirectOperation:async()=>{writes++;throw Error('No SQL bypass');},executeBatchOperation:async()=>{writes++;throw Error('No SQL bypass');}});
+    const update={operation:'update',table:'workspace_ai_settings',values:{primary_model:id,fallback_model:null}};
+    for(const request of [update,{operations:[update,{operation:'update',table:'workspace_settings',values:{business_name:'Fixture business'}}]}]) {
+      const result=await tool.execute(request);assert.equal(result.code,'SETTINGS_REQUIRED');
+      assert.match(result.message,/Settings/);assert.equal(writes,0);assert.equal(supabase.calls.length,0);
+    }
   }
 });

@@ -84,3 +84,32 @@ test('workspace model migration preserves existing saved IDs and constrains new 
 });
 
 function makeResponse(){return {headers:{},setHeader(k,v){this.headers[k]=v;},status(n){this.code=n;return this;},json(data){this.data=data;return this;}};}
+
+
+test('settings API accepts exact free vision aliases and does not silently activate them on reads',async()=>{
+  const saved=[],verified=[];
+  const existing={workspace_id:A,primary_model:primary,fallback_model:fallback};
+  const handler=createAIHandler({authorize:async()=>({role:'owner',getSettings:async()=>existing,
+    saveSettings:async value=>{saved.push(value);return value;}}),
+    verify:async id=>{verified.push(id);return {id};}});
+  const read=makeResponse();await handler({method:'GET',query:{action:'settings',workspaceId:A}},read);
+  assert.equal(read.code,200);assert.equal(read.data.primary_model,primary);assert.equal(read.data.fallback_model,fallback);assert.equal(saved.length,0);
+  const response=makeResponse();await handler({method:'PUT',query:{action:'settings'},body:{workspaceId:A,
+    primary_model:'mimo-v2.6-flash-free',fallback_model:'muse-spark-1.3-contributor-free'}},response);
+  assert.equal(response.code,200);assert.deepEqual(verified,['mimo-v2.6-flash-free','muse-spark-1.3-contributor-free']);assert.equal(saved.length,1);
+  for(const bad of ['longcat-2.5-preview-free','mimo-v2.6-flash','muse-spark-1.3-contributor']) {
+    const rejected=makeResponse();await handler({method:'PUT',query:{action:'settings'},body:{workspaceId:A,primary_model:bad,fallback_model:null}},rejected);
+    assert.equal(rejected.code,400);assert.equal(saved.length,1);
+  }
+});
+
+test('authenticated settings read preserves retired LongCat without writing or replacing its saved role',async()=>{
+  let writes=0;
+  const row={workspace_id:A,primary_model:primary,fallback_model:'longcat-2.5-preview-free'};
+  const store=await authorizeAIWorkspace({headers:{authorization:'Bearer test-user-token'}},A,{env,fetchImpl:async(url,init)=>{
+    if(url.includes('/auth/v1/user'))return Response.json({id:U});
+    if(url.includes('/workspace_members?'))return Response.json([{workspace_id:A,user_id:U,role:'owner'}]);
+    if(init.method==='POST')writes++;return Response.json([row]);
+  }});
+  assert.deepEqual(await store.getSettings(),row);assert.equal(writes,0);
+});

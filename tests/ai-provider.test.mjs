@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   AIError, AIProvider, CF_BACKUP_MODEL, CF_PRIMARY_MODEL, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL,
   DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, GEMINI_FALLBACK_MODEL, OPENROUTER_FREE_MODEL,
-  ZEN_FALLBACK_MODEL, ZEN_PRIMARY_MODEL,
+  ZEN_MIMO_MODEL, ZEN_PRIMARY_MODEL,
   isFallbackModelId, isModelId, isPrimaryModelId, sanitizeModelSettings, verifyModel,
 } from '../ai/provider.mjs';
 
@@ -15,22 +15,22 @@ function openRouter(content='ok',{status=200,toolCalls=[]}={}){
   return jsonResponse(status>=400?{error:{message:'private upstream detail'}}:{choices:[{message:{content,tool_calls:toolCalls},finish_reason:'stop'}]},status);
 }
 function provider(fetchImpl,options={}){
-  return new AIProvider({primaryModel:DEFAULT_MODEL,fallbackModel:DEFAULT_FALLBACK_MODEL,geminiApiKey:'gemini-test-secret',openRouterApiKey:'router-test-secret',zenApiKey:'zen-test-secret',fetchImpl,retryDelayMs:1,sleepImpl:async()=>{},...options});
+  return new AIProvider({primaryModel:DEFAULT_MODEL,fallbackModel:ZEN_MIMO_MODEL,geminiApiKey:'gemini-test-secret',openRouterApiKey:'router-test-secret',zenApiKey:'zen-test-secret',fetchImpl,retryDelayMs:1,sleepImpl:async()=>{},...options});
 }
 
-test('configuration exposes Space Bunny primary, LongCat fallback, and Gemini backup',()=>{
+test('configuration exposes Space Bunny with explicitly selectable MiMo and existing Gemini backup',()=>{
   assert.equal(DEFAULT_MODEL,ZEN_PRIMARY_MODEL);
-  assert.equal(DEFAULT_FALLBACK_MODEL,ZEN_FALLBACK_MODEL);
+  assert.equal(DEFAULT_FALLBACK_MODEL,null);
   assert.equal(DEFAULT_EXTRACTION_MODEL,'gemini-3.5-flash-lite');
   assert.equal(DEFAULT_EXTRACTION_FALLBACK_MODEL,GEMINI_FALLBACK_MODEL);
   assert.equal(isPrimaryModelId(DEFAULT_MODEL),true);
   assert.equal(isPrimaryModelId(ZEN_PRIMARY_MODEL),true);
   assert.equal(isFallbackModelId(ZEN_PRIMARY_MODEL),false);
-  assert.equal(isFallbackModelId(ZEN_FALLBACK_MODEL),true);
+  assert.equal(isFallbackModelId(ZEN_MIMO_MODEL),true);
   assert.equal(isFallbackModelId(GEMINI_FALLBACK_MODEL),true);
   assert.equal(isModelId(DEFAULT_MODEL),true);
   assert.equal(isModelId(ZEN_PRIMARY_MODEL),true);
-  assert.equal(isModelId(ZEN_FALLBACK_MODEL),true);
+  assert.equal(isModelId(ZEN_MIMO_MODEL),true);
   assert.equal(isModelId('openai/gpt-4.1-mini'),false);
   assert.deepEqual(sanitizeModelSettings({primaryModel:ZEN_PRIMARY_MODEL,fallbackModel:GEMINI_FALLBACK_MODEL}),{primaryModel:ZEN_PRIMARY_MODEL,fallbackModel:GEMINI_FALLBACK_MODEL});
 });
@@ -78,7 +78,7 @@ test('rejects malformed or oversized multimodal messages before contacting eithe
   assert.equal(calls,0);
 });
 
-test('retries Space Bunny failures twice then uses the configured LongCat fallback',async()=>{
+test('retries Space Bunny failures twice then uses the configured explicit MiMo fallback',async()=>{
   const calls=[];
   const ai=provider(async(url,init)=>{
     const model=JSON.parse(init.body).model;
@@ -86,9 +86,9 @@ test('retries Space Bunny failures twice then uses the configured LongCat fallba
     return model===ZEN_PRIMARY_MODEL?openRouter('',{status:503}):openRouter('Recovered');
   });
   const result=await ai.generate({messages:[{role:'user',content:'Hi'}]});
-  assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL]);
+  assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_PRIMARY_MODEL,ZEN_MIMO_MODEL]);
   assert.equal(result.content,'Recovered');
-  assert.equal(result.model,ZEN_FALLBACK_MODEL);
+  assert.equal(result.model,ZEN_MIMO_MODEL);
   assert.equal(result.usedFallback,true);
 });
 
@@ -151,10 +151,10 @@ test('Gemini Flash Lite chat retries its primary before using the configured fal
       :JSON.parse(init.body).model;
     calls.push(model);
     return model===DEFAULT_EXTRACTION_MODEL?gemini('',{status:503}):openRouter('Recovered by the configured fallback');
-  },{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:ZEN_FALLBACK_MODEL});
+  },{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:ZEN_MIMO_MODEL});
   const result=await ai.generate({messages:[{role:'user',content:'Hi'}]});
-  assert.deepEqual(calls,[DEFAULT_EXTRACTION_MODEL,DEFAULT_EXTRACTION_MODEL,ZEN_FALLBACK_MODEL]);
-  assert.equal(result.model,ZEN_FALLBACK_MODEL);
+  assert.deepEqual(calls,[DEFAULT_EXTRACTION_MODEL,DEFAULT_EXTRACTION_MODEL,ZEN_MIMO_MODEL]);
+  assert.equal(result.model,ZEN_MIMO_MODEL);
   assert.equal(result.usedFallback,true);
 });
 
@@ -167,7 +167,7 @@ test('network failures and abort timeouts can use the configured fallback',async
     return openRouter('network recovered');
   },{maxAttempts:1});
   assert.equal((await network.generate({messages:[{role:'user',content:'Hi'}]})).content,'network recovered');
-  assert.deepEqual(networkCalls,[ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL]);
+  assert.deepEqual(networkCalls,[ZEN_PRIMARY_MODEL,ZEN_MIMO_MODEL]);
 
   const timeoutCalls=[];
   const timeout=provider((url,init)=>{
@@ -179,7 +179,7 @@ test('network failures and abort timeouts can use the configured fallback',async
     timeoutCalls.push(model);return Promise.resolve(openRouter('timeout recovered'));
   },{timeoutMs:5,maxAttempts:1});
   assert.equal((await timeout.generate({messages:[{role:'user',content:'Hi'}]})).content,'timeout recovered');
-  assert.deepEqual(timeoutCalls,[ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL]);
+  assert.deepEqual(timeoutCalls,[ZEN_PRIMARY_MODEL,ZEN_MIMO_MODEL]);
 });
 
 test('provider timeout stays active while reading an upstream response body',async()=>{
@@ -196,14 +196,14 @@ test('provider timeout stays active while reading an upstream response body',asy
   assert.equal(outcome,'TIMEOUT','a body that never finishes must not outlive the provider deadline');
 });
 
-test('extraction tries Gemini Lite, Gemini Flash, then both Zen legs once',async()=>{
+test('extraction recovery never activates an unselected new Zen model',async()=>{
   const calls=[];
   const ai=provider(async url=>{
     calls.push(String(url).includes('generativelanguage')?'gemini':'openrouter');
     return calls.at(-1)==='gemini'?gemini('',{status:503}):openRouter('',{status:503});
   },{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL,requestPurpose:'extraction'});
   await assert.rejects(ai.generate({messages:[{role:'user',content:'Extract this invoice'}]}),error=>error.code==='PROVIDER_UNAVAILABLE');
-  assert.deepEqual(calls,['gemini','gemini','openrouter','openrouter']);
+  assert.deepEqual(calls,['gemini','gemini','openrouter']);
 });
 
 test('oversized upstream responses are rejected with a safe bounded error',async()=>{
@@ -223,7 +223,7 @@ test('quota exhaustion skips each same-leg retry and aggregates exhausted provid
     assert.deepEqual(error.quotaProviders,['opencode-zen','google']);
     assert.match(error.message,/temporarily rate limited/);assert.doesNotMatch(error.message,/private upstream/);return true;
   });
-  assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL,GEMINI_FALLBACK_MODEL]);
+  assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_MIMO_MODEL,GEMINI_FALLBACK_MODEL]);
   assert.deepEqual(waits,[]);
 });
 
@@ -238,17 +238,17 @@ test('a transient non-quota 429 can retry its current model leg',async()=>{
   assert.equal(result.content,'Recovered on retry');
 });
 
-test('fails over in order from Space Bunny to LongCat to Gemini on 429 and 5xx',async()=>{
+test('fails over in order from Space Bunny to explicit MiMo to Gemini on 429 and 5xx',async()=>{
   const calls=[];
   const ai=provider(async(url,init)=>{
     const model=String(url).includes('generativelanguage')?GEMINI_FALLBACK_MODEL:JSON.parse(init.body).model;
     calls.push(model);
     if(model===ZEN_PRIMARY_MODEL)return openRouter('',{status:429});
-    if(model===ZEN_FALLBACK_MODEL)return openRouter('',{status:503});
+    if(model===ZEN_MIMO_MODEL)return openRouter('',{status:503});
     return gemini('Gemini recovered');
   },{maxAttempts:1});
   const result=await ai.generate({messages:[{role:'user',content:'Hi'}]});
-  assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL,GEMINI_FALLBACK_MODEL]);
+  assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_MIMO_MODEL,GEMINI_FALLBACK_MODEL]);
   assert.equal(result.model,GEMINI_FALLBACK_MODEL);
   assert.equal(result.content,'Gemini recovered');
 });
@@ -262,22 +262,22 @@ test('missing Zen key skips both Zen legs and reaches the Gemini backup',async()
   assert.match(calls[0],/generativelanguage/);
 });
 
-test('authentication failures advance once per leg from Space Bunny to LongCat to Gemini',async()=>{
+test('authentication failures advance once per leg from Space Bunny to explicit MiMo to Gemini',async()=>{
   const calls=[],logs=[];
   const ai=provider(async(url,init)=>{
     const model=String(url).includes('generativelanguage')?GEMINI_FALLBACK_MODEL:JSON.parse(init.body).model;
     calls.push(model);
     if(model===ZEN_PRIMARY_MODEL)return openRouter('',{status:401});
-    if(model===ZEN_FALLBACK_MODEL)return openRouter('',{status:403});
+    if(model===ZEN_MIMO_MODEL)return openRouter('',{status:403});
     return gemini('Gemini recovered');
   },{logger:{warn:(message,details)=>logs.push({message,details}),info:(message,details)=>logs.push({message,details})}});
   const result=await ai.generate({messages:[{role:'user',content:'Hi'}]});
-  assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL,GEMINI_FALLBACK_MODEL]);
+  assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_MIMO_MODEL,GEMINI_FALLBACK_MODEL]);
   assert.equal(result.model,GEMINI_FALLBACK_MODEL);
   assert.equal(result.content,'Gemini recovered');
   assert.deepEqual(logs.map(({message,details})=>({message,details:Object.fromEntries(Object.entries(details).filter(([key])=>key!=='durationMs'))})),[
     {message:'AI provider leg failed:',details:{provider:'opencode-zen',model:ZEN_PRIMARY_MODEL,status:401,reason:'permission_denied'}},
-    {message:'AI provider leg failed:',details:{provider:'opencode-zen',model:ZEN_FALLBACK_MODEL,status:403,reason:'permission_denied'}},
+    {message:'AI provider leg failed:',details:{provider:'opencode-zen',model:ZEN_MIMO_MODEL,status:403,reason:'permission_denied'}},
     {message:'AI provider request served:',details:{provider:'google',model:GEMINI_FALLBACK_MODEL}},
   ]);
   assert.ok(logs.every(({details})=>Number.isFinite(details.durationMs)));
@@ -323,7 +323,7 @@ test('all-leg authentication failure surfaces a safe AUTH_FAILED error without s
     return model===GEMINI_FALLBACK_MODEL?gemini('',{status:401}):openRouter('',{status:403});
   },{logger:{warn(){}}});
   await assert.rejects(ai.generate({messages:[{role:'user',content:'Hi'}]}),error=>error.code==='AUTH_FAILED'&&!/private upstream/.test(error.message));
-  assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_FALLBACK_MODEL,GEMINI_FALLBACK_MODEL]);
+  assert.deepEqual(calls,[ZEN_PRIMARY_MODEL,ZEN_MIMO_MODEL,GEMINI_FALLBACK_MODEL]);
 });
 
 test('null fallback disables fallback instead of silently adding OpenRouter',async()=>{
@@ -337,7 +337,7 @@ test('paid or reversed provider pairs are rejected before any upstream request',
   let calls=0;const fetchImpl=async()=>{calls++;throw Error('unexpected request')};
   assert.throws(()=>provider(fetchImpl,{primaryModel:'openai/gpt-4.1-mini'}),error=>error.code==='INVALID_MODEL');
   assert.throws(()=>provider(fetchImpl,{primaryModel:'openrouter/free'}),error=>error.code==='INVALID_MODEL');
-  assert.throws(()=>provider(fetchImpl,{primaryModel:ZEN_FALLBACK_MODEL}),error=>error.code==='INVALID_MODEL');
+  assert.throws(()=>provider(fetchImpl,{primaryModel:'space-bunny-free',fallbackModel:'space-bunny-free'}),error=>error.code==='INVALID_MODEL');
   assert.throws(()=>provider(fetchImpl,{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_MODEL}),error=>error.code==='INVALID_MODEL');
   assert.throws(()=>provider(fetchImpl,{fallbackModel:'openai/gpt-4.1-mini'}),error=>error.code==='INVALID_MODEL');
   assert.equal(calls,0);

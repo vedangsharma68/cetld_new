@@ -11,7 +11,8 @@ const CLOUDFLARE_AND_GEMINI_MODELS = [
 
 export const AI_MODEL_LABELS = {
   'space-bunny-free': 'Space Bunny Free',
-  'longcat-2.5-preview-free': 'LongCat 2.5 Preview Free',
+  'mimo-v2.6-flash-free': 'MiMo V2.6 Flash Free',
+  'muse-spark-1.3-contributor-free': 'Muse Spark 1.3 Contributor Free',
   '@cf/meta/llama-3.3-70b-instruct-fp8-fast': 'Cloudflare · Llama 3.3 70B',
   '@cf/meta/llama-4-scout-17b-16e-instruct': 'Cloudflare · Llama 4 Scout',
   '@cf/mistralai/mistral-small-3.1-24b-instruct': 'Cloudflare · Mistral 3.1 Small',
@@ -22,16 +23,19 @@ export const AI_MODEL_LABELS = {
   'gemini-3.5-flash-lite': 'Google · Gemini 3.5 Flash Lite',
 };
 
-// Keep the existing defaults first. The live API catalog replaces these values
+// Keep Space Bunny first. The live API catalog replaces these values
 // after account setup, so server-side role validation remains authoritative.
 export const AI_MODELS = [
   'space-bunny-free',
+  'mimo-v2.6-flash-free',
+  'muse-spark-1.3-contributor-free',
   ...CLOUDFLARE_AND_GEMINI_MODELS,
 ];
 
 export const AI_FALLBACK_MODELS = [
-  'longcat-2.5-preview-free',
   ...CLOUDFLARE_AND_GEMINI_MODELS,
+  'mimo-v2.6-flash-free',
+  'muse-spark-1.3-contributor-free',
 ];
 
 export const EXTRACTION_MODELS = [
@@ -47,6 +51,7 @@ export function mergeAIModelOptions(models = AI_MODELS, verifiedModels = []) {
     : [String(entry), AI_MODEL_LABELS[entry] || String(entry)]);
   const seen = new Set(merged.map(([code]) => code));
   for (const code of modelCodes(verifiedModels)) {
+    if (code === 'longcat-2.5-preview-free') continue;
     if (!seen.has(code)) {
       merged.push([code, AI_MODEL_LABELS[code] || code]);
       seen.add(code);
@@ -182,7 +187,7 @@ export function renderAIModelOptions(selected, models = AI_MODELS, {
     const code = String(Array.isArray(entry) ? entry[0] : entry);
     const label = Array.isArray(entry) ? entry[1] : (AI_MODEL_LABELS[code] || code);
     const unavailable = availableCodes && !availableCodes.has(code);
-    const disabled = excludedModel === code || unavailable;
+    const disabled = excludedModel === code || unavailable || code === 'longcat-2.5-preview-free';
     return `<option value="${escapeHtml(code)}"${selected === code ? ' selected' : ''}${disabled ? ' disabled' : ''}>${escapeHtml(label)}${unavailable ? ' · unavailable' : ''}</option>`;
   }).join('');
   return noModelOption + missingSelection + options;
@@ -212,11 +217,11 @@ export function bindAIModelPickers(primarySelect, fallbackSelect, options) {
 
     for (const option of primarySelect.options || []) {
       const unavailable = availablePrimaryCodes && option.value && !availablePrimaryCodes.has(option.value);
-      option.disabled = !!(option.value && (option.value === fallbackSelect.value || unavailable));
+      option.disabled = !!(option.value && (option.value === fallbackSelect.value || unavailable || !modelCodes(options?.models || AI_MODELS).includes(option.value)));
     }
     for (const option of fallbackSelect.options || []) {
       const unavailable = availableFallbackCodes && option.value && !availableFallbackCodes.has(option.value);
-      option.disabled = !!(option.value && (option.value === primarySelect.value || unavailable));
+      option.disabled = !!(option.value && (option.value === primarySelect.value || unavailable || !modelCodes(options?.fallbackModels || AI_FALLBACK_MODELS).includes(option.value)));
     }
   };
 
