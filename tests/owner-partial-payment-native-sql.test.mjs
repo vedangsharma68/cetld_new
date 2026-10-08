@@ -99,6 +99,22 @@ test('leading invoice syntax repairs native BATCH_SHAPE to a single model-select
   assert.equal((await f.db.query("select count(*)::int n from whatsapp_owner_action_receipts where provider_message_id='leading-confirm'")).rows[0].n,1);assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });
+test('allowed messages-off tails agree in JS and SQL and both instruction forms confirm exact partial amounts', {skip:Boolean(baseline)},async()=>{
+ const {requestedOwnerPayment}=await import(new URL('automation/whatsapp/owner-payment-intent.mjs',base));
+ const tails=['','This is only a dummy bookkeeping entry.','Keep customer messages and reminders off.','No customer messages or reminders.','This is only a dummy bookkeeping entry. Keep customer messages and reminders off.','This is only a dummy bookkeeping entry. No customer messages or reminders.','This is a dummy bookkeeping entry only; keep messages and reminders off.'];
+ for(const [index,instruction]of ['Record a USD 500 test payment against invoice SB-10442 for Northwind Systems LLC.','For test invoice INV-2026-6769 for Northwind Systems LLC, record a partial payment of USD 500.'].entries()){
+  const f=await fixture({invoiceNumber:'INV-2026-6769'});try{
+   for(const tail of tails){const text=instruction+' '+tail;assert.deepEqual((await f.db.query('select app.owner_payment_instruction($1) value',[text])).rows[0].value,requestedOwnerPayment(text),text);assert.notEqual(requestedOwnerPayment(text),null);}
+   for(const text of [instruction.replace('USD 500','USD 500 or EUR 500'),instruction.replace('Northwind Systems LLC','Northwind or Acme'),instruction.replace('USD','NOT'),instruction.replace(index?'INV-2026-6769':'SB-10442','or'),'Do not '+instruction,'He said "'+instruction+'"',instruction+' Instead pay USD 600.']){
+    assert.equal(requestedOwnerPayment(text),null,text);assert.equal((await f.db.query('select app.owner_payment_instruction($1) value',[text])).rows[0].value,null,text);
+   }
+   const message=instruction+' No customer messages or reminders.',id='allowed-tail-'+index,before=await f.snapshot();await f.inbound(id,message);
+   const operation={...proposal,filters:[{column:'invoice_number',operator:'eq',value:index?'INV-2026-6769':'SB-10442'}]},run=handlerFor(f,{operation});await run.handler({...f.scope,messageId:id,message});assert.equal(run.outputs.at(-1).proposal,true,JSON.stringify(run.outputs));assert.deepEqual(await f.snapshot(),before);
+   await f.inbound(id+'-confirm','yes');const confirm=handlerFor(f,{confirmation:true});await confirm.handler({...f.scope,messageId:id+'-confirm',message:'yes'});assert.equal(confirm.outputs.at(-1).completed,true,JSON.stringify(confirm.outputs));assert.equal(confirm.outputs.at(-1).outstandingAmount,451.52);
+   const after=await f.snapshot(),invoice=after.invoices.find(row=>row.id===f.ids[0]);assert.equal(after.payments.length,1);assert.equal(after.payments[0].amount,500);assert.equal(after.payments[0].settle_remaining,false);assert.equal(invoice.amount_paid,500);assert.equal(invoice.total_amount,951.52);assert.equal(invoice.status,'draft');assert.equal(invoice.metadata.next_follow_up_at,null);assert.deepEqual(invoice.metadata.source_document,{name:'original-source'});assert.deepEqual(after.files,before.files);assert.equal(after.outbound,0);assert.deepEqual(after.invoices.filter(row=>row.id!==f.ids[0]),before.invoices.filter(row=>row.id!==f.ids[0]));
+  }finally{await f.close();}
+ }
+});
 test('payment batches remain invalid even when the planning repair proposes a two-item batch', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
  const f=await fixture({invoiceNumber:'INV-2026-6769'});try{
   const before=await f.snapshot(),single={...proposal,filters:[{column:'invoice_number',operator:'eq',value:'INV-2026-6769'}]};await f.inbound('leading-batch',leadingPrompt);

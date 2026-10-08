@@ -4,7 +4,7 @@ do $parser_source_guard$
 begin
  if to_regprocedure('app.owner_payment_instruction(text)') is not null
    and (select md5(prosrc) from pg_proc where oid=to_regprocedure('app.owner_payment_instruction(text)'))
-     not in ('39f1711c4d93b873013fedb9ce7cf54c','745dee54b826fe5525d6e1bc1357069e') then
+     not in ('39f1711c4d93b873013fedb9ce7cf54c','745dee54b826fe5525d6e1bc1357069e','b23518142d74e3c076c5dc18c644bf97') then
   raise exception 'Unexpected installed owner payment instruction source; no changes applied';
  end if;
 end;$parser_source_guard$;
@@ -17,7 +17,7 @@ begin
   leading_parts:=pg_catalog.regexp_match(pg_catalog.btrim(p_text),'^(?:please\s+)?for\s+(?:test\s+)?invoice\s+([A-Za-z0-9][A-Za-z0-9_/-]{0,99})(?:\s+for\s+([^,.!?\n]+))?,\s*(?:please\s+)?(?:record|log)\s+(?:a\s+)?(?:partial\s+)?payment\s+of\s+([A-Z]{3})\s+([0-9]{1,12}(?:\.[0-9]{1,2})?)(?:[.!]\s*|$)(?:(?:This is only a dummy bookkeeping entry\.\s*)?(?:Keep customer messages and reminders off\.?|No customer messages or reminders\.?)?|This is a dummy bookkeeping entry only;\s*keep messages and reminders off\.?)$','i');
   if leading_parts is not null then parts:=array[leading_parts[3],leading_parts[4],leading_parts[1],leading_parts[2]];end if;
  end if;
- if parts is null or p_text ~* '\m(not|never|don''t|do not|undo|reverse|refund|transfer|instead|or)\M' or p_text ~ '["“”`]' then return null;end if;
+ if parts is null or pg_catalog.array_to_string(parts,' ') ~* '\m(not|never|don''t|do not|undo|reverse|refund|transfer|instead|or)\M' or p_text ~ '["“”`]' then return null;end if;
  amount:=parts[2]::numeric;if amount<=0 then return null;end if;
  return jsonb_build_object('amount',amount,'currency',upper(parts[1]),'invoiceNumber',parts[3],'customerName',nullif(btrim(parts[4]),''));
 exception when others then return null;
@@ -110,7 +110,7 @@ language sql security invoker set search_path='' as $capability$
  select case when
   (select md5(prosrc) from pg_catalog.pg_proc where oid='public.whatsapp_confirm_owner_invoice_action(uuid,uuid,text,bigint,bigint,text,boolean)'::regprocedure)='4e91e1fc34a0b0e639673a4d39632fd7'
   and (select md5(prosrc) from pg_catalog.pg_proc where oid='public.whatsapp_apply_direct_owner_write(uuid,uuid,text,text,text,text,text,uuid,timestamptz,text,text,text,bigint,bigint,jsonb)'::regprocedure)='6ed00f9c4aaabdb7673272ccef3d1390'
-  and (select md5(prosrc) from pg_catalog.pg_proc where oid='app.owner_payment_instruction(text)'::regprocedure)='745dee54b826fe5525d6e1bc1357069e'
+  and (select md5(prosrc) from pg_catalog.pg_proc where oid='app.owner_payment_instruction(text)'::regprocedure)='b23518142d74e3c076c5dc18c644bf97'
  then jsonb_build_object('ok',true,'version',2) else jsonb_build_object('ok',false) end;
 $capability$;
 revoke all on function public.whatsapp_owner_partial_payment_capability() from public,anon,authenticated,service_role;
