@@ -80,6 +80,7 @@ const TYPE_BY_COLUMN = Object.freeze({
 });
 
 const WRITE_SCHEMA = Object.freeze({
+  payments:{create:['amount','currency']},
   business_records:{create:['record_type','name','custom_fields'],update:['record_type','name','custom_fields'],delete:[],restore:[]},
   customers:{
     create:['name','company_name','email','phone','custom_fields'],
@@ -98,9 +99,9 @@ const WRITE_SCHEMA = Object.freeze({
 function definition() {
   // The server validates the full catalog. Do not send that catalog on every
   // model request; describe exposes it when the model needs unfamiliar fields.
-  const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA)},filters:{type:'array',items:{type:'object'}},values:{type:'object'}},required:['operation','table','values']};
+  const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA).filter(table=>table!=='payments')},filters:{type:'array',items:{type:'object'}},values:{type:'object'}},required:['operation','table','values']};
   return {type:'function',function:{name:'workspaceData',
-    description:'Describe. Invoice update: total_amount/subtotal/tax/discount/line_items; invoice_number eq. Status separate. Attachments: saveAttachment/analyzeAttachment, operation only.',
+    description:'Describe. Invoice update: total_amount/subtotal/tax/discount/line_items; invoice_number eq. Status separate. Partial payment: payments create, invoice_number eq target, amount and currency values; later confirmation required. Attachments: saveAttachment/analyzeAttachment, operation only.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic create/update batch. Read unique targets. No status/deletes. One patch per target.'},
@@ -113,7 +114,7 @@ function definition() {
             operator:{type:'string',enum:FILTER_OPERATORS},
             value:{type:['string','number','boolean','null','array'],items:{type:['string','number','boolean','null']}}},
           required:['column','operator','value']}},
-        values:{type:'object',properties:{due_date:{type:['string','null']},issue_date:{type:'string'},total_amount:{type:'number'},subtotal:{type:'number'},line_items:{type:'array',items:{type:'object',properties:{description:{type:'string'},amount:{type:'number'}},required:['description','amount']}}}},
+        values:{type:'object',properties:{amount:{type:'number'},currency:{type:'string'},due_date:{type:['string','null']},issue_date:{type:'string'},total_amount:{type:'number'},subtotal:{type:'number'},line_items:{type:'array',items:{type:'object',properties:{description:{type:'string'},amount:{type:'number'}},required:['description','amount']}}}},
         limit:{type:'integer',minimum:1,maximum:MAX_LIMIT},
         offset:{type:'integer',minimum:0,maximum:100000},
         order:{type:'object',additionalProperties:false,
@@ -141,7 +142,7 @@ function catalog(table=null) {
   return {
     operations:OPERATIONS,
     externalAccounting:{financialChanges:'Externally managed invoice financial fields and new local payments are refused. Apply them in the connected ledger and sync its authoritative facts.',localAnnotations:'Notes, dates and custom business facts can remain local annotations. A local save is not remote accounting writeback or a queued remote task.'},
-    atomicBatch:{argument:'operations',minItems:2,maxItems:10,itemFields:['operation','table','filters','values'],operations:['create','update'],oneUnambiguousRecordPerItem:true,allCommitOrAllRollback:true,customFields:'Nest additional business facts in each item values.custom_fields.',excluded:['status changes','deletes','confirmations','invoice extended corrections (customer, items, tax/subtotal/discount, direction and extracted facts)']},
+    atomicBatch:{argument:'operations',minItems:2,maxItems:10,itemFields:['operation','table','filters','values'],operations:['create','update'],oneUnambiguousRecordPerItem:true,allCommitOrAllRollback:true,customFields:'Nest additional business facts in each item values.custom_fields.',excluded:['payment proposals','status changes','deletes','confirmations','invoice extended corrections (customer, items, tax/subtotal/discount, direction and extracted facts)']},
     businessRecordLifecycle:{mode:'direct',delete:'Recoverable deletion; retains all business facts. No values allowed.',restore:'Restore one record deleted by the current owner within 30 days; use its name or ID. No values allowed.',reads:'Deleted records are hidden by default; read with deleted_at gt a supplied timestamp to inspect retained deleted records.'},
     attachmentOperations:{analyzeAttachment:'Read the current attachment and retain its source facts in a durable review without saving an invoice.',
       saveAttachment:'Extract/review/save the current attachment or this owner\'s current retained attachment review. Supply operation only, without table or invoice values. Reuse its known facts; do not recreate it with invoice create or chat fields.',
@@ -158,7 +159,8 @@ function catalog(table=null) {
         follow_up_preferences:{description:'Customer reminder settings; partial fields merge with saved preferences.',tone:['gentle','professional','firm'],reminderTemplate:'up to 1000 characters; tokens {{business_name}}, {{customer_name}}, {{invoice_number}}, {{balance}}, {{due_date}}',allowedWeekdays:'array of weekday numbers 0-6',escalation:['pause','manual_review'],stopOnPayment:true}
       }}}:{}),
       ...(name==='workspace_ai_settings'?{writeValueConstraints:{update:{primary_model:VERIFIED_MODEL_CATALOG.filter(entry=>entry.roles.includes('primary')).map(entry=>entry.id),fallback_model:[null,...VERIFIED_MODEL_CATALOG.filter(entry=>entry.roles.includes('fallback')).map(entry=>entry.id)]}}}:{}),
-      operations:name==='invoices'?['read','create','update','delete','restore','reviewAttachment']
+      ...(name==='payments'?{writeValueConstraints:{create:{amount:'Positive, at most 2 decimals; never exceeds remaining invoice balance.',currency:'Required ISO currency matching the invoice.',confirmation:'Always prepares a proposal for later confirmation; no money transfer or customer messages.'}}}:{}),
+      operations:name==='payments'?['read','create']:name==='invoices'?['read','create','update','delete','restore','reviewAttachment']
         :name==='business_records'?['read','create','update','delete','restore']:name==='customers'?['read','create','update','delete']
           :name==='workspace_settings'||name==='workspace_ai_settings'?['read','update']
             :['read'],
@@ -389,7 +391,7 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
       if(Object.keys(args).some(key=>!['operations','operation','table'].includes(key))||args.operation!==undefined&&args.operation!=='batch'||args.table!==undefined&&!Object.hasOwn(TABLES,args.table)||!Array.isArray(args.operations)||args.operations.length<2||args.operations.length>10)throw new TypeError('invalid batch');
       const operations=args.operations.map(rawItem=>{
         const item=ownObject(rawItem)?{...(args.table?{table:args.table}:{}),...rawItem}:rawItem;
-        if(!ownObject(item)||item.operations!==undefined||!['create','update'].includes(item.operation)||!WRITE_SCHEMA[item.table]?.[item.operation]||Object.hasOwn(item.values||{},'status'))throw new TypeError('invalid batch');
+        if(!ownObject(item)||item.operations!==undefined||!['create','update'].includes(item.operation)||!WRITE_SCHEMA[item.table]?.[item.operation]||item.table==='payments'||Object.hasOwn(item.values||{},'status'))throw new TypeError('invalid batch');
         return normalizeStructured(item);
       });
       return {operation:'batch',operations};
@@ -1091,6 +1093,14 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
           if(!found.ok)return safeError(found);
           params.filters=[{column:'id',operator:'eq',value:found.row.id}];
         }
+      }
+      // Payments always use the scoped amount proposal, even in direct mode.
+      if(params.table==='payments'&&params.operation==='create'){
+        if(!exactInvoiceNumberTarget(params.filters)||!ownObject(params.values)||!exactKeys(params.values,['amount','currency'])
+          ||Object.keys(params.values).length!==2||typeof params.values.amount!=='number'||!Number.isFinite(params.values.amount)||params.values.amount<=0
+          ||Math.abs(params.values.amount*100-Math.round(params.values.amount*100))>1e-7||!/^([A-Z]{3})$/.test(params.values.currency||''))
+          return fail('INVALID','Use one invoice number and an exact payment amount with its matching currency. No payment was recorded.');
+        return delegate(params,ctx);
       }
       if(['create','update','delete','restore'].includes(params.operation)&&confirmationMode==='direct'&&typeof executeDirectOperation==='function'){
         ctx.assertLive();await ctx.assertAuthorized();writeAttempted=true;

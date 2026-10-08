@@ -59,6 +59,7 @@ export function createOwnerWorkspaceTools(options = {}) {
         if(Object.keys(values).some(key=>!['business_name','follow_up_preferences'].includes(key)))return {ok:false,code:'INVALID',message:'Choose one settings change at a time.'};
         return invoke('proposeWorkspaceSettingsChange',{...(values.business_name!==undefined?{businessName:values.business_name}:{}),patch:values.follow_up_preferences||{}});
       }
+      if(table==='payments'&&operation==='create')return invoke('proposeInvoicePayment',{target:target(params),amount:values.amount,currency:values.currency});
       if (table !== 'invoices') return {ok:false, code:'INVALID', message:'This operation is not available for that table.'};
       if (operation === 'delete') return invoke('prepareInvoiceDeletion', {target: target(params)});
       if (operation === 'restore') {
