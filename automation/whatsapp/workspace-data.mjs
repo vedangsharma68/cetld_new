@@ -2,7 +2,7 @@ import {sanitizeReminderTemplate} from '../preferences.mjs';
 import {isExternallyManagedInvoice,invoiceBalanceFields} from '../../invoice/business-fields.mjs';
 import {applyPaymentReversals,isMissingReversalStorage} from '../../payment-reversals.mjs';
 import {resolveWorkspaceRecord,validateCustomFields,ownerCalendar} from './workspace-records.mjs';
-import {INVOICE_CORRECTION_FIELDS,INVOICE_BUSINESS_METADATA_FIELDS,INVOICE_EXTENDED_CORRECTION_FIELDS,validateInvoiceCorrection,invoiceBusinessFields} from './invoice-corrections.mjs';
+import {INVOICE_CORRECTION_FIELDS,INVOICE_BUSINESS_METADATA_FIELDS,INVOICE_EXTENDED_CORRECTION_FIELDS,validateInvoiceCorrection,invoiceBusinessFields,requestedInvoiceDateChange} from './invoice-corrections.mjs';
 import {sanitizeOwnerBotPreferences,mergeOwnerBotPreferences,OWNER_BOT_LANGUAGE_OPTIONS} from './bot-preferences.mjs';
 import {
   CF_PRIMARY_MODEL,
@@ -103,7 +103,7 @@ function definition() {
     description:'Describe. Invoice update: total_amount/subtotal/tax/discount/line_items; invoice_number eq. Status separate. Attachments: saveAttachment/analyzeAttachment, operation only.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
-        operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic create/update batch. Read targets; use unique concrete numbers from scoped examples. No status changes/deletes. One patch per target; filters have column/operator/value.'},
+        operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic create/update batch. Read unique targets. No status/deletes. One patch per target.'},
         request:{type:'string',minLength:1,maxLength:1200},
         operation:{type:'string',enum:OPERATIONS},
         table:{type:'string',enum:Object.keys(TABLES)},
@@ -113,7 +113,7 @@ function definition() {
             operator:{type:'string',enum:FILTER_OPERATORS},
             value:{type:['string','number','boolean','null','array'],items:{type:['string','number','boolean','null']}}},
           required:['column','operator','value']}},
-        values:{type:'object',properties:{total_amount:{type:'number'},subtotal:{type:'number'},line_items:{type:'array',items:{type:'object',properties:{description:{type:'string'},amount:{type:'number'}},required:['description','amount']}}}},
+        values:{type:'object',properties:{due_date:{type:['string','null']},issue_date:{type:'string'},total_amount:{type:'number'},subtotal:{type:'number'},line_items:{type:'array',items:{type:'object',properties:{description:{type:'string'},amount:{type:'number'}},required:['description','amount']}}}},
         limit:{type:'integer',minimum:1,maximum:MAX_LIMIT},
         offset:{type:'integer',minimum:0,maximum:100000},
         order:{type:'object',additionalProperties:false,
@@ -1005,6 +1005,9 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       }
       if(params.table==='invoices'&&params.operation==='update'&&!Object.hasOwn(params.values,'status')){
         params.values=validateInvoiceCorrection(params.values);
+        const requestedDate=requestedInvoiceDateChange(message);
+        if(requestedDate&&(params.values[requestedDate.field]!==requestedDate.value
+          ||requestedDate.only&&Object.keys(params.values).some(field=>field!==requestedDate.field)))throw new TypeError('invoice correction omits requested date');
         if(confirmationMode!=='direct'&&Object.keys(params.values).some(key=>INVOICE_EXTENDED_CORRECTION_FIELDS.includes(key)))return fail('UNAVAILABLE','These audited invoice corrections require direct owner mode. No change was made.');
         if(params.values.customer_name!==undefined||params.values.customer_id!==undefined){
           const byName=params.values.customer_name!==undefined;
@@ -1093,6 +1096,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         'invoice action requires exactly one canonical target':['TARGET_REQUIRED','Which invoice do you mean? Send its invoice number or customer name. If that customer has several invoices, I will ask you to choose. No change was made.'],
         'invalid invoice fields':['INVALID_FIELDS','Use the catalog invoice correction fields: total_amount, subtotal, tax, discount, currency, dates and typed line_items. Keep status paid/unpaid separate. Reopening preserves original payments and requires explicit confirmation. Put the invoice target in filters, not values. No write was attempted.'],
         'invalid invoice correction':['INVALID_FIELDS','Use typed invoice correction fields from this catalog. Money requires at most two decimals; line items require description and amount, with consistent quantity/unitPrice when supplied. Do not write metadata, ledger/security fields or credentials. No write was attempted.'],
+        'invoice correction omits requested date':['INVALID_FIELDS','The plan does not match the explicit date change in the current owner instruction. Include that exact date field and value; for an only-date change include no other correction fields. Replan from the current owner message and preserve the original invoice target. No write was attempted.'],
         'invalid request':['REQUEST_SHAPE','The assistant combined two request formats. It should send either a description or structured fields. No change was made.'],
         'record action requires identifying filters':['TARGET_REQUIRED','Updates and deletes require filters identifying one existing record, for example name eq with the record name already supplied by the owner. Keep changes in values.custom_fields. Correct the arguments using this catalog and current owner message; no database write was attempted.'],
         'invalid filter':['FILTER_SHAPE','Each filter requires column, operator and value from this catalog. Updates need one unambiguous record, using eq (or ilike for names). Correct the arguments from the owner message; no database write was attempted.'],
