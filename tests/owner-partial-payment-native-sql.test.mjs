@@ -7,6 +7,7 @@ const base=baseline?pathToFileURL(baseline+'/'):new URL('../',import.meta.url);
 const {createOfflineSqlNetwork}=await import(new URL('tests/fixtures/offline-sql-network.mjs',base));
 const {createOwnerMessageHandler}=await import(new URL('automation/whatsapp/owner-handler.mjs',base));
 const {AIProvider}=await import(new URL('ai/provider.mjs',base));
+const {createOwnerWorkspaceTools}=await import(new URL('automation/whatsapp/owner-workspace-tools.mjs',base));
 const prompt='Record a USD 500 test payment against invoice SB-10442 for Northwind Systems LLC. This is only a dummy bookkeeping entry. Keep customer messages and reminders off.';
 const livePrompt='Record a USD 500 partial payment for the dummy invoice SB-10442 for Northwind Systems LLC. Keep customer messages and reminders off.';
 const newMigration='20261008153500_owner_live_clarification_evidence.sql';
@@ -36,10 +37,16 @@ async function fixture(options={}){
  const inbound=async(id,message)=>db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[id,phone,message]);
  return {...f,scope,ids,snapshot,inbound};
 }
-function handlerFor(f,{readTwice=false,readOnce=false,readTarget=target,operation=proposal,confirmation=false,repairPlan=null,planningMessage=null}={}){
+function handlerFor(f,{readTwice=false,readOnce=false,readTarget=target,operation=proposal,confirmation=false,repairPlan=null,planningMessage=null,keepReading=false,finalFunctionCall=false,transformToolResult=null}={}){
  let calls=0;const outputs=[],requests=[],planningRequests=[];
  const response=parts=>Response.json({candidates:[{content:{parts},finishReason:'STOP'}]});
- const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated'},logger:{info(){},warn(){},error(){}},providerFactory:options=>new AIProvider({...options,primaryModel:'gemini-3.5-flash-lite',fallbackModel:null}),fetchImpl:async(url,init)=>{
+ const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated'},logger:{info(){},warn(){},error(){}},toolsFactory:options=>{
+  const tools=createOwnerWorkspaceTools(options);
+  return {...tools,async execute(name,args,context){
+   const actual=await tools.execute(name,args,context),result=transformToolResult?transformToolResult(actual,args):actual;
+   outputs.push(result);return result;
+  }};
+ },providerFactory:options=>new AIProvider({...options,primaryModel:'gemini-3.5-flash-lite',fallbackModel:null}),fetchImpl:async(url,init)=>{
   assert.equal(new URL(url).hostname,'generativelanguage.googleapis.com');const body=JSON.parse(init.body);calls++;requests.push(body);
   if(body.generationConfig?.responseMimeType==='application/json'){
    planningRequests.push(body);assert.ok(repairPlan,'Unexpected planning request');
@@ -47,10 +54,10 @@ function handlerFor(f,{readTwice=false,readOnce=false,readTarget=target,operatio
    return response([{text:JSON.stringify(repairPlan)}]);
   }
   const tools=body.contents.flatMap(row=>row.parts).flatMap(part=>part.functionResponse?[part.functionResponse.response]:[]),last=tools.at(-1);
-  if(last)outputs.push(last);
+  if(!body.tools&&finalFunctionCall)return response([{functionCall:{name:'workspaceData',args:{operation:'read',table:'invoices',filters:readTarget}}}]);
   if(!body.tools)return response([{text:last?.completed?`Recorded USD ${last.paymentAmount||500} payment. The remaining balance is USD ${last.outstandingAmount??451.52}. Reminders are paused.`:last?.proposal?'Proposed a USD 500 payment. The remaining balance would be USD 451.52. Reply yes to confirm or cancel.':'No changes were made.'}]);
   if(confirmation)return response([{functionCall:{name:'workspaceData',args:{operation:'confirm'}}}]);
-  if(readTwice&&tools.length<2||readOnce&&tools.length<1)return response([{functionCall:{name:'workspaceData',args:{operation:'read',table:'invoices',...(readOnce||tools.length?{filters:readTarget}:{}),columns:['invoice_number','customer_name','total_amount','amount_paid','currency','status']}},thoughtSignature:'c2ln'}]);
+  if(keepReading||readTwice&&tools.length<2||readOnce&&tools.length<1)return response([{functionCall:{name:'workspaceData',args:{operation:'read',table:'invoices',...(readOnce||tools.length?{filters:readTarget}:{}),columns:['invoice_number','customer_name','total_amount','amount_paid','currency','status']}},thoughtSignature:'c2ln'}]);
   return response([{functionCall:{name:'workspaceData',args:operation}}]);
  }});
  return {handler,outputs,requests,planningRequests,calls:()=>calls};
@@ -61,7 +68,7 @@ test('actual native wire reads twice then proposes USD500 and later confirms exa
   await f.inbound('payment-propose',prompt);const turn={...f.scope,messageId:'payment-propose',message:prompt};const result=await run.handler(turn);
   assert.equal(run.outputs[0].rows.length,7);assert.equal(run.outputs[1].rows.length,1);
   if(process.env.CETLD_PAYMENT_BASELINE){assert.equal(run.calls(),3);assert.equal(run.requests[2].tools,undefined);assert.equal(run.outputs.some(out=>out.proposal),false);assert.deepEqual(await f.snapshot(),before);return;}
-  assert.equal(run.calls(),4,JSON.stringify({result,outputs:run.outputs}));assert.equal(run.outputs.at(-1).proposal,true,JSON.stringify(run.outputs));
+  assert.equal(run.calls(),2,JSON.stringify({result,outputs:run.outputs}));assert.equal(run.outputs.at(-1).proposal,true,JSON.stringify(run.outputs));
   assert.equal(run.outputs.at(-1).details.paymentAmount,500);assert.equal(run.outputs.at(-1).details.outstandingAmount,451.52);
   assert.deepEqual(await f.snapshot(),before);assert.match(result.answer,/Proposed a USD 500/);
   const pending=(await f.db.query("select * from whatsapp_pending_actions where workspace_id=$1 and consumed_at is null",[f.scope.workspaceId])).rows[0];
@@ -76,6 +83,63 @@ test('actual native wire reads twice then proposes USD500 and later confirms exa
   const calls=confirm.calls();assert.equal((await confirm.handler({...f.scope,messageId:'payment-confirm',message:'yes'})).replayed,true);assert.equal(confirm.calls(),calls);assert.deepEqual(await f.snapshot(),after);assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });
+test('one exact native read queues the canonical payment before an invalid model batch can run', {skip:Boolean(baseline)},async()=>{
+ const f=await fixture({invoiceNumber:'INV-2026-6769'});try{
+  const before=await f.snapshot(),currentTarget=[{column:'invoice_number',operator:'eq',value:'INV-2026-6769'}];
+  await f.inbound('bounded-leading',leadingPrompt);
+  const run=handlerFor(f,{readOnce:true,readTarget:currentTarget,operation:{operations:[{...proposal,filters:currentTarget}]}});
+  const reply=await run.handler({...f.scope,messageId:'bounded-leading',message:leadingPrompt});
+  assert.equal(run.calls(),1,JSON.stringify({reply,outputs:run.outputs}));assert.equal(run.planningRequests.length,0);
+  assert.equal(run.outputs[0].rows.length,1);assert.equal(run.outputs.at(-1).proposal,true);
+  assert.equal(run.outputs.at(-1).details.paymentAmount,500);assert.equal(run.outputs.at(-1).details.outstandingAmount,451.52);
+  assert.equal(reply.answer,'Proposed a USD 500.00 payment for invoice INV-2026-6769. The remaining balance would be USD 451.52. Reply yes to confirm or cancel.');
+  const pending=(await f.db.query('select * from whatsapp_pending_actions where consumed_at is null')).rows;
+  assert.equal(pending.length,1);assert.deepEqual(pending[0].action.changes,{amount:500,currency:'USD'});
+  assert.equal(pending[0].action.requestedInvoiceNumber,'INV-2026-6769');assert.equal(pending[0].action.sourceMessageId,'bounded-leading');
+  assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
+ }finally{await f.close();}
+});
+test('exact live wording proposes locally despite endless native reads and a final function call, then confirms only USD500', {skip:Boolean(baseline)},async()=>{
+ const f=await fixture({invoiceNumber:'INV-2026-6769'});try{
+  const before=await f.snapshot();await f.inbound('endless-native-propose',livePrompt);
+  const run=handlerFor(f,{keepReading:true,finalFunctionCall:true,readTwice:true});
+  const reply=await run.handler({...f.scope,messageId:'endless-native-propose',message:livePrompt});
+  assert.equal(run.calls(),2,JSON.stringify({reply,outputs:run.outputs}));
+  assert.equal(run.requests.every(request=>Boolean(request.tools)),true,'proposal must not require a final model call');
+  assert.equal(run.outputs[0].rows.length,7);assert.equal(run.outputs[1].rows.length,1);assert.equal(run.outputs.at(-1).proposal,true,JSON.stringify(run.outputs));
+  assert.equal(reply.answer,'Proposed a USD 500.00 payment for invoice SB-10442. The remaining balance would be USD 451.52. Reply yes to confirm or cancel.');
+  const pending=(await f.db.query("select * from whatsapp_pending_actions where consumed_at is null and action->>'type'='owner_invoice_payment'")).rows;
+  assert.equal(pending.length,1);assert.deepEqual(pending[0].action.changes,{amount:500,currency:'USD'});
+  assert.equal(pending[0].action.requestedInvoiceNumber,'SB-10442');assert.equal(pending[0].action.sourceMessageId,'endless-native-propose');
+  assert.deepEqual(await f.snapshot(),before);
+  await f.inbound('endless-native-confirm','yes');const confirm=handlerFor(f,{confirmation:true});
+  const saved=await confirm.handler({...f.scope,messageId:'endless-native-confirm',message:'yes'});
+  assert.equal(confirm.outputs.at(-1).completed,true,JSON.stringify({saved,outputs:confirm.outputs}));
+  assert.equal(confirm.outputs.at(-1).paymentAmount,500);assert.equal(confirm.outputs.at(-1).outstandingAmount,451.52);
+  const after=await f.snapshot(),invoice=after.invoices.find(row=>row.id===f.ids[0]);
+  assert.equal(after.payments.length,1);assert.equal(after.payments[0].amount,500);assert.equal(after.payments[0].settle_remaining,false);
+  assert.equal(invoice.amount_paid,500);assert.equal(invoice.total_amount,951.52);assert.equal(invoice.status,'draft');assert.equal(invoice.currency,'USD');
+  assert.equal(invoice.metadata.next_follow_up_at,null);assert.deepEqual(invoice.metadata.source_document,{name:'original-source'});
+  assert.deepEqual(after.files,before.files);assert.equal(after.outbound,0);
+  assert.deepEqual(after.invoices.filter(row=>row.id!==f.ids[0]),before.invoices.filter(row=>row.id!==f.ids[0]));assert.deepEqual(f.errors,[]);
+ }finally{await f.close();}
+});
+test('a wrong-target or truncated native invoice read cannot authorize the canonical proposal', {skip:Boolean(baseline)},async()=>{
+ for(const [label,options]of [
+  ['wrong-target',{readTarget:[{column:'invoice_number',operator:'eq',value:'FIXTURE-OTHER-0'}]}],
+  ['truncated',{transformToolResult:result=>result.operation==='read'?{...result,truncated:true}:result}],
+ ]){
+  const f=await fixture();try{
+   const before=await f.snapshot(),id='bounded-read-'+label;await f.inbound(id,livePrompt);
+   const run=handlerFor(f,{keepReading:true,readOnce:true,...options});
+   const reply=await run.handler({...f.scope,messageId:id,message:livePrompt});
+   assert.equal(run.outputs[0].rows.length,1);assert.equal(run.outputs.some(output=>output.proposal),false,JSON.stringify({reply,outputs:run.outputs}));
+   assert.equal(run.outputs.some(output=>output.operation==='create'),false);assert.doesNotMatch(reply.answer,/Proposed|Recorded/);
+   assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions where consumed_at is null')).rows[0].n,0);
+   assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+ }
+});
 test('leading invoice syntax repairs native BATCH_SHAPE to a single model-selected payment and later confirms exactly USD500', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
  const f=await fixture({invoiceNumber:'INV-2026-6769'});try{
   const {requestedOwnerPayment}=await import(new URL('automation/whatsapp/owner-payment-intent.mjs',base));
@@ -86,9 +150,9 @@ test('leading invoice syntax repairs native BATCH_SHAPE to a single model-select
   }
   const before=await f.snapshot(),currentTarget=[{column:'invoice_number',operator:'eq',value:'INV-2026-6769'}],single={...proposal,filters:currentTarget};
   await f.inbound('leading-propose',leadingPrompt);
-  const run=handlerFor(f,{readOnce:true,readTarget:currentTarget,operation:{operations:[single]},repairPlan:single,planningMessage:leadingPrompt});
+  const run=handlerFor(f,{operation:{operations:[single]},repairPlan:single,planningMessage:leadingPrompt});
   const result=await run.handler({...f.scope,messageId:'leading-propose',message:leadingPrompt,history:[{role:'assistant',content:'Enter the payment amount for this invoice.'}]});
-  assert.equal(run.planningRequests.length,1);assert.equal(run.calls(),4);assert.equal(run.outputs[0].rows.length,1);
+  assert.equal(run.planningRequests.length,1);assert.equal(run.calls(),process.env.CETLD_PAYMENT_LEADING_BASELINE?3:2);
   if(process.env.CETLD_PAYMENT_LEADING_BASELINE){assert.equal(run.outputs.at(-1).ok,false);assert.equal(run.outputs.at(-1).planningRepair.validationCode,'BATCH_SHAPE');assert.deepEqual(await f.snapshot(),before);assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions')).rows[0].n,0);return;}
   assert.equal(run.outputs.at(-1).planningRepair.validationCode,'BATCH_SHAPE');assert.equal(run.outputs.at(-1).proposal,true,JSON.stringify({result,outputs:run.outputs,errors:f.errors}));
   assert.equal(run.outputs.at(-1).details.paymentAmount,500);assert.equal(run.outputs.at(-1).details.outstandingAmount,451.52);assert.deepEqual(await f.snapshot(),before);

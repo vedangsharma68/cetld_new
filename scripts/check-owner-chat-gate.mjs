@@ -28,7 +28,7 @@ function runCommand(script) {
 export async function writeReleaseManifest({outputPath='owner-chat-build.json'}={}) {
   const paths=['automation/whatsapp/invoice-reopening.mjs','payment-reversals.mjs','collections-pulse.mjs','automation/whatsapp/owner-next-actions.mjs','custom-fields.mjs','automation/whatsapp/workspace-records.mjs','automation/preferences.mjs','owner-whatsapp-ui.mjs','followup-preferences-ui.mjs','app.js','automation/whatsapp/owner-grounding.mjs','automation/whatsapp/owner-direct-runtime.mjs',
     'automation/whatsapp/direct-owner-write.mjs','automation/whatsapp/owner-action-buttons.mjs','automation/whatsapp/bot-preferences.mjs','ai/provider.mjs','ai/tool-calls.mjs','ai/provider-health.mjs','automation/whatsapp/owner-agent.mjs','automation/whatsapp/owner-handler.mjs',
-    'automation/whatsapp/owner-workspace-tools.mjs','automation/whatsapp/workspace-data.mjs','automation/whatsapp/owner-reply-store.mjs',
+    'automation/whatsapp/owner-workspace-tools.mjs','automation/whatsapp/workspace-data.mjs','automation/whatsapp/owner-reply-store.mjs','automation/whatsapp/owner-reply-safety.mjs',
     'automation/whatsapp/cloud-inbound.mjs','automation/whatsapp/cloud-outbound.mjs','automation/whatsapp/owner-binding.mjs',
     'automation/whatsapp/owner-diagnostics.mjs','scripts/owner-chat-battery.mjs','tests/fixtures/owner-chat-battery.mjs',
     'automation/whatsapp/invoice-corrections.mjs','invoice/business-fields.mjs','invoice/correction-form.mjs','invoice/correction-client.mjs','styles.css',
