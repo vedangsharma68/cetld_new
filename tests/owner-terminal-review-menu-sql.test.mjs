@@ -6,7 +6,7 @@ import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mj
 import {pendingBlocksOwnerNextActions} from '../automation/whatsapp/owner-next-actions.mjs';
 import {ownerGroundingIssue} from '../automation/whatsapp/owner-grounding.mjs';
 
-test('native read after a canceled attachment restores signed menus without erasing reversed payment history',async()=>{
+for(const terminalStage of ['canceled','saved'])test(`native read after a ${terminalStage} attachment restores signed menus without changing terminal review or reversed payment history`,async()=>{
   const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+919871367051';
   try{
     await db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -31,7 +31,7 @@ test('native read after a canceled attachment restores signed menus without eras
     assert.equal(reopened.completed,true);
     const review=(await db.query('select * from whatsapp_begin_invoice_review($1,$2,$3)',[workspaceId,customerId,phone])).rows[0];
     await db.query("select * from whatsapp_transition_invoice_review($1,$2,$3,$4,$5,'extracting',$6)",[review.id,review.version,workspaceId,customerId,phone,JSON.stringify({...review.action,stage:'canceled',failureCode:'EXTRACTION_UNAVAILABLE'})]);
-    await db.query("update whatsapp_pending_actions set expires_at=now()-interval '1 minute' where id=$1",[review.id]);
+    await db.query("update whatsapp_pending_actions set expires_at=now()-interval '1 minute',action=jsonb_set(action,'{stage}',to_jsonb($2::text)) where id=$1",[review.id,terminalStage]);
     const snapshots=async()=>Promise.all(['invoices','payments','payment_reversals','whatsapp_pending_actions','invoice_correction_audits'].map(async table=>(await db.query(`select to_jsonb(t) value from ${table} t order by id`)).rows));
     const before=await snapshots();
     assert.equal(before[1].length,1);assert.equal(before[2].length,1);
@@ -50,6 +50,7 @@ test('native read after a canceled attachment restores signed menus without eras
     assert.ok(result.buttons.every(button=>button.id.startsWith('ons1.')));
     assert.match(result.answer,/Current paid balance: USD 0/);assert.doesNotMatch(result.answer,/no payment made|never paid/i);
     assert.equal(calls,3);assert.equal(logs.filter(row=>row.label==='WhatsApp owner tool call').length,1);
+    assert.equal(f.requests.filter(request=>new URL(request.url).pathname.endsWith('/rpc/whatsapp_load_invoice_review')).length,0,'terminal review read must not invoke mutating expiry housekeeping');
     assert.deepEqual(await snapshots(),before);assert.deepEqual(f.errors,[]);
   }finally{await f.close();}
 });
