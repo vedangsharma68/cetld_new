@@ -8,6 +8,19 @@ export const INVOICE_BUSINESS_METADATA_FIELDS=Object.freeze(['subtotal','tax','d
 export const INVOICE_EXTENDED_CORRECTION_FIELDS=Object.freeze(['customer_id','customer_name',...INVOICE_BUSINESS_METADATA_FIELDS]);
 const object=value=>value&&typeof value==='object'&&!Array.isArray(value);
 const invalid=()=>{throw new TypeError('invalid invoice correction');};
+// A single explicit date in the current instruction is evidence, not a model
+// inference. Ambiguous dates and mixed due/issue references require planning.
+export function requestedInvoiceDateChange(message){
+  const text=String(message||''),dates=[...text.matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)].map(match=>match[0]);
+  if(dates.length!==1||!/\b(?:change|update|set|move|extend)\b/i.test(text))return null;
+  const due=/\bdue\s+date\b/i.test(text),issue=/\bissue\s+date\b/i.test(text);
+  if(due===issue)return null;
+  const clause=text.split(/[.;!?\n]+/).find(part=>part.includes(dates[0])&&(due?/\bdue\s+date\b/i:/\bissue\s+date\b/i).test(part));
+  if(!clause||/\b(?:do not|don't|never|cannot|can't|not to|avoid)\b/i.test(clause)
+    ||!new RegExp(`\\b(?:change|update|set|move|extend)\\b[^.;!?\\n]{0,120}\\b${due?'due':'issue'}\\s+date\\b`,'i').test(clause))return null;
+  try{date(dates[0]);}catch{return null;}
+  return {field:due?'due_date':'issue_date',value:dates[0],only:/^\s*(?:please\s+)?only\s+(?:change|update|set)\s+(?:the\s+)?(?:due|issue)\s+date\b/i.test(text)};
+}
 function money(value){
   if(!['string','number'].includes(typeof value)||!/^\d{1,12}(?:\.\d{1,2})?$/.test(String(value)))return invalid();
   const [whole,fraction='']=String(value).split('.');const minor=BigInt(whole)*100n+BigInt(fraction.padEnd(2,'0'));

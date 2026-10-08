@@ -1,10 +1,57 @@
 // Output safety: an assistant sentence is not a database receipt.
-const COMPLETION = /\b(?:deleted|removed|created|saved|updated|changed|restored|reopened|reversed|recorded|sent|cancelled|canceled|reset|completed|marked[^.!?]{0,24}paid)\b/i;
+import {requestedInvoiceDateChange} from './invoice-corrections.mjs';
+const COMPLETION = /\b(?:deleted|removed|created|saved|updated|changed|corrected|restored|reopened|reversed|recorded|sent|cancelled|canceled|reset|completed|marked[^.!?]{0,24}paid)\b/i;
 const NEGATIVE = /\b(?:not|never|cannot|can't|couldn't|could not|haven't|hasn't|wasn't|weren't|didn't|did not|unable|failed|pending|propos(?:al|ed)|would|will|can|could|should|if|once|before|after|to be|to delete|to update|to change|to send)\b/i;
 const NO_RESULT = /\b(?:nothing|no (?:invoice|payment|record|file|change|action))\s+(?:was|were|has been|have been|is|has)\s+(?:saved|logged|created|recorded|changed|updated|sent|applied|completed)\b/gi;
 const COMMITTED = new Set(['deleted','restored','invoice_created','settings_updated','customer_created','customer_updated','customer_deleted','updated','created','paid','cancelled','canceled','review_updated']);
 const COMMITTED_TYPES=new Set(['owner_invoice_update','owner_invoice_payment','owner_invoice_create','owner_settings_update','owner_workspace_data_confirmed','owner_workspace_data_cancelled']);
 const normalize=value=>String(value||'').replace(/[\u201c\u201d]/g,'"').replace(/\u2019/g,"'");
+const CORRECTION_LABELS={due_date:'Due date',issue_date:'Issue date',total_amount:'Total',subtotal:'Subtotal',tax:'Tax',discount:'Discount',currency:'Currency',
+  invoice_number:'Invoice number',notes:'Notes',customer_id:'Customer',custom_fields:'Custom fields',line_items:'Line items',invoice_direction:'Invoice direction',seller_name:'Seller name',buyer_name:'Buyer name',payment_information:'Payment instructions'};
+const CORRECTION_FIELD_CLAIMS={due_date:/\bdue\s+date\b/i,issue_date:/\bissue\s+date\b/i,total_amount:/\b(?:total(?:\s+amount)?|amount)\b/i,subtotal:/\bsubtotal\b/i,
+  tax:/\btax\b/i,discount:/\bdiscount\b/i,currency:/\bcurrency\b/i,invoice_number:/\binvoice\s+number\b/i,notes:/\bnotes?\b/i,
+  customer_id:/\bcustomer\b/i,custom_fields:/\bcustom\s+fields?\b/i,line_items:/\b(?:line\s+items?|itemization)\b/i,invoice_direction:/\binvoice\s+direction\b/i,
+  seller_name:/\bseller\b/i,buyer_name:/\bbuyer\b/i,payment_information:/\bpayment\s+(?:instructions?|information|info)\b/i};
+function mentionedDates(clause,year){
+  const dates=[...clause.matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)].map(match=>match[0]);
+  const months='Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?';
+  const monthNumbers=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+  for(const [pattern,monthIndex,dayIndex]of [[`\\b(${months})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?\\b`,1,2],[`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${months})(?:,?\\s+(\\d{4}))?\\b`,2,1]])
+    for(const match of clause.matchAll(new RegExp(pattern,'gi'))){
+      const month=monthNumbers.indexOf(match[monthIndex].slice(0,3).toLowerCase())+1;
+      if(match[3]||year)dates.push(`${match[3]||year}-${String(month).padStart(2,'0')}-${match[dayIndex].padStart(2,'0')}`);
+    }
+  return dates;
+}
+function correctionResults(results,message=''){
+  const identifiers=[...String(message).matchAll(/\b(?:INV|QA)[-/][A-Z0-9][A-Z0-9/-]*/gi)].map(match=>match[0].toLowerCase());
+  return results.filter(result=>completedOwnerResult(result)&&result.action==='invoice.updated'&&result.correction
+    &&Array.isArray(result.correction.appliedFields)&&Array.isArray(result.correction.changedFields)&&result.record
+    &&(!identifiers.length||[result.record.invoice_number,...(result.correction.invoiceNumbers||[])].some(value=>identifiers.includes(String(value||'').toLowerCase()))));
+}
+export function invoiceCorrectionFallback(message,results=[]){
+  const candidates=[...new Map(correctionResults(results,message).map(result=>[JSON.stringify(result.record),result])).values()];
+  if(candidates.length!==1)return null;
+  const result=candidates[0],record=result.record,fields=result.correction.changedFields.filter(field=>Object.hasOwn(CORRECTION_LABELS,field));
+  const lines=[`Invoice ${String(record.invoice_number||'').replace(/[\x00-\x1f\x7f]/g,' ').slice(0,100)}`];
+  const requested=requestedInvoiceDateChange(message);
+  if(requested){
+    const current=record[requested.field],label=CORRECTION_LABELS[requested.field];
+    if(current!==requested.value||!result.correction.appliedFields.includes(requested.field))lines.push(`The requested ${label.toLowerCase()} change was not applied.`);
+    lines.push(`${label}: ${current===null?'none':/^\d{4}-\d{2}-\d{2}$/.test(String(current))?current:'not available'}`);
+  }
+  if(!fields.length)lines.push('No invoice business fields changed.');
+  else for(const field of fields){
+    if(requested?.field===field)continue;
+    const value=record[field],label=CORRECTION_LABELS[field];
+    if(['due_date','issue_date'].includes(field))lines.push(`${label}: ${value===null?'none':/^\d{4}-\d{2}-\d{2}$/.test(String(value))?value:'not available'}`);
+    else if(['total_amount','subtotal','tax','discount'].includes(field)&&/^\d+(?:\.\d{1,2})?$/.test(String(value)))lines.push(`${label}: ${/^[A-Z]{3}$/.test(record.currency||'')?record.currency+' ':''}${value}`);
+    else if(field==='currency'&&/^[A-Z]{3}$/.test(value||''))lines.push(`${label}: ${value}`);
+    else lines.push(`${label} changed.`);
+  }
+  if(record.followup_state==='paused')lines.push('Reminders are paused.');
+  return lines.join('\n');
+}
 function actionMatches(clause, result) {
   const action=String(result.action||result.actionType||result.operation||'');
   const entity=String(result.entityType||result.table||action);
@@ -27,7 +74,7 @@ function actionMatches(clause, result) {
   const financialClause=clause.replace(/\bpayment (?:instructions?|information|info)\b/gi,'');
   if(/\b(?:marked[^.!?]{0,24}paid|recorded[^.!?]{0,24}payment|payment)\b/i.test(financialClause))return /paid|payment|reopened/.test(action);
   if(paymentBusinessText)return true;
-  if(/\b(?:updated|changed|update|change)\b/i.test(clause))return /updat|change|confirmed|reopened/.test(action);
+  if(/\b(?:updated|changed|corrected|update|change)\b/i.test(clause))return /updat|change|confirmed|reopened/.test(action);
   return true;
 }
 function numericEvidence(results) {
@@ -95,10 +142,42 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
   const claims=text.split(/[.!?\n]+/).map(part=>part.replace(NO_RESULT,''))
     .filter(part=>COMPLETION.test(part)&&!NEGATIVE.test(part)
     &&(!/\bcompleted\b/i.test(part)||/\b(?:update|change|deletion|payment|creation|restoration|action)\b/i.test(part))
-    &&(/^\s*(?:deleted|removed|created|saved|updated|changed|restored|reopened|reversed|recorded|sent|cancelled|canceled|reset)\b/i.test(part)
-      ||/\b(?:I|we|I've|we've)\s+(?:(?:have|already|now|successfully|just|also)\s+)*(?:deleted|removed|created|saved|updated|changed|restored|reopened|reversed|recorded|sent|cancelled|canceled|reset|marked|completed)\b/i.test(part)
-      ||/\b(?:has|have|was|were|now|successfully)\b[^.!?]{0,35}\b(?:deleted|removed|created|saved|updated|changed|restored|recorded|sent|cancelled|canceled|completed|marked)\b/i.test(part)
+    &&(/^\s*(?:deleted|removed|created|saved|updated|changed|corrected|restored|reopened|reversed|recorded|sent|cancelled|canceled|reset)\b/i.test(part)
+      ||/\b(?:I|we|I've|we've)\s+(?:(?:have|already|now|successfully|just|also)\s+)*(?:deleted|removed|created|saved|updated|changed|corrected|restored|reopened|reversed|recorded|sent|cancelled|canceled|reset|marked|completed)\b/i.test(part)
+      ||/\b(?:has|have|was|were|now|successfully)\b[^.!?]{0,35}\b(?:deleted|removed|created|saved|updated|changed|corrected|restored|recorded|sent|cancelled|canceled|completed|marked)\b/i.test(part)
       ||/\bis (?:now )?marked(?: as)? paid\b/i.test(part)));
+  const corrections=correctionResults(completed,message);
+  const genericCompletion=/^(?:done|all done|completed|all set)[.!\s]*$/i.test(text);
+  if(completed.some(result=>result.correction)&&!corrections.length&&(claims.length||genericCompletion))return 'unverified_invoice_correction';
+  if(corrections.length){
+    if(genericCompletion)return 'unverified_invoice_correction';
+    const requested=requestedInvoiceDateChange(message);
+    const dateRefused=requested&&text.split(/[.!?\n]+/).some(clause=>CORRECTION_FIELD_CLAIMS[requested.field].test(clause)&&NEGATIVE.test(clause));
+    if(requested&&!dateRefused&&(claims.length||genericCompletion||CORRECTION_FIELD_CLAIMS[requested.field].test(text))
+      &&!corrections.some(result=>result.correction.appliedFields.includes(requested.field)&&result.record[requested.field]===requested.value))return 'unverified_invoice_correction';
+    for(const clause of claims){
+      // An unchanged/preserved tail cannot authorize or invalidate an earlier
+      // changed-field claim in the same sentence.
+      const changedClause=clause.replace(/(?:[,;]|\band\b|\bwhile\b)\s+[^,;]*\b(?:unchanged|preserved|remains? the same)\b[^,;]*$/i,'');
+      const fields=Object.entries(CORRECTION_FIELD_CLAIMS).filter(([,pattern])=>pattern.test(changedClause)).map(([field])=>field);
+      if(!fields.length||!corrections.some(result=>actionMatches(clause,result)&&fields.every(field=>result.correction.changedFields.includes(field))))return 'unverified_invoice_correction';
+      const moneyFields=fields.filter(field=>['total_amount','subtotal','tax','discount'].includes(field));
+      const amounts=[...changedClause.matchAll(/(?:([$€£₹])|\b(USD|INR|EUR|GBP|CHF|AED|SGD|AUD|CAD))\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(USD|INR|EUR|GBP|CHF|AED|SGD|AUD|CAD)\b/gi)];
+      if(moneyFields.length&&(!amounts.length||!corrections.some(result=>fields.every(field=>result.correction.changedFields.includes(field))
+        &&new Set(moneyFields.map(field=>Number(result.record[field]))).size===1
+        &&amounts.every(match=>Number((match[3]||match[4]).replaceAll(',',''))===Number(result.record[moneyFields[0]])
+          &&(!(match[2]||match[5])||(match[2]||match[5]).toUpperCase()===result.record.currency)))))return 'unverified_invoice_correction';
+      if(fields.includes('currency')){
+        const currency=changedClause.match(/\bcurrency\b[^.;\n]{0,25}?\b([A-Z]{3})\b/i)?.[1]?.toUpperCase();
+        if(!currency||!corrections.some(result=>result.correction.changedFields.includes('currency')&&result.record.currency===currency))return 'unverified_invoice_correction';
+      }
+    }
+    for(const field of ['due_date','issue_date'])for(const clause of text.split(/[.!?\n]+/)){
+      if(!CORRECTION_FIELD_CLAIMS[field].test(clause)||NEGATIVE.test(clause))continue;
+      const dates=mentionedDates(clause,corrections.length===1?String(corrections[0].record[field]||'').slice(0,4):null);
+      if(dates.length&&!corrections.some(result=>dates.every(date=>result.record[field]===date)))return 'unverified_invoice_correction';
+    }
+  }
   for(const clause of claims){
     const match=clause.match(COMPLETION)?.[0]?.toLowerCase();
     if(!completed.length)return 'unverified_action_result';

@@ -8,6 +8,34 @@ test('verified payment history rejects a false absence claim even with a positiv
 });
 import {ownerGroundingIssue,ownerEvidence} from '../automation/whatsapp/owner-grounding.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
+import {requestedInvoiceDateChange} from '../automation/whatsapp/invoice-corrections.mjs';
+
+test('date intent never promotes negated, historical, mixed or ambiguous date text into a correction',()=>{
+ for(const message of ['Do not change the due date to 2026-10-20.','Show the due date 2026-10-20.','Change notes; keep due date 2026-10-20.',
+  'Change due date 2026-10-20 and issue date 2026-10-08.','Change due date from 2026-10-15 to 2026-10-20.','Change due date to 2026-02-31.'])assert.equal(requestedInvoiceDateChange(message),null,message);
+ assert.deepEqual(requestedInvoiceDateChange('Only change the due date of QA-1 to 2026-10-20. Do not change anything else.'),{field:'due_date',value:'2026-10-20',only:true});
+});
+
+test('invoice correction claims require the named audited field and its persisted date, including generic completion',()=>{
+ const receipt={ok:true,completed:true,action:'invoice.updated',entityType:'invoice',record:{invoice_number:'QA-1',due_date:'2026-10-15',currency:'USD',total_amount:100},
+  correction:{appliedFields:['total_amount','subtotal'],changedFields:[]}};
+ const message='Only change the due date of QA-1 to 2026-10-20.';
+ for(const reply of ['Done.','Updated the due date to 2026-10-20.','I successfully updated the due date.','Due date: 2026-10-20.','Due date: October 20, 2026.','I updated the invoice.'])
+  assert.equal(ownerGroundingIssue(reply,[receipt],message),'unverified_invoice_correction',reply);
+ const saved={...receipt,record:{...receipt.record,due_date:'2026-10-20'},correction:{appliedFields:['due_date'],changedFields:['due_date']}};
+ assert.equal(ownerGroundingIssue('Updated the due date to 2026-10-20.',[saved],message),null);
+ assert.equal(ownerGroundingIssue('Updated the due date to 2026-10-21.',[saved],message),'unverified_invoice_correction');
+ assert.equal(ownerGroundingIssue('Due date: October 21, 2026.',[saved],message),'unverified_invoice_correction');
+ assert.equal(ownerGroundingIssue('Updated the due date to 20 October 2026.',[saved],message),null);
+ assert.equal(ownerGroundingIssue('I updated the due date and currency.',[saved],message),'unverified_invoice_correction');
+ assert.equal(ownerGroundingIssue('I could not apply the due date change. Due date: 2026-10-15.',[receipt],message),null);
+ assert.equal(ownerGroundingIssue('Updated the due date.',[{...saved,record:{...saved.record,invoice_number:'QA-2'}}],message),'unverified_invoice_correction');
+ const amount={...receipt,record:{...receipt.record,total_amount:150},correction:{appliedFields:['total_amount'],changedFields:['total_amount']}};
+ const oldRead={ok:true,readOnly:true,table:'invoices',rows:[{invoice_number:'QA-1',total_amount:100,currency:'USD'}]};
+ assert.equal(ownerGroundingIssue('Updated the total to USD 100.',[oldRead,amount],'Change QA-1 total to USD 150.'),'unverified_invoice_correction');
+ assert.equal(ownerGroundingIssue('Updated the total to USD 150.',[oldRead,amount],'Change QA-1 total to USD 150.'),null);
+ assert.equal(ownerGroundingIssue('Updated the total to INR 150.',[amount]),'unverified_invoice_correction');
+});
 
 test('invoice absence needs a checked lookup and cannot contradict a current row',()=>{
   const reply="I couldn't find the invoice INV-2026-0002.",message='Show invoice INV-2026-0002';

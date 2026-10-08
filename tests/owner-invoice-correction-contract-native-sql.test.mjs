@@ -4,6 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 import {authorizeOwnerPhone} from '../automation/whatsapp/owner-binding.mjs';
+import {createDirectOwnerWriteAdapter} from '../automation/whatsapp/direct-owner-write.mjs';
 
 const number='QA-CONTRACT-001';
 const target=[{column:'invoice_number',operator:'eq',value:number}];
@@ -45,12 +46,79 @@ async function fixture(){
     if(result)outputs.push(JSON.parse(result.content));
     return fetchImpl(body);
    }});
-  await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[messageId,phone,message]);
+  await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing') on conflict(provider_message_id) do nothing",[messageId,phone,message]);
   const turn={...scope,messageId,message};
   return {reply:await handler(turn),outputs,logs,handler,turn};
  };
- return {...f,scope,ids,read,before,count,assertNoCustomerWrites,run};
+ const seedCorrection=async(messageId,message,values)=>{
+  await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[messageId,phone,message]);
+  const result=await createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnabled:true}).apply({...scope,providerMessageId:messageId,
+   authorization:{kind:'instruction',quote:message},operation:'invoice.update',targetId:ids[0],expectedUpdatedAt:before.updated_at,payload:values});
+  assert.equal(result.ok,true,JSON.stringify(result));return result;
+ };
+ return {...f,scope,ids,read,before,count,assertNoCustomerWrites,run,seedCorrection};
 }
+
+const dueOnlyMessage='Only change the due date of QA-CONTRACT-001 to 2026-10-20. Leave its amount and currency unchanged, and keep reminders off.';
+test('actual live date-only instruction refuses the observed amount-only plan and a still-incomplete repair before SQL',async()=>{
+ const f=await fixture();try{
+  let plans=0;
+  const turn=await f.run(body=>{
+   if(body.response_format){plans++;assert.equal(body.messages.at(-1).content,dueOnlyMessage);return completion(JSON.stringify({operation:'update',table:'invoices',filters:target,values:{total_amount:100,subtotal:100}}));}
+   if(body.tools&&!body.messages.some(m=>m.role==='tool'))return toolCall({operation:'read',table:'invoices',filters:target,columns:['invoice_number','due_date','total_amount','currency']});
+   if(body.tools&&JSON.parse(body.messages.findLast(m=>m.role==='tool').content).operation==='read')return toolCall({operation:'update',table:'invoices',filters:target,values:{total_amount:100,subtotal:100}});
+   return completion('I successfully updated the due date to 2026-10-20.');
+  },'observed-amount-only',dueOnlyMessage);
+  assert.equal(plans,1);assert.equal(turn.outputs.at(-1).validationCode,'INVALID_FIELDS');assert.equal(turn.outputs.at(-1).writeAttempted,false);
+  assert.equal(turn.outputs[0].rows[0].due_date,'2026-10-15');
+  assert.doesNotMatch(typeof turn.reply==='string'?turn.reply:turn.reply.answer,/successfully updated|due date (?:changed|updated)/i);
+  assert.deepEqual(await f.read(f.ids[0]),f.before);assert.equal(await f.count('invoice_correction_audits'),0);
+  assert.equal(f.requests.filter(r=>r.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length,0);await f.assertNoCustomerWrites();
+ }finally{await f.close();}
+});
+
+test('date-only preflight replans the omitted date once, saves it through native SQL, and grounds generic Done in the persisted field',async()=>{
+ const f=await fixture();try{
+  let plans=0;
+  const turn=await f.run(body=>{
+   if(body.response_format){plans++;return completion(JSON.stringify({operation:'update',table:'invoices',filters:target,values:{due_date:'2026-10-20'}}));}
+   if(body.tools&&!body.messages.some(m=>m.role==='tool')){
+    const values=body.tools.find(t=>t.function.name==='workspaceData').function.parameters.properties.values.properties;
+    assert.deepEqual(values.due_date.type,['string','null']);
+    return toolCall({operation:'update',table:'invoices',filters:target,values:{total_amount:100,subtotal:100}});
+   }
+   return completion('Done.');
+  },'repair-only-date',dueOnlyMessage);
+  assert.equal(plans,1);assert.equal(turn.outputs.at(-1).completed,true);
+  assert.deepEqual(turn.outputs.at(-1).correction.appliedFields,['due_date']);assert.deepEqual(turn.outputs.at(-1).correction.changedFields,['due_date']);
+  assert.match(typeof turn.reply==='string'?turn.reply:turn.reply.answer,/Due date: 2026-10-20/,JSON.stringify(turn.outputs));assert.doesNotMatch(typeof turn.reply==='string'?turn.reply:turn.reply.answer,/not applied|could not confirm/i);
+  const after=await f.read(f.ids[0]);assert.equal(after.due_date,'2026-10-20');assert.equal(after.total_amount,100);assert.equal(after.currency,'USD');
+  assert.equal(after.status,'draft');assert.equal(after.followup_state,'paused');assert.equal(await f.count('invoice_correction_audits'),1);
+  await turn.handler(turn.turn);assert.equal(await f.count('invoice_correction_audits'),1);await f.assertNoCustomerWrites();
+ }finally{await f.close();}
+});
+
+test('a retained native amount-only receipt cannot authorize a false date success or a second correction on recovery',async()=>{
+ const f=await fixture();try{
+  const receipt=await f.seedCorrection('recover-observed-amount-only',dueOnlyMessage,{total_amount:100,subtotal:100});
+  assert.deepEqual(receipt.correction.changedFields,[]);
+  const turn=await f.run(()=>completion('I successfully updated the due date to 2026-10-20.'),'recover-observed-amount-only',dueOnlyMessage);
+  assert.match(typeof turn.reply==='string'?turn.reply:turn.reply.answer,/requested due date change was not applied/);assert.match(typeof turn.reply==='string'?turn.reply:turn.reply.answer,/Due date: 2026-10-15/);
+  assert.match(typeof turn.reply==='string'?turn.reply:turn.reply.answer,/No invoice business fields changed/);assert.doesNotMatch(typeof turn.reply==='string'?turn.reply:turn.reply.answer,/2026-10-20|could not confirm|successfully updated/);
+  assert.equal((await f.read(f.ids[0])).due_date,'2026-10-15');assert.equal(await f.count('invoice_correction_audits'),1);
+  assert.equal(f.requests.filter(r=>r.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length,1);await f.assertNoCustomerWrites();
+ }finally{await f.close();}
+});
+
+test('recovered partial native correction reports its actual fields and stored date without claiming the whole request succeeded',async()=>{
+ const f=await fixture();try{
+  await f.seedCorrection('recover-partial-date',dueOnlyMessage,{notes:'Retained business note'});
+  const turn=await f.run(()=>completion('Done.'),'recover-partial-date',dueOnlyMessage);
+  assert.match(typeof turn.reply==='string'?turn.reply:turn.reply.answer,/requested due date change was not applied/);assert.match(typeof turn.reply==='string'?turn.reply:turn.reply.answer,/Due date: 2026-10-15/);assert.match(typeof turn.reply==='string'?turn.reply:turn.reply.answer,/Notes changed/);
+  assert.doesNotMatch(typeof turn.reply==='string'?turn.reply:turn.reply.answer,/No invoice business fields changed|2026-10-20/);
+  assert.equal((await f.read(f.ids[0])).notes,'Retained business note');assert.equal(await f.count('invoice_correction_audits'),1);await f.assertNoCustomerWrites();
+ }finally{await f.close();}
+});
 
 // Native default owner/provider HTTP, consolidated tool, SDK and SQL. The exact
 // serialized canonical filter shape was observed live; malformed field values

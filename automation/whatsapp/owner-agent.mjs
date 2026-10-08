@@ -1,5 +1,5 @@
 import {internalToolEnvelope} from '../../ai/tool-calls.mjs';
-import {ownerGroundingIssue,ownerEvidence,completedOwnerResult} from './owner-grounding.mjs';
+import {ownerGroundingIssue,ownerEvidence,completedOwnerResult,invoiceCorrectionFallback} from './owner-grounding.mjs';
 import {ownerCalendar} from './workspace-records.mjs';
 import {createHash} from 'node:crypto';
 import {createAssistantTools} from '../../ai/tools.mjs';
@@ -1710,6 +1710,10 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         if(!issue){emitRound(round);activeRound=null;return resultFor(normalizeOwnerReply(draft));}
         round.outcome='error';round.safetyIssueCodes.push(issue);addSafetyIssue(issue);
         emitRound(round);activeRound=null;
+        if(issue==='unverified_invoice_correction'){
+          const fallback=invoiceCorrectionFallback(message,evidence);
+          if(fallback&&!ownerReplySafetyIssue(fallback,requirement)&&!ownerGroundingIssue(fallback,evidence,message,requirement||{}))return resultFor(fallback,{invoiceCorrectionFallback:true});
+        }
         if(['unverified_action_result','fresh_database_read_required'].includes(issue)&&!writeMayHaveBeenAttempted()){
           const fallback=readOnlyInvoiceOptionsFallback(message,evidence)||readOnlyInvoiceHistoryFallback(message,evidence);
           if(fallback)return resultFor(fallback,{readOnlyFallback:true});
@@ -1793,6 +1797,10 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         }
         round.outcome='error';round.safetyIssueCodes.push(issue);addSafetyIssue(issue);
         emitRound(round);activeRound=null;
+        if(issue==='unverified_invoice_correction'){
+          const fallback=invoiceCorrectionFallback(message,evidence);
+          if(fallback&&!ownerReplySafetyIssue(fallback,requirement)&&!ownerGroundingIssue(fallback,evidence,message,requirement||{}))return resultFor(fallback,{invoiceCorrectionFallback:true});
+        }
         if(['unverified_action_result','fresh_database_read_required'].includes(issue)&&!writeMayHaveBeenAttempted()){
           const fallback=readOnlyInvoiceOptionsFallback(message,evidence)||readOnlyInvoiceHistoryFallback(message,evidence);
           if(fallback)return resultFor(fallback,{readOnlyFallback:true});

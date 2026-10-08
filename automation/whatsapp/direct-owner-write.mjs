@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {validateInvoiceCorrection} from './invoice-corrections.mjs';
+import {validateInvoiceCorrection,invoiceBusinessFields,INVOICE_CORRECTION_FIELDS} from './invoice-corrections.mjs';
 
 const OPERATIONS=new Set([
   'invoice.create','invoice.update','invoice.delete','invoice.restore',
@@ -80,12 +80,23 @@ function canonical(value){
 }
 async function verifyCorrectionAudit({supabase,workspaceId,ownerId,record,outcome}){
   if(!validUuid(outcome?.correctionAuditId)||!record)return false;
-  const result=await supabase.from('invoice_correction_audits').select('id,workspace_id,owner_id,invoice_id,after_snapshot')
+  const result=await supabase.from('invoice_correction_audits').select('id,workspace_id,owner_id,invoice_id,values,before_snapshot,after_snapshot')
     .eq('workspace_id',workspaceId).eq('owner_id',ownerId).eq('id',outcome.correctionAuditId).maybeSingle();
   if(result?.error)throw result.error;
   const audit=result.data;
-  return audit?.workspace_id===workspaceId&&audit.owner_id===ownerId&&audit.invoice_id===record.id
-    &&Object.entries(record).every(([field,value])=>JSON.stringify(canonical(audit.after_snapshot?.[field]))===JSON.stringify(canonical(value)));
+  if(!(audit?.workspace_id===workspaceId&&audit.owner_id===ownerId&&audit.invoice_id===record.id
+    &&Object.entries(record).every(([field,value])=>JSON.stringify(canonical(audit.after_snapshot?.[field]))===JSON.stringify(canonical(value)))))return null;
+  let values;try{values=validateInvoiceCorrection(audit.values);}catch{return null;}
+  if(!audit.before_snapshot||typeof audit.before_snapshot!=='object'||Array.isArray(audit.before_snapshot))return null;
+  const before={...audit.before_snapshot,...invoiceBusinessFields(audit.before_snapshot)},after={...record,...invoiceBusinessFields(record)};
+  const compare=(field,value)=>['total_amount','subtotal','tax','discount'].includes(field)&&value!==null&&value!==undefined&&Number.isFinite(Number(value))?Number(value):value;
+  if(Object.entries(values).some(([field,value])=>field==='custom_fields'
+    ?Object.entries(value).some(([key,item])=>JSON.stringify(canonical(after.custom_fields?.[key]))!==JSON.stringify(canonical(item)))
+    :JSON.stringify(canonical(compare(field,after[field])))!==JSON.stringify(canonical(compare(field,value)))))return null;
+  const appliedFields=Object.keys(values);
+  const invoiceNumbers=[...new Set([record.invoice_number,audit.before_snapshot.invoice_number,record.metadata?.printed_invoice_number,record.metadata?.source_invoice_number]
+    .filter(value=>typeof value==='string'&&value.trim()&&value.length<=100&&!/[\x00-\x1f\x7f]/.test(value)))];
+  return {appliedFields,changedFields:INVOICE_CORRECTION_FIELDS.filter(field=>JSON.stringify(canonical(compare(field,before[field])))!==JSON.stringify(canonical(compare(field,after[field])))),invoiceNumbers};
 }
 
 /**
@@ -135,7 +146,8 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
         if(!record||record.workspace_id!==workspaceId||record.id!==outcome.entityId)return failure('WRITE_UNCONFIRMED');
       }else if(!record)return failure('WRITE_UNCONFIRMED');
       if(record.workspace_id!==workspaceId)return failure('WRITE_UNCONFIRMED');
-      if(outcome.correctionAuditId){try{if(!await verifyCorrectionAudit({supabase,workspaceId,ownerId,record,outcome}))return failure('WRITE_UNCONFIRMED');}catch{return failure('WRITE_UNCONFIRMED');}}
+      let correctionEvidence=null;
+      if(outcome.correctionAuditId){try{correctionEvidence=await verifyCorrectionAudit({supabase,workspaceId,ownerId,record,outcome});if(!correctionEvidence)return failure('WRITE_UNCONFIRMED');}catch{return failure('WRITE_UNCONFIRMED');}}
       if(outcome.entityType==='pending'){
         if(!record.consumed_at)return failure('WRITE_UNCONFIRMED');
         record={id:record.id,workspace_id:record.workspace_id,actionType:record.action?.type||null,consumed_at:record.consumed_at};
@@ -151,7 +163,7 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
           &&(minorUnits(record.amount_paid)!==0n||!['sent','overdue'].includes(record.status)))return failure('WRITE_UNCONFIRMED');
       }
       return {ok:true,completed:true,action:outcome.action,entityType:outcome.entityType,
-        entityId:outcome.entityId,record,replayed:true,...(outcome.action==='invoice.reopened'?{invoiceNumber:outcome.invoiceNumber,currency:outcome.currency,
+        entityId:outcome.entityId,record,replayed:true,...(correctionEvidence?{correction:correctionEvidence}:{}),...(outcome.action==='invoice.reopened'?{invoiceNumber:outcome.invoiceNumber,currency:outcome.currency,
           reversedAmount:outcome.reversedAmount,balanceAfter:outcome.balanceAfter,paymentCount:outcome.paymentCount,paymentHistoryPreserved:true,cashRefund:false}: {})};
     },
     async applyBatch({workspaceId,ownerId,phone,providerMessageId,authorization,operations}={}){
@@ -227,7 +239,8 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
         if(!record||record.workspace_id!==workspaceId||record.id!==entityId)return failure('WRITE_UNCONFIRMED');
       }else if(!record)return failure('WRITE_UNCONFIRMED');
       if(record.workspace_id!==workspaceId)return failure('WRITE_UNCONFIRMED');
-      if(correction){try{if(!await verifyCorrectionAudit({supabase,workspaceId,ownerId,record,outcome}))return failure('WRITE_UNCONFIRMED');}catch{return failure('WRITE_UNCONFIRMED');}}
+      let correctionEvidence=null;
+      if(correction){try{correctionEvidence=await verifyCorrectionAudit({supabase,workspaceId,ownerId,record,outcome});if(!correctionEvidence)return failure('WRITE_UNCONFIRMED');}catch{return failure('WRITE_UNCONFIRMED');}}
       if(entityType==='pending'){
         if(!record.consumed_at)return failure('WRITE_UNCONFIRMED');
         record={id:record.id,workspace_id:record.workspace_id,actionType:record.action?.type||null,consumed_at:record.consumed_at};
@@ -240,7 +253,7 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
         if(entityType==='business_record'&&outcome.action==='business_record.restored'&&record.deleted_at!==null)return failure('WRITE_UNCONFIRMED');
         if(entityType==='invoice'&&outcome.action==='invoice.paid'&&!isSettledPaidInvoice(record))return failure('WRITE_UNCONFIRMED');
       }
-      return {ok:true,completed:true,action:outcome.action,entityType,entityId,record,replayed:outcome.replayed===true};
+      return {ok:true,completed:true,action:outcome.action,entityType,entityId,record,replayed:outcome.replayed===true,...(correctionEvidence?{correction:correctionEvidence}:{})};
     },
   });
 }
