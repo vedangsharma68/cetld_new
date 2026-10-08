@@ -54,7 +54,9 @@ test('serialized Gemini, real SDK and SQL persist invoice corrections, resolve J
   const result=await runOwnerAgent({provider,message,tools:change,timezone:'Asia/Kolkata',clock:()=>new Date('2026-10-04T22:00:00Z')});
   assert.equal(evidence?.completed,true,JSON.stringify(wireEvidence));
   assert(!Object.hasOwn(evidence.record,'metadata'));assert(!Object.hasOwn(evidence,'correctionAuditId'));
-  assert.equal(result.plannerFailure,undefined,JSON.stringify(result));assert.match(result.answer,/Updated FIELD-1/);
+  assert.equal(result.plannerFailure,undefined,JSON.stringify(result));assert.equal(result.invoiceCorrectionFallback,true);
+  assert.equal(result.answer.split('\n')[0],'Invoice '+invoice.invoice_number);assert.match(result.answer,/Customer changed/);
+  assert.match(result.answer,/Due date: 2026-10-06/);assert.match(result.answer,/Tax: USD 25/);
   assert.equal((await db.query('select customer_id from invoices where workspace_id=$1 and id=$2',[workspaceId,invoice.id])).rows[0].customer_id,john.id);assert.equal(evidence.record.due_date,'2026-10-06');
   assert.equal((await db.query('select count(*)::int n from invoice_correction_audits where invoice_id=$1',[invoice.id])).rows[0].n,1);
   const read=await tools('Show invoice fields','fields-read');

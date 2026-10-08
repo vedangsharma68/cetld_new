@@ -58,10 +58,11 @@ function database({ownerPreferences=preferences(),pendingAction=null}={}) {
     calls.push({name,args});
     if(name==='invoice_lifecycle_action')return {data:{ok:true,pending:false}};
     if(name==='whatsapp_correct_owner_invoice'){
+      const before=structuredClone(invoice);
       Object.assign(invoice,args.p_values,{updated_at:changedAt});
       const auditId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
       tables.invoice_correction_audits.push({id:auditId,workspace_id:workspaceId,owner_id:ownerId,
-        invoice_id:invoiceId,after_snapshot:structuredClone(invoice)});
+        invoice_id:invoiceId,values:structuredClone(args.p_values),before_snapshot:before,after_snapshot:structuredClone(invoice)});
       return {data:{ok:true,completed:true,action:'invoice.updated',entityType:'invoice',entityId:invoiceId,
         updatedAt:changedAt,correctionAuditId:auditId}};
     }
@@ -175,7 +176,7 @@ test('direct owner command sends the exact inbound quote to the write RPC and re
   assert.equal(rpc.args.p_invoice_id,invoiceId);
   assert.equal(rpc.args.p_expected_updated_at,updatedAt);
   assert.deepEqual(rpc.args.p_values,{total_amount:130});
-  assert.match(result.answer,/Updated invoice INV-JOHN-1\./);
+  assert.match(result.answer,/Invoice INV-JOHN-1/);assert.match(result.answer,/Total: USD 130/);
   assert.match(result.answer,/CETLD support/);
   assert.match(preferenceSystemMessage,/"tone":"concise"/);
   assert.match(preferenceSystemMessage,/"language":"English"/);
