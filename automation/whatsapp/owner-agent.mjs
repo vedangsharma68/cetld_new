@@ -688,7 +688,9 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         value=value.trim();
         if(!value||value.length>(field==='invoiceNumber'?100:255))return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
       }
-      const evidence=ownerFactEvidence(field,value,candidates);
+      const evidence=paymentResolution?.extractedFacts
+        &&((field==='currency'&&value===paymentResolution.currency)||(field==='direction'&&value==='receivable'))
+        ?{value,sourceMessageId:paymentResolution.sourceMessageId}:ownerFactEvidence(field,value,candidates);
       if(!evidence)return {ok:false,code:'INVALID',message:field==='direction'
         ?'Please explicitly confirm that this is an invoice your business issued.':SAFE_ERRORS.INVALID};
       invoice[invoiceKey[field]]=value;ownerProvidedFacts[field]=evidence;missing.delete(field);
@@ -1308,7 +1310,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         if(codes.length===1&&(new RegExp('\\b(?:use|currency(?: is| to)?)\\s+'+codes[0]+'\\b','i').test(message)
           ||new RegExp('^\\s*'+codes[0]+'[.!]?\\s*$','i').test(message)))values.currency=codes[0];
       }
-      if(action.missingFields.includes('direction')&&ownerDirectionEvidence(message))values.invoice_direction='receivable';
+      if(action.missingFields.includes('direction')&&(paymentResolution?.extractedFacts||ownerDirectionEvidence(message)))values.invoice_direction='receivable';
       if(!Object.keys(values).length&&paymentResolution&&isSupportedCurrency(action.invoice?.currency))values.currency=action.invoice.currency;
       return Object.keys(values).length?values:null;
     },

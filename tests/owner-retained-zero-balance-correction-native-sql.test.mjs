@@ -7,9 +7,10 @@ import {createOwnerSafetyTools} from '../automation/whatsapp/owner-agent.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 import {invoiceReviewUnpaidResolution} from '../automation/whatsapp/invoice-review-payment-resolution.mjs';
+import {originalRetainedUnpaidInstruction,retainedUnpaidWordingCases,retainedUnpaidWordingNegatives} from './fixtures/retained-unpaid-wording.mjs';
 
 const migrationName='20261008193550_invoice_review_inferred_currency_unpaid_correction.sql';
-const instruction='My business issued this invoice. The currency is USD. The PAID stamp is incorrect: no payment has been received, and the full USD 93.50 is still due. Save it as an unpaid draft with no customer messages or reminders.';
+const instruction=originalRetainedUnpaidInstruction;
 const action={type:'invoice_review_draft',stage:'incomplete',missingFields:['direction'],
  validationIssues:['PAYMENT_RECORD_REQUIRES_REVIEW','PARTIAL_BALANCE_REQUIRES_PAYMENT_RECORD'],
  currencySource:'photo',currencyEvidence:'inferred AUD based on Australian address',sourceMessageId:'image-source',
@@ -21,12 +22,20 @@ const contradictory=[instruction+' We received USD 10.',instruction+' We got a p
  instruction+' Payment has been received.',instruction+' This invoice is paid.',instruction+' Change the customer to Elsewhere.',
  instruction.replace('currency is USD','currency is AUD'),instruction.replace('93.50','92.50'),
  instruction.replace('no payment has been received','payment has been received'),instruction.replace('incorrect','correct'),
- instruction.replace('The currency is USD. ','')];
+ ...retainedUnpaidWordingNegatives];
 
-test('retained AUD/zero-balance correction requires the complete explicit unpaid instruction',()=>{
+test('retained zero-balance correction accepts equivalent complete facts and rejects unknown or contradictory clauses',()=>{
  const resolve=(message,review=action)=>invoiceReviewUnpaidResolution({action:review,message,messageId:'correction-source'});
  assert.deepEqual(resolve(instruction),{status:'unpaid',outstanding:93.5,currency:'USD',sourceMessageId:'correction-source',
   ownerInstruction:instruction,extractedFacts:{currency:'AUD',outstanding:0}});
+ for(const wording of retainedUnpaidWordingCases){
+  const review=wording.total===action.invoice.total?action:{...action,invoice:{...action.invoice,total:wording.total,subtotal:wording.total,tax:0}};
+  assert.deepEqual(resolve(wording.message,review),{status:'unpaid',outstanding:wording.total,currency:wording.currency,sourceMessageId:'correction-source',
+   ownerInstruction:wording.message,extractedFacts:{currency:'AUD',outstanding:0}},wording.name);
+  const tools=createOwnerSafetyTools({scope:{},pendingAtStart:{id:30,version:2,action:review},message:wording.message,messageId:'correction-source',
+   ownerStore:{async query(){throw Error('retained review must not query unrelated customers');}}});
+  assert.deepEqual(tools.getAttachmentReviewContinuation(),{currency:wording.currency,invoice_direction:'receivable'},wording.name);
+ }
  const tools=createOwnerSafetyTools({scope:{},pendingAtStart:{id:30,version:2,action},message:instruction,messageId:'correction-source',
   ownerStore:{async query(){throw Error('retained review must not query unrelated customers');}}});
  assert.deepEqual(tools.getAttachmentReviewContinuation(),{currency:'USD',invoice_direction:'receivable'});
@@ -40,7 +49,8 @@ test('retained AUD/zero-balance correction requires the complete explicit unpaid
   assert.equal(resolve(instruction,review),null);
 });
 
-for(const lineEndings of ['LF','CRLF'])test(`native Gemini image-shaped extraction corrects retained AUD/zero balance under ${lineEndings} SQL only after a later yes`,async()=>{
+for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF',retainedUnpaidWordingCases[0]],['LF',retainedUnpaidWordingCases[1]],['LF',retainedUnpaidWordingCases[2]]])test(`native image-shaped extraction corrects retained AUD/zero balance with ${wording.name}${wording===retainedUnpaidWordingCases[1]?' and NULL owner transcript':''} under ${lineEndings} SQL only after a later yes`,async()=>{
+ const instruction=wording.message;
  const f=await createOfflineSqlNetwork({excludeMigrations:[migrationName]}),{db,supabase}=f;
  const ownerId=randomUUID(),phone='+15555550130';
  try{
@@ -80,7 +90,10 @@ for(const lineEndings of ['LF','CRLF'])test(`native Gemini image-shaped extracti
    }});
   const persist=async(id,message,media)=>{
    await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status,media_ref) values($1,'fixture',$2,$3,$4,'processing',$5)",[id,phone,media?'image':'text',message,media?id:null]);
-   await db.query("insert into whatsapp_messages(workspace_id,customer_id,phone,direction,audience,body,kind,status,provider_message_id,idempotency_key) values($1,$2,$3,'inbound','owner',$4,'text','received',$5,$5)",[workspaceId,customerId,phone,message,id]);
+   // Cloud ingestion stores owner transcripts without a debtor/customer id.
+   // Exercise that shape through the full equivalent correction and later save.
+   const transcriptCustomerId=wording===retainedUnpaidWordingCases[1]?null:customerId;
+   await db.query("insert into whatsapp_messages(workspace_id,customer_id,phone,direction,audience,body,kind,status,provider_message_id,idempotency_key) values($1,$2,$3,'inbound','owner',$4,'text','received',$5,$5)",[workspaceId,transcriptCustomerId,phone,message,id]);
    if(media)await db.query('insert into whatsapp_inbound_media(provider_message_id,media_id,mime_type,bytes,size_bytes) values($1,$1,$2,$3,$4)',[id,media.mimeType,bytes,bytes.length]);
   };
   const turn=async(id,message,media)=>{confirming=message==='yes';await persist(id,message,media);return handler({workspaceId,ownerId,customerId,phone,messageId:id,message,...(media?{media}:{})});};
@@ -90,11 +103,11 @@ for(const lineEndings of ['LF','CRLF'])test(`native Gemini image-shaped extracti
   assert.equal(draft.action.invoice.currency,'AUD');assert.equal(draft.action.invoice.outstanding,0);assert.equal(draft.action.invoice.total,93.5);
   assert.deepEqual(draft.action.validationIssues,action.validationIssues);assert.equal(draft.action.currencySource,'photo');
   assert.equal(draft.action.currencyEvidence,action.currencyEvidence);assert.equal(draft.action.paymentEvidence.status,'paid');
-  const candidate=(id,text)=>({...draft.action,stage:'proposal',missingFields:[],currencySource:'user',validationIssues:[],
-   invoice:{...draft.action.invoice,currency:'USD',outstanding:93.5,direction:'receivable'},
-   ownerProvidedFacts:{currency:{value:'USD',sourceMessageId:id},direction:{value:'receivable',sourceMessageId:id}},
-   paymentStatusResolution:{status:'unpaid',outstanding:93.5,currency:'USD',sourceMessageId:id,ownerInstruction:text,
-    extractedFacts:{currency:'AUD',outstanding:0}}});
+  const candidate=(id,text,reviewAction=draft.action,currency='USD')=>({...reviewAction,stage:'proposal',missingFields:[],currencySource:'user',validationIssues:[],
+   invoice:{...reviewAction.invoice,currency,outstanding:reviewAction.invoice.total,direction:'receivable'},
+   ownerProvidedFacts:{currency:{value:currency,sourceMessageId:id},direction:{value:'receivable',sourceMessageId:id}},
+   paymentStatusResolution:{status:'unpaid',outstanding:reviewAction.invoice.total,currency,sourceMessageId:id,ownerInstruction:text,
+    extractedFacts:{currency:reviewAction.invoice.currency,outstanding:reviewAction.invoice.outstanding}}});
   const transition=(next,{version=draft.version,workspace=workspaceId,customer=customerId,targetPhone=phone}={})=>
    db.query('select * from public.whatsapp_transition_invoice_review($1,$2,$3,$4,$5,$6,$7)',[draft.id,version,workspace,customer,targetPhone,'incomplete',next]);
   await persist('sql-positive',instruction);const valid=candidate('sql-positive',instruction);
@@ -114,6 +127,17 @@ for(const lineEndings of ['LF','CRLF'])test(`native Gemini image-shaped extracti
   await db.exec(lineEndings==='CRLF'?migration.replaceAll('\n','\r\n'):migration);
   assert.deepEqual(security(await routine()),security(predecessor));assert.deepEqual(await untouched(),otherRoutines);
   const installed=await routine();await db.exec(migration);assert.deepEqual(await routine(),installed,'migration is idempotent');
+  for(const [index,phrase] of retainedUnpaidWordingCases.entries()){
+   const id='sql-wording-'+index;await persist(id,phrase.message);
+   const retained=phrase.total===draft.action.invoice.total?draft.action:{...draft.action,invoice:{...draft.action.invoice,total:phrase.total,subtotal:phrase.total,tax:0}};
+   await db.exec('begin');
+   try{
+    await db.query('update whatsapp_pending_actions set action=$2 where id=$1',[draft.id,JSON.stringify(retained)]);
+    const accepted=(await transition(candidate(id,phrase.message,retained,phrase.currency))).rows[0];
+    assert.equal(accepted.action.stage,'proposal',phrase.name);assert.equal(accepted.action.invoice.currency,phrase.currency,phrase.name);
+    assert.equal(accepted.action.invoice.outstanding,phrase.total,phrase.name);
+   }finally{await db.exec('rollback');}
+  }
   for(const params of [{version:draft.version+1},{workspace:randomUUID()},{customer:randomUUID()},{targetPhone:'+15555559999'}])assert.equal((await transition(valid,params)).rows.length,0);
   for(const tamper of [{...valid,invoice:{...valid.invoice,total:94}}, {...valid,invoice:{...valid.invoice,clientName:'Elsewhere'}},
    {...valid,paymentEvidence:{...valid.paymentEvidence,text:'tampered'}}, {...valid,sourceMessageId:'fabricated'},
@@ -129,8 +153,8 @@ for(const lineEndings of ['LF','CRLF'])test(`native Gemini image-shaped extracti
   await db.query('update whatsapp_pending_actions set action=$2 where id=$1',[draft.id,JSON.stringify(draft.action)]);
   await db.query("update whatsapp_inbound_events set status='done' where provider_message_id='sql-positive'");await assert.rejects(transition(valid),/source is outside current owner scope/);
   await db.query("update whatsapp_inbound_events set status='processing' where provider_message_id='sql-positive'");
-  await db.query("update whatsapp_messages set customer_id=null where provider_message_id='sql-positive'");await assert.rejects(transition(valid),/source is outside current owner scope/);
-  await db.query("update whatsapp_messages set customer_id=$1 where provider_message_id='sql-positive'",[customerId]);
+  await db.query("update whatsapp_messages set phone='+15555559999' where provider_message_id='sql-positive'");await assert.rejects(transition(valid),/source is outside current owner scope/);
+  await db.query("update whatsapp_messages set phone=$1 where provider_message_id='sql-positive'",[phone]);
   await db.query("update whatsapp_pending_actions set expires_at=now()-interval '1 second' where id=$1",[draft.id]);assert.equal((await transition(valid)).rows.length,0);
   await db.query("update whatsapp_pending_actions set expires_at=now()+interval '15 minutes',consumed_at=now() where id=$1",[draft.id]);assert.equal((await transition(valid)).rows.length,0);
   await db.query('update whatsapp_pending_actions set consumed_at=null where id=$1',[draft.id]);
