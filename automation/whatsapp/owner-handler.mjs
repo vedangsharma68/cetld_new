@@ -130,7 +130,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     };
     const loadPending=async()=>{
       let snapshot=await readPendingSnapshot();
-      if(snapshot.available&&snapshot.pendingAtStart?.action?.type==='invoice_review_draft'){
+      if(snapshot.available&&snapshot.pendingAtStart?.action?.type==='invoice_review_draft'
+          &&!['saved','canceled'].includes(snapshot.pendingAtStart.action.stage)){
         try{
           assertActiveTurn();
           if(!await authorizeTurn(scope))throw Object.assign(new Error(),{code:'UNAUTHORIZED'});
