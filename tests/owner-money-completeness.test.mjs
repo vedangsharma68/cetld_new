@@ -8,6 +8,8 @@ test('current explicit ISO money instructions bind the named fields and exact de
   ['Change subtotal to USD 100.25',{currency:'USD',values:{subtotal:100.25}}],
   ['Please update the total to 6,670.50 INR.',{currency:'INR',values:{total_amount:6670.5}}],
   ['The earlier amount was USD 100. Set both subtotal and total to INR 6670 and the due date to 2026-10-20.',{currency:'INR',values:{subtotal:6670,total_amount:6670}}],
+  ['Change QA-OVERNIGHT-001 total and subtotal to INR 6670, keep tax zero and due date 2026-10-20.',{currency:'INR',values:{total_amount:6670,subtotal:6670}}],
+  ['Set total to INR 6670 and tax to zero',{currency:'INR',values:{total_amount:6670,tax:0}}],
   ['Set total to INR 6670 and tax to 0',{currency:'INR',values:{total_amount:6670,tax:0}}],
   ['Set subtotal 100 and total to INR 6670',{currency:'INR',values:{subtotal:100,total_amount:6670}}],
   ['Set subtotal to INR 6670 and total to 6670',{currency:'INR',values:{subtotal:6670,total_amount:6670}}],

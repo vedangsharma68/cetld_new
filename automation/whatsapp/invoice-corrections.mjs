@@ -29,7 +29,10 @@ export function requestedInvoiceMoneyChange(message){
   for(const clause of String(message||'').split(/(?:[;!?\n]|\.(?=\s|$))+/)){
     if(!/^\s*(?:please\s+)?(?:set|change|update)\b/i.test(clause)||/["'“”]/.test(clause)
       ||/\b(?:not|never|avoid|if|unless|maybe|previously|earlier)\b/i.test(clause))continue;
-    const labels=[...clause.matchAll(/\b(subtotal|total(?:_amount)?|tax|discount)\b/gi)];
+    const labels=[...clause.matchAll(/\b(subtotal|total(?:_amount)?|tax|discount)\b/gi)].filter(label=>{
+      const verb=[...clause.slice(0,label.index).matchAll(/\b(set|change|update|keep|leave|preserve)\b/gi)].at(-1)?.[1];
+      return !/^(?:keep|leave|preserve)$/i.test(verb||'');
+    });
     if(!labels.length||/\b(?:notes?|description|payment\s+(?:information|instructions?))\b/i.test(clause.slice(0,labels[0].index)))continue;
     const amounts=[...clause.matchAll(/\b([A-Z]{3})\s+(\d[\d,]*(?:\.\d+)?)\b|\b(\d[\d,]*(?:\.\d+)?)\s+([A-Z]{3})\b/gi)]
       .filter(match=>isSupportedCurrency((match[1]||match[4]).toUpperCase()));
@@ -42,11 +45,12 @@ export function requestedInvoiceMoneyChange(message){
       const label=labels[index],field=/^total/i.test(label[1])?'total_amount':label[1].toLowerCase();pending.push(field);
       const segment=clause.slice(label.index+label[0].length,labels[index+1]?.index??clause.length)
         .replace(/\b[A-Z]+(?:[-/][A-Z0-9]+)+\b/gi,'');
-      const assignment=segment.split(/\b(?:due|issue)\s+date\b|\bquantity\b/i)[0];
+      const assignment=segment.split(/\b(?:due|issue)\s+date\b|\b(?:quantity|keep|leave|preserve)\b/i)[0];
       const numbers=[...assignment.matchAll(/\b\d[\d,]*(?:\.\d+)?\b/g)];
-      if(!numbers.length)continue;
-      if(numbers.length!==1)return ambiguous();
-      const raw=numbers[0][0];if(!/^(?:\d{1,12}|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?$/.test(raw))return ambiguous();
+      const zeros=[...assignment.matchAll(/\bzero\b/gi)];
+      if(!numbers.length&&!zeros.length)continue;
+      if(numbers.length+zeros.length!==1)return ambiguous();
+      const raw=numbers[0]?.[0]||'0';if(!/^(?:\d{1,12}|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?$/.test(raw))return ambiguous();
       let amount;try{amount=money(raw.replaceAll(',','')).value;}catch{return ambiguous();}
       for(const item of pending){if(Object.hasOwn(values,item)&&values[item]!==amount)return ambiguous();values[item]=amount;}
       pending.length=0;
