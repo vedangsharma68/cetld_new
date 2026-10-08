@@ -1,5 +1,5 @@
 // Output safety: an assistant sentence is not a database receipt.
-import {requestedInvoiceDateChange} from './invoice-corrections.mjs';
+import {requestedInvoiceDateChange,requestedInvoiceMoneyChange} from './invoice-corrections.mjs';
 const COMPLETION = /\b(?:deleted|removed|created|saved|updated|changed|corrected|restored|reopened|reversed|recorded|sent|cancelled|canceled|reset|completed|marked[^.!?]{0,24}paid)\b/i;
 const NEGATIVE = /\b(?:not|never|cannot|can't|couldn't|could not|haven't|hasn't|wasn't|weren't|didn't|did not|unable|failed|pending|propos(?:al|ed)|would|will|can|could|should|if|once|before|after|to be|to delete|to update|to change|to send)\b/i;
 const NO_RESULT = /\b(?:nothing|no (?:invoice|payment|record|file|change|action))\s+(?:was|were|has been|have been|is|has)\s+(?:saved|logged|created|recorded|changed|updated|sent|applied|completed)\b/gi;
@@ -35,6 +35,8 @@ export function invoiceCorrectionFallback(message,results=[]){
   const result=candidates[0],record=result.record,fields=result.correction.changedFields.filter(field=>Object.hasOwn(CORRECTION_LABELS,field));
   const lines=[`Invoice ${String(record.invoice_number||'').replace(/[\x00-\x1f\x7f]/g,' ').slice(0,100)}`];
   const requested=requestedInvoiceDateChange(message);
+  const requestedMoney=requestedInvoiceMoneyChange(message);
+  if(requestedMoney&&!requestedMoneyApplied(result,requestedMoney))lines.push('The requested currency and amount correction was not fully applied.');
   if(requested){
     const current=record[requested.field],label=CORRECTION_LABELS[requested.field];
     if(current!==requested.value||!result.correction.appliedFields.includes(requested.field))lines.push(`The requested ${label.toLowerCase()} change was not applied.`);
@@ -51,6 +53,10 @@ export function invoiceCorrectionFallback(message,results=[]){
   }
   if(record.followup_state==='paused')lines.push('Reminders are paused.');
   return lines.join('\n');
+}
+function requestedMoneyApplied(result,requested){
+  return !requested.ambiguous&&result.record.currency===requested.currency&&Object.entries(requested.values).every(([field,value])=>
+    result.correction.appliedFields.includes(field)&&result.record[field]!=null&&Number(result.record[field])===value);
 }
 function actionMatches(clause, result) {
   const action=String(result.action||result.actionType||result.operation||'');
@@ -152,6 +158,9 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
   if(corrections.length){
     if(genericCompletion)return 'unverified_invoice_correction';
     const requested=requestedInvoiceDateChange(message);
+    const requestedMoney=requestedInvoiceMoneyChange(message);
+    if(requestedMoney&&claims.length&&!corrections.some(result=>requestedMoneyApplied(result,requestedMoney))
+      &&!/requested currency and amount correction was not fully applied/i.test(text))return 'unverified_invoice_correction';
     const dateRefused=requested&&text.split(/[.!?\n]+/).some(clause=>CORRECTION_FIELD_CLAIMS[requested.field].test(clause)&&NEGATIVE.test(clause));
     if(requested&&!dateRefused&&(claims.length||genericCompletion||CORRECTION_FIELD_CLAIMS[requested.field].test(text))
       &&!corrections.some(result=>result.correction.appliedFields.includes(requested.field)&&result.record[requested.field]===requested.value))return 'unverified_invoice_correction';

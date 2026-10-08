@@ -292,3 +292,104 @@ test('native Gemini cached reads keep one bounded current-date execution opportu
   assert.match(reply.answer,/Due date: 2026-10-20/);await handler(turn);assert.equal(await f.count('invoice_correction_audits'),1);await f.assertNoCustomerWrites();
  }finally{await f.close();}
 });
+
+async function runNativeMoney(f,initialValues,repairedValues,id,instruction=request){
+ const outputs=[],sent=[];let repairs=0;
+ const response=parts=>Response.json({candidates:[{content:{parts},finishReason:'STOP'}]});
+ const native=(args,callId)=>response([{functionCall:{name:'workspaceData',args,id:callId},thoughtSignature:'isolated-signature-'+callId}]);
+ const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated'},authorize:input=>authorizeOwnerPhone({supabase:f.supabase,...input}),
+  logger:{info(){},warn(){},error(){}},providerFactory:options=>new AIProvider({...options,primaryModel:'gemini-3.5-flash-lite',fallbackModel:null}),
+  fetchImpl:async(url,init)=>{
+   assert.equal(new URL(url).hostname,'generativelanguage.googleapis.com');const body=JSON.parse(init.body);sent.push(body);
+   if(body.generationConfig.responseMimeType==='application/json'){
+    repairs++;assert.equal(body.contents.at(-1).parts[0].text,instruction);
+    assert.equal(f.requests.filter(r=>r.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length,0,'repair must precede SQL dispatch');
+    assert.ok(body.systemInstruction.parts.some(p=>p.text.includes('INVALID_FIELDS')));
+    return response([{text:JSON.stringify({operation:'update',table:'invoices',filters:target,values:repairedValues})}]);
+   }
+   const result=body.contents.flatMap(row=>row.parts).filter(p=>p.functionResponse).at(-1)?.functionResponse.response;
+   if(result)outputs.push(result);
+   if(!result)return native({operation:'read',table:'invoices',filters:target,columns:['invoice_number','total_amount','currency','due_date']},'read');
+   if(result.operation==='read')return native({operation:'update',table:'invoices',filters:target,values:initialValues},'money');
+   return response([{text:'Done.'}]);
+  }});
+ await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[id,f.scope.phone,instruction]);
+ const turn={...f.scope,messageId:id,message:instruction};return {reply:await handler(turn),outputs,sent,repairs,handler,turn};
+}
+const observedMoneyValues={due_date:'2026-10-20',subtotal:6670,total_amount:6670,line_items:[{description:'Consulting service charge',amount:6670}]};
+test('observed native amount-only plan repairs explicit INR before one complete audited correction',async()=>{
+ const f=await fixture();try{
+  // A failed earlier instruction must not replace the current money evidence.
+  await f.db.query("insert into whatsapp_messages(workspace_id,customer_id,phone,direction,audience,body,kind,status,idempotency_key) values($1,$2,$3,'outbound','owner','The prior edit was not successfully run.','normal','sent','money-prior-failure')",[f.scope.workspaceId,f.scope.customerId,f.scope.phone]);
+  const turn=await runNativeMoney(f,observedMoneyValues,{...observedMoneyValues,currency:'INR'},'native-explicit-money');
+  assert.equal(turn.repairs,1);const result=turn.outputs.at(-1);assert.equal(result.completed,true,JSON.stringify(turn));
+  assert.equal(result.planningRepair.route,'invoice_correction');assert.ok(result.correction.appliedFields.includes('currency'));assert.ok(result.correction.changedFields.includes('currency'));
+  const after=await f.read(f.ids[0]);assert.equal(after.currency,'INR');assert.equal(after.total_amount,6670);assert.equal(after.metadata.subtotal,6670);assert.equal(result.record.outstanding_amount,6670);assert.equal(after.due_date,'2026-10-20');
+  assert.equal(after.status,'draft');assert.equal(after.followup_state,'paused');assert.equal(after.next_follow_up_at,null);assert.deepEqual(after.metadata.source_document,f.before.metadata.source_document);
+  assert.equal(await f.count('invoice_correction_audits'),1);assert.equal(f.requests.filter(r=>r.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length,1);
+  const audit=(await f.db.query('select to_jsonb(a) row from invoice_correction_audits a where invoice_id=$1',[f.ids[0]])).rows[0].row;
+  assert.equal(audit.after_snapshot.currency,'INR');assert.equal(Number(audit.after_snapshot.total_amount),6670);
+  assert.match(turn.reply.answer,/INR 6670/);await turn.handler(turn.turn);assert.equal(await f.count('invoice_correction_audits'),1);await f.assertNoCustomerWrites();
+ }finally{await f.close();}
+});
+test('native repairs still missing currency or requested amounts stop before any invoice SQL',async()=>{
+ for(const [suffix,values] of [['missing-currency',observedMoneyValues],['wrong-currency',{...observedMoneyValues,currency:'USD'}],['missing-total',{currency:'INR',subtotal:6670,due_date:'2026-10-20'}],['wrong-total',{...observedMoneyValues,currency:'INR',total_amount:6600}]]){
+  const f=await fixture();try{
+   const turn=await runNativeMoney(f,observedMoneyValues,values,'native-money-'+suffix);
+   assert.equal(turn.repairs,1);assert.equal(turn.outputs.at(-1).validationCode,'INVALID_FIELDS');assert.equal(turn.outputs.at(-1).writeAttempted,false);
+   assert.deepEqual(await f.read(f.ids[0]),f.before);assert.equal(await f.count('invoice_correction_audits'),0);assert.equal(f.requests.filter(r=>r.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length,0);
+   assert.doesNotMatch(turn.reply.answer,/corrected to INR|successfully|INR 6670/);await f.assertNoCustomerWrites();
+  }finally{await f.close();}
+ }
+});
+
+test('native explicit currency repair cannot bypass recorded payment history',async()=>{
+ const f=await fixture();try{
+  await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${f.scope.ownerId}';set role authenticated`);
+  await f.db.query('select record_invoice_payment($1,$2,50,$3,$4,false)',[f.scope.workspaceId,f.ids[0],'money-protected-payment','Isolated original receipt']);
+  await f.db.exec("reset role;set request.jwt.claim.role='service_role';set request.jwt.claim.sub=''");
+  const before=await f.read(f.ids[0]),payments=(await f.db.query('select to_jsonb(p) row from payments p where invoice_id=$1',[f.ids[0]])).rows;
+  const turn=await runNativeMoney(f,observedMoneyValues,{...observedMoneyValues,currency:'INR'},'native-money-payment-guard');
+  assert.equal(turn.repairs,1);assert.equal(turn.outputs.at(-1).code,'PAYMENT_GUARD');assert.deepEqual(await f.read(f.ids[0]),before);
+  assert.deepEqual((await f.db.query('select to_jsonb(p) row from payments p where invoice_id=$1',[f.ids[0]])).rows,payments);assert.equal(await f.count('payment_reversals'),0);assert.equal(await f.count('invoice_correction_audits'),0);
+  assert.equal((await f.db.query("select count(*)::int n from whatsapp_messages where audience='customer'")).rows[0].n,0);assert.deepEqual(f.errors,[]);
+ }finally{await f.close();}
+});
+test('unchanged currency read is version-bound and concurrent currency edits prevent SQL dispatch',async()=>{
+ const f=await fixture();try{
+  let readSeen=false,changed=false;
+  f.intercept(async(url,options,db)=>{
+   if(url.pathname.endsWith('/invoices')&&options.method==='GET'){
+    if(url.searchParams.get('select').startsWith('id,currency,updated_at'))readSeen=true;
+    else if(readSeen&&!changed&&url.searchParams.get('select')==='id,invoice_number,updated_at,metadata'){
+     changed=true;await db.query("update invoices set currency='INR',updated_at=updated_at+interval '1 second' where id=$1",[f.ids[0]]);
+    }
+   }
+  });
+  const turn=await f.run(body=>{
+   if(body.tools&&!body.messages.some(m=>m.role==='tool'))return toolCall({operation:'update',table:'invoices',filters:target,values:{total_amount:200,subtotal:200}});
+   return completion('Done.');
+  },'money-read-race','Set total to USD 200.');
+  assert.equal(changed,true,JSON.stringify({outputs:turn.outputs,reads:f.requests.filter(r=>r.method==='GET').map(r=>new URL(r.url).searchParams.get('select'))}));assert.equal(turn.outputs.at(-1).code,'STALE');assert.equal((await f.read(f.ids[0])).total_amount,100);
+  assert.equal(await f.count('invoice_correction_audits'),0);assert.equal(f.requests.filter(r=>r.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length,0);await f.assertNoCustomerWrites();
+ }finally{await f.close();}
+});
+
+test('recovered prior USD partial receipt reports incomplete INR correction and never replays a financial write',async()=>{
+ const f=await fixture();try{
+  await f.seedCorrection('recover-partial-money',request,observedMoneyValues);
+  const turn=await f.run(()=>completion('Done.'),'recover-partial-money',request);
+  assert.match(turn.reply.answer,/requested currency and amount correction was not fully applied/);assert.match(turn.reply.answer,/USD 6670/);assert.doesNotMatch(turn.reply.answer,/INR 6670/);
+  assert.equal((await f.read(f.ids[0])).currency,'USD');assert.equal(await f.count('invoice_correction_audits'),1);assert.equal(f.requests.filter(r=>r.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length,1);await f.assertNoCustomerWrites();
+ }finally{await f.close();}
+});
+
+test('native trailing monetary assignments require every explicit amount before SQL',async()=>{
+ const f=await fixture();try{
+  const instruction='Set subtotal to INR 6670 and total to 6670 and tax to 0 for QA-CONTRACT-001. Keep reminders off.';
+  const initial={...observedMoneyValues,currency:'INR'},corrected={...initial,tax:0};
+  const turn=await runNativeMoney(f,initial,corrected,'native-money-trailing',instruction);
+  assert.equal(turn.repairs,1);assert.equal(turn.outputs.at(-1).completed,true);assert.ok(turn.outputs.at(-1).correction.appliedFields.includes('tax'));
+  assert.equal((await f.read(f.ids[0])).metadata.tax,0);assert.equal(await f.count('invoice_correction_audits'),1);assert.equal(f.requests.filter(r=>r.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length,1);await f.assertNoCustomerWrites();
+ }finally{await f.close();}
+});
