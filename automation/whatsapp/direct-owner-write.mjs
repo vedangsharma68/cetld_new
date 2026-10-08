@@ -1,3 +1,4 @@
+import {verifyOwnerPaymentReceipt} from './owner-payment-readback.mjs';
 import {createHash} from 'node:crypto';
 import {validateInvoiceCorrection,invoiceBusinessFields,INVOICE_CORRECTION_FIELDS} from './invoice-corrections.mjs';
 
@@ -162,6 +163,11 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
         if(outcome.entityType==='invoice'&&outcome.action==='invoice.reopened'
           &&(minorUnits(record.amount_paid)!==0n||!['sent','overdue'].includes(record.status)))return failure('WRITE_UNCONFIRMED');
       }
+      if(outcome.action==='invoice.payment_recorded'){
+        const verified=await verifyOwnerPaymentReceipt({supabase,scope:{workspaceId,ownerId,phone},messageId:providerMessageId});
+        if(!verified)return failure('WRITE_UNCONFIRMED');
+        return {...verified,entityType:outcome.entityType,entityId:outcome.entityId,replayed:true};
+      }
       return {ok:true,completed:true,action:outcome.action,entityType:outcome.entityType,
         entityId:outcome.entityId,record,replayed:true,...(correctionEvidence?{correction:correctionEvidence}:{}),...(outcome.action==='invoice.reopened'?{invoiceNumber:outcome.invoiceNumber,currency:outcome.currency,
           reversedAmount:outcome.reversedAmount,balanceAfter:outcome.balanceAfter,paymentCount:outcome.paymentCount,paymentHistoryPreserved:true,cashRefund:false}: {})};
@@ -252,6 +258,11 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
         if(entityType==='business_record'&&outcome.action==='business_record.deleted'&&!record.deleted_at)return failure('WRITE_UNCONFIRMED');
         if(entityType==='business_record'&&outcome.action==='business_record.restored'&&record.deleted_at!==null)return failure('WRITE_UNCONFIRMED');
         if(entityType==='invoice'&&outcome.action==='invoice.paid'&&!isSettledPaidInvoice(record))return failure('WRITE_UNCONFIRMED');
+      }
+      if(outcome.action==='invoice.payment_recorded'){
+        const verified=await verifyOwnerPaymentReceipt({supabase,scope:{workspaceId,ownerId,phone},messageId:providerMessageId});
+        if(!verified)return failure('WRITE_UNCONFIRMED');
+        return {...verified,entityType,entityId,replayed:outcome.replayed===true};
       }
       return {ok:true,completed:true,action:outcome.action,entityType,entityId,record,replayed:outcome.replayed===true,...(correctionEvidence?{correction:correctionEvidence}:{})};
     },

@@ -7,7 +7,7 @@ import {createClient} from '@supabase/supabase-js';
 // never forwards a request to a network, and rejects unsupported query shapes.
 const name=value=>{if(!/^[a-z_][a-z0-9_]*$/i.test(value))throw Error('unsupported fixture identifier');return `"${value}"`;};
 const parameter=value=>value&&typeof value==='object'?JSON.stringify(value):value;
-export async function createOfflineSqlNetwork({externalFetch}={}){
+export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[]}={}){
   const db=new PGlite(),requests=[],errors=[],objects=new Map();let interceptor=null;
   await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;
     create schema auth;create schema storage;
@@ -22,7 +22,7 @@ export async function createOfflineSqlNetwork({externalFetch}={}){
   // Legacy adapter tests intentionally model deployed 9836c4c and separately
   // install its disabled proposal. approved-reminders.test applies the new
   // forward migration explicitly and exercises the production runtime end to end.
-  for(const file of (await readdir(new URL('../../supabase/migrations/',import.meta.url))).filter(file=>file.endsWith('.sql') && file!=='20261005070000_approved_whatsapp_reminders.sql').sort())
+  for(const file of (await readdir(new URL('../../supabase/migrations/',import.meta.url))).filter(file=>file.endsWith('.sql') && file!=='20261005070000_approved_whatsapp_reminders.sql' && !excludeMigrations.includes(file)).sort())
     await db.exec((await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8')).replace('create extension if not exists pgcrypto;',''));
   await db.exec('grant all on all tables in schema public to service_role;grant all on all sequences in schema public to service_role');
 
@@ -55,7 +55,7 @@ export async function createOfflineSqlNetwork({externalFetch}={}){
       const path=url.pathname.replace(/^\/rest\/v1\//,''),params=url.searchParams;
       if(path.startsWith('rpc/')){
         const fn=path.slice(4),args=JSON.parse(body||'{}'),keys=Object.keys(args);
-        const metadata=(await db.query('select proretset from pg_proc where proname=$1 and proargnames @> $2::text[] limit 1',[fn,keys])).rows[0];
+        const metadata=(await db.query('select proretset from pg_proc where proname=$1 and coalesce(proargnames,ARRAY[]::text[]) @> $2::text[] limit 1',[fn,keys])).rows[0];
         if(!metadata)throw Error(`unknown fixture RPC ${fn}`);
         const invocation=`public.${name(fn)}(${keys.map((key,index)=>`${name(key)}=>$${index+1}`).join(',')})`;
         const result=await db.query(metadata.proretset?`select * from ${invocation}`:`select ${invocation} as value`,keys.map(key=>parameter(args[key])));
