@@ -253,6 +253,10 @@ test('unsupported partial and amount wording cannot stage or confirm full settle
    // Simulate a legacy/misrouted proposal bypassing runtime: SQL must independently deny it.
    await f.db.query("update whatsapp_pending_actions set consumed_at=now() where consumed_at is null");
    const invoice=(await f.db.query('select * from invoices where id=$1',[f.ids[0]])).rows[0];
+   const {createDirectOwnerWriteAdapter}=await import(new URL('automation/whatsapp/direct-owner-write.mjs',base));
+   const adapter=createDirectOwnerWriteAdapter({supabase:f.supabase});
+   const direct=await adapter.apply({workspaceId:f.scope.workspaceId,ownerId:f.scope.ownerId,phone:f.scope.phone,providerMessageId:id,authorization:{kind:'instruction',quote:text},operation:'invoice.update',targetId:invoice.id,expectedUpdatedAt:new Date(invoice.updated_at).toISOString(),payload:{status:'paid'}});
+   assert.equal(direct.ok,false);assert.equal(direct.code,'PAYMENT_GUARD');assert.deepEqual(await f.snapshot(),before);
    const action={type:'owner_invoice_payment',invoiceId:invoice.id,invoiceNumber:invoice.invoice_number,expectedUpdatedAt:new Date(invoice.updated_at).toISOString(),changes:{status:'paid'},sourceMessageId:id};
    const pending=(await f.db.query("insert into whatsapp_pending_actions(workspace_id,customer_id,phone,action,source,generation) values($1,$2,$3,$4,'whatsapp',$5) returning *",[f.scope.workspaceId,f.scope.customerId,f.scope.phone,action,900])).rows[0];
    await f.inbound(id+'-confirm','yes');const result=(await f.db.query('select whatsapp_confirm_owner_invoice_action($1,$2,$3,$4,$5,$6,true) value',[f.scope.workspaceId,f.scope.ownerId,f.scope.phone,pending.id,pending.version,id+'-confirm'])).rows[0].value;

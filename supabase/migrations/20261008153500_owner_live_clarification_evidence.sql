@@ -15,8 +15,8 @@ begin
  if (select md5(replace(prosrc,chr(13),'')) from pg_catalog.pg_proc where oid='app.owner_payment_instruction(text)'::regprocedure) not in ('b23518142d74e3c076c5dc18c644bf97','fc9b0e7319181b59fd716de8f87acc0f')
   or (select md5(replace(prosrc,chr(13),'')) from pg_catalog.pg_proc where oid='public.whatsapp_confirm_owner_invoice_action(uuid,uuid,text,bigint,bigint,text,boolean)'::regprocedure) not in ('4e91e1fc34a0b0e639673a4d39632fd7','0bd5f0e6ca732a8cbe7ddedee64acb45')
   or (select md5(replace(prosrc,chr(13),'')) from pg_catalog.pg_proc where oid='public.whatsapp_transition_invoice_review(bigint,bigint,uuid,uuid,text,text,jsonb)'::regprocedure) not in ('f39fc6258f46e3fe933f87b77aadea2a','0ec3c131390877826e57e864b4d9ed22')
-  or (select md5(prosrc) from pg_catalog.pg_proc where oid='public.whatsapp_owner_partial_payment_capability()'::regprocedure) not in ('fa99d7cbbbe81bead0ba56decb61e747','0658d4f13ee209f899e5f7680d485134')
-  or (select md5(replace(prosrc,chr(13),'')) from pg_catalog.pg_proc where oid='public.whatsapp_apply_direct_owner_write(uuid,uuid,text,text,text,text,text,uuid,timestamptz,text,text,text,bigint,bigint,jsonb)'::regprocedure)<>'6ed00f9c4aaabdb7673272ccef3d1390' then
+  or (select md5(prosrc) from pg_catalog.pg_proc where oid='public.whatsapp_owner_partial_payment_capability()'::regprocedure) not in ('fa99d7cbbbe81bead0ba56decb61e747','c4ee04ea738de234c5d608fba0f5ef1e')
+  or (select md5(replace(prosrc,chr(13),'')) from pg_catalog.pg_proc where oid='public.whatsapp_apply_direct_owner_write(uuid,uuid,text,text,text,text,text,uuid,timestamptz,text,text,text,bigint,bigint,jsonb)'::regprocedure)not in ('6ed00f9c4aaabdb7673272ccef3d1390','2b66000528ea1d8a34dd483ce040b307') then
    raise exception 'Unexpected installed owner evidence source; no changes applied';
  end if;
  if to_regprocedure('app.owner_payment_amount_mentioned(text)') is not null
@@ -50,13 +50,22 @@ declare target regprocedure;definition text;old_acl aclitem[];old_owner oid;old_
 begin
  foreach target in array array[
   'public.whatsapp_confirm_owner_invoice_action(uuid,uuid,text,bigint,bigint,text,boolean)'::regprocedure,
-  'public.whatsapp_transition_invoice_review(bigint,bigint,uuid,uuid,text,text,jsonb)'::regprocedure] loop
+  'public.whatsapp_transition_invoice_review(bigint,bigint,uuid,uuid,text,text,jsonb)'::regprocedure,
+  'public.whatsapp_apply_direct_owner_write(uuid,uuid,text,text,text,text,text,uuid,timestamptz,text,text,text,bigint,bigint,jsonb)'::regprocedure] loop
   select proacl,proowner,prosecdef,proconfig into old_acl,old_owner,old_definer,old_config from pg_catalog.pg_proc where oid=target;
   definition:=replace(pg_catalog.pg_get_functiondef(target),chr(13),'');
   if target='public.whatsapp_confirm_owner_invoice_action(uuid,uuid,text,bigint,bigint,text,boolean)'::regprocedure then
    if (select md5(prosrc) from pg_catalog.pg_proc where oid=target)='0bd5f0e6ca732a8cbe7ddedee64acb45' then continue;end if;
    marker:=$old$and app.owner_payment_instruction(src.message_text) is not null) then return$old$;
    replacement:=$new$and app.owner_payment_amount_mentioned(src.message_text)) then return$new$;
+  elsif target='public.whatsapp_apply_direct_owner_write(uuid,uuid,text,text,text,text,text,uuid,timestamptz,text,text,text,bigint,bigint,jsonb)'::regprocedure then
+   if (select md5(prosrc) from pg_catalog.pg_proc where oid=target)='2b66000528ea1d8a34dd483ce040b307' then continue;end if;
+   marker:=$old$      elsif v_payload ? 'status' then
+        if v_payload->>'status'<>'paid'$old$;
+   replacement:=$new$      elsif v_payload ? 'status' then
+        if app.owner_payment_amount_mentioned(v_event.message_text) then
+          return pg_catalog.jsonb_build_object('ok',false,'code','PAYMENT_GUARD');end if;
+        if v_payload->>'status'<>'paid'$new$;
   else
    if (select md5(prosrc) from pg_catalog.pg_proc where oid=target)='0ec3c131390877826e57e864b4d9ed22' then continue;end if;
    marker:=$old$        or v_owner_quote !~* '\m(it|this( invoice)?|the invoice)[[:space:]]+is[[:space:]]+unpaid\M'$old$;
@@ -78,7 +87,7 @@ create or replace function public.whatsapp_owner_partial_payment_capability() re
 language sql security invoker set search_path='' as $capability$
  select case when
   (select md5(prosrc) from pg_catalog.pg_proc where oid='public.whatsapp_confirm_owner_invoice_action(uuid,uuid,text,bigint,bigint,text,boolean)'::regprocedure)='0bd5f0e6ca732a8cbe7ddedee64acb45'
-  and (select md5(prosrc) from pg_catalog.pg_proc where oid='public.whatsapp_apply_direct_owner_write(uuid,uuid,text,text,text,text,text,uuid,timestamptz,text,text,text,bigint,bigint,jsonb)'::regprocedure)='6ed00f9c4aaabdb7673272ccef3d1390'
+  and (select md5(prosrc) from pg_catalog.pg_proc where oid='public.whatsapp_apply_direct_owner_write(uuid,uuid,text,text,text,text,text,uuid,timestamptz,text,text,text,bigint,bigint,jsonb)'::regprocedure)='2b66000528ea1d8a34dd483ce040b307'
   and (select md5(prosrc) from pg_catalog.pg_proc where oid='app.owner_payment_instruction(text)'::regprocedure)='fc9b0e7319181b59fd716de8f87acc0f'
   and (select md5(prosrc) from pg_catalog.pg_proc where oid='app.owner_payment_amount_mentioned(text)'::regprocedure)='cdf7e0257ebe342c904acfb937935d73'
  then jsonb_build_object('ok',true,'version',3) else jsonb_build_object('ok',false) end;

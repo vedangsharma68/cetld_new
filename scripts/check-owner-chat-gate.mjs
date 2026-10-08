@@ -42,7 +42,8 @@ export async function writeReleaseManifest({outputPath='owner-chat-build.json'}=
     'automation/whatsapp/template-diagnostic.mjs','automation/whatsapp/test-send.mjs','automation/whatsapp/reminder-proof.mjs','automation/whatsapp/webhook.mjs',
     'supabase/migrations/20261005070000_approved_whatsapp_reminders.sql');
   paths.push('automation/whatsapp/owner-payment-intent.mjs','automation/whatsapp/owner-payment-readback.mjs',
-    'supabase/migrations/20261008031733_owner_partial_payment_confirmation.sql');
+    'supabase/migrations/20261008031733_owner_partial_payment_confirmation.sql',
+    'supabase/migrations/20261008153500_owner_live_clarification_evidence.sql');
   const files={};for(const path of paths)files[path]=createHash('sha256').update(await readFile(path)).digest('hex');
   let commit=process.env.VERCEL_GIT_COMMIT_SHA||process.env.GITHUB_SHA;
   if(!commit)try{commit=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();}catch{commit=null;}
