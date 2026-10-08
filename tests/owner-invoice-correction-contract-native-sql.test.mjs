@@ -5,6 +5,7 @@ import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 import {authorizeOwnerPhone} from '../automation/whatsapp/owner-binding.mjs';
 import {createDirectOwnerWriteAdapter} from '../automation/whatsapp/direct-owner-write.mjs';
+import {AIProvider} from '../ai/provider.mjs';
 
 const number='QA-CONTRACT-001';
 const target=[{column:'invoice_number',operator:'eq',value:number}];
@@ -60,6 +61,34 @@ async function fixture(){
 }
 
 const dueOnlyMessage='Only change the due date of QA-CONTRACT-001 to 2026-10-20. Leave its amount and currency unchanged, and keep reminders off.';
+test('native Gemini read and excessive date-only plan repair use compatible JSON before one audited SQL correction',async()=>{
+ const f=await fixture();try{
+  let calls=0,repairs=0;const outputs=[];
+  const response=parts=>Response.json({candidates:[{content:{parts},finishReason:'STOP'}]});
+  const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated'},authorize:input=>authorizeOwnerPhone({supabase:f.supabase,...input}),
+   logger:{info(){},warn(){},error(){}},providerFactory:options=>new AIProvider({...options,primaryModel:'gemini-3.5-flash-lite',fallbackModel:null}),
+   fetchImpl:async(url,init)=>{
+    assert.equal(new URL(url).hostname,'generativelanguage.googleapis.com');const body=JSON.parse(init.body);calls++;
+    if(body.generationConfig.responseMimeType==='application/json'){
+     repairs++;if(body.generationConfig.responseJsonSchema)return Response.json({error:{code:400,message:'fixture constrained schema rejected'}},{status:400});
+     assert.equal(body.tools,undefined);assert.equal(body.contents.at(-1).parts[0].text,dueOnlyMessage);
+     assert.ok(body.systemInstruction.parts.some(p=>p.text.includes('INVALID_FIELDS')&&p.text.includes('validationShape')));
+     return response([{text:JSON.stringify({operation:'update',table:'invoices',filters:target,values:{due_date:'2026-10-20'}})}]);
+    }
+    const result=body.contents.flatMap(row=>row.parts).flatMap(part=>{try{return [JSON.parse(part.text)];}catch{return [];}}).findLast(row=>row.operation||row.action);
+    if(result)outputs.push(result);
+    if(!result)return response([{functionCall:{name:'workspaceData',args:{operation:'read',table:'invoices',filters:target,columns:['invoice_number','due_date','total_amount','currency']}}}]);
+    if(result.operation==='read')return response([{functionCall:{name:'workspaceData',args:{operation:'update',table:'invoices',filters:target,values:{line_items:[],due_date:'2026-10-20',subtotal:100,total_amount:100}}}}]);
+    return response([{text:'Done.'}]);
+   }});
+  const messageId='native-gemini-date-repair';await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[messageId,f.scope.phone,dueOnlyMessage]);
+  const turn={...f.scope,messageId,message:dueOnlyMessage},reply=await handler(turn);
+  assert.equal(repairs,1);assert.equal(calls,4);assert.equal(outputs.at(-1).completed,true,JSON.stringify({reply,outputs}));
+  assert.deepEqual(outputs.at(-1).correction.appliedFields,['due_date']);assert.match(typeof reply==='string'?reply:reply.answer,/Due date: 2026-10-20/);
+  const after=await f.read(f.ids[0]);assert.equal(after.due_date,'2026-10-20');assert.equal(after.total_amount,100);assert.equal(after.currency,'USD');assert.equal(after.status,'draft');assert.equal(after.followup_state,'paused');
+  assert.equal(await f.count('invoice_correction_audits'),1);await handler(turn);assert.equal(await f.count('invoice_correction_audits'),1);await f.assertNoCustomerWrites();
+ }finally{await f.close();}
+});
 test('actual live date-only instruction refuses the observed amount-only plan and a still-incomplete repair before SQL',async()=>{
  const f=await fixture();try{
   let plans=0;

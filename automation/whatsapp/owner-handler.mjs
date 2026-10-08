@@ -358,7 +358,10 @@ export function createOwnerWorkspacePlanner({provider,message,history=[],timezon
     const needsTarget=validationFeedback?.validationCode==='TARGET_REQUIRED';
     const valuesSchema=Object.keys(catalog?.tables||{}).length===1&&catalog?.tables?.invoices?.correctionValuesSchema
       ?{type:'object',properties:catalog.tables.invoices.correctionValuesSchema.properties}:{type:'object'};
-    const result=await provider.generateStructured({name:'workspace_operation',
+    // Workspace/custom-field plans contain dynamic keys. Gemini JSON mode avoids
+    // its constrained-schema rejection; normalization and write guards still
+    // validate the decoded plan before any dispatch. Extraction keeps its schema.
+    const result=await provider.generateStructured({name:'workspace_operation',geminiJsonMode:true,
       schema:{type:'object',properties:{operations:{type:'array',minItems:2,maxItems:10,items:{type:'object',properties:{operation:{type:'string',enum:['create','update']},table:{type:'string'},filters:{type:'array',items:{type:'object',properties:{column:{type:'string'},operator:{type:'string'},value:{}},required:['column','operator','value'],additionalProperties:false}},values:{type:'object'}},required:['operation','table','values'],additionalProperties:false}},operation:{type:'string'},table:{type:'string'},columns:{type:'array',items:{type:'string'}},
         filters:{type:'array',...(needsTarget?{minItems:1}:{}),items:{type:'object',properties:{column:{type:'string'},operator:{type:'string'},value:{}},required:['column','operator','value'],additionalProperties:false}},
         values:valuesSchema,limit:{type:'integer'},offset:{type:'integer'},order:{type:'object'}},required:needsTarget?['operation','table','filters','values']:[],additionalProperties:false},
