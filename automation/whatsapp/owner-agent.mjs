@@ -1790,12 +1790,12 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         }else if(boundedPaymentSelected){
           const last=evidence.at(-1);
           const failureReplies={
-            PAYMENT_GUARD:'The payment must match the receivable invoice currency and remaining balance. No payment was recorded.',
-            NOT_FOUND:'I could not find that invoice for the specified customer. No payment was recorded.',
-            AMBIGUOUS:'More than one invoice matches. Specify one invoice and customer. No payment was recorded.',
+            PAYMENT_GUARD:'The payment must match the receivable invoice currency and remaining balance. This payment was not recorded.',
+            NOT_FOUND:'The invoice and customer could not be matched for this payment. This payment was not recorded.',
+            AMBIGUOUS:'More than one invoice matches. Specify one invoice and customer. This payment was not recorded.',
             EXTERNAL_ACCOUNTING:'Record this payment in the connected ledger and sync it. No local payment was recorded.',
             PENDING:'Another owner change is waiting for a decision. Review or cancel it before requesting this payment.',
-            UNAVAILABLE:'I could not prepare this payment proposal. No payment was recorded. Please try again later.',
+            UNAVAILABLE:'I could not prepare this payment proposal. This payment was not recorded. Please try again later.',
           };
           if(last?.ok===false&&!evidence.some(completedOwnerResult))answer=failureReplies[last.code];
         }

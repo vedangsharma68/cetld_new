@@ -8,12 +8,12 @@ const evidence={ok:true,readOnly:true,operation:'read',table:'invoices',lookupIn
 const proposal={ok:true,proposal:true,expiresAt:new Date(Date.now()+600_000).toISOString(),details:{type:'owner_invoice_payment',requestedInvoiceNumber:'SB-10442',requestedCustomerName:'Northwind Systems LLC',changes:{amount:500,currency:'USD'},paymentAmount:500,currency:'USD',outstandingAmount:451.52}};
 const requirement={confirmationText:'yes',requiresCancel:true,requiresReplyCue:true};
 const provider=()=>({async generate(){return {toolCalls:[{id:'read',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(read)}}]};}});
-function toolsFor(execute){return {supportsBoundedPaymentProposal:true,definitions:[definition],execute,getReplyRequirement:()=>requirement};}
+function toolsFor(execute){let attempted=false;return {supportsBoundedPaymentProposal:true,definitions:[definition],async execute(name,args){if(args.operation!=='read')attempted=true;return execute(name,args);},getWriteAttempted:()=>attempted,getReplyRequirement:()=>requirement};}
 test('checkpointed acknowledged proposal renders without a model call or duplicate proposal',async()=>{
  let checkpoint,creates=0,modelCalls=0;
  const tools=toolsFor(async(name,args)=>{if(args.operation==='read')return evidence;creates++;assert.deepEqual(args,{operation:'create',table:'payments',filters:read.filters,values:{amount:500,currency:'USD'}});return proposal;});
  const first=await runOwnerAgent({message,tools,provider:provider(),allowDeferred:true,onCheckpoint:async value=>{checkpoint=structuredClone(value);}});
- assert.match(first.answer,/USD 500\.00/);assert.equal(creates,1);assert.equal(checkpoint.boundedPaymentSelected,true);assert.equal(checkpoint.phase,'final');
+ assert.match(first.answer,/USD 500\.00/);assert.equal(creates,1);assert.equal(first.agentDiagnostics.rounds,2);assert.equal(checkpoint.boundedPaymentSelected,true);assert.equal(checkpoint.phase,'final');
  const resumed=await runOwnerAgent({message,tools:toolsFor(async()=>{throw new Error('No tool may rerun');}),checkpoint,allowDeferred:true,provider:{async generate(){modelCalls++;throw new Error('No model required');}}});
  assert.equal(resumed.answer,first.answer);assert.equal(resumed.boundedPaymentReply,true);assert.equal(creates,1);assert.equal(modelCalls,0);
 });
@@ -31,4 +31,13 @@ test('an attempted operation or a current ambiguous instruction never enables a 
   const result=await runOwnerAgent({message:input,tools,provider:{async generate(request){calls++;return request.tools?await provider().generate():{content:'No changes were made.'};}}});
   assert.equal(creates,0,input);assert.equal(result.boundedPaymentReply,undefined);assert.ok(calls<=4);
  }
+});
+test('a failed customer match is rendered without denying an invoice that the scoped read found',async()=>{
+ let calls=0,creates=0;
+ const result=await runOwnerAgent({message,tools:{...toolsFor(async(name,args)=>{
+  if(args.operation==='read')return evidence;
+  creates++;return {ok:false,code:'NOT_FOUND',operation:'create',table:'payments'};
+ }),getReplyRequirement:()=>null,getWriteAttempted:()=>creates>0},provider:{async generate(){calls++;return provider().generate();}}});
+ assert.equal(calls,1);assert.equal(creates,1);assert.equal(result.boundedPaymentReply,true);
+ assert.equal(result.answer,'The invoice and customer could not be matched for this payment. This payment was not recorded.');
 });
