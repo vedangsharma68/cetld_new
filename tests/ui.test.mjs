@@ -134,16 +134,16 @@ test('invoice detail exposes the operator-gated TEST review and one-shot confirm
 
 test('reminder preview gates on the signed-in workspace owner, not an unset UI flag', async () => {
   const requests=[];
-  const preview=extractedAppFunction('async function reminderProofRequest(send=false){','async function reminderProofReview(){',{
-    state:{demo:false,user:{id:'owner-1'},workspace:{id:'workspace-1',owner_id:'owner-1'}},
+  const preview=extractedAppFunction('async function reminderProofRequest(send=false,signal){','let reminderProofReviewPending=null;',{
+    state:{demo:false,user:{id:'owner-1'},workspace:{id:'workspace-1',owner_id:'owner-1'}},readyReminderPreviewToken:()=>null,
     accessToken:async()=>'owner-session-token',fetch:async(url,options)=>{requests.push({url,options});return{ok:true,json:async()=>({test:true,recipient:'+919871367051'})}},
     URL,URLSearchParams,Error,
   });
   assert.equal((await preview()).recipient,'+919871367051');
   assert.equal(requests.length,1);
   assert.equal(requests[0].options.method,'GET');
-  const nonOwner=extractedAppFunction('async function reminderProofRequest(send=false){','async function reminderProofReview(){',{
-    state:{demo:false,user:{id:'member-1'},workspace:{id:'workspace-1',owner_id:'owner-1'}},
+  const nonOwner=extractedAppFunction('async function reminderProofRequest(send=false,signal){','let reminderProofReviewPending=null;',{
+    state:{demo:false,user:{id:'member-1'},workspace:{id:'workspace-1',owner_id:'owner-1'}},readyReminderPreviewToken:()=>null,
     accessToken:async()=>'member-session-token',fetch:async()=>{throw new Error('must not request preview')},URL,URLSearchParams,Error,
   });
   await assert.rejects(nonOwner(),/Sign in as the business owner/);
