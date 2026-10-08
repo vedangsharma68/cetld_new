@@ -578,6 +578,25 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         totalAmount:invoice.total,currency:invoice.currency}};
   }
 
+  async function duplicateAttachmentResult(action,reviewFacts=null,store=null) {
+    let existingInvoice=null;
+    try{
+      await active();
+      const scopedStore=store||invoiceStoreFactory(scope);
+      existingInvoice=await scopedStore.findDuplicateSourceInvoice?.({
+        invoiceNumber:action.invoiceNumberOverrideAudit?.originalExtractedNumber||action.invoice?.invoiceNumber,
+        clientName:action.invoice?.clientName,clientEmail:action.invoice?.clientEmail})||null;
+    }catch{}
+    // A duplicate rejection proves this attempted invoice was not created. Its
+    // original ledger number requires a separate unique, scoped readback.
+    const answer=existingInvoice
+      ?`Invoice ${existingInvoice.invoiceNumber} is already logged for ${existingInvoice.clientName} (source invoice ${existingInvoice.sourceInvoiceNumber}). No new invoice was saved.`
+      :'This save was rejected as a duplicate. No new invoice was saved. The existing invoice details could not be verified.';
+    replyRequirement={attachmentDuplicate:{answer,existingInvoice}};
+    return {ok:false,code:'DUPLICATE_INVOICE',outcome:'duplicate_rejected',invoiceCreated:false,readOnly:true,
+      ...(existingInvoice?{existingInvoice}:{}),...(reviewFacts?{review:reviewFacts}:{}),message:answer};
+  }
+
   async function continueReview(raw) {
     const currentAction=pendingAtStart?.action;
     if(!pendingStoreAvailable||!pending||typeof pending.loadInvoiceReview!=='function'
@@ -738,7 +757,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
       if(!existing&&error?.code==='INVOICE_ALREADY_EXISTS'){
         await pending.transitionInvoiceReview({...saving,...scope,fromStage:'saving',
           action:{...action,stage:'failed',failureCode:'DUPLICATE_INVOICE'}}).catch(()=>null);
-        return {ok:false,code:'DUPLICATE_INVOICE',message:'This invoice is already logged for this customer. No duplicate was created.'};
+        return duplicateAttachmentResult(action,null,store);
       }
       if(!existing)return {ok:false,code:'DATABASE_UNAVAILABLE',message:'The invoice save could not be verified yet. Check its status before trying again.'};
       try{savedResult=await saveAssistantInvoice({store,invoice,confirmed:true,idempotencyKey,accounting:null,allowMissingDueDate:true});}
@@ -1202,8 +1221,9 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
             details:'The attachment produced a durable review, but no saved invoice result is recorded.'};
         }
         if(action.stage==='saving')return {ok:false,code:'PENDING',message:'Invoice processing is still in progress. Do not retry the write until its status is checked.',review:reviewFacts};
-        if(action.stage==='failed')return {ok:false,code:action.failureCode==='DUPLICATE_INVOICE'?'DUPLICATE_INVOICE':'UNAVAILABLE',
-          message:action.failureCode==='DUPLICATE_INVOICE'?'This invoice is already logged for this customer. No duplicate was created.':'The invoice was not saved because processing failed.',review:reviewFacts};
+        if(action.stage==='failed')return action.failureCode==='DUPLICATE_INVOICE'
+          ?duplicateAttachmentResult(action,reviewFacts)
+          :{ok:false,code:'UNAVAILABLE',message:'The invoice was not saved because processing failed.',review:reviewFacts};
         if(['EXTRACTION_UNAVAILABLE','INVOICE_REVIEW_UNAVAILABLE'].includes(action.failureCode)){
           replyRequirement={attachmentReview:{failureCode:action.failureCode,
             failureReason:action.failureReason==='TIMEOUT'?'TIMEOUT':'UNAVAILABLE',
@@ -1291,6 +1311,12 @@ export function ownerReplySafetyIssue(value,requirement=null) {
     if(!/\b(?:nothing|no invoice) (?:was |has been )?saved\b|\b(?:not|wasn't|hasn't been) (?:saved|logged)\b/i.test(reply))return 'attachment_review_status';
     const timeout=requirement.attachmentReview.failureReason==='TIMEOUT';
     if(timeout?!/\b(?:timed out|timeout)\b/i.test(reply):!/\bunavailable\b/i.test(reply))return 'attachment_review_details';
+  }
+  if(requirement?.attachmentDuplicate){
+    if(!/\bno (?:new |duplicate )?invoice (?:was |has been )?(?:saved|created|logged)\b|\bno duplicate (?:was |has been )?created\b/i.test(reply))return 'attachment_duplicate_status';
+    if(!/\b(?:already (?:exists|logged)|rejected as a duplicate)\b/i.test(reply))return 'attachment_duplicate_status';
+    const existing=requirement.attachmentDuplicate.existingInvoice;
+    if(existing&&(!mentionsPositiveWholePhrase(reply,existing.invoiceNumber)||!mentionsWholePhrase(reply,existing.sourceInvoiceNumber)))return 'attachment_duplicate_identity';
   }
   return null;
 }
@@ -1737,9 +1763,9 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
           if(fallback)return resultFor(fallback,{readOnlyFallback:true});
         }
         if(repair===repairLimit){
-          const fallback=requirement?.attachmentReview?.answer;
+          const fallback=requirement?.attachmentReview?.answer||requirement?.attachmentDuplicate?.answer;
           if(typeof fallback==='string'&&!ownerReplySafetyIssue(fallback,requirement)&&!ownerGroundingIssue(fallback,evidence,message,requirement||{}))
-            return resultFor(fallback,{attachmentReviewFallback:true});
+            return resultFor(fallback,requirement?.attachmentDuplicate?{attachmentDuplicateFallback:true}:{attachmentReviewFallback:true});
           throw Object.assign(new Error('Owner reply did not pass output validation'),{code:'OWNER_REPLY_REPAIR_FAILED',reason:issue});
         }
         finalMessages.push({role:'assistant',content:String(result?.content||'')},turnAnchor,{role:'user',content:replyRepairInstruction(issue,requirement)});

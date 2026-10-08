@@ -33,6 +33,26 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, a
       const [row]=await activeInvoiceRows(includeDeletedAt=>{let query=invoices(scoped('invoices').select('*').eq('workspace_id',workspaceId));if(includeDeletedAt)query=query.is('deleted_at',null);return query.eq('metadata->>assistant_idempotency_key',idempotencyKey).limit(1)});
       return row||null;
     },
+    async findDuplicateSourceInvoice({invoiceNumber,clientName,clientEmail}) {
+      if(!owner||typeof invoiceNumber!=='string'||!invoiceNumber.trim()||invoiceNumber==='AUTO')return null;
+      const customer=await store.findCustomer({name:clientName,email:clientEmail});
+      if(!customer)return null;
+      const matches=new Map();
+      for(const column of ['metadata->>printed_invoice_number','metadata->>source_invoice_number','invoice_number']){
+        const found=await activeInvoiceRows(includeDeletedAt=>{
+          let query=scoped('invoices').select('id,workspace_id,customer_id,invoice_number,metadata')
+            .eq('workspace_id',workspaceId).eq('customer_id',customer.id).eq(column,invoiceNumber);
+          if(column==='invoice_number')query=query.is('metadata->>printed_invoice_number',null).is('metadata->>source_invoice_number',null);
+          if(includeDeletedAt)query=query.is('deleted_at',null);
+          return query.limit(2);
+        });
+        for(const row of found)matches.set(row.id,row);
+        if(matches.size>1)return null;
+      }
+      const [row]=matches.values();
+      if(!row||row.workspace_id!==workspaceId||row.customer_id!==customer.id)return null;
+      return {invoiceNumber:row.invoice_number,clientName:customer.name,sourceInvoiceNumber:invoiceNumber};
+    },
     async findCustomer({email,name}={}) {
       if(owner){
         let q=scoped('customers').select('*').eq('workspace_id',workspaceId).eq('name',name);
