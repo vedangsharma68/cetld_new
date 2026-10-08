@@ -22,6 +22,53 @@ export function requestedInvoiceDateChange(message){
   try{date(dates[0]);}catch{return null;}
   return {field:due?'due_date':'issue_date',value:dates[0],only:/^\s*(?:please\s+)?only\s+(?:change|update|set)\s+(?:the\s+)?(?:due|issue)\s+date\b/i.test(text)};
 }
+// Explicit current instructions constrain completeness before dispatch; they
+// neither authorize ledger currency changes nor synthesize financial writes.
+export function requestedInvoiceMoneyChange(message){
+  const requests=[],ambiguous=()=>({ambiguous:true});
+  for(const clause of String(message||'').split(/(?:[;!?\n]|\.(?=\s|$))+/)){
+    if(!/^\s*(?:please\s+)?(?:set|change|update)\b/i.test(clause)||/["'“”]/.test(clause)
+      ||/\b(?:not|never|avoid|if|unless|maybe|previously|earlier)\b/i.test(clause))continue;
+    const labels=[...clause.matchAll(/\b(subtotal|total(?:_amount)?|tax|discount)\b/gi)].filter(label=>{
+      const verb=[...clause.slice(0,label.index).matchAll(/\b(set|change|update|keep|leave|preserve)\b/gi)].at(-1)?.[1];
+      return !/^(?:keep|leave|preserve)$/i.test(verb||'');
+    });
+    if(!labels.length||/\b(?:notes?|description|payment\s+(?:information|instructions?))\b/i.test(clause.slice(0,labels[0].index)))continue;
+    const amounts=[...clause.matchAll(/\b([A-Z]{3})\s+(\d[\d,]*(?:\.\d+)?)\b|\b(\d[\d,]*(?:\.\d+)?)\s+([A-Z]{3})\b/gi)]
+      .filter(match=>isSupportedCurrency((match[1]||match[4]).toUpperCase()));
+    if(!amounts.length)continue;
+    if(/\b(?:either|or)\b/i.test(clause))return ambiguous();
+    const currencies=[...new Set([...clause.matchAll(/\b[A-Z]{3}\b/gi)].map(match=>match[0].toUpperCase()).filter(isSupportedCurrency))];
+    if(currencies.length!==1)return ambiguous();
+    const values={},pending=[];
+    for(let index=0;index<labels.length;index++){
+      const label=labels[index],field=/^total/i.test(label[1])?'total_amount':label[1].toLowerCase();pending.push(field);
+      const segment=clause.slice(label.index+label[0].length,labels[index+1]?.index??clause.length)
+        .replace(/\b[A-Z]+(?:[-/][A-Z0-9]+)+\b/gi,'');
+      const assignment=segment.split(/\b(?:due|issue)\s+date\b|\b(?:quantity|keep|leave|preserve)\b/i)[0];
+      const numbers=[...assignment.matchAll(/\b\d[\d,]*(?:\.\d+)?\b/g)];
+      const zeros=[...assignment.matchAll(/\bzero\b/gi)];
+      if(!numbers.length&&!zeros.length)continue;
+      if(numbers.length+zeros.length!==1)return ambiguous();
+      const raw=numbers[0]?.[0]||'0';if(!/^(?:\d{1,12}|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?$/.test(raw))return ambiguous();
+      let amount;try{amount=money(raw.replaceAll(',','')).value;}catch{return ambiguous();}
+      for(const item of pending){if(Object.hasOwn(values,item)&&values[item]!==amount)return ambiguous();values[item]=amount;}
+      pending.length=0;
+    }
+    if(pending.length)return ambiguous();
+    requests.push({currency:currencies[0],values});
+  }
+  if(!requests.length)return null;
+  const currency=requests[0].currency,values={};
+  for(const request of requests){
+    if(request.currency!==currency)return ambiguous();
+    for(const [field,value] of Object.entries(request.values)){
+      if(Object.hasOwn(values,field)&&values[field]!==value)return ambiguous();
+      values[field]=value;
+    }
+  }
+  return {currency,values};
+}
 function money(value){
   if(!['string','number'].includes(typeof value)||!/^\d{1,12}(?:\.\d{1,2})?$/.test(String(value)))return invalid();
   const [whole,fraction='']=String(value).split('.');const minor=BigInt(whole)*100n+BigInt(fraction.padEnd(2,'0'));

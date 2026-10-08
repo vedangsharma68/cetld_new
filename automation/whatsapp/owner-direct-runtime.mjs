@@ -54,6 +54,10 @@ export function createOwnerDirectRuntime({supabase,scope,message,messageId,autho
         }
       }
       let payload=values;
+      // The unchanged-currency completeness check must refer to the same
+      // version that the SQL correction locks, including concurrent edits.
+      if(ctx.invoiceCorrectionReadGuard&&(table!=='invoices'||operation!=='update'
+        ||row?.id!==ctx.invoiceCorrectionReadGuard.id||row?.updated_at!==ctx.invoiceCorrectionReadGuard.updatedAt))return {ok:false,completed:false,code:'STALE'};
       if(table==='invoices'&&operation==='update'&&values.status==='paid'&&row?.metadata?.invoice_direction!=='receivable')
         return {ok:false,completed:false,code:'PAYMENT_GUARD',message:'Recording money received requires a receivable invoice. No payment was recorded.'};
       if(table==='invoices'&&operation==='update'&&values.customer_name!==undefined){
