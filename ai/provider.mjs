@@ -1,3 +1,4 @@
+import {randomUUID} from 'node:crypto';
 import {providerHealthIdentity} from './provider-health.mjs';
 import {normalizeProviderToolCalls} from './tool-calls.mjs';
 
@@ -352,9 +353,45 @@ function parseDataUrl(url) {
 function geminiRequest(messages, {tools, tool_choice: toolChoice, response_format: responseFormat, max_tokens: maxTokens, temperature, geminiJsonMode=false} = {}) {
   const system = [];
   const contents = [];
+  const responses=new Map();
+  const addContent=(role,parts)=>{
+    if(!parts.length)return;
+    const last=contents.at(-1);
+    if(last?.role===role)last.parts.push(...parts);
+    else contents.push({role,parts});
+  };
   for (const message of messages) {
     if (!message || typeof message !== 'object') throw invalidArgument();
     if (message.role === 'system') { system.push(String(message.content || '')); continue; }
+    if(message.role==='assistant'&&Array.isArray(message.tool_calls)&&message.tool_calls.length){
+      if(Array.isArray(message.googleParts)&&message.googleParts.some(part=>part?.functionCall)){
+        // Preserve native parts/signatures exactly as received. The executor can
+        // normalize or atomically coalesce calls; return its verified result to
+        // each original call represented by that executed call.
+        const original=message.googleParts.filter(part=>part?.functionCall);
+        for(const [index,part] of original.entries()){
+          const call=message.tool_calls[index]||(message.googleBatchCoalesced?message.tool_calls[0]:null);
+          const executed=Boolean(call);
+          const resultCall=call||message.tool_calls[0];
+          if(!resultCall?.id)throw invalidArgument();
+          const list=responses.get(resultCall.id)||[];list.push({call:part.functionCall,executed});responses.set(resultCall.id,list);
+        }
+        addContent('model',structuredClone(message.googleParts));
+      }else{
+        // Cross-provider/synthetic calls have no Google signature. Preserve their
+        // named context as text instead of fabricating a native signed call.
+        addContent('model',[{text:JSON.stringify({tool_calls:message.tool_calls})}]);
+      }
+      continue;
+    }
+    if(message.role==='tool'){
+      let response;try{response=JSON.parse(message.content);}catch{throw invalidArgument();}
+      if(!response||typeof response!=='object'||Array.isArray(response))response={result:response};
+      const calls=responses.get(message.tool_call_id);
+      if(calls?.length)addContent('user',calls.map(({call,executed})=>({functionResponse:{name:call.name,...(call.id?{id:call.id}:{}),response:executed?response:{ok:false,code:'NOT_EXECUTED',message:'This requested call did not execute. Use only the actual operation result as evidence.'}}})));
+      else addContent('user',[{text:JSON.stringify({...response,toolName:message.name,toolCallId:message.tool_call_id})}]);
+      continue;
+    }
     const role = message.role === 'assistant' ? 'model' : 'user';
     const parts = [];
     if (typeof message.content === 'string') parts.push({text: message.content});
@@ -366,7 +403,7 @@ function geminiRequest(messages, {tools, tool_choice: toolChoice, response_forma
         else throw invalidArgument();
       }
     } else throw invalidArgument();
-    contents.push({role, parts});
+    addContent(role,parts);
   }
   const generationConfig = {};
   if (Number.isInteger(maxTokens)) generationConfig.maxOutputTokens = maxTokens;
@@ -660,6 +697,7 @@ export class AIProvider {
   async #request(model, messages, options, usedFallback) {
     // This server-only compatibility option must never reach another provider.
     const {signal, deadlineAt, geminiJsonMode, ...wireOptions} = options;
+    const ordinaryMessages=messages.map(({googleParts,googleBatchCoalesced,...message})=>message);
     if (isCfModel(model)) {
       if (!this.#cfApiToken || !this.#cfAccountId) throw new AIError('API_KEY_MISSING', 503);
       const cfWireOptions = {...wireOptions};
@@ -671,7 +709,7 @@ export class AIProvider {
         const result = await this.#fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(this.#cfAccountId)}/ai/v1/chat/completions`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json', Authorization: `Bearer ${this.#cfApiToken}`},
-          body: safeJsonStringify({...cfWireOptions, model, messages, stream: false}),
+          body: safeJsonStringify({...cfWireOptions, model, messages:ordinaryMessages, stream: false}),
         }, async response => {
           const body = await readBoundedJson(response);
           if (!response.ok || body?.error || body?.success === false) throw responseStatusError(response, body, 'cloudflare');
@@ -697,7 +735,7 @@ export class AIProvider {
       return this.#fetch(ZEN_CHAT_COMPLETIONS_URL, {
         method: 'POST',
         headers: {'Content-Type': 'application/json', Authorization: `Bearer ${this.#zenApiKey}`},
-        body: safeJsonStringify({...wireOptions, model, messages, stream: false}),
+        body: safeJsonStringify({...wireOptions, model, messages:ordinaryMessages, stream: false}),
       }, async response => {
         const body = await readBoundedJson(response);
         if (!response.ok || body?.error) throw responseStatusError(response, body, 'opencode-zen');
@@ -715,7 +753,7 @@ export class AIProvider {
       return this.#fetch(OPENROUTER_BASE_URL + '/chat/completions', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', Authorization: `Bearer ${this.#openRouterApiKey}`},
-        body: safeJsonStringify(openRouterRequest(messages, wireOptions)),
+        body: safeJsonStringify(openRouterRequest(ordinaryMessages, wireOptions)),
       }, async response => {
         const body = await readBoundedJson(response);
         if (!response.ok || body?.error) throw responseStatusError(response, body, 'openrouter');
@@ -736,15 +774,15 @@ export class AIProvider {
       if (!response.ok || body?.error) throw responseStatusError(response, body, 'google');
       const parts = body?.candidates?.[0]?.content?.parts;
       if (!Array.isArray(parts)) throw new AIError('INVALID_RESPONSE');
-      const content = parts.filter(part => typeof part?.text === 'string').map(part => part.text).join('');
+      const content = parts.filter(part => part?.thought!==true&&typeof part?.text === 'string').map(part => part.text).join('');
       const finishReason = body?.candidates?.[0]?.finishReason || null;
       const toolCalls = parts.filter(part => part?.functionCall?.name).map((part, index) => ({
-        id: `gemini-call-${index}`,
+        id: `gemini-call-${randomUUID()}-${index}`,
         type: 'function',
         function: {name: part.functionCall.name, arguments: safeJsonStringify(part.functionCall.args || {})},
       }));
       if (!content && !toolCalls.length) throw new AIError('INVALID_RESPONSE');
-      return {content, finishReason, toolCalls, model, usedFallback};
+      return {content, finishReason, toolCalls, model, usedFallback,...(toolCalls.length?{googleParts:structuredClone(parts)}:{})};
     }, {signal, deadlineAt});
   }
 

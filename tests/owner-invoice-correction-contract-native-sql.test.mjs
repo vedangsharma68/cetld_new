@@ -1,3 +1,5 @@
+// All contacts are synthetic fixtures using reserved 555-01xx phone numbers.
+// Provider credential placeholders only reach the local stub; no network sends.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -14,7 +16,7 @@ const completion=content=>Response.json({choices:[{finish_reason:'stop',message:
 const toolCall=args=>Response.json({choices:[{finish_reason:'tool_calls',message:{content:'',tool_calls:[{id:'correction',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(args)}}]}}]});
 
 async function fixture(){
- const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+919871367051';
+ const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+12025550101';
  await db.query('insert into auth.users(id) values($1)',[ownerId]);
  await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
  const workspaceId=(await db.query("select (create_workspace('Correction contract',$1)).id",[randomUUID()])).rows[0].id;
@@ -75,7 +77,7 @@ test('native Gemini read and excessive date-only plan repair use compatible JSON
      assert.ok(body.systemInstruction.parts.some(p=>p.text.includes('INVALID_FIELDS')&&p.text.includes('validationShape')));
      return response([{text:JSON.stringify({operation:'update',table:'invoices',filters:target,values:{due_date:'2026-10-20'}})}]);
     }
-    const result=body.contents.flatMap(row=>row.parts).flatMap(part=>{try{return [JSON.parse(part.text)];}catch{return [];}}).findLast(row=>row.operation||row.action);
+    const result=body.contents.flatMap(row=>row.parts).flatMap(part=>{try{return [part.functionResponse?.response||JSON.parse(part.text)];}catch{return [];}}).findLast(row=>row.operation||row.action);
     if(result)outputs.push(result);
     if(!result)return response([{functionCall:{name:'workspaceData',args:{operation:'read',table:'invoices',filters:target,columns:['invoice_number','due_date','total_amount','currency']}}}]);
     if(result.operation==='read')return response([{functionCall:{name:'workspaceData',args:{operation:'update',table:'invoices',filters:target,values:{line_items:[],due_date:'2026-10-20',subtotal:100,total_amount:100}}}}]);
@@ -253,5 +255,40 @@ test('catalog repair cannot change the original invoice target or widen into a s
    assert.deepEqual(await f.read(f.ids[0]),f.before);assert.equal(await f.count('invoice_correction_audits'),0);
   }
   assert.equal(f.requests.filter(r=>r.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length,0);await f.assertNoCustomerWrites();
+ }finally{await f.close();}
+});
+
+test('native Gemini cached reads keep one bounded current-date execution opportunity despite prior failure history',async()=>{
+ const f=await fixture();try{
+  for(const [i,direction,body] of [[0,'inbound','Set amount to INR 6670 and due date 2026-10-20.'],[1,'outbound','Done, the due date was changed.'],[2,'outbound','The edit tool was not successfully run.']]){
+   await f.db.query("insert into whatsapp_messages(workspace_id,customer_id,phone,direction,audience,body,kind,status,idempotency_key,created_at) values($1,$2,$3,$4,'owner',$5,'normal',$6,$7,now()+$8::interval)",[f.scope.workspaceId,f.scope.customerId,f.scope.phone,direction,body,direction==='inbound'?'received':'sent','history-'+i,i+' seconds']);
+  }
+  const outputs=[],sent=[],readArgs={operation:'read',table:'invoices',filters:target,columns:['invoice_number','due_date','total_amount','currency']};
+  const response=parts=>Response.json({candidates:[{content:{parts},finishReason:'STOP'}]});
+  const native=(args,id)=>response([{functionCall:{name:'workspaceData',args,id},thoughtSignature:'c2ln'+id}]);
+  const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated'},authorize:input=>authorizeOwnerPhone({supabase:f.supabase,...input}),
+   logger:{info(){},warn(){},error(){}},providerFactory:options=>new AIProvider({...options,primaryModel:'gemini-3.5-flash-lite',fallbackModel:null}),
+   fetchImpl:async(url,init)=>{
+    assert.equal(new URL(url).hostname,'generativelanguage.googleapis.com');const body=JSON.parse(init.body);sent.push(body);
+    const replies=body.contents.flatMap(row=>row.parts).filter(p=>p.functionResponse).map(p=>p.functionResponse);
+    const result=replies.at(-1)?.response;if(result)outputs.push(result);
+    if(!result){assert.ok(body.contents.some(c=>c.parts.some(p=>p.text==='The edit tool was not successfully run.')));return native(readArgs,'read-first');}
+    assert.equal(replies[0].id,'read-first');
+    const original=body.contents.find(c=>c.role==='model'&&c.parts.some(p=>p.functionCall?.id==='read-first'));
+    assert.equal(original.parts.find(p=>p.functionCall).thoughtSignature,'c2lnread-first');
+    if(result.completed)return response([{text:'Done.'}]);
+    if(replies.length===1)return native(readArgs,'read-cached');
+    if(!body.tools)return response([{text:'The due date could not be updated because the edit tool was not successfully run.'}]);
+    assert.match(body.systemInstruction.parts.map(p=>p.text).join('\n'),/cached invoice read is evidence only/);
+    assert.equal(replies.at(-1).id,'read-cached');
+    return native({operation:'update',table:'invoices',filters:target,values:{due_date:'2026-10-20'}},'update-current');
+   }});
+  const messageId='native-cached-current-date';await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[messageId,f.scope.phone,dueOnlyMessage]);
+  const turn={...f.scope,messageId,message:dueOnlyMessage},reply=await handler(turn);
+  assert.equal(sent.length,4,JSON.stringify({reply,outputs}));assert.ok(sent[2].tools,'current write opportunity must remain enabled');
+  assert.equal(outputs.at(-1).completed,true,JSON.stringify({reply,outputs}));assert.deepEqual(outputs.at(-1).correction.changedFields,['due_date']);
+  const after=await f.read(f.ids[0]);assert.equal(after.due_date,'2026-10-20');assert.equal(after.currency,'USD');assert.equal(after.total_amount,100);assert.equal(after.status,'draft');assert.equal(after.followup_state,'paused');
+  assert.equal(f.requests.filter(r=>r.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length,1);assert.equal(await f.count('invoice_correction_audits'),1);
+  assert.match(reply.answer,/Due date: 2026-10-20/);await handler(turn);assert.equal(await f.count('invoice_correction_audits'),1);await f.assertNoCustomerWrites();
  }finally{await f.close();}
 });

@@ -1,3 +1,4 @@
+import {requestedInvoiceDateChange} from './invoice-corrections.mjs';
 import {internalToolEnvelope} from '../../ai/tool-calls.mjs';
 import {ownerGroundingIssue,ownerEvidence,completedOwnerResult,invoiceCorrectionFallback} from './owner-grounding.mjs';
 import {ownerCalendar} from './workspace-records.mjs';
@@ -1520,6 +1521,8 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
   const safetyRejects=new Set();
   const traceScope=traceId??config?.workspaceId??config?.workspace_id??'owner-agent';
   const scopedTrace=createHash('sha256').update(String(traceScope)).digest('hex').slice(0,16);
+  let dateReadRecoveryUsed=checkpoint?.version===1&&checkpoint.dateReadRecoveryUsed===true;
+  const requestedDateChange=requestedInvoiceDateChange(message);
   let observedWriteAttempted=checkpoint?.version===1&&checkpoint.observedWriteAttempted===true;
   let attemptedOperation=null;
   let lastCompletedOperation=null;
@@ -1549,7 +1552,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
   const saveCheckpoint=async()=>{
     if(!allowDeferred)return;
     const next={version:1,transcript:activeTranscript,toolCache:[...toolCache],phase:checkpointPhase,
-      pendingToolCalls,uncertainWrite,replyRequirement:replyRequirement(),observedWriteAttempted,mediaReference};
+      pendingToolCalls,uncertainWrite,replyRequirement:replyRequirement(),observedWriteAttempted,mediaReference,dateReadRecoveryUsed};
     // Persistence is a barrier before another operation starts. The worker
     // stores this under the original inbound event's lease, never model scope.
     if(onCheckpoint)await onCheckpoint(next);
@@ -1812,6 +1815,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         }
         return await finalAnswer({prompt:replyRepairInstruction(issue,requirement),repairLimit:1});
       }
+      let googleBatchCoalesced=false;
       // Coalesce ordinary structured writes before recording a checkpoint.
       // Every target remains independently resolved and one database RPC owns
       // all mutations; resuming cannot execute a partially saved call list.
@@ -1823,10 +1827,12 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
             if(!['create','update'].includes(args?.operation)||args.request!==undefined||args.operations!==undefined||Object.hasOwn(args.values||{},'status'))throw new Error();
             return args;
           });
+          googleBatchCoalesced=true;
           const first=calls[0];calls.splice(0,calls.length,{...first,function:{...first.function,arguments:JSON.stringify({operations})}});
         }catch{}
       }
-      transcript.push({role:'assistant',content:String(lastResult?.content||''),tool_calls:calls});
+      transcript.push({role:'assistant',content:String(lastResult?.content||''),tool_calls:calls,
+        ...(Array.isArray(lastResult?.googleParts)?{googleParts:lastResult.googleParts,...(googleBatchCoalesced?{googleBatchCoalesced:true}:{})}:{})});
       const parsed=[];
       for(const call of calls){
         const name=call?.function?.name;
@@ -1845,6 +1851,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
       const hasWorkspaceData=calls.length>1&&parsed.some(item=>item.name==='workspaceData')&&!readOnlyBatch;
       const mixedLegacyWrites=calls.length>1&&parsed.some(item=>WRITE_TOOLS.has(item.name)||tools.writeTools?.has?.(item.name));
       const resultStates=[];
+      let cachedInvoiceRead=false;
       for(const {call,name,args} of parsed){
         let output;
         let executedTool=false;
@@ -1864,6 +1871,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         }else if(cacheKey&&toolCache.has(cacheKey)){
           output=alreadyAnswered(toolCache.get(cacheKey));
           diagnostics.cacheHits++;
+          if(name==='workspaceData'&&output?.ok===true&&output?.operation==='read'&&output?.table==='invoices')cachedInvoiceRead=true;
           lastAttemptedToolName=name;
         }else{
           attemptedOperation={operation:args.operation,table:args.table};
@@ -1925,10 +1933,18 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
       if(resultStates.some(state=>state.readOnly))readOnlyToolRounds++;
       if(resultStates.some(state=>state.success)&&firstSuccessfulReadRound===null)firstSuccessfulReadRound=diagnostics.toolRounds;
       emitRound(round);activeRound=null;
+      const nextReadWouldFinalize=firstSuccessfulReadRound!==null&&diagnostics.toolRounds>firstSuccessfulReadRound;
+      const recoverCurrentDate=requestedDateChange&&!dateReadRecoveryUsed&&cachedInvoiceRead&&nextReadWouldFinalize
+        &&!writeMayHaveBeenAttempted()&&readOnlyToolRounds<OWNER_AGENT_MAX_READ_ONLY_TOOL_ROUNDS
+        &&diagnostics.toolRounds<OWNER_AGENT_MAX_TOOL_ROUNDS;
+      if(recoverCurrentDate){
+        dateReadRecoveryUsed=true;
+        transcript.push({role:'system',content:'The cached invoice read is evidence only. No edit has been attempted or completed in this turn. Carry out the current owner date instruction using workspaceData and its normal validation/authorization: '+JSON.stringify(String(message||''))+'. Prior assistant failure or success messages are not current results. If the target or instruction is ambiguous, ask; do not retry an attempted write or claim success without a verified result.'});
+      }
       const shouldFinalize=writeMayHaveBeenAttempted()
         ||diagnostics.toolRounds>=OWNER_AGENT_MAX_TOOL_ROUNDS
         ||readOnlyToolRounds>=OWNER_AGENT_MAX_READ_ONLY_TOOL_ROUNDS
-        ||(firstSuccessfulReadRound!==null&&diagnostics.toolRounds>firstSuccessfulReadRound);
+        ||(nextReadWouldFinalize&&!recoverCurrentDate);
       if(shouldFinalize)return await finalAnswer({});
       await saveCheckpoint();
     }
