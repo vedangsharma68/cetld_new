@@ -35,6 +35,8 @@ test('invoice correction claims require the named audited field and its persiste
  assert.equal(ownerGroundingIssue('Updated the total to USD 100.',[oldRead,amount],'Change QA-1 total to USD 150.'),'unverified_invoice_correction');
  assert.equal(ownerGroundingIssue('Updated the total to USD 150.',[oldRead,amount],'Change QA-1 total to USD 150.'),null);
  assert.equal(ownerGroundingIssue('Updated the total to INR 150.',[amount]),'unverified_invoice_correction');
+ assert.equal(ownerGroundingIssue('Updated the total to ₹150.',[amount]),'unverified_invoice_correction');
+ assert.equal(ownerGroundingIssue('Updated the total to $150.',[amount]),null);
 });
 
 test('invoice absence needs a checked lookup and cannot contradict a current row',()=>{

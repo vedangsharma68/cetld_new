@@ -166,7 +166,8 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
       if(moneyFields.length&&(!amounts.length||!corrections.some(result=>fields.every(field=>result.correction.changedFields.includes(field))
         &&new Set(moneyFields.map(field=>Number(result.record[field]))).size===1
         &&amounts.every(match=>Number((match[3]||match[4]).replaceAll(',',''))===Number(result.record[moneyFields[0]])
-          &&(!(match[2]||match[5])||(match[2]||match[5]).toUpperCase()===result.record.currency)))))return 'unverified_invoice_correction';
+          &&(!(match[2]||match[5])||(match[2]||match[5]).toUpperCase()===result.record.currency)
+          &&(!match[1]||new Intl.NumberFormat('en',{style:'currency',currency:result.record.currency,currencyDisplay:'narrowSymbol'}).formatToParts(0).find(part=>part.type==='currency')?.value===match[1])))))return 'unverified_invoice_correction';
       if(fields.includes('currency')){
         const currency=changedClause.match(/\bcurrency\b[^.;\n]{0,25}?\b([A-Z]{3})\b/i)?.[1]?.toUpperCase();
         if(!currency||!corrections.some(result=>result.correction.changedFields.includes('currency')&&result.record.currency===currency))return 'unverified_invoice_correction';
