@@ -16,7 +16,8 @@ export function requestedInvoiceDateChange(message){
   const due=/\bdue\s+date\b/i.test(text),issue=/\bissue\s+date\b/i.test(text);
   if(due===issue)return null;
   const clause=text.split(/[.;!?\n]+/).find(part=>part.includes(dates[0])&&(due?/\bdue\s+date\b/i:/\bissue\s+date\b/i).test(part));
-  if(!clause||/\b(?:do not|don't|never|cannot|can't|not to|avoid)\b/i.test(clause)
+  if(!clause||!/^\s*(?:(?:please|only)\s+)*(?:change|update|set|move|extend)\b/i.test(clause)||/["'“”]/.test(clause)
+    ||/\b(?:do not|don't|never|cannot|can't|not to|avoid)\b/i.test(clause)
     ||!new RegExp(`\\b(?:change|update|set|move|extend)\\b[^.;!?\\n]{0,120}\\b${due?'due':'issue'}\\s+date\\b`,'i').test(clause))return null;
   try{date(dates[0]);}catch{return null;}
   return {field:due?'due_date':'issue_date',value:dates[0],only:/^\s*(?:please\s+)?only\s+(?:change|update|set)\s+(?:the\s+)?(?:due|issue)\s+date\b/i.test(text)};

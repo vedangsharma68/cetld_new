@@ -11,7 +11,7 @@ import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {requestedInvoiceDateChange} from '../automation/whatsapp/invoice-corrections.mjs';
 
 test('date intent never promotes negated, historical, mixed or ambiguous date text into a correction',()=>{
- for(const message of ['Do not change the due date to 2026-10-20.','Show the due date 2026-10-20.','Change notes; keep due date 2026-10-20.',
+ for(const message of ['Do not change the due date to 2026-10-20.','Show the due date 2026-10-20.','Change notes; keep due date 2026-10-20.',"Change notes to 'change due date to 2026-10-20'.",'Earlier the customer said change due date to 2026-10-20.',
   'Change due date 2026-10-20 and issue date 2026-10-08.','Change due date from 2026-10-15 to 2026-10-20.','Change due date to 2026-02-31.'])assert.equal(requestedInvoiceDateChange(message),null,message);
  assert.deepEqual(requestedInvoiceDateChange('Only change the due date of QA-1 to 2026-10-20. Do not change anything else.'),{field:'due_date',value:'2026-10-20',only:true});
 });
