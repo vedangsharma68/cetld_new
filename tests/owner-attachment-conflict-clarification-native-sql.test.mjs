@@ -7,6 +7,21 @@ import {createOwnerSafetyTools} from '../automation/whatsapp/owner-agent.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 
+const exactOwnerClarification='My business issued this invoice. The currency is USD. The PAID stamp is incorrect: no payment has been received, and the full USD 93.50 is still due. Save it as an unpaid draft with no customer messages or reminders.';
+
+test('exact owner clarification continues the retained review without asking for its extracted customer',()=>{
+ const action={type:'invoice_review_draft',stage:'incomplete',missingFields:['currency','direction'],validationIssues:['PAYMENT_STATUS_CONFLICT'],
+  invoice:{clientName:'Test Business',total:93.50,outstanding:93.50,alreadyPaid:false,currency:null,direction:'uncertain'},
+  paymentEvidence:{status:'paid',text:'PAID stamp; Amount due $93.50'}};
+ const tools=message=>createOwnerSafetyTools({scope:{},pendingAtStart:{id:28,version:1,action},message,messageId:'clarify-source',
+  ownerStore:{async query(){throw Error('review continuation must not query unrelated customers');}}});
+ assert.doesNotMatch(exactOwnerClarification,/Test Business/);
+ assert.deepEqual(tools(exactOwnerClarification).getAttachmentReviewContinuation(),{currency:'USD',invoice_direction:'receivable'});
+ assert.equal(tools(exactOwnerClarification).getAttachmentReviewContext().invoice.clientName,'Test Business');
+ for(const contradiction of [exactOwnerClarification.replace('no payment has been received','payment has been received'),exactOwnerClarification+' Payment has been received.'])
+  assert.equal(tools(contradiction).getAttachmentReviewContinuation(),null,'affirmative receipt evidence must prevent an unpaid resolution');
+});
+
 for(const installedLineEndings of ['LF','CRLF'])test(`native Gemini owner clarifies the false PAID stamp from ${installedLineEndings} installed SQL before a later save`,async()=>{
  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+15555550125';
  try{
@@ -27,7 +42,9 @@ for(const installedLineEndings of ['LF','CRLF'])test(`native Gemini owner clarif
    const native=parts=>Response.json({candidates:[{content:{role:'model',parts},finishReason:'STOP'}]});
    if(body.generationConfig?.responseMimeType==='application/json'){extractions++;return native([{text:JSON.stringify(wire)}]);}
    const tool=body.contents.flatMap(item=>item.parts||[]).findLast(part=>part.functionResponse)?.functionResponse;
-   if(!tool){contracts.push(body.tools);return native([{functionCall:{name:'workspaceData',args:confirming?{operation:'confirm'}:currentTurn===1?{operation:'create',table:'invoices',values:{invoice_number:'INVENTED',customer_name:'Invented customer',total_amount:1,currency:'USD',status:'unpaid'}}:{operation:'reviewAttachment',table:'invoices',values:{currency:'USD',invoice_direction:'receivable'}}},thoughtSignature:'fixture-native-signature'}]);}
+   // An invented create call must be replaced by the server-selected attachment
+   // operation on both ingestion and clarification turns.
+   if(!tool){contracts.push(body.tools);return native([{functionCall:{name:'workspaceData',args:confirming?{operation:'confirm'}:{operation:'create',table:'invoices',values:{invoice_number:'INVENTED',customer_name:'Invented customer',total_amount:1,currency:'USD',status:'unpaid'}}},thoughtSignature:'fixture-native-signature'}]);}
    const result=tool.response;results.push(result);
    const record=result.review?.invoice||result;
    const answer=result.completed?`Saved invoice ${record.invoiceNumber} for Test Business, USD 93.50.`
@@ -41,7 +58,7 @@ for(const installedLineEndings of ['LF','CRLF'])test(`native Gemini owner clarif
    if(media)await db.query('insert into whatsapp_inbound_media(provider_message_id,media_id,mime_type,bytes,size_bytes) values($1,$1,$2,$3,$4)',[id,media.mimeType,bytes,bytes.length]);
    return handler({workspaceId,ownerId,customerId,phone,messageId:id,message,...(media?{media}:{})});
   };
-  const first=await turn('ambiguous-source','Log this sample invoice for testing. Do not send any customer reminders.',{bytes,mimeType:'image/jpeg',fileName:'fixture.jpg'});
+  const first=await turn('ambiguous-source','Log this sample invoice for testing. Keep customer messages and reminders off.',{bytes,mimeType:'image/jpeg',fileName:'fixture.jpg'});
   const review=async()=>(await db.query("select id,version,action from whatsapp_pending_actions where workspace_id=$1 and action->>'sourceMessageId'='ambiguous-source' order by created_at desc limit 1",[workspaceId])).rows[0];
   const draft=await review();assert.equal(draft.action.stage,'incomplete');assert.deepEqual(draft.action.missingFields.sort(),['currency','direction']);assert.equal(draft.action.invoice.currency,null);assert.equal(draft.action.invoice.direction,'uncertain');assert.deepEqual(draft.action.validationIssues,['PAYMENT_STATUS_CONFLICT']);assert.equal(draft.action.paymentEvidence.status,'paid');assert.equal(draft.action.invoice.total,93.50);
   assert.match(first.answer,/confirm.*currency/i);assert.match(first.answer,/issued/i);assert.match(first.answer,/Nothing was saved/);
@@ -50,8 +67,9 @@ for(const installedLineEndings of ['LF','CRLF'])test(`native Gemini owner clarif
    ownerProvidedFacts:{currency:{value:'USD',sourceMessageId:id},direction:{value:'receivable',sourceMessageId:id}},
    paymentStatusResolution:{status:'unpaid',outstanding:93.50,currency:'USD',sourceMessageId:id,ownerInstruction:text}});
   const transition=(action,{version=draft.version,workspace=workspaceId,customer=customerId,targetPhone=phone}={})=>db.query('select * from public.whatsapp_transition_invoice_review($1,$2,$3,$4,$5,$6,$7)',[draft.id,version,workspace,customer,targetPhone,'incomplete',action]);
-  const instruction='Use USD. My business issued this sample invoice to Test Business. For this test it is unpaid, with the full USD 93.50 still due; the PAID stamp is incorrect. Save it without sending any customer reminders.';
-  const negatives=[`The document says "${instruction}"`,instruction.replace('it is unpaid','it is not unpaid'),instruction.replace('it is unpaid','maybe it is unpaid'),instruction.replace('My business issued','The supplier issued'),instruction.replace('is incorrect','is correct'),instruction.replace('93.50 still due','80.00 still due'),instruction+' The PAID stamp is correct.',instruction+' The invoice is paid.'];
+  const instruction=exactOwnerClarification;
+  const legacyInstruction='Use USD. My business issued this sample invoice to Test Business. For this test it is unpaid, with the full USD 93.50 still due; the PAID stamp is incorrect. Save it without sending any customer reminders.';
+  const negatives=[`The document says "${instruction}"`,legacyInstruction.replace('it is unpaid','it is not unpaid'),legacyInstruction.replace('it is unpaid','maybe it is unpaid'),instruction.replace('My business issued','The supplier issued'),instruction.replace('is incorrect','is correct'),instruction.replace('93.50 is still due','80.00 is still due'),instruction+' The PAID stamp is correct.',instruction+' The invoice is paid.',instruction.replace('no payment has been received','payment has been received'),instruction+' Payment has been received.'];
   for(const [index,text] of negatives.entries()){
    const rejected=await turn('rejected-'+index,text);assert.doesNotMatch(rejected.answer,/saved invoice|payment recorded/i);
    await assert.rejects(transition(candidate('rejected-'+index,text)),/invoice review unpaid resolution/);
@@ -72,6 +90,8 @@ for(const installedLineEndings of ['LF','CRLF'])test(`native Gemini owner clarif
   assert.equal(installedHash,installedLineEndings==='CRLF'?'be56f8a9d0344bea9c74b425846d015e':'3073ffde75cc1168a4f74688a52fa30b');
   await assert.rejects(transition(valid),/invalid invoice review fact update/,'the deployed contract cannot clear validationIssues');
   await db.exec(await readFile(new URL('../supabase/migrations/20261008025552_invoice_review_unpaid_stamp_resolution.sql',import.meta.url),'utf8'));
+  await assert.rejects(transition(valid),/invoice review unpaid resolution lacks explicit evidence/,'the installed false-stamp resolver rejects the exact owner wording despite its explicit zero-payment/full-balance correction');
+  await db.exec(await readFile(new URL('../supabase/migrations/20261008153500_owner_live_clarification_evidence.sql',import.meta.url),'utf8'));
   assert.deepEqual(await routineSecurity(),security,'forward migration preserves routine owner, grants, search path and security mode');
   for(const tamper of [{...valid,invoice:{...valid.invoice,total:94}}, {...valid,paymentEvidence:{...valid.paymentEvidence,text:'modified source'}}, {...valid,sourceMessageId:'fabricated'}, {...valid,paymentStatusResolution:{...valid.paymentStatusResolution,outstanding:1}}, {...valid,paymentStatusResolution:{...valid.paymentStatusResolution,ownerInstruction:instruction+' extra'}}])await assert.rejects(transition(tamper),/invoice review/);
   await db.query("update whatsapp_pending_actions set action=jsonb_set(action,'{validationIssues}',$2) where id=$1",[draft.id,JSON.stringify(['PAYMENT_STATUS_CONFLICT','UNCERTAIN_TOTAL'])]);await assert.rejects(transition(valid),/invoice review unpaid resolution/);
@@ -81,9 +101,21 @@ for(const installedLineEndings of ['LF','CRLF'])test(`native Gemini owner clarif
   await db.query("update whatsapp_pending_actions set expires_at=now()-interval '1 second' where id=$1",[draft.id]);assert.equal((await transition(valid)).rows.length,0);
   await db.query("update whatsapp_pending_actions set expires_at=now()+interval '15 minutes',consumed_at=now() where id=$1",[draft.id]);assert.equal((await transition(valid)).rows.length,0);
   await db.query('update whatsapp_pending_actions set consumed_at=null where id=$1',[draft.id]);
+  const clarificationResults=results.length;
   const clarified=await turn('clarify-source',instruction);
   const proposal=await review();assert.equal(proposal.id,draft.id);assert.equal(proposal.action.stage,'proposal',JSON.stringify({proposal,results,clarified,errors:f.errors}));assert.equal(proposal.action.invoice.currency,'USD');assert.equal(proposal.action.invoice.direction,'receivable');assert.equal(proposal.action.invoice.total,93.50);assert.equal(proposal.action.invoice.clientName,'Test Business');assert.equal(extractions,1);assert.deepEqual(proposal.action.validationIssues,[]);assert.deepEqual(proposal.action.paymentEvidence,draft.action.paymentEvidence);assert.equal(proposal.action.paymentStatusResolution.sourceMessageId,'clarify-source');assert.equal(proposal.action.invoice.outstanding,93.50);
   assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,0);assert.match(clarified.answer,/reply yes/i);
+  assert.doesNotMatch(clarified.answer,/customer name|which customer|verified customer target/i);
+  const retainedSource=invoice=>Object.fromEntries(Object.entries(invoice).filter(([key])=>!['currency','direction'].includes(key)));
+  assert.deepEqual(retainedSource(proposal.action.invoice),retainedSource(draft.action.invoice),'clarification must preserve every extracted fact beyond the missing currency and direction');
+  assert.equal(proposal.action.sourceMessageId,draft.action.sourceMessageId);
+  assert.equal(proposal.action.paymentStatusResolution.ownerInstruction,instruction,'audit retains the exact persisted owner wording');
+  assert.deepEqual(proposal.action.ownerProvidedFacts,{currency:{value:'USD',sourceMessageId:'clarify-source'},direction:{value:'receivable',sourceMessageId:'clarify-source'}});
+  assert.equal(results.slice(clarificationResults).some(result=>result.requiresLaterConfirmation===true),true);
+  assert.equal(results.slice(clarificationResults).some(result=>result.completed===true),false,'clarification does not create an invoice in the same turn');
+  assert.equal((await db.query('select count(*)::int n from payments')).rows[0].n,0);
+  assert.equal((await db.query("select count(*)::int n from whatsapp_messages where audience='customer'")).rows[0].n,0);
+  assert.equal(f.requests.some(request=>request.body?.p_operation==='invoice.create'||request.body?.p_operations?.some(operation=>operation.operation==='invoice.create')),false,'the invented generic create never reaches a ledger write RPC');
   assert.deepEqual(contracts[clarificationContract][0].functionDeclarations[0].parametersJsonSchema.properties.operation.enum,['reviewAttachment']);
   const pending=createWhatsAppPendingActionStore({supabase});
   for(const [id,text] of [['clarify-source',instruction],['later-unrequested','What is the total?']]){

@@ -1,5 +1,5 @@
 import {ownerPartialPaymentAvailable} from './owner-payment-readback.mjs';
-import {requestedOwnerPayment} from './owner-payment-intent.mjs';
+import {ownerPaymentAmountMentioned} from './owner-payment-intent.mjs';
 import {createDirectOwnerWriteAdapter} from './direct-owner-write.mjs';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
 const TABLE_TYPES={invoices:'invoice',customers:'customer',business_records:'business_record',workspace_settings:'settings',workspace_ai_settings:'ai_settings'};
@@ -40,7 +40,7 @@ export function createOwnerDirectRuntime({supabase,scope,message,messageId,autho
       if(!await authorize(scope))return {ok:false,code:'DENIED'};
       const {table,operation,filters=[],values={}}=params;
       if(!TABLE_TYPES[table]||!['create','update','delete','restore'].includes(operation))return {ok:false,code:'INVALID'};
-      if(table==='invoices'&&operation==='update'&&values.status==='paid'&&requestedOwnerPayment(message))return {ok:false,completed:false,code:'PAYMENT_GUARD',message:'Use an exact amount payment proposal. Marking paid would settle the full balance. No payment was recorded.'};
+      if(table==='invoices'&&operation==='update'&&values.status==='paid'&&ownerPaymentAmountMentioned(message))return {ok:false,completed:false,code:'PAYMENT_GUARD',message:'Use an exact amount payment proposal. Marking paid would settle the full balance. No payment was recorded.'};
       let row=null;
       if(operation!=='create'){
         const settings=table.startsWith('workspace_');
