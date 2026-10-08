@@ -12,6 +12,7 @@ import {createWhatsAppPendingActionStore} from './pending-actions.mjs';
 import {createOwnerSettingsStore, describeSettingsChange} from './owner-settings.mjs';
 import {createWhatsAppBoundMessageHandler,reviewDraft,invoiceReviewClarification} from './assistant-handler.mjs';
 import {extractInvoice} from '../../ai/extraction.mjs';
+import {invoiceReviewUnpaidResolution} from './invoice-review-payment-resolution.mjs';
 import {isSupportedCurrency} from '../../currency-contract.mjs';
 
 const YES = /^\s*(?:yes|y|ok|okay|confirm|confirmed|do it|go ahead|proceed|approve)\s*[.!]?\s*$/i;
@@ -171,6 +172,7 @@ function mentionsAmount(text,value) {
   return false;
 }
 function ownerCurrencyEvidence(message,value) {
+  if(/[\"“”`]|(?:^|\s)'|\b(?:says|said|quoted)\b/i.test(message))return false;
   if(typeof value!=='string'||/[?]|\b(?:maybe|perhaps|might|whether|later|tomorrow|next)\b/i.test(message))return false;
   const codes=[...new Set([...String(message).matchAll(/\b[A-Za-z]{3}\b/g)].map(match=>match[0].toUpperCase())
     .filter(code=>isSupportedCurrency(code)&&mentionsPositiveWholePhrase(message,code)))];
@@ -178,6 +180,7 @@ function ownerCurrencyEvidence(message,value) {
   return codes.length===1&&codes[0]===value.toUpperCase()&&!denied.test(message);
 }
 function ownerDirectionEvidence(message) {
+  if(/[\"“”`]|(?:^|\s)'|\b(?:says|said|quoted)\b/i.test(message))return false;
   if(/[?]|\b(?:not|never|[a-z]+n['’]t|maybe|perhaps|might|could|would|if|whether|will)\b[^.!?;]{0,50}\b(?:receivable|issue(?:d)?|created|made|sent (?:it|this|the invoice|the bill))\b/i.test(message))return false;
   const receivable=/\b(?:this(?: invoice| bill| document| attachment)?|it|the (?:invoice|bill))\s+is\s+(?:an?\s+)?receivable\b/u;
   return normalizedOwnerText(message).split(/[.!?;,]+|\b(?:and|but)\b/u).some(clause=>
@@ -579,11 +582,12 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     const currentAction=pendingAtStart?.action;
     if(!pendingStoreAvailable||!pending||typeof pending.loadInvoiceReview!=='function'
       ||typeof pending.transitionInvoiceReview!=='function')return {ok:false,code:'UNAVAILABLE',message:SAFE_ERRORS.UNAVAILABLE};
-    if(currentAction?.type==='invoice_review_draft'&&currentAction.validationIssues?.length)
+    const paymentResolution=invoiceReviewUnpaidResolution({action:currentAction,message,messageId});
+    if(currentAction?.type==='invoice_review_draft'&&currentAction.validationIssues?.length&&!paymentResolution)
       return {ok:false,code:'INVALID',outcome:'review_incomplete',message:invoiceReviewClarification(currentAction)};
     if(currentAction?.type==='invoice_review_draft'&&['incomplete','proposal'].includes(currentAction.stage)){
       const keys={invoiceNumber:'invoiceNumber',customerName:'clientName',invoiceDate:'invoiceDate',dueDate:'dueDate',total:'total',currency:'currency',direction:'direction',subtotal:'subtotal',tax:'tax',notes:'notes',lineItems:'lineItems',clientEmail:'clientEmail',clientPhone:'clientPhone'};
-      if(raw&&typeof raw==='object'&&!Array.isArray(raw)&&Object.keys(raw).length
+      if(!paymentResolution&&raw&&typeof raw==='object'&&!Array.isArray(raw)&&Object.keys(raw).length
         &&Object.entries(raw).every(([key,value])=>keys[key]&&!currentAction.missingFields?.includes(key)&&JSON.stringify(value)===JSON.stringify(currentAction.invoice?.[keys[key]]))){
         const current=await pending.loadInvoiceReview({...scope});
         if(!current||current.id!==pendingAtStart.id||current.version!==pendingAtStart.version)return {ok:false,code:'STALE',message:SAFE_ERRORS.STALE};
@@ -622,7 +626,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     const action=current.action;
     const invoice={...(action.invoice||{})};
     const missing=new Set(Array.isArray(action.missingFields)?action.missingFields:[]);
-    if(!missing.size||[...missing].some(field=>!allowed.has(field)))return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
+    if((!missing.size&&!paymentResolution)||[...missing].some(field=>!allowed.has(field)))return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
     // Older extraction drafts omitted provenance even when currency passed the
     // required confidence check. Recover only that existing, complete fact.
     const legacyPhotoCurrency=action.currencySource==null&&!missing.has('currency')&&isSupportedCurrency(invoice.currency);
@@ -635,7 +639,10 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     const ownerProvidedFacts={...(action.ownerProvidedFacts||{})};
     const invoiceKey={invoiceNumber:'invoiceNumber',customerName:'clientName',invoiceDate:'invoiceDate',dueDate:'dueDate',total:'total',currency:'currency',direction:'direction'};
     for(const [field,rawValue] of Object.entries(raw)){
-      if(!missing.has(field))return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
+      if(!missing.has(field)){
+        if(paymentResolution&&JSON.stringify(rawValue)===JSON.stringify(invoice[invoiceKey[field]]))continue;
+        return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
+      }
       let value=rawValue;
       if(field==='currency'){
         if(typeof value!=='string')return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
@@ -659,12 +666,15 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     }
     if(invoice.invoiceDate&&invoice.dueDate&&invoice.dueDate<invoice.invoiceDate)
       return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
-    const proposalReady=missing.size===0&&invoice.direction==='receivable'&&isSupportedCurrency(invoice.currency)
+    const validationIssues=paymentResolution?(action.validationIssues||[]).filter(code=>code!=='PAYMENT_STATUS_CONFLICT'):action.validationIssues||[];
+    const proposalReady=validationIssues.length===0&&missing.size===0&&invoice.direction==='receivable'&&isSupportedCurrency(invoice.currency)
       &&typeof invoice.invoiceNumber==='string'&&invoice.invoiceNumber.trim()
       &&typeof invoice.clientName==='string'&&invoice.clientName.trim()&&amountCents(invoice.total)!==null
       &&dateIsValid(invoice.invoiceDate)&&(invoice.dueDate==null||dateIsValid(invoice.dueDate)&&invoice.dueDate>=invoice.invoiceDate);
     const next={...action,stage:proposalReady?'proposal':'incomplete',invoice,missingFields:[...missing],ownerProvidedFacts,
+      ...(paymentResolution?{validationIssues,paymentStatusResolution:paymentResolution}:{}),
       currencySource:Object.hasOwn(ownerProvidedFacts,'currency')?'user':action.currencySource??(legacyPhotoCurrency?'photo':null)};
+    await active();
     const saved=await pending.transitionInvoiceReview({...current,...scope,fromStage:'incomplete',action:next});
     if(!saved)return {ok:false,code:'STALE',message:SAFE_ERRORS.STALE};
     if(proposalReady)setReviewReplyRequirement(invoice);
@@ -683,8 +693,12 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     if(!pendingStoreAvailable||!pending||typeof pending.loadInvoiceReview!=='function'
       ||typeof pending.transitionInvoiceReview!=='function')return {ok:false,code:'UNAVAILABLE',message:SAFE_ERRORS.UNAVAILABLE};
     if(action.stage==='proposal'&&((action.sourceMessageId&&action.sourceMessageId===messageId)
-      ||action.invoiceNumberOverrideAudit?.ownerMessageId===messageId))
+      ||action.invoiceNumberOverrideAudit?.ownerMessageId===messageId
+      ||action.paymentStatusResolution?.sourceMessageId===messageId
+      ||Object.values(action.ownerProvidedFacts||{}).some(fact=>fact?.sourceMessageId===messageId)))
       return {ok:false,code:'INVALID',message:'A review proposal must be confirmed in a later message.'};
+    if(action.stage==='proposal'&&action.paymentStatusResolution&&!canConfirm()&&!ownerRequestsInvoiceAttachment(message))
+      return {ok:false,code:'INVALID',message:'Please explicitly confirm that you want to save this reviewed invoice.'};
     const invoice=action.invoice||{};
     setReviewReplyRequirement(invoice);
     if(invoice.direction!=='receivable')return {ok:false,code:'INVALID',message:'Only an invoice your business issued can be saved here.'};
@@ -1216,7 +1230,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     getAttachmentReviewContinuation(){
       const action=pendingAtStart?.action;
       if(pendingAtStart?.consumed_at||action?.type!=='invoice_review_draft'||action.stage!=='incomplete'
-        ||action.validationIssues?.length||!Array.isArray(action.missingFields)
+        ||(action.validationIssues?.length&&!invoiceReviewUnpaidResolution({action,message,messageId}))||!Array.isArray(action.missingFields)
         ||/[?]|\b(?:maybe|perhaps|might|if|whether|later|tomorrow|next)\b/i.test(message))return null;
       const values={};
       if(action.missingFields.includes('currency')){
@@ -1226,6 +1240,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
           ||new RegExp('^\\s*'+codes[0]+'[.!]?\\s*$','i').test(message)))values.currency=codes[0];
       }
       if(action.missingFields.includes('direction')&&ownerDirectionEvidence(message))values.invoice_direction='receivable';
+      if(!Object.keys(values).length&&invoiceReviewUnpaidResolution({action,message,messageId})&&isSupportedCurrency(action.invoice?.currency))values.currency=action.invoice.currency;
       return Object.keys(values).length?values:null;
     },
     getAttachmentReviewContext(){
