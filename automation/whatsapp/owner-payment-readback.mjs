@@ -1,5 +1,5 @@
 export async function ownerPartialPaymentAvailable(supabase){
- try{const result=await supabase.rpc('whatsapp_owner_partial_payment_capability',{});return !result.error&&result.data?.ok===true&&result.data?.version===1;}catch{return false;}
+ try{const result=await supabase.rpc('whatsapp_owner_partial_payment_capability',{});return !result.error&&result.data?.ok===true&&result.data?.version===2;}catch{return false;}
 }
 // Receipt plus independent scoped invoice/payment reads are completion evidence.
 export async function verifyOwnerPaymentReceipt({supabase,scope,messageId}){

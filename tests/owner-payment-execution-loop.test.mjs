@@ -3,12 +3,15 @@ import assert from 'node:assert/strict';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {requestedOwnerPayment} from '../automation/whatsapp/owner-payment-intent.mjs';
 const message='Record a USD 500 test payment against invoice SB-10442 for Northwind Systems LLC. This is only a dummy bookkeeping entry. Keep customer messages and reminders off.';
+const leadingMessage='For test invoice INV-2026-6769 for Northwind Systems LLC, record a partial payment of USD 500. This is a dummy bookkeeping entry only; keep messages and reminders off.';
 const call=(args,id)=>({id,type:'function',function:{name:'workspaceData',arguments:JSON.stringify(args)}});
 const read={operation:'read',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:'SB-10442'}]};
 const definition={type:'function',function:{name:'workspaceData',parameters:{type:'object'}}};
 const evidence={ok:true,readOnly:true,operation:'read',table:'invoices',lookupInvoiceNumber:'SB-10442',rows:[{invoice_number:'INV-2026-6769',currency:'USD',total_amount:951.52,amount_paid:0}],truncated:false};
 test('payment current intent ignores quoted, historical, question and ambiguous authority',()=>{
  assert.deepEqual(requestedOwnerPayment(message),{amount:500,currency:'USD',invoiceNumber:'SB-10442',customerName:'Northwind Systems LLC'});
+ assert.deepEqual(requestedOwnerPayment(leadingMessage),{amount:500,currency:'USD',invoiceNumber:'INV-2026-6769',customerName:'Northwind Systems LLC'});
+ for(const text of ['He said "'+leadingMessage+'"','Do not '+leadingMessage,'Can I '+leadingMessage,'Yesterday I '+leadingMessage,leadingMessage+' Instead pay USD 600.',leadingMessage.replace('USD 500','USD 500 or EUR 500'),leadingMessage.replace('record a partial','do not record a partial'),leadingMessage.replace('USD 500.','USD 500?')])assert.equal(requestedOwnerPayment(text),null,text);
  for(const text of ['He said "'+message+'"','Do not '+message,'Can I '+message,'Yesterday I '+message,message+' Instead pay USD 600.',message.replace('USD 500','USD 500 or EUR 500')])assert.equal(requestedOwnerPayment(text),null,text);
 });
 test('one cached-read model opportunity respects caps and attempted-write uncertainty',async()=>{

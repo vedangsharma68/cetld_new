@@ -2,11 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
-const base=process.env.CETLD_PAYMENT_BASELINE?pathToFileURL(process.env.CETLD_PAYMENT_BASELINE+'/'):new URL('../',import.meta.url);
+const baseline=process.env.CETLD_PAYMENT_BASELINE||process.env.CETLD_PAYMENT_LEADING_BASELINE;
+const base=baseline?pathToFileURL(baseline+'/'):new URL('../',import.meta.url);
 const {createOfflineSqlNetwork}=await import(new URL('tests/fixtures/offline-sql-network.mjs',base));
 const {createOwnerMessageHandler}=await import(new URL('automation/whatsapp/owner-handler.mjs',base));
 const {AIProvider}=await import(new URL('ai/provider.mjs',base));
 const prompt='Record a USD 500 test payment against invoice SB-10442 for Northwind Systems LLC. This is only a dummy bookkeeping entry. Keep customer messages and reminders off.';
+const leadingPrompt='For test invoice INV-2026-6769 for Northwind Systems LLC, record a partial payment of USD 500. This is a dummy bookkeeping entry only; keep messages and reminders off.';
 const target=[{column:'invoice_number',operator:'eq',value:'SB-10442'}];
 const proposal={operation:'create',table:'payments',filters:target,values:{amount:500,currency:'USD'}};
 async function fixture(options={}){
@@ -24,6 +26,7 @@ async function fixture(options={}){
   ids.push((await db.query("insert into invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,status,metadata) values($1,$2,'AUTO','2026-10-01','2026-10-31','USD',951.52,'draft',$3) returning id",[ws,client,{invoice_direction:'receivable',printed_invoice_number:'SB-10442',source_document:{name:'original-source'},followup_state:'paused',next_follow_up_at:null}])).rows[0].id);
  }
  for(let index=0;index<6;index++)await db.query("insert into invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,status,metadata) values($1,(select customer_id from invoices where id=$2),'AUTO','2026-10-01','2026-10-31','USD',$3,'draft',$4)",[workspaceId,ids[0],100+index,{invoice_direction:'receivable',printed_invoice_number:'FIXTURE-OTHER-'+index,followup_state:'paused',next_follow_up_at:null}]);
+ if(options.invoiceNumber)await db.query('update invoices set invoice_number=$2 where id=$1',[ids[0],options.invoiceNumber]);
  await db.query("insert into invoice_files(workspace_id,invoice_id,storage_path,file_name,mime_type,size_bytes) values($1,$2,$3,'original.pdf','application/pdf',123)",[workspaceId,ids[0],workspaceId+'/original.pdf']);
  const scope={workspaceId,ownerId,customerId,phone};
  await db.query("update workspace_settings set owner_bot_preferences=owner_bot_preferences||'{\"confirmationMode\":\"direct\"}' where workspace_id=$1",[workspaceId]);
@@ -31,19 +34,24 @@ async function fixture(options={}){
  const inbound=async(id,message)=>db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[id,phone,message]);
  return {...f,scope,ids,snapshot,inbound};
 }
-function handlerFor(f,{readTwice=false,operation=proposal,confirmation=false}={}){
- let calls=0;const outputs=[],requests=[];
+function handlerFor(f,{readTwice=false,readOnce=false,readTarget=target,operation=proposal,confirmation=false,repairPlan=null,planningMessage=null}={}){
+ let calls=0;const outputs=[],requests=[],planningRequests=[];
  const response=parts=>Response.json({candidates:[{content:{parts},finishReason:'STOP'}]});
  const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated'},logger:{info(){},warn(){},error(){}},providerFactory:options=>new AIProvider({...options,primaryModel:'gemini-3.5-flash-lite',fallbackModel:null}),fetchImpl:async(url,init)=>{
   assert.equal(new URL(url).hostname,'generativelanguage.googleapis.com');const body=JSON.parse(init.body);calls++;requests.push(body);
+  if(body.generationConfig?.responseMimeType==='application/json'){
+   planningRequests.push(body);assert.ok(repairPlan,'Unexpected planning request');
+   const wire=JSON.stringify(body);assert.match(wire,/BATCH_SHAPE/);assert.ok(wire.includes(planningMessage));assert.match(wire,/payments/);assert.match(wire,/currency/);assert.match(wire,/amount/);
+   return response([{text:JSON.stringify(repairPlan)}]);
+  }
   const tools=body.contents.flatMap(row=>row.parts).flatMap(part=>part.functionResponse?[part.functionResponse.response]:[]),last=tools.at(-1);
   if(last)outputs.push(last);
   if(!body.tools)return response([{text:last?.completed?`Recorded USD ${last.paymentAmount||500} payment. The remaining balance is USD ${last.outstandingAmount??451.52}. Reminders are paused.`:last?.proposal?'Proposed a USD 500 payment. The remaining balance would be USD 451.52. Reply yes to confirm or cancel.':'No changes were made.'}]);
   if(confirmation)return response([{functionCall:{name:'workspaceData',args:{operation:'confirm'}}}]);
-  if(readTwice&&tools.length<2)return response([{functionCall:{name:'workspaceData',args:{operation:'read',table:'invoices',...(tools.length?{filters:target}:{}),columns:['invoice_number','customer_name','total_amount','amount_paid','currency','status']}},thoughtSignature:'c2ln'}]);
+  if(readTwice&&tools.length<2||readOnce&&tools.length<1)return response([{functionCall:{name:'workspaceData',args:{operation:'read',table:'invoices',...(readOnce||tools.length?{filters:readTarget}:{}),columns:['invoice_number','customer_name','total_amount','amount_paid','currency','status']}},thoughtSignature:'c2ln'}]);
   return response([{functionCall:{name:'workspaceData',args:operation}}]);
  }});
- return {handler,outputs,requests,calls:()=>calls};
+ return {handler,outputs,requests,planningRequests,calls:()=>calls};
 }
 test('actual native wire reads twice then proposes USD500 and later confirms exactly USD500',async()=>{
  const f=await fixture();try{
@@ -64,6 +72,38 @@ test('actual native wire reads twice then proposes USD500 and later confirms exa
   assert.deepEqual(after.invoices.find(row=>row.id===f.ids[1]),before.invoices.find(row=>row.id===f.ids[1]));
   assert.deepEqual(after.invoices.filter(row=>row.id!==f.ids[0]),before.invoices.filter(row=>row.id!==f.ids[0]));
   const calls=confirm.calls();assert.equal((await confirm.handler({...f.scope,messageId:'payment-confirm',message:'yes'})).replayed,true);assert.equal(confirm.calls(),calls);assert.deepEqual(await f.snapshot(),after);assert.deepEqual(f.errors,[]);
+ }finally{await f.close();}
+});
+test('leading invoice syntax repairs native BATCH_SHAPE to a single model-selected payment and later confirms exactly USD500', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
+ const f=await fixture({invoiceNumber:'INV-2026-6769'});try{
+  const {requestedOwnerPayment}=await import(new URL('automation/whatsapp/owner-payment-intent.mjs',base));
+  for(const text of [prompt,leadingPrompt,'For invoice INV-2026-6769, log payment of USD 500.',
+   'He said "'+leadingPrompt+'"','Do not '+leadingPrompt,'Can I '+leadingPrompt,'Yesterday I '+leadingPrompt,
+   leadingPrompt+' Instead pay USD 600.',leadingPrompt.replace('record a partial','do not record a partial'),leadingPrompt.replace('USD 500.','USD 500?'),leadingPrompt.replace('USD 500','USD 500 or EUR 500')]){
+   assert.deepEqual((await f.db.query('select app.owner_payment_instruction($1) value',[text])).rows[0].value,requestedOwnerPayment(text),text);
+  }
+  const before=await f.snapshot(),currentTarget=[{column:'invoice_number',operator:'eq',value:'INV-2026-6769'}],single={...proposal,filters:currentTarget};
+  await f.inbound('leading-propose',leadingPrompt);
+  const run=handlerFor(f,{readOnce:true,readTarget:currentTarget,operation:{operations:[single]},repairPlan:single,planningMessage:leadingPrompt});
+  const result=await run.handler({...f.scope,messageId:'leading-propose',message:leadingPrompt,history:[{role:'assistant',content:'Enter the payment amount for this invoice.'}]});
+  assert.equal(run.planningRequests.length,1);assert.equal(run.calls(),4);assert.equal(run.outputs[0].rows.length,1);
+  if(process.env.CETLD_PAYMENT_LEADING_BASELINE){assert.equal(run.outputs.at(-1).ok,false);assert.equal(run.outputs.at(-1).planningRepair.validationCode,'BATCH_SHAPE');assert.deepEqual(await f.snapshot(),before);assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions')).rows[0].n,0);return;}
+  assert.equal(run.outputs.at(-1).planningRepair.validationCode,'BATCH_SHAPE');assert.equal(run.outputs.at(-1).proposal,true,JSON.stringify({result,outputs:run.outputs,errors:f.errors}));
+  assert.equal(run.outputs.at(-1).details.paymentAmount,500);assert.equal(run.outputs.at(-1).details.outstandingAmount,451.52);assert.deepEqual(await f.snapshot(),before);
+  const pending=(await f.db.query('select * from whatsapp_pending_actions where consumed_at is null')).rows[0];assert.deepEqual(pending.action.changes,{amount:500,currency:'USD'});assert.equal(pending.action.requestedInvoiceNumber,'INV-2026-6769');
+  await f.inbound('leading-confirm','yes');const confirm=handlerFor(f,{confirmation:true});await confirm.handler({...f.scope,messageId:'leading-confirm',message:'yes'});
+  assert.equal(confirm.outputs.at(-1).completed,true,JSON.stringify(confirm.outputs));assert.equal(confirm.outputs.at(-1).outstandingAmount,451.52);
+  const after=await f.snapshot(),invoice=after.invoices.find(row=>row.id===f.ids[0]);assert.equal(invoice.amount_paid,500);assert.equal(invoice.total_amount,951.52);assert.equal(invoice.status,'draft');
+  assert.equal(after.payments.length,1);assert.equal(after.payments[0].amount,500);assert.equal(after.payments[0].settle_remaining,false);assert.deepEqual(after.files,before.files);assert.deepEqual(invoice.metadata.source_document,before.invoices.find(row=>row.id===f.ids[0]).metadata.source_document);assert.equal(invoice.metadata.printed_invoice_number,'SB-10442');assert.equal(invoice.metadata.next_follow_up_at,null);assert.equal(after.outbound,0);
+  assert.deepEqual(after.invoices.filter(row=>row.id!==f.ids[0]),before.invoices.filter(row=>row.id!==f.ids[0]));
+  assert.equal((await f.db.query("select count(*)::int n from whatsapp_owner_action_receipts where provider_message_id='leading-confirm'")).rows[0].n,1);assert.deepEqual(f.errors,[]);
+ }finally{await f.close();}
+});
+test('payment batches remain invalid even when the planning repair proposes a two-item batch', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
+ const f=await fixture({invoiceNumber:'INV-2026-6769'});try{
+  const before=await f.snapshot(),single={...proposal,filters:[{column:'invoice_number',operator:'eq',value:'INV-2026-6769'}]};await f.inbound('leading-batch',leadingPrompt);
+  const run=handlerFor(f,{operation:{operations:[single]},repairPlan:{operations:[single,single]},planningMessage:leadingPrompt});await run.handler({...f.scope,messageId:'leading-batch',message:leadingPrompt});
+  assert.equal(run.planningRequests.length,1);assert.equal(run.outputs.at(-1).validationCode,'BATCH_SHAPE');assert.equal(run.outputs.at(-1).writeAttempted,false);assert.deepEqual(await f.snapshot(),before);assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions')).rows[0].n,0);
  }finally{await f.close();}
 });
 test('amount proposal rejects currency, full-settlement fallback, wrong target and quoted/negated requests', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
@@ -118,6 +158,9 @@ test('forward migration is idempotent, refuses installed drift and preserves exi
   assert.equal(before.find(r=>r.proname==='owner_payment_instruction').anon,false);assert.equal(before.find(r=>r.proname==='owner_payment_instruction').authenticated,false);assert.equal(before.find(r=>r.proname==='owner_payment_instruction').service,false);
   for(const name of ['whatsapp_confirm_owner_invoice_action','whatsapp_apply_direct_owner_write']){const row=before.find(r=>r.proname===name);assert.equal(row.anon,false);assert.equal(row.authenticated,false);assert.equal(row.service,true);}
   await f.db.exec(sql);assert.deepEqual(await routines(),before);assert.deepEqual(await f.snapshot(),state);
+  const parserDefinition=(await f.db.query("select pg_get_functiondef('app.owner_payment_instruction(text)'::regprocedure) definition")).rows[0].definition;
+  const parserEnd=parserDefinition.lastIndexOf('$function$');await f.db.exec(parserDefinition.slice(0,parserEnd)+'\n-- isolated parser source drift\n'+parserDefinition.slice(parserEnd));
+  const parserDrifted=await routines();assert.equal((await f.db.query('select whatsapp_owner_partial_payment_capability() value')).rows[0].value.ok,false);await assert.rejects(()=>f.db.exec(sql),/Unexpected installed owner payment instruction source/);await f.db.exec('rollback');assert.deepEqual(await routines(),parserDrifted);assert.deepEqual(await f.snapshot(),state);await f.db.exec(parserDefinition);
   const definition=(await f.db.query("select pg_get_functiondef('public.whatsapp_apply_direct_owner_write(uuid,uuid,text,text,text,text,text,uuid,timestamptz,text,text,text,bigint,bigint,jsonb)'::regprocedure) definition")).rows[0].definition;
   assert.ok(definition.includes('$function$'));const end=definition.lastIndexOf('$function$');await f.db.exec(definition.slice(0,end)+'\n-- isolated source drift\n'+definition.slice(end));
   const drifted=await routines();await assert.rejects(()=>f.db.exec(sql),/Unexpected installed.*source/);await f.db.exec('rollback');
@@ -126,9 +169,14 @@ test('forward migration is idempotent, refuses installed drift and preserves exi
 });
 
 test('new runtime on old production SQL fails closed without any partial proposal or full settlement', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
- const f=await fixture({excludeMigrations:['20261008031733_owner_partial_payment_confirmation.sql']});try{
-  const before=await f.snapshot();await f.inbound('old-schema-propose',prompt);const run=handlerFor(f,{readTwice:true});const reply=await run.handler({...f.scope,messageId:'old-schema-propose',message:prompt});
-  assert.equal(run.outputs.at(-1).ok,false);assert.equal(run.outputs.some(out=>out.proposal),false);assert.doesNotMatch(reply.answer,/Proposed|Recorded/);
+ const f=await fixture({invoiceNumber:'INV-2026-6769',excludeMigrations:['20261008031733_owner_partial_payment_confirmation.sql']});try{
+  const before=await f.snapshot();
+  for(const [id,message,operation]of [['old-schema-propose',prompt,proposal],['old-schema-leading',leadingPrompt,{...proposal,filters:[{column:'invoice_number',operator:'eq',value:'INV-2026-6769'}]}]]){
+   await f.inbound(id,message);const run=handlerFor(f,{readTwice:true,readTarget:operation.filters,operation});const reply=await run.handler({...f.scope,messageId:id,message});
+   assert.equal(run.outputs.at(-1).ok,false);assert.equal(run.outputs.some(out=>out.proposal),false);assert.doesNotMatch(reply.answer,/Proposed|Recorded/);
+  }
+  await f.db.exec("create function public.whatsapp_owner_partial_payment_capability() returns jsonb language sql as $$select '{\"ok\":true,\"version\":1}'::jsonb$$");
+  await f.inbound('old-capability-propose',leadingPrompt);const oldCapability=handlerFor(f,{operation:{...proposal,filters:[{column:'invoice_number',operator:'eq',value:'INV-2026-6769'}]}});await oldCapability.handler({...f.scope,messageId:'old-capability-propose',message:leadingPrompt});assert.equal(oldCapability.outputs.at(-1).ok,false);assert.equal(oldCapability.outputs.some(out=>out.proposal),false);
   assert.equal((await f.db.query("select count(*)::int n from whatsapp_pending_actions where consumed_at is null and action->>'type'='owner_invoice_payment'")).rows[0].n,0);
   await f.inbound('old-schema-yes','yes');await handlerFor(f,{confirmation:true}).handler({...f.scope,messageId:'old-schema-yes',message:'yes'});assert.deepEqual(await f.snapshot(),before);
   const {createOwnerDirectRuntime}=await import(new URL('automation/whatsapp/owner-direct-runtime.mjs',base));let called=false;

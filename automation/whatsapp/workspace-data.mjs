@@ -101,7 +101,7 @@ function definition() {
   // model request; describe exposes it when the model needs unfamiliar fields.
   const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA).filter(table=>table!=='payments')},filters:{type:'array',items:{type:'object'}},values:{type:'object'}},required:['operation','table','values']};
   return {type:'function',function:{name:'workspaceData',
-    description:'Invoice: total_amount/subtotal/tax/discount/line_items; status separate. payments create: amount/currency, invoice_number eq; confirm later. Attachments: saveAttachment/analyzeAttachment; operation only.',
+    description:'Invoice update: total_amount/subtotal/tax/discount/line_items; status separate. payments create: amount/currency, invoice_number eq; confirm later. Attachments: saveAttachment/analyzeAttachment; operation only.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic batch.'},
@@ -1118,7 +1118,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     } catch(error) {
       if(!(error instanceof TypeError))return safeError(error);
       const errors={
-        'invalid batch':['BATCH_SHAPE','Atomic batches support 2–10 create/update items in operations, each with table, filters and values. One unambiguous record per item; all commit or all roll back. Nest custom business fields in values.custom_fields. Status changes and deletes are separate operations. No write was attempted.'],
+        'invalid batch':['BATCH_SHAPE','Atomic batches support 2–10 create/update items in operations, each with table, filters and values. One unambiguous record per item; all commit or all roll back. Nest custom business fields in values.custom_fields. Payment creates, status changes and deletes are separate operations. No write was attempted.'],
         'invoice action requires exactly one canonical target':['TARGET_REQUIRED','Which invoice do you mean? Send its invoice number or customer name. If that customer has several invoices, I will ask you to choose. No change was made.'],
         'invalid invoice fields':['INVALID_FIELDS','Use the catalog invoice correction fields: total_amount, subtotal, tax, discount, currency, dates and typed line_items. Keep status paid/unpaid separate. Reopening preserves original payments and requires explicit confirmation. Put the invoice target in filters, not values. No write was attempted.'],
         'invalid invoice correction':['INVALID_FIELDS','Use typed invoice correction fields from this catalog. Money requires at most two decimals; line items require description and amount, with consistent quantity/unitPrice when supplied. Do not write metadata, ledger/security fields or credentials. No write was attempted.'],
