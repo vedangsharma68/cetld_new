@@ -108,7 +108,10 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         return normalizeOwnerBotPreferences(row?.owner_bot_preferences);
       }catch{return normalizeOwnerBotPreferences({confirmationMode:'buttons'});}
     };
-    const loadPending=async(expirationChecked=false)=>{
+    const assertActiveTurn=()=>{
+      if(signal?.aborted||Date.now()>=deadlineAt)throw Object.assign(new Error(),{code:'OWNER_LOOP_TIMEOUT'});
+    };
+    const readPendingSnapshot=async()=>{
       let pendingAtStart=null,pendingInitialState=null,available=pendingStoreAvailable;
       const reads=await Promise.allSettled([
         timedContextRead(logger,'pending_action',()=>pending.loadPendingAction({workspaceId,customerId:scope.customerId,phone})),
@@ -123,14 +126,37 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         available=false;
         logger?.error?.('WhatsApp owner pending-action snapshot failed',{code:String(reads[1].reason?.code||'PENDING_UNAVAILABLE').slice(0,60)});
       }
-      const expiresAt=Date.parse(pendingAtStart?.action?.expiresAt||pendingAtStart?.expires_at||'');
-      if(!expirationChecked&&available&&pendingAtStart&&Number.isFinite(expiresAt)&&expiresAt<=clock().getTime()&&typeof pending.expireOwnerPending==='function'){
+      return {pendingAtStart,pendingInitialState,available};
+    };
+    const loadPending=async()=>{
+      let snapshot=await readPendingSnapshot();
+      if(snapshot.available&&snapshot.pendingAtStart?.action?.type==='invoice_review_draft'){
         try{
+          assertActiveTurn();
+          if(!await authorizeTurn(scope))throw Object.assign(new Error(),{code:'UNAUTHORIZED'});
+          assertActiveTurn();
+          // The review RPC atomically retires expired/undated drafts and keeps
+          // saving reviews. The general pending read omits expires_at, so let
+          // the database decide, then refresh both inputs to proposal CAS.
+          await timedContextRead(logger,'invoice_review_expiration',()=>pending.loadInvoiceReview({workspaceId,customerId:scope.customerId,phone}));
+          assertActiveTurn();
+          snapshot=await readPendingSnapshot();
+        }catch(error){
+          snapshot={...snapshot,available:false};
+          logger?.warn?.('WhatsApp owner invoice review expiration unavailable',{code:String(error?.code||'PENDING_EXPIRATION_UNAVAILABLE').slice(0,60)});
+        }
+      }
+      const {pendingAtStart,available}=snapshot;
+      const expiresAt=Date.parse(pendingAtStart?.action?.expiresAt||pendingAtStart?.expires_at||'');
+      if(available&&pendingAtStart&&pendingAtStart.action?.type!=='invoice_review_draft'&&Number.isFinite(expiresAt)&&expiresAt<=clock().getTime()&&typeof pending.expireOwnerPending==='function'){
+        try{
+          assertActiveTurn();
           const expired=await timedContextRead(logger,'pending_expiration',()=>pending.expireOwnerPending({workspaceId,ownerId,phone,messageId,message}));
-          if(expired?.ok===true&&expired.expired===true)return loadPending(true);
+          assertActiveTurn();
+          if(expired?.ok===true&&expired.expired===true)snapshot=await readPendingSnapshot();
         }catch{logger?.warn?.('WhatsApp owner pending expiration unavailable',{code:'PENDING_EXPIRATION_UNAVAILABLE'});}
       }
-      return {pendingAtStart,pendingInitialState,available};
+      return snapshot;
     };
     const loadHistory=async()=>{
       try{
@@ -166,6 +192,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     const [settingsState,pendingState,historyState,lifecycleState,ownerStoreState,botPreferences]=await Promise.all([
       loadSettings(),loadPending(),loadHistory(),loadLifecycle(),loadOwnerStore(),loadBotPreferences(),
     ]);
+    assertActiveTurn();
     const {settings,available:settingsAvailable}=settingsState;
     const {pendingAtStart,pendingInitialState,available:pendingStateAvailable}=pendingState;
     pendingStoreAvailable=pendingStateAvailable;

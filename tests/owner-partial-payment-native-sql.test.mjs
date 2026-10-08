@@ -336,3 +336,105 @@ test('previous version-2 SQL cannot expose a confirmable new wording proposal',a
   assert.equal(run.outputs.at(-1).code,'UNAVAILABLE');assert.equal(run.outputs.some(o=>o.proposal),false);assert.deepEqual(await f.snapshot(),before);assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions')).rows[0].n,0);
  }finally{await f.close();}
 });
+
+async function seedReview249(f,{expiresAt='2000-01-01T00:00:00Z',stage='incomplete'}={}){
+ const action={type:'invoice_review_draft',stage,sourceMessageId:'event-249-old-attachment',missingFields:['currency'],invoice:{invoiceNumber:'OLD-249',total:951.52}};
+ await f.db.query('insert into whatsapp_pending_actions(id,workspace_id,customer_id,phone,action,source,version,generation,expires_at) values(29,$1,$2,$3,$4,\'whatsapp\',1,29,$5)',
+  [f.scope.workspaceId,f.scope.customerId,f.scope.phone,action,expiresAt]);
+ // Reviews outside each dimension of the verified conversation must survive.
+ const foreign=(await f.db.query('select workspace_id,customer_id from invoices where id=$1',[f.ids[1]])).rows[0];
+ for(const [id,workspaceId,customerId,phone]of [
+  [30,foreign.workspace_id,foreign.customer_id,f.scope.phone],
+  [31,f.scope.workspaceId,(await f.db.query('select customer_id from invoices where id=$1',[f.ids[0]])).rows[0].customer_id,f.scope.phone],
+  [32,f.scope.workspaceId,f.scope.customerId,'+12025550199'],
+ ])await f.db.query('insert into whatsapp_pending_actions(id,workspace_id,customer_id,phone,action,source,version,generation,expires_at) values($1,$2,$3,$4,$5,\'whatsapp\',1,29,$6)',[id,workspaceId,customerId,phone,action,'2000-01-01T00:00:00Z']);
+ return (await f.db.query('select to_jsonb(p) value from whatsapp_pending_actions p where id in (30,31,32) order by id')).rows.map(row=>row.value);
+}
+
+for(const [label,expiresAt,stage,retired]of [
+ ['expired incomplete','2000-01-01T00:00:00Z','incomplete',true],
+ ['undated incomplete',null,'incomplete',true],
+ ['future incomplete','2100-01-01T00:00:00Z','incomplete',false],
+ ['expired saving','2000-01-01T00:00:00Z','saving',false],
+])test(`verified native owner turn ${label} review 29 before USD500 proposal`,async()=>{
+ const f=await fixture();try{
+  const otherReviews=await seedReview249(f,{expiresAt,stage}),before=await f.snapshot();
+  await f.inbound('review249-payment',livePrompt);
+  const run=handlerFor(f,{readOnce:true}),result=await run.handler({...f.scope,messageId:'review249-payment',message:livePrompt});
+  const old=(await f.db.query('select * from whatsapp_pending_actions where id=29')).rows[0];
+  assert.equal(Boolean(old.consumed_at),retired,JSON.stringify({result,outputs:run.outputs,errors:f.errors}));
+  assert.equal(run.outputs.some(out=>out.proposal),retired,JSON.stringify({result,outputs:run.outputs}));
+  assert.deepEqual(await f.snapshot(),before,'proposal or blocked review cannot write ledger or customer messages');
+  const reviewLoads=f.requests.filter(request=>new URL(request.url).pathname.endsWith('/rpc/whatsapp_load_invoice_review'));
+  assert.equal(reviewLoads.length,1);assert.deepEqual(reviewLoads[0].body,{p_workspace_id:f.scope.workspaceId,p_customer_id:f.scope.customerId,p_phone:f.scope.phone});
+  const contextQueries=f.requests.filter(request=>new URL(request.url).pathname==='/rest/v1/whatsapp_pending_actions'&&new URL(request.url).searchParams.get('consumed_at')==='is.null');
+  assert.ok(contextQueries.length>=2,'refresh pending action after review RPC');
+  assert.ok(f.requests.filter(request=>new URL(request.url).pathname.endsWith('/rpc/whatsapp_load_pending_action_state')).length>=2,'refresh CAS state after review RPC');
+  assert.deepEqual((await f.db.query('select to_jsonb(p) value from whatsapp_pending_actions p where id in (30,31,32) order by id')).rows.map(row=>row.value),otherReviews);
+  if(retired){
+   assert.match(result.answer,/Proposed a USD 500/);assert.doesNotMatch(result.answer,/Recorded/);
+   const pending=(await f.db.query("select * from whatsapp_pending_actions where workspace_id=$1 and customer_id=$2 and phone=$3 and consumed_at is null",[f.scope.workspaceId,f.scope.customerId,f.scope.phone])).rows[0];
+   assert.equal(pending.generation,30);assert.deepEqual(pending.action.changes,{amount:500,currency:'USD'});
+   const store=f.requests.find(request=>new URL(request.url).pathname.endsWith('/rpc/whatsapp_store_pending_action'));
+   assert.equal(store.body.p_expected_generation,29);assert.equal(store.body.p_expected_id,null);assert.equal(store.body.p_expected_version,null);
+   const calls=run.calls();assert.equal((await run.handler({...f.scope,messageId:'review249-payment',message:livePrompt})).replayed,true);assert.equal(run.calls(),calls);
+   await f.inbound('review249-yes','yes');const confirm=handlerFor(f,{confirmation:true});await confirm.handler({...f.scope,messageId:'review249-yes',message:'yes'});
+   assert.equal(confirm.outputs.at(-1).completed,true,JSON.stringify(confirm.outputs));
+   const after=await f.snapshot(),invoice=after.invoices.find(row=>row.id===f.ids[0]);
+   assert.equal(invoice.amount_paid,500);assert.equal(invoice.total_amount,951.52);assert.equal(after.payments.length,1);assert.equal(after.payments[0].amount,500);assert.equal(after.payments[0].settle_remaining,false);assert.equal(after.outbound,0);
+   assert.deepEqual(after.files,before.files);assert.deepEqual(after.invoices.filter(row=>row.id!==f.ids[0]),before.invoices.filter(row=>row.id!==f.ids[0]));
+  }else{
+   assert.ok(run.outputs.some(out=>out.code==='PENDING'),JSON.stringify(run.outputs));assert.doesNotMatch(result.answer,/Proposed|Recorded/);
+   assert.equal(f.requests.some(request=>new URL(request.url).pathname.endsWith('/rpc/whatsapp_expire_owner_pending')),false,'saving is never passed to generic expiration');
+  }
+  assert.deepEqual(f.errors,[]);
+ }finally{await f.close();}
+});
+
+for(const fault of ['review-rpc','state-reload','action-reload','proposal-cas'])test(`review249 ${fault} failure cannot stage a partial payment`,async()=>{
+ const f=await fixture();try{
+  await seedReview249(f);const before=await f.snapshot();let stateReads=0,actionReads=0,failed=false;
+  f.intercept(async(url,options)=>{
+   const rpc=url.pathname;
+   if(rpc.endsWith('/rpc/whatsapp_load_pending_action_state'))stateReads++;
+   if(rpc==='/rest/v1/whatsapp_pending_actions'&&url.searchParams.get('consumed_at')==='is.null')actionReads++;
+   if(fault==='review-rpc'&&rpc.endsWith('/rpc/whatsapp_load_invoice_review')||fault==='state-reload'&&stateReads===2&&rpc.endsWith('/rpc/whatsapp_load_pending_action_state')||fault==='action-reload'&&actionReads>=2&&rpc==='/rest/v1/whatsapp_pending_actions'){
+    failed=true;throw Error('isolated '+fault);
+   }
+   if(fault==='proposal-cas'&&rpc.endsWith('/rpc/whatsapp_store_pending_action')){
+    failed=true;await f.db.exec('update whatsapp_pending_actions set generation=30 where id=29');
+   }
+  });
+  await f.inbound('review249-fault',livePrompt);const run=handlerFor(f,{readOnce:true}),reply=await run.handler({...f.scope,messageId:'review249-fault',message:livePrompt});
+  assert.equal(failed,true);assert.equal(run.outputs.some(out=>out.proposal),false,JSON.stringify({reply,outputs:run.outputs}));assert.doesNotMatch(reply.answer,/Proposed|Recorded/);
+  assert.equal((await f.db.query("select count(*)::int n from whatsapp_pending_actions where action->>'type'='owner_invoice_payment'")).rows[0].n,0);
+  assert.deepEqual(await f.snapshot(),before);
+ }finally{await f.close();}
+});
+
+for(const fault of ['wrong-owner','wrong-workspace','wrong-phone'])test(`review249 ${fault} cannot reach review retirement`,async()=>{
+ const f=await fixture();try{
+  await seedReview249(f);const rows=(await f.db.query('select to_jsonb(p) value from whatsapp_pending_actions p order by id')).rows;
+  const invalid={...f.scope,...(fault==='wrong-owner'?{ownerId:randomUUID()}:fault==='wrong-workspace'?{workspaceId:randomUUID()}:{phone:'+12025550198'})};
+  const run=handlerFor(f,{readOnce:true});assert.equal(await run.handler({...invalid,messageId:'review249-denied',message:livePrompt}), '');assert.equal(run.calls(),0);
+  assert.equal(f.requests.some(request=>new URL(request.url).pathname.endsWith('/rpc/whatsapp_load_invoice_review')),false);
+  assert.deepEqual((await f.db.query('select to_jsonb(p) value from whatsapp_pending_actions p order by id')).rows,rows);
+ }finally{await f.close();}
+});
+
+test('review249 context completing after request timeout cannot reach provider or proposal',async t=>{
+ const f=await fixture();try{
+  await seedReview249(f);const before=await f.snapshot();let release,entered;
+  const waiting=new Promise(resolve=>{release=resolve;}),started=new Promise(resolve=>{entered=resolve;});
+  f.intercept(async url=>{if(url.pathname.endsWith('/rpc/whatsapp_load_invoice_review')){entered();await waiting;}});
+  const run=handlerFor(f,{readOnce:true});
+  const pending=run.handler({...f.scope,messageId:'review249-timeout',message:livePrompt});
+  await started;
+  // Expire the request only after the RPC starts; shared CPU load must not
+  // cause authorization to time out before this deliberately stalled read.
+  const expiredNow=Date.now()+60_000;t.mock.method(Date,'now',()=>expiredNow);
+  release();
+  const reply=await pending;assert.equal(reply.plannerFailure?.code,'OWNER_AGENT_TOOL_FAILED');
+  assert.equal(run.calls(),0);assert.equal(f.requests.some(request=>new URL(request.url).pathname.endsWith('/rpc/whatsapp_store_pending_action')),false);assert.deepEqual(await f.snapshot(),before);
+ }finally{await f.close();}
+});
