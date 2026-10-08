@@ -50,7 +50,8 @@ test('Gemini extraction sends native generation settings and normalizes text and
   assert.equal(sent.tools[0].functionDeclarations[0].name,'getOverdueInvoices');
   assert.deepEqual(sent.toolConfig,{functionCallingConfig:{mode:'ANY'}});
   assert.equal(result.content,'Overdue count is two.');
-  assert.deepEqual(result.toolCalls,[{id:'gemini-call-0',type:'function',function:{name:'getOverdueInvoices',arguments:'{"dueDateFrom":"2026-09-01"}'}}]);
+  assert.match(result.toolCalls[0].id,/^gemini-call-[a-f0-9-]+-0$/);
+  assert.deepEqual(result.toolCalls[0].function,{name:'getOverdueInvoices',arguments:'{"dueDateFrom":"2026-09-01"}'});
   assert.equal(result.usedFallback,false);
 });
 
@@ -468,4 +469,66 @@ test('Cloudflare catalog verification uses the account model search endpoint and
 
 test('removed Ollama model is not accepted by the verified model catalog',()=>{
   assert.equal(isModelId('gpt-oss:20b-cloud'),false);
+});
+
+test('native Gemini preserves signed model parts and named function results with unique local call IDs',async()=>{
+ const definition={type:'function',function:{name:'workspaceData',parameters:{type:'object',properties:{}}}};
+ const parts=[{text:'private reasoning',thought:true},{functionCall:{name:'workspaceData',id:'google-original',args:{operation:'read'}},thoughtSignature:'c2lnbmF0dXJl'}];
+ const sent=[];const ai=provider(async(_url,init)=>{sent.push(JSON.parse(init.body));return gemini('',{parts});},{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null});
+ const messages=[{role:'user',content:'Read invoice'}];
+ const first=await ai.generate({messages,tools:[definition]});
+ assert.equal(first.content,'');assert.deepEqual(first.googleParts,parts);
+ const result={ok:true,operation:'read',table:'invoices',rows:[{invoice_number:'QA-1'}]};
+ const second=await ai.generate({messages:[...messages,{role:'assistant',content:first.content,tool_calls:first.toolCalls,googleParts:first.googleParts},
+  {role:'tool',name:'workspaceData',tool_call_id:first.toolCalls[0].id,content:JSON.stringify(result)}],tools:[definition]});
+ assert.notEqual(first.toolCalls[0].id,second.toolCalls[0].id);
+ assert.deepEqual(sent[1].contents[1],{role:'model',parts});
+ assert.deepEqual(sent[1].contents[2],{role:'user',parts:[{functionResponse:{name:'workspaceData',id:'google-original',response:result}}]});
+});
+
+test('Gemini returns one verified coalesced result to the original parallel calls without forged signatures',async()=>{
+ const parts=[{functionCall:{name:'workspaceData',args:{operation:'update',values:{due_date:'2026-10-20'}}},thoughtSignature:'c2ln'},
+  {functionCall:{name:'workspaceData',args:{operation:'update',values:{issue_date:'2026-10-08'}}}}];
+ let sent;const ai=provider(async(_url,init)=>{sent=JSON.parse(init.body);return gemini('Done');},{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null});
+ const verified={ok:true,completed:true,operation:'batch',results:[{ok:true},{ok:true}]};
+ await ai.generate({messages:[{role:'user',content:'Update dates'},{role:'assistant',content:'',googleParts:parts,googleBatchCoalesced:true,
+  tool_calls:[{id:'batch',type:'function',function:{name:'workspaceData',arguments:'{"operations":[]}'}}]},
+  {role:'tool',name:'workspaceData',tool_call_id:'batch',content:JSON.stringify(verified)}]});
+ assert.deepEqual(sent.contents[1].parts,parts);
+ assert.deepEqual(sent.contents[2].parts,parts.map(()=>({functionResponse:{name:'workspaceData',response:verified}})));
+});
+
+test('Google opaque parts stay private across other provider transports',async()=>{
+ const messages=[{role:'user',content:'Read invoice'},{role:'assistant',content:'',googleParts:[{thoughtSignature:'private-google-signature',functionCall:{name:'workspaceData',args:{}}}],
+  tool_calls:[{id:'native-1',type:'function',function:{name:'workspaceData',arguments:'{}'}}]},
+  {role:'tool',name:'workspaceData',tool_call_id:'native-1',content:'{"ok":true}'}];
+ for(const primaryModel of [ZEN_PRIMARY_MODEL,CF_PRIMARY_MODEL]){
+  let body;const ai=provider(async(url,init)=>{if(String(url).includes('generativelanguage'))return gemini('',{status:503});body=JSON.parse(init.body);return openRouter('Read completed');},
+   {primaryModel:primaryModel===OPENROUTER_FREE_MODEL?DEFAULT_EXTRACTION_MODEL:primaryModel,fallbackModel:primaryModel===OPENROUTER_FREE_MODEL?OPENROUTER_FREE_MODEL:null,maxAttempts:1,cfApiToken:'isolated',cfAccountId:'isolated'});
+  await ai.generate({messages});
+  assert.doesNotMatch(JSON.stringify(body),/private-google-signature|googleParts/);
+  assert.deepEqual(body.messages,messages.map(({googleParts,...rest})=>rest));
+ }
+});
+
+test('synthetic or cross-provider tool history becomes named context without fabricated native signatures',async()=>{
+ let sent;const ai=provider(async(_url,init)=>{sent=JSON.parse(init.body);return gemini('Read completed');},{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null});
+ const call={id:'foreign-1',type:'function',function:{name:'workspaceData',arguments:'{}'}};
+ await ai.generate({messages:[{role:'user',content:'Read invoice'},{role:'assistant',content:'',tool_calls:[call]},
+  {role:'tool',tool_call_id:call.id,name:'workspaceData',content:'{"ok":true}'}]});
+ assert.deepEqual(JSON.parse(sent.contents[1].parts[0].text),{tool_calls:[call]});
+ assert.deepEqual(JSON.parse(sent.contents[2].parts[0].text),{ok:true,toolName:'workspaceData',toolCallId:'foreign-1'});
+ assert.doesNotMatch(JSON.stringify(sent),/thoughtSignature|functionResponse|"functionCall"/);
+});
+
+test('server-selected attachment call does not lend its success to unexecuted extra native calls',async()=>{
+ const parts=[{functionCall:{id:'save-source',name:'workspaceData',args:{operation:'create'}}},
+  {functionCall:{id:'extra-update',name:'workspaceData',args:{operation:'update',values:{total_amount:999}}}}];
+ let sent;const ai=provider(async(_url,init)=>{sent=JSON.parse(init.body);return gemini('Saved');},{primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:null});
+ await ai.generate({messages:[{role:'user',content:'Log this invoice'},{role:'assistant',content:'',googleParts:parts,
+  tool_calls:[{id:'selected',type:'function',function:{name:'workspaceData',arguments:'{"operation":"saveAttachment"}'}}]},
+  {role:'tool',name:'workspaceData',tool_call_id:'selected',content:'{"ok":true,"completed":true,"operation":"saveAttachment"}'}]});
+ const replies=sent.contents[2].parts.map(p=>p.functionResponse);
+ assert.equal(replies[0].id,'save-source');assert.equal(replies[0].response.completed,true);assert.equal(replies[0].response.operation,'saveAttachment');
+ assert.equal(replies[1].id,'extra-update');assert.equal(replies[1].response.code,'NOT_EXECUTED');assert.equal(replies[1].response.ok,false);assert.equal(replies[1].response.completed,undefined);
 });

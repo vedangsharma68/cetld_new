@@ -1,3 +1,5 @@
+// All contacts are synthetic fixtures using reserved 555-01xx phone numbers.
+// Provider credential placeholders only reach the local stub; no network sends.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -12,14 +14,14 @@ test('typed correction preflight rejects security fields and malformed dates, mo
  for(const patch of [{metadata:{}},{amount_paid:0},{customer_id:'other'},{total_amount:0},{tax:null},{discount:-1},{currency:'JPY'},
   {issue_date:'2026-02-31'},{issue_date:'2026-10-04',due_date:'2026-10-03'},
   {line_items:[{description:'Service',quantity:2,unitPrice:20,amount:41}]},
-  {line_items:[{description:'Service',amount:20,credentials:'secret'}]},
+  {line_items:[{description:'Service',amount:20,credentials:'fixture-invalid-value'}]},
   {custom_fields:{owner_id:randomUUID()}}])assert.throws(()=>validateInvoiceCorrection(patch));
  assert.deepEqual(validateInvoiceCorrection({tax:'1.25',notes:null,line_items:[{description:'Service',quantity:2.5,unitPrice:2,amount:5}]}),
   {tax:1.25,notes:null,line_items:[{description:'Service',amount:5,quantity:2.5,unitPrice:2}]});
 });
 
-test('serialized Gemini, real SDK and SQL persist invoice corrections, resolve JohnSmith and recover interrupted replies',async()=>{
- const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+919871367051';
+test('serialized Gemini, real SDK and SQL persist invoice corrections, resolve ExampleAlpha and recover interrupted replies',async()=>{
+ const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+12025550101';
  try{
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
   await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
@@ -34,21 +36,21 @@ test('serialized Gemini, real SDK and SQL persist invoice corrections, resolve J
    return createOwnerWorkspaceTools({supabase,scope,message,messageId:id,authorize:async()=>true,clock:()=>new Date('2026-10-04T22:00:00Z'),timezone:'Asia/Kolkata',
     botPreferences:{confirmationMode:'direct'},pendingStoreAvailable:false,ownerStore:{async query(){throw Error('Legacy tool must not run');}}});
   }
-  const create=await tools('Create invoice for Jane','fields-create');
-  const created=await create.execute('workspaceData',{operation:'create',table:'invoices',values:{invoice_number:'FIELD-1',customer_name:'Jane',issue_date:'2026-10-01',due_date:'2026-10-05',currency:'USD',total_amount:100}});
+  const create=await tools('Create invoice for Initial Customer','fields-create');
+  const created=await create.execute('workspaceData',{operation:'create',table:'invoices',values:{invoice_number:'FIELD-1',customer_name:'Initial Customer',issue_date:'2026-10-01',due_date:'2026-10-05',currency:'USD',total_amount:100}});
   assert.equal(created.completed,true,JSON.stringify(created));
   const invoice=(await db.query('select * from invoices where workspace_id=$1',[workspaceId])).rows[0];
-  const john=(await db.query("insert into customers(workspace_id,name,phone) values($1,'John Smith','+919822222222') returning id",[workspaceId])).rows[0];
+  const john=(await db.query("insert into customers(workspace_id,name,phone) values($1,'Example Alpha','+12025550102') returning id",[workspaceId])).rows[0];
   const target=[{column:'invoice_number',operator:'eq',value:invoice.invoice_number}];
-  const message='Assign FIELD-1 to JohnSmith, set its line items and tax, and make its due date tomorrow.';
+  const message='Assign FIELD-1 to ExampleAlpha, set its line items and tax, and make its due date tomorrow.';
   const change=await tools(message,'fields-change');let calls=0,evidence,wireEvidence;
-  const values={customer_name:'JohnSmith',line_items:[{description:'Service',quantity:2,unitPrice:40,amount:80}],subtotal:80,tax:25,discount:5,total_amount:100,
-   due_date:'tomorrow',notes:'Corrected',invoice_direction:'receivable',seller_name:'Our company',buyer_name:'John Smith',payment_information:'Pay by bank transfer',custom_fields:{purchase_order:'PO-1'}};
+  const values={customer_name:'ExampleAlpha',line_items:[{description:'Service',quantity:2,unitPrice:40,amount:80}],subtotal:80,tax:25,discount:5,total_amount:100,
+   due_date:'tomorrow',notes:'Corrected',invoice_direction:'receivable',seller_name:'Our company',buyer_name:'Example Alpha',payment_information:'Pay by bank transfer',custom_fields:{purchase_order:'PO-1'}};
   const provider=new AIProvider({primaryModel:'gemini-3.5-flash-lite',fallbackModel:null,geminiApiKey:'isolated',maxAttempts:1,logger,
    fetchImpl:async(_url,init)=>{calls++;const body=JSON.parse(init.body);
     if(calls===1)return Response.json({candidates:[{content:{parts:[{functionCall:{name:'workspaceData',args:{operation:'update',table:'invoices',filters:target,values}}}]},finishReason:'STOP'}]});
     wireEvidence=body;
-    evidence=body.contents.flatMap(row=>row.parts).flatMap(part=>{try{return [JSON.parse(part.text)];}catch{return [];}}).find(row=>row.action==='invoice.updated');
+    evidence=body.contents.flatMap(row=>row.parts).flatMap(part=>{try{return [part.functionResponse?.response||JSON.parse(part.text)];}catch{return [];}}).find(row=>row.action==='invoice.updated');
     return Response.json({candidates:[{content:{parts:[{text:'Updated FIELD-1.'}]},finishReason:'STOP'}]});
    }});
   const result=await runOwnerAgent({provider,message,tools:change,timezone:'Asia/Kolkata',clock:()=>new Date('2026-10-04T22:00:00Z')});
@@ -79,9 +81,9 @@ test('serialized Gemini, real SDK and SQL persist invoice corrections, resolve J
   assert.equal(interrupted.completed,false);assert.equal(interrupted.code,'WRITE_UNCONFIRMED');
   assert.equal((await edit.lookupCompleted()).completed,true);assert.equal((await edit.lookupCompleted()).completed,true);assert.equal(writes,1);
   supabase.rpc=rpc;
-  await db.query("insert into customers(workspace_id,name) values($1,'John Jones')",[workspaceId]);
-  const ambiguous=await tools('Assign FIELD-1 to John','fields-ambiguous');
-  assert.equal((await ambiguous.execute('workspaceData',{operation:'update',table:'invoices',filters:target,values:{customer_name:'John'}})).code,'AMBIGUOUS');
+  await db.query("insert into customers(workspace_id,name) values($1,'Example Beta')",[workspaceId]);
+  const ambiguous=await tools('Assign FIELD-1 to Example','fields-ambiguous');
+  assert.equal((await ambiguous.execute('workspaceData',{operation:'update',table:'invoices',filters:target,values:{customer_name:'Example'}})).code,'AMBIGUOUS');
   assert.equal(ambiguous.getWriteAttempted(),false);
   await db.query("update invoice_correction_audits set after_snapshot=after_snapshot where invoice_id=$1",[invoice.id]).then(()=>assert.fail('Audit mutation must fail'),()=>{});
   for(const request of f.requests.filter(request=>request.method==='GET'))assert.equal(new URL(request.url).searchParams.get('workspace_id'),'eq.'+workspaceId);

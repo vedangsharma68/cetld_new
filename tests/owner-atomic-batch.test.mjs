@@ -1,3 +1,5 @@
+// All data comes from the isolated local owner-chat fixture; provider values
+// are placeholders and fetchImpl never contacts an external provider.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
@@ -75,12 +77,20 @@ for(const providerName of ['Cloudflare','Gemini'])test(`${providerName} serializ
     clock:()=>DEFAULT_NOW,botPreferences:{confirmationMode:'direct'},pendingStoreAvailable:false});
   const provider=new AIProvider({primaryModel:providerName==='Gemini'?'gemini-3.5-flash-lite':CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',geminiApiKey:'isolated',maxAttempts:1,logger,
     fetchImpl:async(_url,init)=>{
-      generations++;const wire=JSON.parse(init.body);evidence=providerName==='Gemini'?wire.contents.flatMap(row=>row.parts).flatMap(part=>{try{return [JSON.parse(part.text)];}catch{return [];}}):wire.messages.filter(row=>row.role==='tool').map(row=>JSON.parse(row.content));let message;
+      generations++;const wire=JSON.parse(init.body);evidence=providerName==='Gemini'?wire.contents.flatMap(row=>row.parts).flatMap(part=>{try{return [part.functionResponse?.response||JSON.parse(part.text)];}catch{return [];}}):wire.messages.filter(row=>row.role==='tool').map(row=>JSON.parse(row.content));let message;
       if(generations===1)message={content:'',tool_calls:[{id:'fresh',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'read',table:'invoices'})}}]};
       else if(generations===2){
         assert(evidence.some(row=>row.rows?.length));
         message={content:'',tool_calls:invoices.map((row,index)=>({id:'rename-'+index,type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'update',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:original[index]}],values:{invoice_number:`INV-2026-000${index+3}`}})}}))};
-      }else message={content:'Updated both invoices to INV-2026-0003 and INV-2026-0004.'};
+      }else{
+        if(providerName==='Gemini'){
+          const responses=wire.contents.flatMap(row=>row.parts).filter(part=>part.functionResponse).map(part=>part.functionResponse.response);
+          assert.equal(responses.length,3);
+          assert.deepEqual(responses.slice(-2).map(result=>result.action),['batch.completed','batch.completed']);
+          assert.deepEqual(responses.at(-1),responses.at(-2));
+        }
+        message={content:'Updated both invoices to INV-2026-0003 and INV-2026-0004.'};
+      }
       const body=providerName==='Gemini'?{candidates:[{content:{parts:message.tool_calls?message.tool_calls.map(call=>({functionCall:{name:call.function.name,args:JSON.parse(call.function.arguments)}})):[{text:message.content}]},finishReason:'STOP'}]}:{choices:[{message,finish_reason:'stop'}]};
       return {ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify(body)};
     }});
