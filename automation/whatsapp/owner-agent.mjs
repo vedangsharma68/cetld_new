@@ -667,7 +667,8 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     const ownerProvidedFacts={...(action.ownerProvidedFacts||{})};
     const invoiceKey={invoiceNumber:'invoiceNumber',customerName:'clientName',invoiceDate:'invoiceDate',dueDate:'dueDate',total:'total',currency:'currency',direction:'direction'};
     for(const [field,rawValue] of Object.entries(raw)){
-      if(!missing.has(field)){
+      const correctedCurrency=field==='currency'&&paymentResolution?.extractedFacts&&rawValue===paymentResolution.currency;
+      if(!missing.has(field)&&!correctedCurrency){
         if(paymentResolution&&JSON.stringify(rawValue)===JSON.stringify(invoice[invoiceKey[field]]))continue;
         return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
       }
@@ -694,7 +695,11 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     }
     if(invoice.invoiceDate&&invoice.dueDate&&invoice.dueDate<invoice.invoiceDate)
       return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
-    const validationIssues=paymentResolution?(action.validationIssues||[]).filter(code=>code!=='PAYMENT_STATUS_CONFLICT'):action.validationIssues||[];
+    if(paymentResolution?.extractedFacts){
+      if(invoice.currency!==paymentResolution.currency||!Object.hasOwn(ownerProvidedFacts,'currency'))return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
+      invoice.outstanding=paymentResolution.outstanding;
+    }
+    const validationIssues=paymentResolution?[]:action.validationIssues||[];
     const proposalReady=validationIssues.length===0&&missing.size===0&&invoice.direction==='receivable'&&isSupportedCurrency(invoice.currency)
       &&typeof invoice.invoiceNumber==='string'&&invoice.invoiceNumber.trim()
       &&typeof invoice.clientName==='string'&&invoice.clientName.trim()&&amountCents(invoice.total)!==null
@@ -703,7 +708,20 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
       ...(paymentResolution?{validationIssues,paymentStatusResolution:paymentResolution}:{}),
       currencySource:Object.hasOwn(ownerProvidedFacts,'currency')?'user':action.currencySource??(legacyPhotoCurrency?'photo':null)};
     await active();
-    const saved=await pending.transitionInvoiceReview({...current,...scope,fromStage:'incomplete',action:next});
+    let saved;
+    try{saved=await pending.transitionInvoiceReview({...current,...scope,fromStage:'incomplete',action:next});}
+    catch(error){
+      if(!paymentResolution?.extractedFacts)throw error;
+      await active();
+      const retained=await pending.loadInvoiceReview({...scope});
+      await active();
+      if(!retained||retained.id!==current.id||retained.version!==current.version
+        ||JSON.stringify(retained.action)!==JSON.stringify(current.action))throw error;
+      const answer=`Invoice ${invoice.invoiceNumber} for ${invoice.clientName} is still in review. The unpaid ${paymentResolution.currency} ${invoice.total.toFixed(2)} correction could not be recorded. Nothing was saved.`;
+      replyRequirement={attachmentReview:{incomplete:true,answer},requiredFacts:{invoiceNumber:invoice.invoiceNumber,
+        customerName:invoice.clientName,totalAmount:invoice.total,currency:paymentResolution.currency}};
+      return {ok:false,code:'UNAVAILABLE',outcome:'review_incomplete',invoice:safeReviewInvoice(retained.action.invoice),message:answer};
+    }
     if(!saved)return {ok:false,code:'STALE',message:SAFE_ERRORS.STALE};
     if(proposalReady)setReviewReplyRequirement(invoice);
     return {ok:true,action:'review_updated',stage:next.stage,missingFields:next.missingFields,
@@ -1278,10 +1296,12 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     getMedia:()=>attachment,getAttachmentIngested:()=>attachmentIngested,
     getAttachmentReviewContinuation(){
       const action=pendingAtStart?.action;
+      const paymentResolution=invoiceReviewUnpaidResolution({action,message,messageId});
       if(pendingAtStart?.consumed_at||action?.type!=='invoice_review_draft'||action.stage!=='incomplete'
-        ||(action.validationIssues?.length&&!invoiceReviewUnpaidResolution({action,message,messageId}))||!Array.isArray(action.missingFields)
+        ||(action.validationIssues?.length&&!paymentResolution)||!Array.isArray(action.missingFields)
         ||/[?]|\b(?:maybe|perhaps|might|if|whether|later|tomorrow|next)\b/i.test(message))return null;
       const values={};
+      if(paymentResolution?.extractedFacts)values.currency=paymentResolution.currency;
       if(action.missingFields.includes('currency')){
         const codes=[...new Set([...String(message).matchAll(/\b[A-Za-z]{3}\b/g)].map(match=>match[0].toUpperCase())
           .filter(code=>isSupportedCurrency(code)&&ownerCurrencyEvidence(message,code)))];
@@ -1289,7 +1309,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
           ||new RegExp('^\\s*'+codes[0]+'[.!]?\\s*$','i').test(message)))values.currency=codes[0];
       }
       if(action.missingFields.includes('direction')&&ownerDirectionEvidence(message))values.invoice_direction='receivable';
-      if(!Object.keys(values).length&&invoiceReviewUnpaidResolution({action,message,messageId})&&isSupportedCurrency(action.invoice?.currency))values.currency=action.invoice.currency;
+      if(!Object.keys(values).length&&paymentResolution&&isSupportedCurrency(action.invoice?.currency))values.currency=action.invoice.currency;
       return Object.keys(values).length?values:null;
     },
     getAttachmentReviewContext(){

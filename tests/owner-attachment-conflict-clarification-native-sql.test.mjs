@@ -23,7 +23,7 @@ test('exact owner clarification continues the retained review without asking for
 });
 
 for(const installedLineEndings of ['LF','CRLF'])test(`native Gemini owner clarifies the false PAID stamp from ${installedLineEndings} installed SQL before a later save`,async()=>{
- const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+15555550125';
+ const f=await createOfflineSqlNetwork({excludeMigrations:['20261008193550_invoice_review_inferred_currency_unpaid_correction.sql']}),{db,supabase}=f,ownerId=randomUUID(),phone='+15555550125';
  try{
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
   await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);

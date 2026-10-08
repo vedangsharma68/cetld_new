@@ -15,7 +15,9 @@ const leadingPrompt='For test invoice INV-2026-6769 for Northwind Systems LLC, r
 const target=[{column:'invoice_number',operator:'eq',value:'SB-10442'}];
 const proposal={operation:'create',table:'payments',filters:target,values:{amount:500,currency:'USD'}};
 async function fixture(options={}){
- const f=await createOfflineSqlNetwork(options),{db,supabase}=f,ownerId=randomUUID(),foreignOwner=randomUUID(),phone='+12025550107';
+ const excludeMigrations=options.excludeMigrations?.includes(newMigration)
+  ?[...options.excludeMigrations,'20261008193550_invoice_review_inferred_currency_unpaid_correction.sql']:options.excludeMigrations;
+ const f=await createOfflineSqlNetwork({...options,excludeMigrations}),{db,supabase}=f,ownerId=randomUUID(),foreignOwner=randomUUID(),phone='+12025550107';
  await db.query('insert into auth.users(id) values($1),($2)',[ownerId,foreignOwner]);
  const workspace=async owner=>{await db.exec(`reset role;set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${owner}';set role authenticated`);return (await db.query("select (create_workspace('Payment fixture',$1)).id",[randomUUID()])).rows[0].id;};
  const foreignWorkspace=await workspace(foreignOwner),workspaceId=await workspace(ownerId);
