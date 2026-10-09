@@ -51,7 +51,7 @@ async function fixture(){
       if(body.generationConfig?.responseMimeType==='application/json'){
         calls.extractions.push({host,body,message:currentMessage});
         if(failExtraction)return Response.json({error:{message:'fixture extraction unavailable'}},{status:503});
-        return Response.json({candidates:[{content:{parts:[{text:JSON.stringify(extractionOverride||extractedWire())}]},finishReason:'STOP'}]});
+        return Response.json({candidates:[{content:{parts:[{text:JSON.stringify({...extractedWire(),...(extractionOverride||{})})}]},finishReason:'STOP'}]});
       }
       calls.planner.push({host,body,message:currentMessage});
       if(host==='api.cloudflare.com'){
@@ -129,8 +129,11 @@ test('missing or ambiguous attachment identity and extraction failure never asse
       ['missing-number',{invoiceNumber:null,customerName:'Test Business',clientEmail:'test@test.com'}],
       ['missing-customer',{invoiceNumber:'INV-3337',customerName:null,clientEmail:null}],
       ['unknown-source',{invoiceNumber:'INV-NOT-LOGGED',customerName:'Test Business',clientEmail:'test@test.com'}],
+      ['uncertain-number',{invoiceNumberConfidence:0.74}],
+      ['uncertain-customer',{customerNameConfidence:0.74}],
+      ['missing-confidence',{invoiceNumberConfidence:null}],
     ]){
-      f.extractionOverride={...Object.fromEntries(Object.entries({invoiceNumber:'INV-3337',customerName:'Test Business',clientEmail:'test@test.com'})),...override};
+      f.extractionOverride={invoiceNumber:'INV-3337',customerName:'Test Business',clientEmail:'test@test.com',invoiceNumberConfidence:0.95,customerNameConfidence:0.95,...override};
       const reply=await f.turn(`event265-${id}`,duplicateQuestion,{mediaBytes:f.imageBytes});
       assertNoAbsenceClaim(reply.answer);assert.doesNotMatch(reply.answer,/already logged|INV-2026-0001/i,JSON.stringify(reply));
       assert.deepEqual(await f.snapshot(),before);

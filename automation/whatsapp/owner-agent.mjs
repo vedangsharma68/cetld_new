@@ -1188,7 +1188,8 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
           await active();
           const invoiceNumber=extracted?.invoiceNumber?.value,clientName=extracted?.customerName?.value,clientEmail=extracted?.clientEmail?.value;
           if(typeof invoiceNumber!=='string'||!invoiceNumber.trim()||invoiceNumber.length>100||invoiceNumber==='AUTO'
-            ||typeof clientName!=='string'||!clientName.trim()||clientName.length>160)return unavailable('INVALID');
+            ||typeof clientName!=='string'||!clientName.trim()||clientName.length>160
+            ||!['invoiceNumber','customerName'].every(key=>Number.isFinite(extracted?.[key]?.confidence)&&extracted[key].confidence>=0.75))return unavailable('INVALID');
           const existingInvoice=await invoiceStoreFactory(scope).findDuplicateSourceInvoice({invoiceNumber:invoiceNumber.trim(),clientName:clientName.trim(),
             ...(typeof clientEmail==='string'&&clientEmail.trim()?{clientEmail:clientEmail.trim()}:{})});
           await active();
