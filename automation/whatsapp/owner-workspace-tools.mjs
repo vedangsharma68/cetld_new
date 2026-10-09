@@ -101,11 +101,15 @@ export function createOwnerWorkspaceTools(options = {}) {
         // Advertise choices only after the server can actually sign them for a
         // current proposal. A model statement is never evidence of a button.
         buttonAction=null;
-        if(!accountingBlocked&&options.botPreferences?.confirmationMode==='buttons'&&options.interactiveAvailable
+        if(!accountingBlocked&&options.interactiveAvailable
           &&(pendingWasRead||tool.getReplyRequirement?.()?.confirmationText||safety.getReplyRequirement()?.confirmationText)){
           try{
             const action=await options.pending?.loadPendingAction?.({...options.scope});
-            if(createOwnerActionButtons({scope:options.scope,action,env:options.env,clock:options.clock}).length)buttonAction=action;
+            // Reopening has its own guarded decision RPC, which accepts signed
+            // decisions in direct mode. Other writes require persisted buttons mode.
+            const buttonsAllowed=options.botPreferences?.confirmationMode==='buttons'
+              ||action?.action?.type==='owner_invoice_reopen';
+            if(buttonsAllowed&&createOwnerActionButtons({scope:options.scope,action,env:options.env,clock:options.clock}).length)buttonAction=action;
           }catch{}
         }
         return result;
