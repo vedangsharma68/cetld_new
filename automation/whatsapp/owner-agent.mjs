@@ -516,7 +516,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     if (type === 'owner_invoice_delete_proposal') return {ok:false,code:'EXACT_DELETE_CONFIRMATION_REQUIRED',message:SAFE_ERRORS.EXACT_DELETE_CONFIRMATION_REQUIRED};
     if (!['owner_invoice_update','owner_invoice_payment'].includes(type)) return null;
     await active();
-    if(confirm&&current.action?.changes?.amount!==undefined&&!await ownerPartialPaymentAvailable(supabase))return {ok:false,code:'UNAVAILABLE',message:'Exact amount payments are not available. No payment was recorded; do not use full settlement.'};
+    if(confirm&&current.action?.changes?.amount!==undefined&&!await ownerPartialPaymentAvailable(supabase,current.action?.instructionVersion))return {ok:false,code:'UNAVAILABLE',message:'Exact amount payments are not available. No payment was recorded; do not use full settlement.'};
     const result = await supabase.rpc('whatsapp_confirm_owner_invoice_action', {
       p_workspace_id:scope.workspaceId,p_owner_id:scope.ownerId,p_phone:scope.phone,p_action_id:current.id,p_version:current.version,
       p_confirmation_message_id:messageId,p_confirm:confirm,
@@ -1100,7 +1100,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
           if(!intent||Object.keys(raw).some(key=>!['target','amount','currency'].includes(key))||raw.target!==intent.invoiceNumber||raw.amount!==intent.amount||raw.currency!==intent.currency)
             return {ok:false,code:'PAYMENT_GUARD',validationCode:'PAYMENT_INSTRUCTION_REQUIRED',message:'A partial payment requires a current explicit invoice, amount and currency instruction. No proposal or payment was recorded.'};
           await active();
-          if(!await ownerPartialPaymentAvailable(supabase))return {ok:false,code:'UNAVAILABLE',message:'Exact amount payments are not available. No proposal or payment was recorded; do not use full settlement.'};
+          if(!await ownerPartialPaymentAvailable(supabase,intent.instructionVersion))return {ok:false,code:'UNAVAILABLE',message:'Exact amount payments are not available. No proposal or payment was recorded; do not use full settlement.'};
           const found=await resolveWorkspaceRecord({supabase,scope,table:'invoices',operation:'update',filters:[{column:'invoice_number',operator:'eq',value:raw.target},...(intent.customerName?[{column:'customer_name',operator:'eq',value:intent.customerName}]:[])],select:'id,invoice_number,customer_id,updated_at,currency,total_amount,amount_paid,status,metadata,external_provider,external_invoice_id',assertAuthorized:active});
           if(!found.ok)return {ok:false,code:found.code,message:SAFE_ERRORS[found.code]};
           const row=found.row,totalCents=Math.round(Number(row.total_amount)*100),paidCents=Math.round(Number(row.amount_paid)*100),
@@ -1112,7 +1112,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
             ||['paid','void','cancelled'].includes(row.status))
             return {ok:false,code:'PAYMENT_GUARD',message:'The payment must match the receivable invoice currency and remaining balance. No payment was recorded.'};
           const action={type:'owner_invoice_payment',invoiceId:row.id,invoiceNumber:row.invoice_number,customerId:row.customer_id,expectedUpdatedAt:row.updated_at,
-            requestedInvoiceNumber:intent.invoiceNumber,requestedCustomerName:intent.customerName,changes:{amount:raw.amount,currency:raw.currency},amountPaidBefore:Number(row.amount_paid),
+            requestedInvoiceNumber:intent.invoiceNumber,requestedCustomerName:intent.customerName,...(intent.instructionVersion===5?{instructionVersion:5}:{}),changes:{amount:raw.amount,currency:raw.currency},amountPaidBefore:Number(row.amount_paid),
             totalAmount:Number(row.total_amount),paymentAmount:raw.amount,currency:raw.currency,outstandingAmount:(balanceCents-paymentCents)/100,
             requestedAt:clock().toISOString(),expiresAt:expiry(),sourceMessageId:messageId};
           const proposed=await stage(action);

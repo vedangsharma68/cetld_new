@@ -77,7 +77,7 @@ export function createOwnerDirectRuntime({supabase,scope,message,messageId,autho
     },
     async decideButton({interactionId,decision,pending}){
       if(!await authorize(scope))return {ok:false,code:'DENIED'};
-      if(decision==='confirm'&&pending?.action?.type==='owner_invoice_payment'&&pending.action.changes?.amount!==undefined&&!await ownerPartialPaymentAvailable(supabase))return {ok:false,code:'UNAVAILABLE',message:'Exact amount payment confirmation is not available. No payment was recorded.'};
+      if(decision==='confirm'&&pending?.action?.type==='owner_invoice_payment'&&pending.action.changes?.amount!==undefined&&!await ownerPartialPaymentAvailable(supabase,pending.action.instructionVersion))return {ok:false,code:'UNAVAILABLE',message:'Exact amount payment confirmation is not available. No payment was recorded.'};
       return adapter.apply({workspaceId:scope.workspaceId,ownerId:scope.ownerId,phone:scope.phone,
         providerMessageId:messageId,interactionId,operation:'pending.decide',
         authorization:{kind:'button',decision,pendingId:pending.id,pendingVersion:pending.version}});

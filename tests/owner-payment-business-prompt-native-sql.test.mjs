@@ -158,3 +158,46 @@ test('SQL independently rejects a wrong requested remainder even when a valid st
   assert.equal(rejected.ok,false);assert.equal(rejected.reason,'invalid_payment');assert.deepEqual(await f.snapshot(),before);
  }finally{await f.close();}
 });
+
+const bookkeepingPrompt='Record a USD 40 partial bookkeeping payment on the disposable QA invoice INV-2026-6771. Leave USD 60 outstanding. Keep reminders paused and do not contact anyone.';
+async function disposableInvoice(f){
+ await f.db.query("update customers set name='QA Fixture Customer' where id=(select customer_id from invoices where id=$1)",[f.ids[0]]);
+ await f.db.query("update invoices set total_amount=100,metadata=jsonb_set(metadata,'{printed_invoice_number}','\"INV-2026-6771\"') where id=$1",[f.ids[0]]);
+}
+test('event278 exact bookkeeping request proposes through native SQL; cancel and stale yes write nothing, a fresh confirmed proposal records exactly USD40',async()=>{
+ const f=await fixture();try{
+  await disposableInvoice(f);const before=await f.snapshot(),run=nativeHandler(f);
+  const turn=async(id,message)=>{await f.inbound(id,message);return run.handler({...f.scope,messageId:id,message});};
+  const proposed=await turn('event278-propose',bookkeepingPrompt);
+  assert.equal(run.calls(),0,JSON.stringify({proposed,outputs:run.outputs}));assert.match(proposed.answer,/Proposed a USD 40\.00/);assert.match(proposed.answer,/USD 60\.00/);assert.doesNotMatch(proposed.answer,/external|connected ledger|Recorded/i);
+  assert.deepEqual(run.executions[0].args.filters,[{column:'invoice_number',operator:'eq',value:'INV-2026-6771'}]);assert.deepEqual(await f.snapshot(),before);
+  const canceled=await turn('event278-cancel','cancel');assert.match(canceled.answer,/cancel/i);assert.deepEqual(await f.snapshot(),before);
+  run.confirm();const stale=await turn('event278-stale-yes','yes');assert.doesNotMatch(stale.answer,/Recorded/);assert.deepEqual(await f.snapshot(),before);
+  const fresh=await turn('event278-fresh-propose',bookkeepingPrompt);assert.match(fresh.answer,/Proposed a USD 40\.00/);assert.deepEqual(await f.snapshot(),before);
+  const saved=await turn('event278-fresh-yes','yes');assert.match(saved.answer,/Recorded USD 40/);assert.match(saved.answer,/USD 60/);
+  const after=await f.snapshot(),invoice=after.invoices.find(x=>x.id===f.ids[0]);assert.equal(invoice.total_amount,100);assert.equal(invoice.amount_paid,40);assert.equal(invoice.currency,'USD');assert.equal(invoice.metadata.followup_state,'paused');assert.equal(invoice.metadata.next_follow_up_at,null);
+  assert.equal(after.payments.length,1);assert.equal(after.payments[0].amount,40);assert.equal(after.payments[0].settle_remaining,false);assert.deepEqual(after.files,before.files);assert.deepEqual(after.invoices.find(x=>x.id===f.ids[1]),before.invoices.find(x=>x.id===f.ids[1]));assert.equal(after.outbound,0);
+  assert.equal((await run.handler({...f.scope,messageId:'event278-fresh-yes',message:'yes'})).replayed,true);assert.deepEqual(await f.snapshot(),after);assert.deepEqual(f.errors,[]);
+ }finally{await f.close();}
+});
+for(const fault of ['missing-feature','external-ledger','wrong-remainder'])test(`event278 ${fault} gives grounded refusal without planner fallback or writes`,async()=>{
+ const f=await fixture();try{
+  await disposableInvoice(f);
+  if(fault==='missing-feature')await f.db.exec("create or replace function public.whatsapp_owner_partial_payment_capability() returns jsonb language sql as $$select '{\"ok\":true,\"version\":4}'::jsonb$$");
+  if(fault==='external-ledger')await f.db.query("update invoices set external_provider='zoho',external_invoice_id='external-fixture' where id=$1",[f.ids[0]]);
+  const message=fault==='wrong-remainder'?bookkeepingPrompt.replace('USD 60','USD 59'):bookkeepingPrompt;
+  const before=await f.snapshot(),run=nativeHandler(f);await f.inbound('event278-'+fault,message);const reply=await run.handler({...f.scope,messageId:'event278-'+fault,message});
+  assert.equal(run.calls(),0,JSON.stringify({reply,outputs:run.outputs}));assert.equal(run.outputs.some(x=>x.proposal||x.completed),false);assert.doesNotMatch(reply.answer,/Proposed|Recorded/);
+  if(fault==='external-ledger')assert.match(reply.answer,/connected ledger/);else assert.doesNotMatch(reply.answer,/external|connected ledger/i);
+  assert.deepEqual(await f.snapshot(),before);assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions')).rows[0].n,0);assert.deepEqual(f.errors,[]);
+ }finally{await f.close();}
+});
+test('event278 later typed confirmation fails closed when the bookkeeping capability disappears',async()=>{
+ const f=await fixture();try{
+  await disposableInvoice(f);const run=nativeHandler(f);await f.inbound('capability-propose',bookkeepingPrompt);await run.handler({...f.scope,messageId:'capability-propose',message:bookkeepingPrompt});
+  const pending=(await f.db.query('select * from whatsapp_pending_actions where consumed_at is null')).rows[0];assert.equal(pending.action.instructionVersion,5);
+  await f.db.exec("create or replace function public.whatsapp_owner_partial_payment_capability() returns jsonb language sql as $$select '{\"ok\":true,\"version\":4}'::jsonb$$");
+  const before=await f.snapshot();run.confirm();await f.inbound('capability-yes','yes');const reply=await run.handler({...f.scope,messageId:'capability-yes',message:'yes'});
+  assert.doesNotMatch(reply.answer,/Recorded/);assert.doesNotMatch(reply.answer,/external|connected ledger/i);assert.deepEqual(await f.snapshot(),before);assert.equal(run.outputs.at(-1).code,'UNAVAILABLE');assert.deepEqual(f.errors,[]);
+ }finally{await f.close();}
+});
