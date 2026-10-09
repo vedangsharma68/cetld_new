@@ -53,7 +53,7 @@ async function fixture(){
  return {...f,phone,workspaceId,customerId,persist,transition,review,setAction,routine};
 }
 
-const migration=()=>readFile(new URL('../supabase/migrations/'+migrationName,import.meta.url),'utf8');
+const migration=()=>readFile(new URL('./fixtures/superseded-migrations/'+migrationName,import.meta.url),'utf8');
 const unchangedFields=invoice=>Object.fromEntries(Object.entries(invoice).filter(([key])=>!['currency','direction'].includes(key)));
 const security=({proowner,proacl,prosecdef,proconfig})=>({proowner,proacl,prosecdef,proconfig});
 

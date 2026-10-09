@@ -58,7 +58,8 @@ const generalNegativeEvidence=canonicalInference.flatMap(([currency,source,regio
 });
 
 async function fixture({includeEarlierCandidate=false}={}){
- const f=await createOfflineSqlNetwork({excludeMigrations:[migrationName,...includeEarlierCandidate?[]:[earlierMigration]]}),{db}=f;
+ const f=await createOfflineSqlNetwork({excludeMigrations:[migrationName]}),{db}=f;
+ if(includeEarlierCandidate)await db.exec(await readFile(new URL('./fixtures/superseded-migrations/'+earlierMigration,import.meta.url),'utf8'));
  const ownerId=randomUUID(),phone='+15555550154';
  await db.query('insert into auth.users(id) values($1)',[ownerId]);
  await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
@@ -224,7 +225,7 @@ for(const lineEndings of ['LF','CRLF'])test(`superseding migration accepts froze
   const before=await routine(),baseline=await review();assert.equal(before.normalized_md5,earlierHash);
   if(lineEndings==='CRLF')await db.exec(before.definition.replaceAll('\n','\r\n'));
   await db.exec(await migration());const after=await routine();assert.equal(after.normalized_md5,forwardHash);assert.deepEqual(security(after),security(before));assert.deepEqual(await review(),baseline);
-  const earlierSql=await readFile(new URL('../supabase/migrations/'+earlierMigration,import.meta.url),'utf8');
+  const earlierSql=await readFile(new URL('./fixtures/superseded-migrations/'+earlierMigration,import.meta.url),'utf8');
   await assert.rejects(db.exec(earlierSql),/Unexpected retained invoice review source/);await db.exec('rollback');assert.deepEqual(await routine(),after);
  }finally{await f.close();}
 });

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
@@ -22,7 +23,8 @@ function textPdf(lines){
 }
 
 async function fixture({oldSql=false,transform=null,currency='AUD',currencyEvidence='Melbourne, VIC 3000',beforeGeneral=false}={}){
- const f=await createOfflineSqlNetwork(oldSql?{excludeMigrations:[migration,generalMigration]}:beforeGeneral?{excludeMigrations:[generalMigration]}:{}),{db,supabase}=f;
+ const f=await createOfflineSqlNetwork(oldSql||beforeGeneral?{excludeMigrations:[generalMigration]}:{}),{db,supabase}=f;
+ if(beforeGeneral&&!oldSql)await db.exec(await readFile(new URL('./fixtures/superseded-migrations/'+migration,import.meta.url),'utf8'));
  const ownerId=randomUUID(),phone='+15555550314';
  await db.query('insert into auth.users(id) values($1)',[ownerId]);
  await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
