@@ -27,4 +27,15 @@ test('reopening replies require consequential facts and cannot invent a reversal
   assert.equal(ownerGroundingIssue('I reopened INV-1.',[result]),null);
   assert.equal(ownerGroundingIssue('I refunded the payment.',[result]),'unverified_refund');
   assert.equal(ownerGroundingIssue('No payment was refunded.',[result]),null);
+  for(const negative of ['No refund was sent.','No cash refund was sent.','No cash refund has been sent.'])
+    assert.equal(ownerGroundingIssue(`I reopened INV-1. ${negative}`,[result]),null);
+  assert.equal(ownerGroundingIssue('No cash refund was sent, but I sent a refund.',[result]),'unverified_refund');
+  assert.equal(ownerGroundingIssue('No cash refund was sent, but I refunded the payment.',[result]),'unverified_refund');
+  assert.ok(ownerGroundingIssue('No cash refund was sent. I sent a customer reminder.',[result]));
+  assert.ok(ownerGroundingIssue('No cash refund was sent, but I sent a customer reminder.',[result]));
+  const delivery={ok:true,completed:true,action:'sent',entityType:'customer',deliveryStatus:'accepted'};
+  assert.equal(ownerGroundingIssue('No cash refund was sent. I sent a customer reminder.',[result,delivery]),null);
+  assert.equal(ownerGroundingIssue('No cash refund was sent, but I refunded the payment.',[result,delivery]),'unverified_refund');
+  assert.equal(ownerGroundingIssue('I transferred a refund.',[result]),'unverified_refund');
+  assert.equal(ownerGroundingIssue('No cash refund was sent, but I transferred a refund.',[result,delivery]),'unverified_refund');
 });
