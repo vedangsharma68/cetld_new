@@ -44,7 +44,7 @@ export function invoiceReviewClarification(action) {
     mismatch && /\b(?:shipping|handling|freight|delivery|surcharge|discount)\b/i.test(action.invoice?.notes || '') ? 'The printed shipping, charges, or discounts must be reviewed as part of that breakdown.' : null,
     moneyIssues ? 'Please verify the amounts and send a corrected invoice or a clearer photo showing the subtotal, tax, total, outstanding balance, and any printed adjustments.' : null,
     details.length ? `Please confirm the ${details.join(', ')}.` : null,
-    action.missingFields?.includes('direction') ? 'Please confirm that your business issued this invoice.' : null,
+    action.missingFields?.includes('direction') ? 'Please tell me whether your business issued the invoice.' : null,
     !moneyIssues && !details.length && !paymentReview && !action.missingFields?.includes('direction') ? 'Please send a clearer photo so I can verify the invoice details.' : null,
     'Nothing was saved.'].filter(Boolean).join(' ');
 }

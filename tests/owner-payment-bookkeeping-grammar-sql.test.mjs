@@ -6,6 +6,7 @@ import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {requestedOwnerPayment,ownerPaymentAmountMentioned} from '../automation/whatsapp/owner-payment-intent.mjs';
 import {ownerPartialPaymentAvailable} from '../automation/whatsapp/owner-payment-readback.mjs';
 import {createOwnerDirectRuntime} from '../automation/whatsapp/owner-direct-runtime.mjs';
+import {ownerGroundingIssue} from '../automation/whatsapp/owner-grounding.mjs';
 import {invoiceReviewClarification} from '../automation/whatsapp/assistant-handler.mjs';
 const migration='20261009202000_owner_payment_bookkeeping_instruction.sql';
 const exact='Record a USD 40 partial bookkeeping payment on the disposable QA invoice INV-2026-6771. Leave USD 60 outstanding. Keep reminders paused and do not contact anyone.';
@@ -52,7 +53,7 @@ test('forward bookkeeping migration preserves security and business rows, reappl
  }finally{await f.close();}
 });
 test('issuer clarification asks directly and preserves other missing facts',()=>{
- const answer=invoiceReviewClarification({missingFields:['direction','currency']});assert.match(answer,/Please confirm that your business issued this invoice\./);assert.match(answer,/explicit currency code/);assert.doesNotMatch(answer,/confirm the confirmation|clearer photo/);assert.match(answer,/Nothing was saved/);
+ const answer=invoiceReviewClarification({missingFields:['direction','currency']});assert.match(answer,/Please tell me whether your business issued the invoice\./);assert.match(answer,/explicit currency code/);assert.doesNotMatch(answer,/confirm the confirmation|clearer photo/);assert.match(answer,/Nothing was saved/);assert.equal(ownerGroundingIssue(answer,[{ok:true,pending:true,type:'invoice_review_draft',stage:'incomplete'}],'',{}),null);assert.equal(ownerGroundingIssue(invoiceReviewClarification({missingFields:['direction']}),[], '', {}),null);
 });
 test('forward bookkeeping migration accepts uniform CRLF but rejects mixed line endings',async()=>{
  const f=await createOfflineSqlNetwork({excludeMigrations:[migration]});try{
