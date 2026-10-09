@@ -2,7 +2,7 @@
 import {requestedInvoiceDateChange,requestedInvoiceMoneyChange} from './invoice-corrections.mjs';
 const COMPLETION = /\b(?:deleted|removed|created|saved|updated|changed|corrected|restored|reopened|reversed|recorded|sent|cancelled|canceled|reset|completed|marked[^.!?]{0,24}paid)\b/i;
 const NEGATIVE = /\b(?:not|never|cannot|can't|couldn't|could not|haven't|hasn't|wasn't|weren't|didn't|did not|unable|failed|pending|propos(?:al|ed)|would|will|can|could|should|if|once|before|after|to be|to delete|to update|to change|to send)\b/i;
-const NO_RESULT = /\b(?:nothing|no (?:(?:new |duplicate )?invoice|duplicate|payment|record|file|change|action))\s+(?:was|were|has been|have been|is|has)\s+(?:saved|logged|created|recorded|changed|updated|sent|applied|completed)\b/gi;
+const NO_RESULT = /\b(?:nothing|no (?:(?:new |duplicate )?invoice|duplicate|payment|(?:cash )?refund|record|file|change|action))\s+(?:was|were|has been|have been|is|has)\s+(?:saved|logged|created|recorded|changed|updated|sent|applied|completed)\b/gi;
 const COMMITTED = new Set(['deleted','restored','invoice_created','settings_updated','customer_created','customer_updated','customer_deleted','updated','created','paid','cancelled','canceled','review_updated']);
 const COMMITTED_TYPES=new Set(['owner_invoice_update','owner_invoice_payment','owner_invoice_create','owner_settings_update','owner_workspace_data_confirmed','owner_workspace_data_cancelled']);
 const normalize=value=>String(value||'').replace(/[\u201c\u201d]/g,'"').replace(/\u2019/g,"'");
@@ -126,7 +126,8 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
   const text=normalize(reply);
   if(/\b(?:i(?:'m| am) still (?:working|processing)|i(?:'ll| will) (?:message|notify|let you know)|working on (?:it|that|this) now)\b/i.test(text)
     &&!results.some(result=>result?.ok===true&&result.durableJob===true&&result.queued===true))return 'unverified_background_job';
-  if(results.some(result=>result.cashRefund===false)&&text.split(/[.!?\n]+/).some(clause=>/\b(?:refunded|sent[^.!?]{0,25}refund|refund[^.!?]{0,25}(?:sent|processed|issued))\b/i.test(clause)&&!NEGATIVE.test(clause)&&!/\bno\b/i.test(clause)))return 'unverified_refund';
+  if(results.some(result=>result.cashRefund===false)&&text.split(/[.!?\n]+/).map(clause=>clause.replace(NO_RESULT,''))
+    .some(clause=>/\b(?:refunded|(?:sent|transferred)[^.!?]{0,25}refund|refund[^.!?]{0,25}(?:sent|processed|issued|transferred))\b/i.test(clause)&&!NEGATIVE.test(clause)&&!/\bno\b/i.test(clause)))return 'unverified_refund';
   const buttonIssue=ownerButtonClaimIssue(text,capabilities);
   if(buttonIssue)return buttonIssue;
   const proposalClaims=text.split(/[.!?\n]+/).filter(clause=>
