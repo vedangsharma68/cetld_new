@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 const filename='20261008153500_owner_live_clarification_evidence.sql';
 test('live clarification migration is exact, idempotent, transactional and retains routine security',async()=>{
- const f=await createOfflineSqlNetwork({excludeMigrations:[filename]});try{
+ const f=await createOfflineSqlNetwork({excludeMigrations:[filename,'20261008193550_invoice_review_inferred_currency_unpaid_correction.sql']});try{
   const sql=await readFile(new URL('../supabase/migrations/'+filename,import.meta.url),'utf8');
   const routines=async()=>(await f.db.query("select proname,prosrc,proowner,proacl::text acl,prosecdef,proconfig from pg_proc where proname in ('owner_payment_instruction','whatsapp_confirm_owner_invoice_action','whatsapp_transition_invoice_review','whatsapp_apply_direct_owner_write','whatsapp_owner_partial_payment_capability') order by proname")).rows;
   const before=await routines();await f.db.exec(sql);const after=await routines();
