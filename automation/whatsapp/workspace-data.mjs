@@ -2,6 +2,7 @@ import {sanitizeReminderTemplate} from '../preferences.mjs';
 import {isExternallyManagedInvoice,invoiceBalanceFields} from '../../invoice/business-fields.mjs';
 import {applyPaymentReversals,isMissingReversalStorage} from '../../payment-reversals.mjs';
 import {resolveWorkspaceRecord,validateCustomFields,ownerCalendar} from './workspace-records.mjs';
+import {ownerInvoiceReadIntent} from './owner-invoice-read-intent.mjs';
 import {INVOICE_CORRECTION_FIELDS,INVOICE_BUSINESS_METADATA_FIELDS,INVOICE_EXTENDED_CORRECTION_FIELDS,validateInvoiceCorrection,invoiceBusinessFields,requestedInvoiceDateChange,requestedInvoiceMoneyChange} from './invoice-corrections.mjs';
 import {sanitizeOwnerBotPreferences,mergeOwnerBotPreferences,OWNER_BOT_LANGUAGE_OPTIONS} from './bot-preferences.mjs';
 import {
@@ -14,7 +15,7 @@ const DATA_ACTION = 'owner_workspace_data_change';
 const MAX_LIMIT = 50;
 const OPERATIONS = Object.freeze([
   'read','create','update','batch','delete','restore','pending','confirm','cancel','describe',
-  'analyzeAttachment','saveAttachment','reviewAttachment','sendFile',
+  'analyzeAttachment','checkAttachment','saveAttachment','reviewAttachment','sendFile',
 ]);
 const FILTER_OPERATORS = Object.freeze(['eq','neq','gt','gte','lt','lte','ilike','in','is']);
 const ALLOWED_ARGS = new Set(['request','operations','operation','table','columns','filters','values','limit','offset','order']);
@@ -101,7 +102,7 @@ function definition() {
   // model request; describe exposes it when the model needs unfamiliar fields.
   const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA).filter(table=>table!=='payments')},filters:{type:'array',items:{type:'object'}},values:{type:'object'}},required:['operation','table','values']};
   return {type:'function',function:{name:'workspaceData',
-    description:'Invoice update: total_amount/subtotal/tax/discount/line_items; status separate. payments create: amount/currency, invoice_number eq; confirm later. Attachments: saveAttachment/analyzeAttachment; operation only.',
+    description:'Invoice update: total_amount/subtotal/line_items; status separate. Payment create: amount/currency, invoice_number eq; confirm later. File ops: saveAttachment/analyzeAttachment/checkAttachment.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic batch.'},
@@ -144,7 +145,7 @@ function catalog(table=null) {
     externalAccounting:{financialChanges:'Externally managed invoice financial fields and new local payments are refused. Apply them in the connected ledger and sync its authoritative facts.',localAnnotations:'Notes, dates and custom business facts can remain local annotations. A local save is not remote accounting writeback or a queued remote task.'},
     atomicBatch:{argument:'operations',minItems:2,maxItems:10,itemFields:['operation','table','filters','values'],operations:['create','update'],oneUnambiguousRecordPerItem:true,allCommitOrAllRollback:true,customFields:'Nest additional business facts in each item values.custom_fields.',excluded:['payment proposals','status changes','deletes','confirmations','invoice extended corrections (customer, items, tax/subtotal/discount, direction and extracted facts)']},
     businessRecordLifecycle:{mode:'direct',delete:'Recoverable deletion; retains all business facts. No values allowed.',restore:'Restore one record deleted by the current owner within 30 days; use its name or ID. No values allowed.',reads:'Deleted records are hidden by default; read with deleted_at gt a supplied timestamp to inspect retained deleted records.'},
-    attachmentOperations:{analyzeAttachment:'Read the current attachment and retain its source facts in a durable review without saving an invoice.',
+    attachmentOperations:{checkAttachment:'Inspect the current attachment and check its exact source identity against existing invoices without saving or changing a review.',analyzeAttachment:'Read the current attachment and retain its source facts in a durable review without saving an invoice.',
       saveAttachment:'Extract/review/save the current attachment or this owner\'s current retained attachment review. Supply operation only, without table or invoice values. Reuse its known facts; do not recreate it with invoice create or chat fields.',
       reviewAttachment:'Supply missing owner-evidenced facts or acknowledge unchanged known fields. Only invoice_number may be explicitly overridden to workspace numbering: include invoice_number_intent use_workspace_numbering with invoice_number AUTO. Concrete number or pattern replacement is unsupported. The workspace sequence assigns the unique ledger number on save and original extraction is audited. Other extracted fields cannot be overwritten.'},
     tables:Object.fromEntries(Object.entries(TABLES).filter(([name])=>!table||name===table).map(([name,spec])=>[name,{
@@ -407,10 +408,10 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
     if(!OPERATIONS.includes(operation))throw new TypeError('unknown operation');
     const table=args.table||null;
     if(table!==null&&!Object.hasOwn(TABLES,table))throw new TypeError('unknown table');
-    const noTableOps=['pending','confirm','cancel','describe','analyzeAttachment','saveAttachment'];
+    const noTableOps=['pending','confirm','cancel','describe','analyzeAttachment','checkAttachment','saveAttachment'];
     if(!table&&!noTableOps.includes(operation))throw new TypeError('table required');
     if(table&&!['read','create','update','delete','restore','reviewAttachment','sendFile','describe'].includes(operation))throw new TypeError('invalid table operation');
-    if(['pending','confirm','cancel','describe'].includes(operation)&&Object.keys(args).some(key=>!['operation',...(operation==='describe'?['table']:[])].includes(key)))throw new TypeError('unexpected operation fields');
+    if(['pending','confirm','cancel','describe','checkAttachment'].includes(operation)&&Object.keys(args).some(key=>!['operation',...(operation==='describe'?['table']:[])].includes(key)))throw new TypeError('unexpected operation fields');
     let values=args.values===undefined?{}:args.values;
     let correctionTransport=null;
     if(operation==='update'&&table==='invoices'){
@@ -661,7 +662,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     }
     const internal=[];
     if(table==='invoices')internal.push('id','invoice_number','updated_at','status','total_amount','amount_paid');
-    if(table==='invoices'&&/\b(?:payments?\s+(?:history|records)|history\s+of\s+payments?)\b/i.test(message))internal.push('currency','metadata');
+    if(table==='invoices'&&(ownerInvoiceReadIntent(message)?.paymentHistory||/\b(?:payments?\s+(?:history|records)|history\s+of\s+payments?)\b/i.test(message)))internal.push('currency','metadata');
     if(table==='customers')internal.push('id','name','updated_at','metadata');
     if(['payments','invoice_files'].includes(table))internal.push('invoice_id');
     if(table==='payments')internal.push('id','workspace_id','amount');
@@ -708,7 +709,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       internal.filter(key=>Object.hasOwn(row,key)).map(key=>[key,key==='metadata'?{whatsapp_owner:row.metadata?.whatsapp_owner===true}:structuredClone(row[key])])));
     let paymentHistory;
     if(table==='invoices'&&rows.length===1&&params.offset===0
-      &&/\b(?:payments?\s+(?:history|records)|history\s+of\s+payments?)\b/i.test(message)){
+      &&(ownerInvoiceReadIntent(message)?.paymentHistory||/\b(?:payments?\s+(?:history|records)|history\s+of\s+payments?)\b/i.test(message))){
       // The target ID comes from this authorized invoice read, not model scope
       // or conversation history. Keep immutable receipts and reversal evidence.
       const history=await read({operation:'read',table:'payments',columns:['invoice_number','amount','reversed_amount','net_amount','paid_at'],
@@ -719,7 +720,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       const requestedInvoiceMatched=aliases.some(value=>typeof value==='string'&&value.length>0&&value.length<=160
         &&new RegExp(`(?:^|[^\\p{L}\\p{N}])${value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}(?=$|[^\\p{L}\\p{N}])`,'iu').test(message));
       paymentHistory={...history,operation:'read',table:'payments',readOnly:true,invoiceNumber:rows[0].invoice_number,currency:rows[0].currency,
-        requestedInvoiceMatched,invoice:{invoice_number:rows[0].invoice_number,currency:rows[0].currency,total_amount:rows[0].total_amount,amount_paid:rows[0].amount_paid}};
+        requestedInvoiceMatched,invoice:{invoice_number:rows[0].invoice_number,currency:rows[0].currency,total_amount:rows[0].total_amount,amount_paid:rows[0].amount_paid,...invoiceBalanceFields(rows[0])}};
       await ctx.assertAuthorized();ctx.assertLive();
     }
     return sanitise({ok:true,rows:output.slice(0,params.limit),truncated,
@@ -1114,7 +1115,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         return {...sanitise(visible,scope),operation:params.operation,table:params.table,writeAttempted:true};
       }
       if(params.operation==='create'||params.operation==='update'||params.operation==='delete')return await propose(params,ctx);
-      if(['restore','analyzeAttachment','saveAttachment','reviewAttachment','sendFile'].includes(params.operation)) {
+      if(['restore','analyzeAttachment','checkAttachment','saveAttachment','reviewAttachment','sendFile'].includes(params.operation)) {
         if(typeof executeSafetyOperation!=='function')return fail();
         return delegate(params,ctx);
       }

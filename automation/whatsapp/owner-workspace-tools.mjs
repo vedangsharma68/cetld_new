@@ -48,6 +48,7 @@ export function createOwnerWorkspaceTools(options = {}) {
       if (operation === 'confirm') return invoke('confirmPendingOwnerChange');
       if (operation === 'cancel') return invoke('cancelPendingOwnerChange');
       if (operation === 'analyzeAttachment') return invoke('readInvoiceAttachment');
+      if (operation === 'checkAttachment') return invoke('checkInvoiceAttachmentDuplicate');
       if (operation === 'saveAttachment') return invoke('ingestInvoiceAttachment');
       if (operation === 'reviewAttachment') {
         const names={invoice_number_intent:'invoiceNumberIntent',invoice_number:'invoiceNumber',customer_name:'customerName',issue_date:'invoiceDate',due_date:'dueDate',total_amount:'total',currency:'currency',invoice_direction:'direction',subtotal:'subtotal',tax:'tax',notes:'notes',line_items:'lineItems',customer_email:'clientEmail',customer_phone:'clientPhone'};
@@ -84,6 +85,7 @@ export function createOwnerWorkspaceTools(options = {}) {
     // Server-selected amount proposals still use this adapter's full scope,
     // capability and pending-action checks, followed by a later confirmation.
     supportsBoundedPaymentProposal:true,
+    supportsAttachmentDuplicateLookup:true,
     definitions:[{type:'function',function:{name:'getAIProviderConfiguration',description:'Read this turn\'s actual primary, fallback and serving model configuration.',parameters:{type:'object',properties:{},additionalProperties:false}}},tool.definition],
     async execute(name, args, context) {
       if (!['workspaceData','getAIProviderConfiguration'].includes(name)) return {ok:false, code:'UNKNOWN_TOOL', message:'That tool does not exist. Use workspaceData with a description of what you need.'};
