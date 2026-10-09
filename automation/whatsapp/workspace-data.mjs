@@ -1048,8 +1048,9 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         return params.operation==='pending'?readResult(result):result;
       }
       if(params.operation==='read'){
-        const target=params.table==='invoices'&&params.filters.length===1&&params.filters[0].column==='invoice_number'
-          &&params.filters[0].operator==='eq'?params.filters[0].value:null;
+        const identifying=params.filters.filter(filter=>filter.column==='invoice_number'&&filter.operator==='eq');
+        const target=params.table==='invoices'&&identifying.length===1
+          &&params.filters.every(filter=>filter.operator==='eq'&&['invoice_number','customer_name'].includes(filter.column))?identifying[0].value:null;
         return {...readResult(await read(params,ctx)),...(typeof target==='string'?{lookupInvoiceNumber:target}:{})};
       }
       if(params.table==='invoices'&&params.operation==='update'&&params.values.status==='unpaid'){

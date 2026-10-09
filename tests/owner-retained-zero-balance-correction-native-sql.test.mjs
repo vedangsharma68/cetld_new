@@ -52,7 +52,7 @@ test('retained zero-balance correction accepts equivalent complete facts and rej
 
 for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF',retainedUnpaidWordingCases[0]],['LF',retainedUnpaidWordingCases[1]],['LF',retainedUnpaidWordingCases[2]]])test(`native image-shaped extraction corrects retained AUD/zero balance with ${wording.name}${wording===retainedUnpaidWordingCases[1]?' and NULL owner transcript':''} under ${lineEndings} SQL only after a later yes`,async()=>{
  const instruction=wording.message;
- const f=await createOfflineSqlNetwork({excludeMigrations:[migrationName,'20261009031935_invoice_review_nonzero_inferred_currency_correction.sql','20261009040005_invoice_review_general_inferred_currency_correction.sql']}),{db,supabase}=f;
+ const f=await createOfflineSqlNetwork({excludeMigrations:[migrationName,'20261009015001_owner_payment_factual_instruction.sql','20261009031935_invoice_review_nonzero_inferred_currency_correction.sql','20261009040005_invoice_review_general_inferred_currency_correction.sql']}),{db,supabase}=f;
  const ownerId=randomUUID(),phone='+15555550130';
  try{
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -201,7 +201,7 @@ for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF'
 });
 
 test('retained correction source guard rejects unknown or mixed sources and historical guard rejects the new body',async()=>{
- const f=await createOfflineSqlNetwork({excludeMigrations:[migrationName,'20261009031935_invoice_review_nonzero_inferred_currency_correction.sql','20261009040005_invoice_review_general_inferred_currency_correction.sql']}),{db}=f;
+ const f=await createOfflineSqlNetwork({excludeMigrations:[migrationName,'20261009015001_owner_payment_factual_instruction.sql','20261009031935_invoice_review_nonzero_inferred_currency_correction.sql','20261009040005_invoice_review_general_inferred_currency_correction.sql']}),{db}=f;
  try{
   const migration=await readFile(new URL('../supabase/migrations/'+migrationName,import.meta.url),'utf8');
   const routine=async()=>(await db.query("select prosrc,proowner,proacl,prosecdef,proconfig,pg_get_functiondef(oid) definition from pg_proc where oid='public.whatsapp_transition_invoice_review(bigint,bigint,uuid,uuid,text,text,jsonb)'::regprocedure")).rows[0];

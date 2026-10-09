@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 
 test('unpaid stamp migration accepts only the approved installed source or its exact fixed body',async()=>{
- const f=await createOfflineSqlNetwork({excludeMigrations:['20261008153500_owner_live_clarification_evidence.sql','20261008193550_invoice_review_inferred_currency_unpaid_correction.sql','20261009031935_invoice_review_nonzero_inferred_currency_correction.sql','20261009040005_invoice_review_general_inferred_currency_correction.sql']}),{db}=f;
+ const f=await createOfflineSqlNetwork({excludeMigrations:['20261008153500_owner_live_clarification_evidence.sql','20261008193550_invoice_review_inferred_currency_unpaid_correction.sql','20261009015001_owner_payment_factual_instruction.sql','20261009031935_invoice_review_nonzero_inferred_currency_correction.sql','20261009040005_invoice_review_general_inferred_currency_correction.sql']}),{db}=f;
  try{
   const migration=await readFile(new URL('../supabase/migrations/20261008025552_invoice_review_unpaid_stamp_resolution.sql',import.meta.url),'utf8');
   const routine=async()=>(await db.query("select proowner,proacl,prosecdef,proconfig,prosrc,pg_get_functiondef(oid) definition from pg_proc where oid='public.whatsapp_transition_invoice_review(bigint,bigint,uuid,uuid,text,text,jsonb)'::regprocedure")).rows[0];

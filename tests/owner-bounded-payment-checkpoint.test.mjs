@@ -35,9 +35,12 @@ test('an attempted operation or a current ambiguous instruction never enables a 
 test('a failed customer match is rendered without denying an invoice that the scoped read found',async()=>{
  let calls=0,creates=0;
  const result=await runOwnerAgent({message,tools:{...toolsFor(async(name,args)=>{
-  if(args.operation==='read')return evidence;
+  if(args.operation==='read'){
+   assert.deepEqual(args.filters,[...read.filters,{column:'customer_name',operator:'eq',value:'Northwind Systems LLC'}]);
+   return evidence;
+  }
   creates++;return {ok:false,code:'NOT_FOUND',operation:'create',table:'payments'};
  }),getReplyRequirement:()=>null,getWriteAttempted:()=>creates>0},provider:{async generate(){calls++;return provider().generate();}}});
- assert.equal(calls,1);assert.equal(creates,1);assert.equal(result.boundedPaymentReply,true);
+ assert.equal(calls,0);assert.equal(creates,1);assert.equal(result.boundedPaymentReply,true);
  assert.equal(result.answer,'The invoice and customer could not be matched for this payment. This payment was not recorded.');
 });

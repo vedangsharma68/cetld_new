@@ -46,6 +46,7 @@ export async function writeReleaseManifest({outputPath='owner-chat-build.json'}=
     'supabase/migrations/20261008153500_owner_live_clarification_evidence.sql');
   paths.push('settings-ai.js','ai/store.mjs','ai/routes.mjs',
     'supabase/migrations/20261008193550_invoice_review_inferred_currency_unpaid_correction.sql',
+    'supabase/migrations/20261009015001_owner_payment_factual_instruction.sql',
     'supabase/migrations/20261009040005_invoice_review_general_inferred_currency_correction.sql');
   const files={};for(const path of paths)files[path]=createHash('sha256').update(await readFile(path)).digest('hex');
   let commit=process.env.VERCEL_GIT_COMMIT_SHA||process.env.GITHUB_SHA;
