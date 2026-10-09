@@ -102,7 +102,7 @@ function definition() {
   // model request; describe exposes it when the model needs unfamiliar fields.
   const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA).filter(table=>table!=='payments')},filters:{type:'array',items:{type:'object'}},values:{type:'object'}},required:['operation','table','values']};
   return {type:'function',function:{name:'workspaceData',
-    description:'Invoice edits: total_amount/subtotal/line_items; status separate. Payment create: amount/currency, invoice_number eq; confirm later. Attachments: saveAttachment/analyzeAttachment/checkAttachment.',
+    description:'Invoice update: total_amount/subtotal/line_items; status separate. Payment create: amount/currency, invoice_number eq; confirm later. Attachments: saveAttachment/analyzeAttachment/checkAttachment.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic batch.'},
