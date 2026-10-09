@@ -40,10 +40,11 @@ test('native owner attachment retains currency/direction ambiguity and clarifies
   const review=async()=>(await db.query("select id,version,action from whatsapp_pending_actions where workspace_id=$1 and action->>'sourceMessageId'='ambiguous-source' order by created_at desc limit 1",[workspaceId])).rows[0];
   const draft=await review();assert.equal(draft.action.stage,'incomplete');assert.deepEqual(draft.action.missingFields.sort(),['currency','direction']);assert.equal(draft.action.invoice.currency,null);assert.equal(draft.action.invoice.direction,'payable');assert.equal(draft.action.invoice.total,118);
   assert.match(first.answer,/confirm.*currency/i);assert.match(first.answer,/issued/i);assert.match(first.answer,/Nothing was saved/);
+  const callsBeforeClarification=providerCalls;
   const clarified=await turn('clarify-source','Use USD. This is a receivable from Fixture customer, and it is unpaid. Log it without sending any customer reminders.');
   const proposal=await review();assert.equal(proposal.id,draft.id);assert.equal(proposal.action.stage,'proposal',JSON.stringify({proposal,results,clarified,errors:f.errors}));assert.equal(proposal.action.invoice.currency,'USD');assert.equal(proposal.action.invoice.direction,'receivable');assert.equal(proposal.action.invoice.total,118);assert.equal(proposal.action.invoice.clientName,'Fixture customer');assert.equal(extractions,1);
   assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,0);assert.match(clarified.answer,/reply yes/i);
-  assert.deepEqual(contracts[1][0].function.parameters.properties.operation.enum,['reviewAttachment']);
+  assert.equal(providerCalls,callsBeforeClarification,'the retained review continues before native planning');
   const savedReply=await turn('confirm-source','yes');assert.match(savedReply.answer,/Saved invoice INV-2026-0001/);
   const saved=(await db.query('select * from invoices where workspace_id=$1',[workspaceId])).rows;assert.equal(saved.length,1);assert.equal(Number(saved[0].total_amount),118);assert.equal(Number(saved[0].amount_paid),0);assert.equal(saved[0].currency,'USD');assert.equal(saved[0].metadata.printed_invoice_number,'PRINTED-118');assert.equal(saved[0].metadata.invoice_direction,'receivable');
   assert.equal((await db.query('select count(*)::int n from invoice_files where workspace_id=$1',[workspaceId])).rows[0].n,1);
