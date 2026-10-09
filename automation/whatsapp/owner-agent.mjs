@@ -1058,13 +1058,17 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
           if(!await ownerPartialPaymentAvailable(supabase))return {ok:false,code:'UNAVAILABLE',message:'Exact amount payments are not available. No proposal or payment was recorded; do not use full settlement.'};
           const found=await resolveWorkspaceRecord({supabase,scope,table:'invoices',operation:'update',filters:[{column:'invoice_number',operator:'eq',value:raw.target},...(intent.customerName?[{column:'customer_name',operator:'eq',value:intent.customerName}]:[])],select:'id,invoice_number,customer_id,updated_at,currency,total_amount,amount_paid,status,metadata,external_provider,external_invoice_id',assertAuthorized:active});
           if(!found.ok)return {ok:false,code:found.code,message:SAFE_ERRORS[found.code]};
-          const row=found.row,balance=Math.round((Number(row.total_amount)-Number(row.amount_paid))*100)/100;
+          const row=found.row,totalCents=Math.round(Number(row.total_amount)*100),paidCents=Math.round(Number(row.amount_paid)*100),
+            paymentCents=Math.round(raw.amount*100),balanceCents=totalCents-paidCents;
           if(isExternallyManagedInvoice(row))return {ok:false,code:'EXTERNAL_ACCOUNTING',message:'Record this payment in the connected ledger and sync it. No local payment was recorded.'};
-          if(row.currency!==raw.currency||row.metadata?.invoice_direction!=='receivable'||!Number.isFinite(balance)||raw.amount>balance||['paid','void','cancelled'].includes(row.status))
+          if(row.currency!==raw.currency||row.metadata?.invoice_direction!=='receivable'
+            ||![totalCents,paidCents,paymentCents,balanceCents].every(Number.isSafeInteger)||paymentCents>balanceCents
+            ||intent.expectedOutstanding!==undefined&&Math.round(intent.expectedOutstanding*100)!==balanceCents-paymentCents
+            ||['paid','void','cancelled'].includes(row.status))
             return {ok:false,code:'PAYMENT_GUARD',message:'The payment must match the receivable invoice currency and remaining balance. No payment was recorded.'};
           const action={type:'owner_invoice_payment',invoiceId:row.id,invoiceNumber:row.invoice_number,customerId:row.customer_id,expectedUpdatedAt:row.updated_at,
             requestedInvoiceNumber:intent.invoiceNumber,requestedCustomerName:intent.customerName,changes:{amount:raw.amount,currency:raw.currency},amountPaidBefore:Number(row.amount_paid),
-            totalAmount:Number(row.total_amount),paymentAmount:raw.amount,currency:raw.currency,outstandingAmount:Math.round((balance-raw.amount)*100)/100,
+            totalAmount:Number(row.total_amount),paymentAmount:raw.amount,currency:raw.currency,outstandingAmount:(balanceCents-paymentCents)/100,
             requestedAt:clock().toISOString(),expiresAt:expiry(),sourceMessageId:messageId};
           const proposed=await stage(action);
           return proposed.ok?{...proposed,paymentAmount:raw.amount,currency:raw.currency,outstandingAmount:action.outstandingAmount}:proposed;
@@ -1618,8 +1622,14 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
   let dateReadRecoveryUsed=checkpoint?.version===1&&checkpoint.dateReadRecoveryUsed===true;
   const requestedDateChange=requestedInvoiceDateChange(message);
   const requestedPayment=requestedOwnerPayment(message);
+  const boundedPaymentReadArgs=requestedPayment?{
+    operation:'read',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:requestedPayment.invoiceNumber},
+      ...(requestedPayment.customerName?[{column:'customer_name',operator:'eq',value:requestedPayment.customerName}]:[])],
+    columns:['invoice_number','customer_name','total_amount','amount_paid','currency','status'],
+  }:null;
   const requestedMoney=requestedInvoiceMoneyChange(message);
   let actionReadRecoveryUsed=checkpoint?.version===1&&checkpoint.actionReadRecoveryUsed===true;
+  let boundedPaymentReadSelected=checkpoint?.version===1&&checkpoint.boundedPaymentReadSelected===true;
   let boundedPaymentSelected=checkpoint?.version===1&&checkpoint.boundedPaymentSelected===true;
   let observedWriteAttempted=checkpoint?.version===1&&checkpoint.observedWriteAttempted===true;
   let attemptedOperation=null;
@@ -1650,7 +1660,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
   const saveCheckpoint=async()=>{
     if(!allowDeferred)return;
     const next={version:1,transcript:activeTranscript,toolCache:[...toolCache],phase:checkpointPhase,
-      pendingToolCalls,uncertainWrite,replyRequirement:replyRequirement(),observedWriteAttempted,mediaReference,dateReadRecoveryUsed,actionReadRecoveryUsed,boundedPaymentSelected};
+      pendingToolCalls,uncertainWrite,replyRequirement:replyRequirement(),observedWriteAttempted,mediaReference,dateReadRecoveryUsed,actionReadRecoveryUsed,boundedPaymentReadSelected,boundedPaymentSelected};
     // Persistence is a barrier before another operation starts. The worker
     // stores this under the original inbound event's lease, never model scope.
     if(onCheckpoint)await onCheckpoint(next);
@@ -1809,7 +1819,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         if(proposal&&!evidence.some(completedOwnerResult)){
           const cue=requirement?.buttonsAvailable?'Tap Confirm or Cancel.':'Reply yes to confirm or cancel.';
           answer=`Proposed a ${requestedPayment.currency} ${requestedPayment.amount.toFixed(2)} payment for invoice ${requestedPayment.invoiceNumber}. The remaining balance would be ${requestedPayment.currency} ${proposal.details.outstandingAmount.toFixed(2)}. ${cue}`;
-        }else if(boundedPaymentSelected){
+        }else if(boundedPaymentSelected||boundedPaymentReadSelected){
           const last=evidence.at(-1);
           const failureReplies={
             PAYMENT_GUARD:'The payment must match the receivable invoice currency and remaining balance. This payment was not recorded.',
@@ -1818,8 +1828,13 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
             EXTERNAL_ACCOUNTING:'Record this payment in the connected ledger and sync it. No local payment was recorded.',
             PENDING:'Another owner change is waiting for a decision. Review or cancel it before requesting this payment.',
             UNAVAILABLE:'I could not prepare this payment proposal. This payment was not recorded. Please try again later.',
+            INVALID:'I could not verify the invoice for this payment. This payment was not recorded.',
+            STALE:'The invoice changed before this payment could be prepared. This payment was not recorded. Please check its current balance.',
           };
           if(last?.ok===false&&!evidence.some(completedOwnerResult))answer=failureReplies[last.code];
+          if(!answer&&boundedPaymentReadSelected&&!boundedPaymentSelected&&!evidence.some(completedOwnerResult))
+            answer='I could not verify exactly one matching invoice and customer for this payment. This payment was not recorded.';
+          if(!answer&&last?.ok===false&&!evidence.some(completedOwnerResult))answer=failureReplies.UNAVAILABLE;
         }
         if(answer&&!ownerReplySafetyIssue(answer,requirement)&&!ownerGroundingIssue(answer,evidence,message,requirement||{}))
           return resultFor(answer,{boundedPaymentReply:true});
@@ -1866,6 +1881,13 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
       if(restored?.ok)media=tools.getMedia?.()||null;
     }
     if(checkpoint?.version===1&&checkpoint.pendingToolCalls?.length){
+      const resumePaymentRead=tools.supportsBoundedPaymentProposal===true&&definitionNames.has('workspaceData')
+        &&boundedPaymentReadSelected&&!boundedPaymentSelected&&boundedPaymentReadArgs&&!checkpoint.uncertainWrite
+        &&!writeMayHaveBeenAttempted()&&!requireAttachmentIngest&&!reviewContinuation
+        &&checkpoint.pendingToolCalls.length===1
+        &&checkpoint.pendingToolCalls[0].call?.id==='owner-payment-read'
+        &&checkpoint.pendingToolCalls[0].name==='workspaceData'
+        &&canonicalToolArgs(checkpoint.pendingToolCalls[0].args)===canonicalToolArgs(boundedPaymentReadArgs);
       for(const {call,name,args} of checkpoint.pendingToolCalls){
         const key=name+':'+canonicalToolArgs(args||{});
         let output=toolCache.get(key);
@@ -1884,9 +1906,11 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         if(!transcript.some(turn=>turn.role==='tool'&&turn.tool_call_id===call.id))transcript.push({role:'tool',tool_call_id:call.id,name,content:json(output)});
       }
       pendingToolCalls=[];uncertainWrite=null;
-      return await finalAnswer({});
+      if(!resumePaymentRead)return await finalAnswer({});
+      await saveCheckpoint();
     }
     if(checkpointPhase==='final'||(!checkpoint&&initialToolResults.length))return await finalAnswer({});
+    if(boundedPaymentSelected)return await finalAnswer({});
     let firstSuccessfulReadRound=null;
     let readOnlyToolRounds=0;
     for(;;){
@@ -1905,16 +1929,23 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         &&output.readOnly===true&&output.operation==='read'&&output.table==='invoices'&&output.truncated!==true&&output.rows?.length===1
         &&(output.lookupInvoiceNumber===requestedPayment.invoiceNumber||output.rows[0].invoice_number===requestedPayment.invoiceNumber));
       let lastResult,round,calls;
-      if(tools.supportsBoundedPaymentProposal===true&&definitionNames.has('workspaceData')&&verifiedPaymentRead
+      if(tools.supportsBoundedPaymentProposal===true&&definitionNames.has('workspaceData')&&requestedPayment
         &&!boundedPaymentSelected&&!writeMayHaveBeenAttempted()&&!requiredAttachmentCall&&!requiredReview){
-        // Current parsed owner text supplies authority; the read only proves
-        // context. The normal adapter independently resolves and reauthorizes
-        // the invoice/customer and stages an exact amount, never full settlement.
-        boundedPaymentSelected=true;
-        calls=[{id:'owner-payment-proposal',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({
-          operation:'create',table:'payments',filters:[{column:'invoice_number',operator:'eq',value:requestedPayment.invoiceNumber}],
-          values:{amount:requestedPayment.amount,currency:requestedPayment.currency},
-        })}}];
+        // Current owner text selects one scoped context read before any model
+        // call. Its normal resolver retains both invoice and customer identity.
+        // A failed or incomplete read cannot become a broader model lookup.
+        if(!boundedPaymentReadSelected){
+          boundedPaymentReadSelected=true;
+          calls=[{id:'owner-payment-read',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(boundedPaymentReadArgs)}}];
+        }else if(verifiedPaymentRead){
+          // The adapter independently reauthorizes and resolves the same
+          // invoice/customer before staging an exact amount for later consent.
+          boundedPaymentSelected=true;
+          calls=[{id:'owner-payment-proposal',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({
+            operation:'create',table:'payments',filters:[{column:'invoice_number',operator:'eq',value:requestedPayment.invoiceNumber}],
+            values:{amount:requestedPayment.amount,currency:requestedPayment.currency},
+          })}}];
+        }else return await finalAnswer({});
         round={number:++diagnostics.rounds,toolNames:['workspaceData'],toolResults:[],outcome:'ok',safetyIssueCodes:[],logged:false};
         activeRound=round;diagnostics.toolRounds++;
       }else({result:lastResult,round,calls}=await requestProvider({messages:[...transcript,turnAnchor],toolOptions,maxTokens:512}));
