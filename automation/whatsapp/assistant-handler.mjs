@@ -29,7 +29,7 @@ export function invoiceReviewClarification(action) {
       ? 'Invoice review timed out. Nothing was saved. Please resend the attachment later to retry.'
       : 'The invoice review service is unavailable right now. Nothing was saved. Please resend the attachment later to retry.';
   }
-  const details = (action.missingFields || []).map(name => fieldLabels[name]);
+  const details = (action.missingFields || []).filter(name => name !== 'direction').map(name => fieldLabels[name]);
   const issues = action.validationIssues || [];
   const moneyIssues = issues.some(code => /SUBTOTAL|TAX|OUTSTANDING|BALANCE|LINE_ITEMS|AMOUNT|TOTAL/.test(code));
   const mismatch = issues.includes('INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX');
@@ -44,7 +44,8 @@ export function invoiceReviewClarification(action) {
     mismatch && /\b(?:shipping|handling|freight|delivery|surcharge|discount)\b/i.test(action.invoice?.notes || '') ? 'The printed shipping, charges, or discounts must be reviewed as part of that breakdown.' : null,
     moneyIssues ? 'Please verify the amounts and send a corrected invoice or a clearer photo showing the subtotal, tax, total, outstanding balance, and any printed adjustments.' : null,
     details.length ? `Please confirm the ${details.join(', ')}.` : null,
-    !moneyIssues && !details.length && !paymentReview ? 'Please send a clearer photo so I can verify the invoice details.' : null,
+    action.missingFields?.includes('direction') ? 'Please tell me whether your business issued the invoice.' : null,
+    !moneyIssues && !details.length && !paymentReview && !action.missingFields?.includes('direction') ? 'Please send a clearer photo so I can verify the invoice details.' : null,
     'Nothing was saved.'].filter(Boolean).join(' ');
 }
 

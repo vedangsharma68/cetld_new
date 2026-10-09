@@ -8,6 +8,10 @@ import {createClient} from '@supabase/supabase-js';
 const name=value=>{if(!/^[a-z_][a-z0-9_]*$/i.test(value))throw Error('unsupported fixture identifier');return `"${value}"`;};
 const parameter=value=>value&&typeof value==='object'?JSON.stringify(value):value;
 export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[]}={}){
+  // The bookkeeping forward migration requires the installed factual parser.
+  // Historical migration fixtures intentionally omit that predecessor.
+  if(excludeMigrations.includes('20261009015001_owner_payment_factual_instruction.sql'))
+    excludeMigrations=[...excludeMigrations,'20261009202000_owner_payment_bookkeeping_instruction.sql'];
   const db=new PGlite(),requests=[],errors=[],objects=new Map();let interceptor=null;
   await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;
     create schema auth;create schema storage;
