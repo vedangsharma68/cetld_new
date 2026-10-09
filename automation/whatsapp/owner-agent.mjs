@@ -1189,11 +1189,11 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
           const invoiceNumber=extracted?.invoiceNumber?.value,clientName=extracted?.customerName?.value,clientEmail=extracted?.clientEmail?.value;
           if(typeof invoiceNumber!=='string'||!invoiceNumber.trim()||invoiceNumber.length>100||invoiceNumber==='AUTO'
             ||typeof clientName!=='string'||!clientName.trim()||clientName.length>160
-            ||!['invoiceNumber','customerName'].every(key=>Number.isFinite(extracted?.[key]?.confidence)&&extracted[key].confidence>=0.75))return unavailable('INVALID');
+            ||!['invoiceNumber','customerName'].every(key=>Number.isFinite(extracted?.[key]?.confidence)&&extracted[key].confidence>=0.75))return unavailable('UNAVAILABLE');
           const existingInvoice=await invoiceStoreFactory(scope).findDuplicateSourceInvoice({invoiceNumber:invoiceNumber.trim(),clientName:clientName.trim(),
             ...(typeof clientEmail==='string'&&clientEmail.trim()?{clientEmail:clientEmail.trim()}:{})});
           await active();
-          if(!existingInvoice||!['invoiceNumber','clientName'].every(key=>typeof existingInvoice[key]==='string'&&existingInvoice[key].trim()))return unavailable('NOT_FOUND');
+          if(!existingInvoice||!['invoiceNumber','clientName'].every(key=>typeof existingInvoice[key]==='string'&&existingInvoice[key].trim()))return unavailable('UNAVAILABLE');
           return {ok:true,operation:'checkAttachment',readOnly:true,attachmentLookup:true,existingInvoice,
             message:`Invoice ${existingInvoice.invoiceNumber} is already logged for ${existingInvoice.clientName} (source invoice ${invoiceNumber.trim()}). No changes were made.`};
         }catch(error){
