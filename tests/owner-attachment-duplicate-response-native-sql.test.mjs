@@ -4,6 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 import {createWhatsAppInvoiceStore} from '../automation/whatsapp/invoice-store.mjs';
+import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 
 async function fixture({badDuplicateReply=false,storeWrap=store=>store}={}){
  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+15555550128';
@@ -17,8 +18,11 @@ async function fixture({badDuplicateReply=false,storeWrap=store=>store}={}){
  const scope={workspaceId,ownerId,customerId,phone};
  const facts={invoiceNumber:'SB-10442',customerName:'Northwind Systems LLC',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:879,tax:72.52,total:951.52,outstandingAmount:951.52,currency:'USD',direction:'payable',clientPhone:null,clientPhoneRaw:null,clientEmail:null,notes:'Net 30',currencySource:'photo',addressHint:null,paymentTerms:null,paymentStatus:null,paymentStatusEvidence:null};
  const wire={...Object.fromEntries(Object.entries(facts).flatMap(([key,value])=>[[key,value],[key+'Confidence',value==null?0:.99]])),lineItems:[{description:'Service',quantity:1,unitPrice:879,amount:879,confidence:.99}],lineItemsConfidence:.99};
- const bytes=Buffer.from([255,216,255,0,0,0]),results=[];let current='',providerCalls=0,extractions=0;
+ const bytes=Buffer.from([255,216,255,0,0,0]),results=[];let current='',providerCalls=0,extractions=0,falseSuccessDrafts=0;
  const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
+  toolsFactory:options=>{const tools=createOwnerWorkspaceTools(options);return {...tools,async execute(...args){
+   const result=await tools.execute(...args);results.push(result);return result;
+  }};},
   invoiceStoreFactory:verified=>storeWrap(createWhatsAppInvoiceStore({supabase,...verified,audience:'owner'})),logger:{info(){},warn(){},error(){}},fetchImpl:async(url,init)=>{
    providerCalls++;const body=JSON.parse(init.body);
    if(new URL(url).hostname==='api.cloudflare.com')return Response.json({error:{message:'isolated primary unavailable'}},{status:503});
@@ -27,7 +31,8 @@ async function fixture({badDuplicateReply=false,storeWrap=store=>store}={}){
    if(body.generationConfig?.responseMimeType==='application/json'){extractions++;return native([{text:JSON.stringify(wire)}]);}
    const tool=body.contents.flatMap(item=>item.parts||[]).findLast(part=>part.functionResponse)?.functionResponse;
    if(!tool)return native([{functionCall:{name:'workspaceData',args:current==='yes'?{operation:'confirm'}:current.includes('my business issued')?{operation:'reviewAttachment',table:'invoices',values:{invoice_direction:'receivable'}}:{operation:'create',table:'invoices',values:{customer_name:'Invented',total_amount:1,currency:'USD'}}},thoughtSignature:'fixture-native-signature'}]);
-   const result=tool.response;results.push(result);
+   const result=tool.response;
+   if(result.code==='DUPLICATE_INVOICE'&&badDuplicateReply)falseSuccessDrafts++;
    const answer=result.code==='DUPLICATE_INVOICE'?(badDuplicateReply?'Saved invoice INV-2026-9999.':result.message)
     :result.completed?`Saved invoice ${result.invoiceNumber||result.review?.invoice?.invoiceNumber} for Northwind Systems LLC, USD 951.52.`
     :result.requiresLaterConfirmation?'Invoice SB-10442 for Northwind Systems LLC, USD 951.52. Reply yes to save it, or cancel.'
@@ -40,7 +45,9 @@ async function fixture({badDuplicateReply=false,storeWrap=store=>store}={}){
   await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status,media_ref) values($1,'fixture',$2,$3,$4,'processing',$5)",[id,phone,media?'image':'text',message,media?id:null]);
   await db.query("insert into whatsapp_messages(workspace_id,customer_id,phone,direction,audience,body,kind,status,provider_message_id,idempotency_key) values($1,$2,$3,'inbound','owner',$4,'text','received',$5,$5)",[workspaceId,customerId,phone,message,id]);
   if(media)await db.query('insert into whatsapp_inbound_media(provider_message_id,media_id,mime_type,bytes,size_bytes) values($1,$1,$2,$3,$4)',[id,'image/jpeg',bytes,bytes.length]);
-  return handler({...scope,messageId:id,message,...(media?{media:{bytes,mimeType:'image/jpeg',fileName:'fixture.jpg'}}:{})});
+  const callsBefore=providerCalls;
+  const response=await handler({...scope,messageId:id,message,...(media?{media:{bytes,mimeType:'image/jpeg',fileName:'fixture.jpg'}}:{})});
+  return {...response,fixtureProviderCalls:providerCalls-callsBefore};
  };
  const upload=async(prefix)=>{
   await turn(prefix+'-source','Log this new sample invoice as an unpaid USD receivable issued by my business to Northwind Systems LLC. This is a test; do not send any customer reminders.',true);
@@ -48,17 +55,18 @@ async function fixture({badDuplicateReply=false,storeWrap=store=>store}={}){
   assert.match(clarify.answer,/reply yes/i,JSON.stringify({clarify,results,errors:f.errors}));
   return turn(prefix+'-confirm','yes');
  };
- return {...f,scope,handler,turn,upload,results,get providerCalls(){return providerCalls;},get extractions(){return extractions;}};
+ return {...f,scope,handler,turn,upload,results,get providerCalls(){return providerCalls;},get extractions(){return extractions;},get falseSuccessDrafts(){return falseSuccessDrafts;}};
 }
 
-for(const badDuplicateReply of [false,true])test(`native default owner duplicate ${badDuplicateReply?'repairs a false success':'reports the verified rejection'} without saving or changing the original`,async()=>{
+for(const badDuplicateReply of [false,true])test(`native default owner duplicate ${badDuplicateReply?'bypasses a provider poised to invent success':'reports the verified rejection'} without saving or changing the original`,async()=>{
  const f=await fixture({badDuplicateReply});try{
   assert.match((await f.upload('original')).answer,/Saved invoice INV-2026-0001/);
   const before=(await f.db.query('select to_jsonb(i) value from invoices i where workspace_id=$1',[f.scope.workspaceId])).rows[0].value;
   assert.equal(before.metadata.printed_invoice_number,'SB-10442');assert.notEqual(before.invoice_number,'SB-10442');
   const duplicate=await f.upload('duplicate');
   assert.equal(duplicate.plannerFailure,undefined,JSON.stringify(duplicate));assert.match(duplicate.answer,/already logged/);assert.match(duplicate.answer,/INV-2026-0001/);assert.match(duplicate.answer,/SB-10442/);assert.match(duplicate.answer,/No new invoice was saved/);assert.doesNotMatch(duplicate.answer,/Saved invoice|INV-2026-9999|reply yes|may have saved/i);
-  if(badDuplicateReply)assert.ok(duplicate.agentDiagnostics.safetyRejects.includes('attachment_duplicate_status'),'false success drafts must be rejected before the grounded fallback');
+  assert.equal(duplicate.fixtureProviderCalls,0,'the guarded duplicate result supplies the reply before provider planning');
+  assert.equal(f.falseSuccessDrafts,0,'the provider never receives a duplicate result to turn into an invented success');
   const result=f.results.findLast(value=>value.code==='DUPLICATE_INVOICE');assert.equal(result.ok,false);assert.equal(result.completed,undefined);assert.equal(result.invoiceCreated,false);assert.equal(result.outcome,'duplicate_rejected');assert.equal(result.existingInvoice.invoiceNumber,before.invoice_number);
   const after=(await f.db.query('select to_jsonb(i) value from invoices i where workspace_id=$1',[f.scope.workspaceId])).rows;assert.equal(after.length,1);assert.deepEqual(after[0].value,before);
   const failed=(await f.db.query("select action from whatsapp_pending_actions where workspace_id=$1 and action->>'sourceMessageId'='duplicate-source'",[f.scope.workspaceId])).rows[0].action;assert.equal(failed.stage,'failed');assert.equal(failed.failureCode,'DUPLICATE_INVOICE');

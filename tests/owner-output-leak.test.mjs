@@ -9,6 +9,17 @@ const narration='We need to draft a concise final answer. Mention the missing cu
 const requirement={attachmentReview:{incomplete:true,missingFields:['currency'],validationIssues:[],answer:safeReview},maxLength:1000};
 const initialToolResults=[{name:'getPendingOwnerAction',args:{},result:{ok:true,pending:true,type:'invoice_review_draft',stage:'incomplete',missingFields:['currency']}}];
 
+test('event257 developer field-catalog failure is rejected and replaced with an owner-facing reply',async()=>{
+  const leaked='The invoice for Test Business could not be saved due to invalid fields. Please correct the fields according to the catalog invoice correction fields and try again.';
+  assert.equal(ownerReplySafetyIssue(leaked),'internal_tool_contract');
+  let requests=0;
+  const result=await runOwnerAgent({message:'Help with an invoice.',tools:{definitions:[],async execute(){throw Error('No tool should run');}},
+    provider:{async generate(){requests++;return {content:requests===1?leaked:'I could not save the invoice. Please check its details before trying again.'};}}});
+  assert.equal(requests,2);
+  assert.equal(result.answer,'I could not save the invoice. Please check its details before trying again.');
+  assert.ok(result.agentDiagnostics.safetyRejects.includes('internal_tool_contract'));
+});
+
 test('reply checks reject internal requirements and drafting around a valid invoice answer',()=>{
   for(const text of [leakedRequirements+'\n'+safeReview,safeReview+'\n'+leakedRequirements,'```json\n'+leakedRequirements+'\n```\n'+safeReview,
     'replyRequirements: '+leakedRequirements,safeReview+'\n{"requiredFacts":{"changeValues":[]}}'])

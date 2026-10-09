@@ -3,6 +3,7 @@
 // unsupported claims in the remaining answer. The caller repairs or fails closed.
 export function internalOwnerReplyIssue(value) {
   const text=String(value||'');
+  if(/\bcatalog\s+invoice\s+correction\s+fields\b/i.test(text))return 'internal_tool_contract';
   if(/(?:["'](?:replyRequirements|requiredFacts|attachmentReview|attachmentDuplicate|confirmationText|confirmationAlternatives|requiresCancel|requiresReplyCue|safetyIssueCodes)["']\s*:|\breplyRequirements\s*[:=])/i.test(text))
     return 'internal_reply_requirements';
   if(/<\/?(?:think|thinking|analysis|reasoning)\b[^>]*>|\[(?:analysis|thinking|reasoning)\]|(?:^|\n)\s*(?:#{1,6}\s*)?(?:analysis|thinking|reasoning|draft(?: answer| reply)?|final answer)\s*:/i.test(text)
