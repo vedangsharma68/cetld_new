@@ -3,6 +3,7 @@ import {isExternallyManagedInvoice,invoiceBalanceFields} from '../../invoice/bus
 import {applyPaymentReversals,isMissingReversalStorage} from '../../payment-reversals.mjs';
 import {resolveWorkspaceRecord,validateCustomFields,ownerCalendar} from './workspace-records.mjs';
 import {ownerInvoiceReadIntent} from './owner-invoice-read-intent.mjs';
+import {ownerInvoiceReadAnalysis,invoiceReadAnalysisArgs,deriveInvoiceReadAnalysis} from './owner-invoice-read-analysis.mjs';
 import {INVOICE_CORRECTION_FIELDS,INVOICE_BUSINESS_METADATA_FIELDS,INVOICE_EXTENDED_CORRECTION_FIELDS,validateInvoiceCorrection,invoiceBusinessFields,requestedInvoiceDateChange,requestedInvoiceMoneyChange} from './invoice-corrections.mjs';
 import {sanitizeOwnerBotPreferences,mergeOwnerBotPreferences,OWNER_BOT_LANGUAGE_OPTIONS} from './bot-preferences.mjs';
 import {
@@ -377,11 +378,13 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
     if(typeof planRequest!=='function')throw new TypeError('natural-language planning unavailable');
     const hints=Object.fromEntries(['operation','table'].filter(key=>raw[key]!==undefined).map(key=>[key,raw[key]]));
     const text=Object.keys(hints).length?JSON.stringify({request:raw.request.trim(),hints}):raw.request.trim();
-    return Promise.resolve(planRequest(text,{catalog:catalog(raw.table||null),signal:ctx.signal,deadlineAt:ctx.deadlineAt,validationFeedback}))
+    ctx.phase='planning';ctx.planning=true;
+    return Promise.resolve().then(()=>planRequest(text,{catalog:catalog(raw.table||null),signal:ctx.signal,deadlineAt:ctx.deadlineAt,validationFeedback}))
       .then(planned=>{
         ctx.assertLive();
         if(!ownObject(planned)||containsForbiddenIdentity(planned,scope))throw new TypeError('invalid planned operation');
         for(const[key,value]of Object.entries(hints))if(planned[key]!==undefined&&planned[key]!==value)throw new TypeError('conflicting request hints');
+        ctx.planning=false;
         return normalizeStructured({...hints,...planned});
       });
   }
@@ -662,7 +665,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     }
     const internal=[];
     if(table==='invoices')internal.push('id','invoice_number','updated_at','status','total_amount','amount_paid');
-    if(table==='invoices'&&(ownerInvoiceReadIntent(message)?.paymentHistory||/\b(?:payments?\s+(?:history|records)|history\s+of\s+payments?)\b/i.test(message)))internal.push('currency','metadata');
+    if(table==='invoices'&&(ownerInvoiceReadAnalysis(message)||ownerInvoiceReadIntent(message)?.paymentHistory||/\b(?:payments?\s+(?:history|records)|history\s+of\s+payments?)\b/i.test(message)))internal.push('currency','metadata');
     if(table==='customers')internal.push('id','name','updated_at','metadata');
     if(['payments','invoice_files'].includes(table))internal.push('invoice_id');
     if(table==='payments')internal.push('id','workspace_id','amount');
@@ -723,7 +726,18 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         requestedInvoiceMatched,invoice:{invoice_number:rows[0].invoice_number,currency:rows[0].currency,total_amount:rows[0].total_amount,amount_paid:rows[0].amount_paid,...invoiceBalanceFields(rows[0])}};
       await ctx.assertAuthorized();ctx.assertLive();
     }
+    let invoiceReadAnalysis;
+    const analysis=table==='invoices'?ownerInvoiceReadAnalysis(message):null;
+    if(analysis){
+      if(truncated||params.offset!==0)return safeError({code:'UNAVAILABLE'});
+      const current=rows.length?await findRelatedRows('invoices','id',rows.map(row=>row.id),'id,updated_at',ctx):[];
+      if(current.length!==rows.length||rows.some(row=>!row.updated_at||!current.some(value=>value.id===row.id&&value.updated_at===row.updated_at)))return safeError({code:'STALE'});
+      invoiceReadAnalysis=deriveInvoiceReadAnalysis(analysis,rows,{truncated});
+      if(!invoiceReadAnalysis)return safeError({code:'UNAVAILABLE'});
+      await ctx.assertAuthorized();ctx.assertLive();
+    }
     return sanitise({ok:true,rows:output.slice(0,params.limit),truncated,
+      ...(invoiceReadAnalysis?{invoiceReadAnalysis}:{}),
       ...(paymentHistory?{paymentHistory}:{}),
       ...(truncated?{nextOffset:params.offset+params.limit}:{})},scope);
   };
@@ -953,7 +967,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     const combinedSignal=signals.length>1&&typeof AbortSignal?.any==='function'?AbortSignal.any(signals):signals[0];
     const deadlines=[deadlineAt,executionOptions?.deadlineAt].map(asEpoch).filter(Number.isFinite);
     const effectiveDeadline=deadlines.length?Math.min(...deadlines):null;
-    const ctx={signal:combinedSignal,deadlineAt:effectiveDeadline,
+    const ctx={signal:combinedSignal,deadlineAt:effectiveDeadline,phase:'authorization',
       recordCorrectionTransport(shape){if(!correctionTransport)correctionTransport=shape;},
       assertLive(){
         if(signals.some(item=>item.aborted))throw Object.assign(new Error(),{code:'OWNER_LOOP_TIMEOUT'});
@@ -968,6 +982,14 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       try { await ctx.assertAuthorized(); }
       catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
       const params=await normalizeRequest(raw,scope,planRequest,ctx,validationFeedback);
+      ctx.phase='dispatch';
+      const analysis=ownerInvoiceReadAnalysis(message);
+      if(analysis&&params.operation!=='describe'){
+        const expected=invoiceReadAnalysisArgs(analysis);
+        if(params.operation!=='read'||params.table!=='invoices'||params.offset!==0
+          ||JSON.stringify(params.filters)!==JSON.stringify(expected.filters))
+          return {...fail('INVALID','This question permits only its scoped invoice lookup. No change was made.'),writeAttempted:false,readOnly:true};
+      }
       if((params.operation==='batch'?params.operations:[params]).some(item=>item.table==='workspace_ai_settings'
         &&['mimo-v2.6-flash-free','muse-spark-1.3-contributor-free'].some(id=>Object.values(item.values||{}).includes(id))))
         return fail('SETTINGS_REQUIRED','Choose this model in Settings → Advanced AI settings. WhatsApp model changes do not support it yet.');
@@ -1121,7 +1143,12 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       }
       return fail();
     } catch(error) {
-      if(!(error instanceof TypeError))return safeError(error);
+      if(!(error instanceof TypeError)){
+        const result=safeError(error);
+        if(ctx.phase!=='dispatch')result.planningFailure={phase:ctx.phase,deadlineExpired:effectiveDeadline!==null&&Date.now()>=effectiveDeadline,code:['INVALID_OUTPUT','INVALID_ARGUMENT','TIMEOUT','NETWORK_ERROR','RATE_LIMITED','PROVIDER_UNAVAILABLE','OWNER_LOOP_TIMEOUT','API_KEY_MISSING','INVALID_MODEL'].includes(error?.code)?error.code:'OTHER',
+          ...(Number.isInteger(error?.status)&&error.status>=400&&error.status<=599?{status:error.status}:{})};
+        return result;
+      }
       const errors={
         'invalid batch':['BATCH_SHAPE','Atomic batches support 2–10 create/update items in operations, each with table, filters and values. One unambiguous record per item; all commit or all roll back. Nest custom business fields in values.custom_fields. Payment creates, status changes and deletes are separate operations. No write was attempted.'],
         'invoice action requires exactly one canonical target':['TARGET_REQUIRED','Which invoice do you mean? Send its invoice number or customer name. If that customer has several invoices, I will ask you to choose. No change was made.'],
