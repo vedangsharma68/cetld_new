@@ -6,6 +6,7 @@ import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mj
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 import {authorizeOwnerPhone} from '../automation/whatsapp/owner-binding.mjs';
+import {createOwnerScopedStore} from '../ai/whatsapp-channel.mjs';
 
 const caption='Log this invoice as a receivable draft for this disposable QA fixture. Nothing has been paid. Never send customer reminders. Ask me if any required fact is missing.';
 const question='What information is missing from the invoice photo I just sent?';
@@ -85,6 +86,7 @@ test('native missing-field follow-ups read matching reviews and never invent fac
     assert.equal(logs.filter(row=>row.label==='WhatsApp owner tool call'&&row.data.operation==='pending').length,3);
     const pending=createWhatsAppPendingActionStore({supabase});
     const nativeTools=(extra={})=>createOwnerWorkspaceTools({supabase,scope,pending,pendingAtStart:before,pendingInitialState:before,
+      ownerStore:createOwnerScopedStore({supabase,...scope,authorize:()=>authorizeOwnerPhone({supabase,...scope})}),
       message:question,messageId:'fault-question',ownerHistory:[{role:'user',content:caption,providerMessageId:'fresh-photo'}],
       authorize:input=>authorizeOwnerPhone({supabase,...input}),logger:{error(){}},...extra});
     const unavailable=await nativeTools({pendingStoreAvailable:false}).execute('workspaceData',{operation:'pending'});
