@@ -1105,7 +1105,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
           if(!found.ok)return {ok:false,code:found.code,message:SAFE_ERRORS[found.code]};
           const row=found.row,totalCents=Math.round(Number(row.total_amount)*100),paidCents=Math.round(Number(row.amount_paid)*100),
             paymentCents=Math.round(raw.amount*100),balanceCents=totalCents-paidCents;
-          if(isExternallyManagedInvoice(row))return {ok:false,code:'EXTERNAL_ACCOUNTING',message:'Record this payment in the connected ledger and sync it. No local payment was recorded.'};
+          if(isExternallyManagedInvoice(row))return {ok:false,code:'EXTERNAL_ACCOUNTING',message:'Record this payment in the connected ledger and sync it. This payment was not recorded.'};
           if(row.currency!==raw.currency||row.metadata?.invoice_direction!=='receivable'
             ||![totalCents,paidCents,paymentCents,balanceCents].every(Number.isSafeInteger)||paymentCents>balanceCents
             ||intent.expectedOutstanding!==undefined&&Math.round(intent.expectedOutstanding*100)!==balanceCents-paymentCents
@@ -2008,7 +2008,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
             PAYMENT_GUARD:'The payment must match the receivable invoice currency and remaining balance. This payment was not recorded.',
             NOT_FOUND:'The invoice and customer could not be matched for this payment. This payment was not recorded.',
             AMBIGUOUS:'More than one invoice matches. Specify one invoice and customer. This payment was not recorded.',
-            EXTERNAL_ACCOUNTING:'Record this payment in the connected ledger and sync it. No local payment was recorded.',
+            EXTERNAL_ACCOUNTING:'Record this payment in the connected ledger and sync it. This payment was not recorded.',
             PENDING:'Another owner change is waiting for a decision. Review or cancel it before requesting this payment.',
             UNAVAILABLE:'I could not prepare this payment proposal. This payment was not recorded. Please try again later.',
             INVALID:'I could not verify the invoice for this payment. This payment was not recorded.',
