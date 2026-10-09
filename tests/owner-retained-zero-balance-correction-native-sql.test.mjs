@@ -6,6 +6,7 @@ import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createOwnerSafetyTools} from '../automation/whatsapp/owner-agent.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {invoiceReviewUnpaidResolution} from '../automation/whatsapp/invoice-review-payment-resolution.mjs';
 import {originalRetainedUnpaidInstruction,retainedUnpaidWordingCases,retainedUnpaidWordingNegatives} from './fixtures/retained-unpaid-wording.mjs';
 
@@ -51,7 +52,7 @@ test('retained zero-balance correction accepts equivalent complete facts and rej
 
 for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF',retainedUnpaidWordingCases[0]],['LF',retainedUnpaidWordingCases[1]],['LF',retainedUnpaidWordingCases[2]]])test(`native image-shaped extraction corrects retained AUD/zero balance with ${wording.name}${wording===retainedUnpaidWordingCases[1]?' and NULL owner transcript':''} under ${lineEndings} SQL only after a later yes`,async()=>{
  const instruction=wording.message;
- const f=await createOfflineSqlNetwork({excludeMigrations:[migrationName,'20261009015001_owner_payment_factual_instruction.sql']}),{db,supabase}=f;
+ const f=await createOfflineSqlNetwork({excludeMigrations:[migrationName,'20261009015001_owner_payment_factual_instruction.sql','20261009031935_invoice_review_nonzero_inferred_currency_correction.sql','20261009040005_invoice_review_general_inferred_currency_correction.sql']}),{db,supabase}=f;
  const ownerId=randomUUID(),phone='+15555550130';
  try{
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -71,7 +72,10 @@ for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF'
   // travel through the native image request with the reported extraction facts.
   const bytes=Buffer.from([255,216,255,0,0,0]),results=[],contracts=[];let providerCalls=0,extractions=0,confirming=false;
   const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
-   logger:{info(){},warn(){},error(){}},fetchImpl:async(url,init)=>{
+   logger:{info(){},warn(){},error(){}},toolsFactory:options=>{
+    const tools=createOwnerWorkspaceTools(options);
+    return {...tools,async execute(name,args,context){const result=await tools.execute(name,args,context);results.push(result);return result;}};
+   },fetchImpl:async(url,init)=>{
     providerCalls++;const body=JSON.parse(init.body);
     if(new URL(url).hostname==='api.cloudflare.com')return Response.json({error:{message:'isolated primary unavailable'}},{status:503});
     assert.equal(new URL(url).hostname,'generativelanguage.googleapis.com');
@@ -169,7 +173,7 @@ for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF'
   assert.deepEqual(proposal.action.ownerProvidedFacts,{currency:{value:'USD',sourceMessageId:'correction-source'},direction:{value:'receivable',sourceMessageId:'correction-source'}});
   assert.match(clarified.answer,/reply yes/i);assert.doesNotMatch(clarified.answer,/customer name|which customer|verified customer target/i);
   assert.equal(results.slice(startResults).some(result=>result.requiresLaterConfirmation===true),true);assert.equal(results.slice(startResults).some(result=>result.completed===true),false);
-  assert.deepEqual(contracts[clarificationContract][0].functionDeclarations[0].parametersJsonSchema.properties.operation.enum,['reviewAttachment']);
+  assert.equal(contracts.length,clarificationContract,'owner-evidenced continuation executes before native planning');
   assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,0);assert.equal((await db.query('select count(*)::int n from invoice_files')).rows[0].n,0);
   assert.equal((await db.query('select count(*)::int n from payments')).rows[0].n,0);assert.equal((await db.query("select count(*)::int n from whatsapp_messages where audience='customer'")).rows[0].n,0);
   for(const table of ['payment_reversals','whatsapp_owner_action_receipts','whatsapp_direct_write_receipts'])assert.equal((await db.query(`select count(*)::int n from ${table}`)).rows[0].n,0,table);
@@ -197,7 +201,7 @@ for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF'
 });
 
 test('retained correction source guard rejects unknown or mixed sources and historical guard rejects the new body',async()=>{
- const f=await createOfflineSqlNetwork({excludeMigrations:[migrationName,'20261009015001_owner_payment_factual_instruction.sql']}),{db}=f;
+ const f=await createOfflineSqlNetwork({excludeMigrations:[migrationName,'20261009015001_owner_payment_factual_instruction.sql','20261009031935_invoice_review_nonzero_inferred_currency_correction.sql','20261009040005_invoice_review_general_inferred_currency_correction.sql']}),{db}=f;
  try{
   const migration=await readFile(new URL('../supabase/migrations/'+migrationName,import.meta.url),'utf8');
   const routine=async()=>(await db.query("select prosrc,proowner,proacl,prosecdef,proconfig,pg_get_functiondef(oid) definition from pg_proc where oid='public.whatsapp_transition_invoice_review(bigint,bigint,uuid,uuid,text,text,jsonb)'::regprocedure")).rows[0];

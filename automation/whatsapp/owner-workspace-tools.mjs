@@ -115,6 +115,7 @@ export function createOwnerWorkspaceTools(options = {}) {
     getMedia: safety.getMedia,
     getAttachmentReviewContext:safety.getAttachmentReviewContext,
     getAttachmentReviewContinuation:safety.getAttachmentReviewContinuation,
+    getAttachmentReviewRefusal:safety.getAttachmentReviewRefusal,
     getNextActionContext:tool.getNextActionContext,
     getAttachmentIngested: safety.getAttachmentIngested,
     getWriteAttempted: () => writeAttempted || tool.getWriteAttempted?.() || false,

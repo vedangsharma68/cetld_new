@@ -2,7 +2,7 @@ import {isSupportedCurrency} from '../../currency-contract.mjs';
 
 // Match complete factual clauses, never keyword fragments. This bounded grammar
 // is mirrored in the retained SQL transition; extra claims fail closed.
-function retainedZeroBalanceEvidence(message,total) {
+function retainedUnpaidEvidence(message,total) {
   const normalized=message.toLowerCase().replace(/[ \t\r\n]+/g,' ');
   if(!/^[\x20-\x7e]+$/.test(normalized))return null;
   const text=normalized.trim();
@@ -32,8 +32,36 @@ function retainedZeroBalanceEvidence(message,total) {
   return isSupportedCurrency(currency)?{currency}:null;
 }
 
-// Keep the printed stamp and all source facts. A zero-balance extraction needs
-// an explicit correction audit before currency and balance can be corrected.
+// These canonical sources are emitted by inferInvoiceCurrency. A photo marker
+// alone is insufficient because explicitly printed currencies also use it.
+const inferredCurrencyProvenance={
+  INR:{source:'indian details',regions:'india|indian'},
+  USD:{source:'us address or phone details',regions:'us|american|united states'},
+  GBP:{source:'uk details',regions:'uk|british|united kingdom'},
+  AED:{source:'uae details',regions:'uae|emirati|united arab emirates'},
+  SGD:{source:'singapore details',regions:'singapore|singaporean'},
+  AUD:{source:'australian details',regions:'australia|australian'},
+  CAD:{source:'canadian details',regions:'canada|canadian'},
+  CHF:{source:'swiss details',regions:'switzerland|swiss'},
+  EUR:{source:'european details',regions:'european|european union|germany|german|france|french|italy|italian|spain|spanish|ireland|irish|netherlands|dutch|belgium|belgian|austria|austrian|portugal|portuguese'},
+};
+function retainedCurrencyInference(action) {
+  const currency=action?.invoice?.currency,provenance=Object.hasOwn(inferredCurrencyProvenance,currency)?inferredCurrencyProvenance[currency]:null;
+  if(!provenance||![null,undefined,'photo'].includes(action.currencySource)
+    ||Object.hasOwn(action.ownerProvidedFacts||{},'currency')||typeof action.currencyEvidence!=='string')return false;
+  const evidence=action.currencyEvidence.toLowerCase().replace(/[ \t\r\n]+/g,' ').trim();
+  return evidence===provenance.source
+    ||new RegExp(`^inferred ${currency.toLowerCase()} based on (?:(?:${provenance.regions}) )?(?:address|country|phone|tax)(?: details| evidence)?$`).test(evidence)
+    ||currency==='AUD'&&/^melbourne,? (?:vic|victoria) 3000$/.test(evidence);
+}
+
+function retainedExtractionAudit(action) {
+  return Object.fromEntries(['invoice','paymentEvidence','sourceMessageId','currencySource','currencyEvidence']
+    .filter(key=>Object.hasOwn(action,key)).map(key=>[key,action[key]]));
+}
+
+// Keep the printed stamp and all source facts. The bounded inferred-currency
+// exception audits the original extraction before changing only its currency.
 export function invoiceReviewUnpaidResolution({action,message,messageId}) {
   const invoice=action?.invoice,issues=action?.validationIssues;
   const zeroBalanceCorrection=Array.isArray(issues)&&issues.length===2
@@ -48,9 +76,14 @@ export function invoiceReviewUnpaidResolution({action,message,messageId}) {
     ||!['paid','conflicting'].includes(action.paymentEvidence?.status)||! /\bPAID\b/i.test(action.paymentEvidence?.text||'')
     ||invoice?.alreadyPaid!==false||typeof invoice.total!=='number'||!Number.isFinite(invoice.total)||invoice.total<=0
     ||!messageId||typeof message!=='string'||messageId===action.sourceMessageId||message.length>4000)return null;
+  const inferredCurrencyShape=existingConflict&&invoice.direction==='uncertain'
+    &&Array.isArray(action.missingFields)&&action.missingFields.length===1&&action.missingFields[0]==='direction'
+    &&typeof action.sourceMessageId==='string'&&!!action.sourceMessageId&&retainedCurrencyInference(action);
+  const inferredEvidence=inferredCurrencyShape?retainedUnpaidEvidence(message,invoice.total):null;
+  const inferredCurrencyCorrection=!!inferredEvidence&&inferredEvidence.currency!==invoice.currency;
   let currency;
-  if(zeroBalanceCorrection){
-    const evidence=retainedZeroBalanceEvidence(message,invoice.total);
+  if(zeroBalanceCorrection||inferredCurrencyCorrection){
+    const evidence=inferredCurrencyCorrection?inferredEvidence:retainedUnpaidEvidence(message,invoice.total);
     if(!evidence||invoice.subtotal!=null&&invoice.tax!=null
       &&(!Number.isFinite(invoice.subtotal)||!Number.isFinite(invoice.tax)
         ||Math.round(invoice.subtotal*100)+Math.round(invoice.tax*100)!==Math.round(invoice.total*100)))return null;
@@ -73,5 +106,6 @@ export function invoiceReviewUnpaidResolution({action,message,messageId}) {
     if(invoice.currency&&currency!==invoice.currency)return null;
   }
   return {status:'unpaid',outstanding:invoice.total,currency,sourceMessageId:messageId,ownerInstruction:message,
-    ...(zeroBalanceCorrection?{extractedFacts:{currency:invoice.currency,outstanding:invoice.outstanding}}:{})};
+    ...(zeroBalanceCorrection?{extractedFacts:{currency:invoice.currency,outstanding:invoice.outstanding}}:{}),
+    ...(inferredCurrencyCorrection?{extractedFacts:retainedExtractionAudit(action)}:{})};
 }
