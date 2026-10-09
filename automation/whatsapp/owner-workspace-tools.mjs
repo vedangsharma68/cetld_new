@@ -86,6 +86,7 @@ export function createOwnerWorkspaceTools(options = {}) {
     // capability and pending-action checks, followed by a later confirmation.
     supportsBoundedPaymentProposal:true,
     supportsAttachmentDuplicateLookup:true,
+    supportsInvoiceReadAnalysis:true,
     definitions:[{type:'function',function:{name:'getAIProviderConfiguration',description:'Read this turn\'s actual primary, fallback and serving model configuration.',parameters:{type:'object',properties:{},additionalProperties:false}}},tool.definition],
     async execute(name, args, context) {
       if (!['workspaceData','getAIProviderConfiguration'].includes(name)) return {ok:false, code:'UNKNOWN_TOOL', message:'That tool does not exist. Use workspaceData with a description of what you need.'};
