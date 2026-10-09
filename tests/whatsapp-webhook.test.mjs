@@ -146,7 +146,7 @@ test('callbacks containing messages and statuses log a summary and enqueue the m
 test('a duplicate STOP remains actionable when the first delivery stored but failed to revoke', async () => {
   const stored = { id: 4, ...parseMetaMessages(meta([message('wamid.retry', 'STOP')]), env.WHATSAPP_PHONE_NUMBER_ID, env.WHATSAPP_WABA_ID)[0],
     stop_processed_at: null };
-  const supabase = { from(name) {
+  const supabase = {async rpc(name){assert.equal(name,'whatsapp_resolve_verified_owner');return {data:[]};}, from(name) {
     if(name==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
 
     assert.equal(name, 'whatsapp_inbound_events');
@@ -694,6 +694,7 @@ test('unknown STOP gets a global suppression claim before acknowledgement', asyn
         is: async () => ({data: [], error: null})};
     },
     async rpc(name, args) {
+      if(name==='whatsapp_resolve_verified_owner')return {data:[]};
       assert.equal(name, 'whatsapp_suppress_unknown_phone');
       assert.equal(args.p_phone, event.sender_phone);
       return {data: true, error: null};
@@ -721,6 +722,7 @@ test('a retried STOP recovers its workspace confirmation after revocation commit
       };
     },
     async rpc(name, args) {
+      if(name==='whatsapp_resolve_verified_owner')return {data:[]};
       calls.push({ name, args });
       if (name === 'whatsapp_suppress_unknown_phone') return { data: false, error: null };
       assert.equal(name, 'whatsapp_revoke_phone');
@@ -748,6 +750,7 @@ test('STOP installs phone-wide suppression before discovering workspace consents
         }).then(resolve); } };
     },
     async rpc(name) {
+      if(name==='whatsapp_resolve_verified_owner')return {data:[]};
       calls.push(name);
       if (name === 'whatsapp_suppress_unknown_phone') return { data: false, error: null };
       if (name === 'whatsapp_revoke_phone') return { data: [{ revoked: true, confirmation_due: true }], error: null };

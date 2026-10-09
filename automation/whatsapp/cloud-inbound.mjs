@@ -91,7 +91,8 @@ export class SupabaseInboundInbox {
     for(const message of messages.filter(item=>isOptOut(item.message_text))){
       // A verified owner can say STOP or cancel as ordinary conversation text.
       // Install the synchronous consent barrier only for non-owner senders.
-      const owner=await resolveOwnerIdentity({supabase:this.supabase,phone:message.sender_phone});
+      const owner=message.message_type==='button'?null
+        :await resolveOwnerBinding({supabase:this.supabase,phone:message.sender_phone});
       if(!owner)stopIds.push(message.provider_message_id);
     }
     if (!stopIds.length) return inserted;
@@ -274,6 +275,19 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
   }
   async function revokeOptOut(event) {
     if (event.stop_processed_at) return;
+    // The signed webhook calls this before its worker runs. Resolve the same
+    // current owner binding here, before suppression can invalidate it. Historical
+    // verification alone must not exempt a recipient from STOP/CANCEL handling.
+    // Template reminder buttons retain their recipient opt-out path.
+    if(event.message_type!=='button'){
+      const owner=await resolveOwnerBinding({supabase,phone:event.sender_phone});
+      // A webhook replay of a durable owner job must not become a recipient
+      // opt-out if the binding changed after the original turn.
+      if((event.owner_job_checkpoint||event.owner_ack_claimed_at||event.owner_job_workspace_id)
+        &&(!owner||event.owner_job_workspace_id!==owner.workspaceId||event.owner_job_owner_id!==owner.ownerId))
+        throw Object.assign(new Error('Owner job binding changed'),{code:'OWNER_JOB_BINDING_CHANGED'});
+      if(owner)return;
+    }
     // Install the phone-wide barrier before discovering workspace scopes. A
     // consent added in another workspace during this loop must stay blocked.
     const global = await suppressUnknownPhone({ supabase, phone: event.sender_phone,
