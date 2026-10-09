@@ -184,7 +184,7 @@ for(const fault of ['missing-feature','external-ledger','wrong-remainder'])test(
  const f=await fixture();try{
   await disposableInvoice(f);
   if(fault==='missing-feature')await f.db.exec("create or replace function public.whatsapp_owner_partial_payment_capability() returns jsonb language sql as $$select '{\"ok\":true,\"version\":4}'::jsonb$$");
-  if(fault==='external-ledger')await f.db.query("update invoices set external_provider='zoho',external_invoice_id='external-fixture' where id=$1",[f.ids[0]]);
+  if(fault==='external-ledger')await f.db.query("update invoices set external_provider='zoho_books',external_invoice_id='external-fixture' where id=$1",[f.ids[0]]);
   const message=fault==='wrong-remainder'?bookkeepingPrompt.replace('USD 60','USD 59'):bookkeepingPrompt;
   const before=await f.snapshot(),run=nativeHandler(f);await f.inbound('event278-'+fault,message);const reply=await run.handler({...f.scope,messageId:'event278-'+fault,message});
   assert.equal(run.calls(),0,JSON.stringify({reply,outputs:run.outputs}));assert.equal(run.outputs.some(x=>x.proposal||x.completed),false);assert.doesNotMatch(reply.answer,/Proposed|Recorded/);
