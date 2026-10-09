@@ -14,7 +14,16 @@ const captions=[
   ['Please save it. Do not send reminders.','image/jpeg'],
   ['Could you please save this invoice? No reminders.','image/jpeg'],
   ['Please could you log this invoice? No reminders.','image/jpeg'],
+  ['Log this invoice as a receivable draft for this disposable QA fixture. Nothing has been paid. Never send customer reminders. Ask me if any required fact is missing.','image/jpeg'],
+  ['Log this invoice as a receivable draft. Nothing has been paid. Never send customer reminders. Ask me if any required fact is missing.','application/pdf'],
+  ['Please save this invoice. No customer reminders. Let me know if anything is missing.','image/jpeg'],
+  ['Please save this invoice. No customer reminders. Tell me if a required detail is missing.','image/jpeg'],
+  ['Please save this invoice. No customer reminders. If a fact is missing, ask me.','image/jpeg'],
   ['Do not save this invoice. Just tell me its total.','image/jpeg',true],
+  ['No reminders. Log this invoice only if a fact is missing.','image/jpeg',true],
+  ['No reminders. Save this invoice if you can identify the customer.','image/jpeg',true],
+  ['No reminders. Please save this invoice after I confirm. Let me know if anything is missing.','image/jpeg',true],
+  ['No reminders. Do not save this invoice. Let me know if anything is missing.','image/jpeg',true],
 ];
 
 for(const [caption,mimeType,declined=false] of captions)test(`default native attachment routing: ${mimeType} / ${caption}`,async()=>{
