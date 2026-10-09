@@ -122,6 +122,7 @@ export function createOwnerWorkspaceTools(options = {}) {
     setServedModel: safety.setServedModel,
     getMedia: safety.getMedia,
     getAttachmentReviewContext:safety.getAttachmentReviewContext,
+    getAttachmentReviewQuestionIntent:safety.getAttachmentReviewQuestionIntent,
     getAttachmentReviewDecision:safety.getAttachmentReviewDecision,
     getOwnerPaymentDecision:safety.getOwnerPaymentDecision,
     getAttachmentReviewContinuation:safety.getAttachmentReviewContinuation,
