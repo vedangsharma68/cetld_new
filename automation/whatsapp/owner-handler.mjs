@@ -243,7 +243,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     const recovered=await tools.lookupCompleted?.();
     if(recovered?.ok&&recovered.completed)initialToolResults=[{name:'workspaceData',args:{operation:'verifiedReceipt'},result:recovered}];
     if(!recovered?.completed&&!scope.interactionId&&!media&&!mediaError&&!scope.checkpoint
-        &&/^\s*cancel[.!\s]*$/i.test(message||'')&&pendingStoreAvailable&&lifecycleAvailable){
+        &&/^\s*cancel[.!\s]*$/i.test(message||'')&&pendingStoreAvailable&&lifecycleAvailable
+        &&tools.definitions?.some(item=>item?.function?.name==='workspaceData')){
       if(!await authorizeTurn(scope))return '';
       const diagnostics={rounds:0,toolRounds:0,cacheHits:0,safetyRejects:[]};
       if(!pendingBlocksOwnerNextActions(pendingAtStart)&&!lifecyclePending?.pending)
