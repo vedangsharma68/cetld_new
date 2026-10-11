@@ -242,6 +242,22 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     let initialToolResults=[];
     const recovered=await tools.lookupCompleted?.();
     if(recovered?.ok&&recovered.completed)initialToolResults=[{name:'workspaceData',args:{operation:'verifiedReceipt'},result:recovered}];
+    if(!recovered?.completed&&!scope.interactionId&&!media&&!mediaError&&!scope.checkpoint
+        &&/^\s*cancel[.!\s]*$/i.test(message||'')&&pendingStoreAvailable&&lifecycleAvailable){
+      if(!await authorizeTurn(scope))return '';
+      const diagnostics={rounds:0,toolRounds:0,cacheHits:0,safetyRejects:[]};
+      if(!pendingBlocksOwnerNextActions(pendingAtStart)&&!lifecyclePending?.pending)
+        return {answer:'What would you like to cancel? There is no pending action right now.',agentDiagnostics:diagnostics};
+      // Use the existing scoped cancellation guard, independent of the model.
+      // It checks the exact pending version and never applies the proposal.
+      const result=await tools.execute('workspaceData',{operation:'cancel'},{signal});
+      if(!await authorizeTurn(scope))return '';
+      if(result?.ok&&['canceled','cancelled'].includes(result.actionType||result.action))
+        return {answer:pendingAtStart?.action?.type==='owner_invoice_payment'
+          ?'Canceled the payment proposal. No payment was recorded.':'Canceled the pending action.',agentDiagnostics:diagnostics};
+      if(result?.ok===false&&result.message)return {answer:result.message,agentDiagnostics:diagnostics};
+      initialToolResults=[{name:'workspaceData',args:{operation:'cancel'},result}];
+    }
     if(scope.interactionId){
       // Recover a committed click after a worker interruption before looking for
       // the pending row that the successful transaction already consumed.

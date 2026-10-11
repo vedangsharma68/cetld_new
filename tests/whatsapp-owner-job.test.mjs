@@ -52,8 +52,8 @@ test('checkpoint persistence requires the current processing lease',async()=>{
   assert.deepEqual(filters,[['id',9],['claim_token','expired'],['status','processing']]);
 });
 
-for(const marker of ['checkpoint','ack','started'])test('a revoked '+marker+' owner STOP cannot become a debtor opt-out or leak its checkpoint',async()=>{
-  const event={id:10,attempts:1,provider_message_id:'wamid.revoked',sender_phone:'+919871367051',message_text:'STOP',
+for(const marker of ['checkpoint','ack','started'])test('a revoked '+marker+' owner cancel cannot become a debtor opt-out or leak its checkpoint',async()=>{
+  const event={id:10,attempts:1,provider_message_id:'wamid.revoked',sender_phone:'+919871367051',message_text:'cancel',
     received_at:new Date().toISOString(),owner_job_checkpoint:{version:1,transcript:[{role:'tool',content:'Private old workspace facts'}]},
     owner_job_workspace_id:'old-workspace',owner_job_owner_id:'old-owner'};
   if(marker!=='checkpoint')event.owner_job_checkpoint=null;

@@ -199,6 +199,13 @@ test('Meta parsing ignores status callbacks and other phone IDs; it never reads 
   assert.equal(isOptOut('Please do not message me.'), true);
   assert.equal(isOptOut('Please stop sending me messages.'), true);
   assert.equal(isOptOut('I no longer want these updates.'), true);
+  assert.equal(isOptOut('stop messaging me'), true);
+  assert.equal(isOptOut('Please stop messaging me!'), true);
+  assert.equal(isOptOut('STOP'), true);
+  assert.equal(isOptOut('unsubscribe'), true);
+  assert.equal(isOptOut('cancel whatsapp'), true);
+  assert.equal(isOptOut('Do not stop messaging me'), false);
+  assert.equal(isOptOut('Invoice notes contain "stop messaging me"'), false);
   assert.equal(isOptOut('I do not want to pay'), false);
 });
 

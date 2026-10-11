@@ -14,7 +14,7 @@ const env={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE
  WHATSAPP_GRAPH_API_VERSION:'v24.0',WHATSAPP_WABA_ID:waba,WHATSAPP_APP_SECRET:'fixture-signature',CLOUDFLARE_ACCOUNT_ID:'fixture',CLOUDFLARE_API_TOKEN:'fixture'};
 const logger={log(){},info(){},warn(){},error(){}};
 async function fixture(){
- const graph=[],f=await createOfflineSqlNetwork({externalFetch:async(url,options)=>{
+ const graph=[],f=await createOfflineSqlNetwork({excludeMigrations:['20261009202000_owner_payment_bookkeeping_instruction.sql'],externalFetch:async(url,options)=>{
   if(url.hostname==='graph.facebook.com'){
    graph.push(JSON.parse(options.body));return Response.json({messages:[{id:'wamid.fixture.'+graph.length}]});
   }
@@ -43,6 +43,10 @@ async function fixture(){
  // The production outbound QA allowlist contains real contacts. Use a synthetic
  // transport sink here, retaining real SQL owner-reply authorization/readback.
  const conversation=createConversationStore(f.supabase),outbound={async sendTypingIndicator(){},async sendServiceReply(input){
+  if(input.kind==='stop_confirmation'){
+   assert.equal(input.to,phone);assert.ok([workspaceId,oldWorkspace,null].includes(input.workspaceId));
+   graph.push({type:'text',text:{body:input.body},kind:input.kind});return {status:'accepted'};
+  }
   assert.equal(input.audience,'owner');assert.equal(input.workspaceId,workspaceId);assert.equal(input.to,phone);
   const key='reply:'+input.messageId;
   await conversation.record({workspaceId,phone,audience:'owner',direction:'outbound',kind:'normal',body:input.body,status:'pending',key});
@@ -124,5 +128,68 @@ test('signed reminder STOP button still suppresses even a currently bound owner 
   assert.equal(await f.post('reminder-stop','STOP',{type:'button',context:'wamid.synthetic.reminder'}),200);
   const after=await f.snapshot();assert.equal(after.global.length,1);assert.ok(after.consents.every(c=>c.revoked_at));assert.equal(after.payments,0);
   assert.deepEqual(f.errors,[]);
+ }finally{await f.close();}
+});
+
+test('signed owner cancel without a pending action asks what to cancel without a planner or consent writes',async()=>{
+ const f=await fixture();try{
+  const before=await f.snapshot();
+  f.intercept(url=>{if(url.hostname==='api.cloudflare.com')throw Error('Clarification must not need a planner');});
+  assert.equal(await f.post('owner-empty-cancel','cancel'),200);
+  assert.equal((await f.runtime.processPending()).completed,1);
+  assert.deepEqual(await f.snapshot(),before);
+  assert.match(f.graph.at(-1).text.body,/what (?:would you like|do you want) to cancel/i);
+  assert.doesNotMatch(f.graph.at(-1).text.body,/opted out|canceled the/i);
+ }finally{await f.close();}
+});
+
+for(const text of ['STOP','unsubscribe','stop messaging me'])test(`signed explicit owner ${text} suppresses before HTTP 200 despite owner lookup outage`,async()=>{
+ const f=await fixture();try{
+  // Clear opt-outs must not depend on the owner lookup or a planner. Preserve
+  // a pending financial proposal: stopping messages cannot cancel or confirm it.
+  assert.equal(await f.post('explicit-proposal','Record a USD 40 partial payment on invoice INV-SYNTHETIC-281. Leave USD 60 outstanding.'),200);
+  await f.runtime.processPending();
+  const pendingBefore=(await f.db.query('select * from whatsapp_pending_actions')).rows;
+  const before=await f.snapshot(),sent=f.graph.length;
+  f.intercept(url=>{if(url.pathname==='/rest/v1/rpc/whatsapp_resolve_verified_owner')throw Error('synthetic owner lookup outage');});
+  assert.equal(await f.post('explicit-stop',text),200);
+  const after=await f.snapshot();
+  assert.equal(after.global.length,1);assert.equal(after.scoped.length,2);
+  assert.ok(after.consents.every(c=>c.revoked_at));
+  assert.deepEqual(after.invoice,before.invoice);assert.deepEqual(after.files,before.files);
+  assert.equal(after.payments,0);assert.equal(after.reversals,0);
+  assert.deepEqual((await f.db.query('select * from whatsapp_pending_actions')).rows,pendingBefore);
+  assert.ok((await f.db.query("select stop_processed_at from whatsapp_inbound_events where provider_message_id='explicit-stop'")).rows[0].stop_processed_at);
+  assert.equal(await f.post('explicit-stop',text),200);
+  assert.deepEqual(await f.snapshot(),after);assert.equal(f.graph.length,sent);
+  // A durable old owner checkpoint cannot override STOP or leak into its reply.
+  await f.db.query("update whatsapp_inbound_events set owner_job_workspace_id=$1,owner_job_owner_id=$2,owner_job_checkpoint=$3 where provider_message_id='explicit-stop'",
+   [f.workspaceId,f.ownerId,JSON.stringify({version:1,transcript:[{role:'tool',content:'Private old workspace facts'}]})]);
+  assert.equal((await f.runtime.processPending()).completed,1);
+  assert.equal(f.graph.at(-1).kind,'stop_confirmation');
+  assert.doesNotMatch(f.graph.at(-1).text.body,/Private old/);
+  assert.deepEqual((await f.db.query('select * from whatsapp_pending_actions')).rows,pendingBefore);
+  assert.deepEqual(await f.snapshot(),after);
+ }finally{await f.close();}
+});
+
+test('signed owner cancel cancels only the pending invoice edit without a planner, including stale yes',async()=>{
+ const f=await fixture();try{
+  const before=await f.snapshot(),invoice=before.invoice;
+  const customer=(await f.db.query("select id from customers where workspace_id=$1 and phone=$2 and metadata->>'whatsapp_owner'='true'",[f.workspaceId,phone])).rows[0];
+  const action={type:'owner_invoice_update',invoiceId:f.invoiceId,invoiceNumber:invoice.invoice_number,
+   expectedUpdatedAt:invoice.updated_at,changes:{notes:'Synthetic correction'},requestedAt:new Date().toISOString(),
+   expiresAt:new Date(Date.now()+300000).toISOString(),sourceMessageId:'synthetic-edit-proposal'};
+  const pending=(await f.db.query("insert into whatsapp_pending_actions(workspace_id,customer_id,phone,action,source) values($1,$2,$3,$4,'whatsapp') returning id",[f.workspaceId,customer.id,phone,JSON.stringify(action)])).rows[0];
+  f.intercept(url=>{if(url.hostname==='api.cloudflare.com')throw Error('Cancellation must not need a planner');});
+  assert.equal(await f.post('owner-edit-cancel','cancel'),200);
+  assert.equal((await f.runtime.processPending()).completed,1);
+  assert.ok((await f.db.query('select consumed_at from whatsapp_pending_actions where id=$1',[pending.id])).rows[0].consumed_at);
+  assert.deepEqual(await f.snapshot(),before);
+  assert.match(f.graph.at(-1).text.body,/canceled/i);
+  assert.equal(await f.post('owner-edit-cancel','cancel'),200);
+  assert.equal((await f.runtime.processPending()).claimed,0);
+  assert.equal(await f.post('owner-edit-stale-yes','yes'),200);await f.runtime.processPending();
+  assert.deepEqual(await f.snapshot(),before);
  }finally{await f.close();}
 });

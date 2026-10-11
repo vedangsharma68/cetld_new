@@ -21,7 +21,8 @@ const SAFE_FALLBACK_REPLY = "Something broke on my side while handling that mess
 const MEDIA_FETCH_FAILED_REPLY = "I couldn't fetch that photo. Please resend it and I'll try again.";
 const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
 const E164 = /^\+[1-9]\d{6,14}$/;
-const refusal = /^(?:stop|unsubscribe|opt[ -]?out|cancel(?: whatsapp)?|remove me|no more (?:messages|texts|whatsapp(?: updates)?)|(?:do not|don't) (?:message|text|contact) me|(?:do not|don't) send me (?:messages|texts|whatsapp updates)|please (?:stop(?: sending me (?:messages|texts|whatsapp updates))?|remove me|(?:do not|don't) (?:message|text|contact) me)|i (?:do not|don't|no longer) (?:consent|agree|want (?:these |whatsapp )?(?:messages|updates)))\b[.!\s]*$/i;
+const refusal = /^(?:stop(?: messaging me)?|unsubscribe|opt[ -]?out|cancel(?: whatsapp)?|remove me|no more (?:messages|texts|whatsapp(?: updates)?)|(?:do not|don't) (?:message|text|contact) me|(?:do not|don't) send me (?:messages|texts|whatsapp updates)|please (?:stop(?: messaging me| sending me (?:messages|texts|whatsapp updates))?|remove me|(?:do not|don't) (?:message|text|contact) me)|i (?:do not|don't|no longer) (?:consent|agree|want (?:these |whatsapp )?(?:messages|updates)))\b[.!\s]*$/i;
+const ambiguousOwnerCancel = text => typeof text === 'string' && /^cancel[.!\s]*$/i.test(text.trim());
 
 export function isOptOut(text) {
   return typeof text === 'string' && refusal.test(text.trim());
@@ -89,9 +90,9 @@ export class SupabaseInboundInbox {
       .select('*'), 'enqueue') || [];
     const stopIds=[];
     for(const message of messages.filter(item=>isOptOut(item.message_text))){
-      // A verified owner can say STOP or cancel as ordinary conversation text.
-      // Install the synchronous consent barrier only for non-owner senders.
-      const owner=message.message_type==='button'?null
+      // Only bare cancel can mean an owner's pending action. Clear opt-outs
+      // install the barrier without depending on owner lookup availability.
+      const owner=message.message_type==='button'||!ambiguousOwnerCancel(message.message_text)?null
         :await resolveOwnerBinding({supabase:this.supabase,phone:message.sender_phone});
       if(!owner)stopIds.push(message.provider_message_id);
     }
@@ -276,10 +277,10 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
   async function revokeOptOut(event) {
     if (event.stop_processed_at) return;
     // The signed webhook calls this before its worker runs. Resolve the same
-    // current owner binding here, before suppression can invalidate it. Historical
-    // verification alone must not exempt a recipient from STOP/CANCEL handling.
+    // current owner binding for ambiguous cancel, before suppression invalidates
+    // it. Historical verification cannot exempt an unbound recipient.
     // Template reminder buttons retain their recipient opt-out path.
-    if(event.message_type!=='button'){
+    if(event.message_type!=='button'&&ambiguousOwnerCancel(event.message_text)){
       const owner=await resolveOwnerBinding({supabase,phone:event.sender_phone});
       // A webhook replay of a durable owner job must not become a recipient
       // opt-out if the binding changed after the original turn.
@@ -340,13 +341,13 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       }),'reminder button');
       return result?.ok===true?result.status:'unmatched_template_button';
     }
-    // Resolve the verified owner before interpreting STOP/CANCEL or onboarding
-    // words. Those strings can be ordinary owner conversation turns; only a
-    // non-owner debtor message installs consent barriers and exits the model.
-    const owner=await resolveOwnerBinding({supabase,phone:event.sender_phone});
+    // Clear opt-outs always exit before owner/model routing. Only bare cancel
+    // needs a current binding to distinguish an action from recipient refusal.
+    const explicitOptOut=isOptOut(event.message_text)&&!ambiguousOwnerCancel(event.message_text);
+    const owner=explicitOptOut?null:await resolveOwnerBinding({supabase,phone:event.sender_phone});
     // A resumed owner job cannot be reinterpreted as a debtor message after
     // unbinding. Validate its persisted scope before STOP/link routing.
-    if((event.owner_job_checkpoint||event.owner_ack_claimed_at||event.owner_job_workspace_id)
+    if(!explicitOptOut&&(event.owner_job_checkpoint||event.owner_ack_claimed_at||event.owner_job_workspace_id)
       &&(!owner||event.owner_job_workspace_id!==owner.workspaceId||event.owner_job_owner_id!==owner.ownerId))
       throw Object.assign(new Error('Owner job binding changed'),{code:'OWNER_JOB_BINDING_CHANGED'});
     if (!owner&&isOptOut(event.message_text)) {
