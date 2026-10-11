@@ -27,15 +27,30 @@ the chat model and the operation planner. Relative date values are resolved by
 the server. A single date edit explicitly requesting tomorrow is also resolved
 from the owner's message, preventing a stale model-generated calendar date.
 
-`status: "unpaid"` is a payment-fact check, not a payment reversal. An invoice
-with no recorded payment, zero amount paid and a draft/sent/overdue status is
-already unpaid, so the result says no change was made and requests no
-confirmation. Paid, partially paid, void/cancelled invoices, or invoices with
-payment rows are refused with `PAYMENT_GUARD`. There is no supported WhatsApp
-payment correction or reopening operation. Review recorded payments and use an
-authorized accounting correction/reversal process first; this change does not
-implement or authorize that process. Failed writes cannot create a proposal or
-justify an awaiting-confirmation claim.
+`status: "unpaid"` checks current payment facts and can request confirmed local
+invoice reopening. An invoice with no recorded payment, zero amount paid and a
+draft/sent/overdue status is already unpaid, so the result says no change was made
+and requests no confirmation. With local payment history or a paid status, the
+owner assistant can prepare a reopening preview after verifying that net local
+receipts reconcile with amount paid. A zero net balance on an invoice that is
+already unpaid remains a read-only result, including after a prior reversal.
+
+The preview identifies the invoice, currency, payment count, reversal amount and
+restored balance. A later explicit `yes` or valid signed Confirm button is required
+even in direct mode. Confirmation records immutable reversal audits for all
+unreversed local receipts while preserving the original payments. It sets net
+amount paid to zero, restores the invoice total as outstanding, sets sent/overdue
+status according to the due date, and pauses reminders with no next follow-up.
+Reopening sends no cash refund or customer reminder and does not permit arbitrary
+payment edits or deletion. Payment history continues to protect currency,
+customer, invoice number and direction after reversal.
+
+External accounting ledgers, inconsistent payment balances and void/cancelled
+invoices are blocked; an active reminder delivery also blocks reopening. Changed,
+expired or canceled previews cannot authorize a reversal. Repeated delivery of
+the same completed confirmation reuses its receipt without another reversal.
+Unavailable or failed operations cannot justify a completion claim. Use the
+[disposable owner QA checks](owner-workspace-user-qa.md) for authorized verification.
 
 `customers.custom_fields` and `invoices.custom_fields` hold extension facts.
 Keys are lowercase snake_case, up to 64 characters. Values are text (up to
@@ -62,7 +77,7 @@ customer management page.
 | --- | --- | --- |
 | Customers | Read/list, create, edit name/company/email/phone, custom fields; existing safe deletion path | Linked owner/security contact protected; customers attached to invoices cannot be deleted |
 | Invoices | Read/list, create, edit number/dates/currency/total/notes, custom fields; existing soft-delete/restore | Paid/terminal ledger guards remain; one unambiguous target; invoice custom fields in button mode are a separate edit |
-| Payments | Read payment facts; existing verified settlement action | No arbitrary amount-paid edit, payment deletion/reversal or reopening paid invoices |
+| Payments | Read payment facts; verified settlement; confirmed local invoice reopening with reversal audit | No arbitrary amount-paid edit, payment deletion, selective payment reversal, cash refund or external-ledger reopening |
 | Business settings | Business name, currency, timezone, follow-up preferences, assistant preferences | Owner linking/verification/security fields use the dedicated verified flow |
 | AI settings | Read/update approved model selections | Credentials and arbitrary provider settings are inaccessible |
 | Files | Existing attachment analysis/review/save and invoice file send | No arbitrary storage path or unrestricted file mutation |

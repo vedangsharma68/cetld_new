@@ -36,10 +36,23 @@ steps and postpone financial writes.
    `Set it to tomorrow's date.` Expected: tomorrow in the **saved business timezone**,
    including when local and UTC dates differ. Verify the ISO date in the dashboard.
 8. `Mark that invoice as unpaid.` Expected: if there are no payments and zero
-   amount paid, an honest already-unpaid response with no mutation/confirmation.
-   On a test invoice with a recorded payment, expect a refusal explaining that
-   payment history cannot be erased. This release has no payment reversal or
-   reopening flow; use an separately authorized accounting correction process.
+   amount paid and the invoice is draft/sent/overdue, an honest already-unpaid
+   response with no mutation/confirmation. On an eligible paid or partially paid
+   local test invoice, expect a reopening preview stating the invoice, currency,
+   payment count, reversal amount and restored balance. No financial change occurs
+   until a later explicit `yes` or valid Confirm button, even in direct mode.
+   Confirm only a matching preview in the separately authorized disposable
+   financial workspace. Confirmation appends reversal audits for the unreversed
+   local receipts, preserves the original receipts, sets net amount paid to zero
+   and restores the full invoice total as outstanding. The invoice becomes sent
+   or overdue according to its due date; reminders are paused with no next
+   follow-up scheduled. No cash refund or customer reminder is sent by reopening.
+   Repeated delivery of the same confirmation must not add another reversal.
+   Canceling the preview followed by `yes` must make no financial change; a fresh
+   request requires a fresh preview. Changed or expired previews must be rejected.
+   External accounting ledgers, inconsistent payment balances and void/cancelled
+   invoices cannot be reopened from chat; an active reminder delivery blocks the
+   operation. Payment history still prevents a currency change after reversal.
 9. `Add a purchase_order custom field PO-QA-7 to that invoice.`
    Expected: saved directly or a custom-field proposal. Refresh/reload invoice
    detail and verify **Invoice custom fields**. Customer custom fields should
