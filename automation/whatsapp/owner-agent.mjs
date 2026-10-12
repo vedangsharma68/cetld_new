@@ -1927,7 +1927,9 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
       }
       if(boundedInvoiceReadSelected){
         const evidence=ownerEvidence(transcript,requirement),last=evidence.at(-1);
-        const answer=invoiceReadAnalysisReply(last)||'I could not verify the current invoices for this calculation. No changes were made.';
+        const answer=invoiceReadAnalysisReply(last)||(requestedReadAnalysis?.kind==='unpaidInvoices'
+          ?'I could not verify the complete unpaid-invoice list. Try a specific customer. No changes were made.'
+          :'I could not verify the current invoices for this calculation. No changes were made.');
         if(!writeMayHaveBeenAttempted()&&!evidence.some(completedOwnerResult)&&!ownerReplySafetyIssue(answer,requirement)
           &&!ownerGroundingIssue(answer,evidence,message,requirement||{}))return resultFor(answer,{invoiceReadAnalysisReply:true});
       }
@@ -2301,7 +2303,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
           },'tool','work');}
           finally{try{logger?.info?.('WhatsApp owner tool call',{traceId:scopedTrace,toolName:safeToolName(name),durationMs:Date.now()-toolStartedAt,code:logToolCode(output),
             ...(exception?{exception}:{}),
-            ...(['TARGET_REQUIRED','INVALID_FIELDS','REQUEST_SHAPE','REQUIRED_FIELDS','INVALID_CATEGORY','INVALID_VALUE','FILTER_SHAPE'].includes(output?.validationCode)?{validationCode:output.validationCode}:{}),
+            ...(['TARGET_REQUIRED','INVALID_FIELDS','REQUEST_SHAPE','REQUIRED_FIELDS','INVALID_CATEGORY','INVALID_VALUE','INVALID_STATUS','FILTER_SHAPE'].includes(output?.validationCode)?{validationCode:output.validationCode}:{}),
             ...(name==='workspaceData'&&output?.validationShape?{validationShape:output.validationShape}:{}),
             ...(name==='workspaceData'&&output?.filterShapeDiagnostic?{filterShapeDiagnostic:output.filterShapeDiagnostic,
               filterShapeStructure:JSON.stringify(output.filterShapeDiagnostic.structure)}:{}),

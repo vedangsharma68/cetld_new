@@ -611,18 +611,18 @@ test('a retried confirmation replays its durable receipt even after pending stat
 
 test('reads use stable scoped pagination and expose a next offset when a page is full',async()=>{
   const customers=[
-    {invoice_number:'INV-001',status:'open',created_at:'2026-10-01T00:00:00Z'},
-    {invoice_number:'INV-002',status:'open',created_at:'2026-10-02T00:00:00Z'},
+    {invoice_number:'INV-001',status:'sent',created_at:'2026-10-01T00:00:00Z'},
+    {invoice_number:'INV-002',status:'sent',created_at:'2026-10-02T00:00:00Z'},
     {invoice_number:'INV-003',status:'paid',created_at:'2026-10-03T00:00:00Z'},
-    {invoice_number:'INV-004',status:'open',created_at:'2026-10-04T00:00:00Z'},
-    {invoice_number:'INV-005',status:'open',created_at:'2026-10-05T00:00:00Z'},
+    {invoice_number:'INV-004',status:'sent',created_at:'2026-10-04T00:00:00Z'},
+    {invoice_number:'INV-005',status:'sent',created_at:'2026-10-05T00:00:00Z'},
   ];
   const supabase=fakeSupabase({rows:{invoices:customers}});
   let authorizations=0;
   const tool=createWorkspaceDataTool({supabase,scope,authorize:async()=>{authorizations++;return true;}});
   const result=await tool.execute({operation:'read',table:'invoices',columns:['invoice_number','status'],
-    filters:[{column:'status',operator:'eq',value:'open'}],limit:2,offset:1});
-  assert.deepEqual(result.rows,[{invoice_number:'INV-002',status:'open'},{invoice_number:'INV-004',status:'open'}]);
+    filters:[{column:'status',operator:'eq',value:'sent'}],limit:2,offset:1});
+  assert.deepEqual(result.rows,[{invoice_number:'INV-002',status:'sent'},{invoice_number:'INV-004',status:'sent'}]);
   assert.equal(result.truncated,true);
   assert.equal(result.nextOffset,3);
   assert.deepEqual(supabase.calls[0].range,[1,3]);
