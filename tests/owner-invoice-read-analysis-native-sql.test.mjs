@@ -4,12 +4,15 @@ import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
-import {ownerInvoiceReadAnalysis} from '../automation/whatsapp/owner-invoice-read-analysis.mjs';
+import {ownerInvoiceReadAnalysis,invoiceReadAnalysisReply} from '../automation/whatsapp/owner-invoice-read-analysis.mjs';
+import {ownerGroundingIssue} from '../automation/whatsapp/owner-grounding.mjs';
+import {ownerReplySafetyIssue} from '../automation/whatsapp/owner-agent.mjs';
+import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs';
 
 const COMPANY='Example Fabrication LLC';
 const invoiceQuestion=amount=>`If ${COMPANY} pays USD ${amount} against invoice SIM-2048, how much would be overpaid? Just explain; do not record a payment or change anything.`;
 
-async function fixture(){
+async function fixture({modelResponse=null}={}){
   const f=await createOfflineSqlNetwork(),{db}=f,ownerId=randomUUID(),foreignOwnerId=randomUUID(),phone='+12025550876';
   try{
     await db.query('insert into auth.users(id) values($1),($2)',[ownerId,foreignOwnerId]);
@@ -61,6 +64,7 @@ async function fixture(){
       },
       fetchImpl:async(url,init)=>{
         providerCalls.push({url:String(url),body:JSON.parse(init.body)});
+        if(modelResponse)return modelResponse(providerCalls.length,JSON.parse(init.body));
         throw new Error('the server-selected invoice read analysis should not call a model');
       }});
     const inbound=async(id,message)=>db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[id,phone,message]);
@@ -75,6 +79,54 @@ async function fixture(){
     return {...f,scope,workspaceId,foreignWorkspaceId,invoice,foreignInvoice,addInvoice,ensureCustomer,handler,turn,snapshot,executions,outputs,providerCalls};
   }catch(error){await f.close();throw error;}
 }
+
+test('unpaid invoice listing uses current SQL balances and valid statuses instead of a model enum alias',async()=>{
+  const f=await fixture({modelResponse:round=>Response.json({choices:[{finish_reason:round===1?'tool_calls':'stop',message:round===1
+    ?{content:'',tool_calls:[{id:'invalid-status-read',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'read',table:'invoices',filters:[{column:'status',operator:'eq',value:'unpaid'}]})}}]}
+    :{content:'The workspace data service is temporarily unavailable.'}}]})});
+  try{
+    const draft=await f.addInvoice({customer:'Example Draft Customer',number:'DRAFT-100',currency:'INR',total:900});
+    const paid=await f.addInvoice({customer:'Example Paid Customer',number:'PAID-100',total:100,paid:100});
+    await f.addInvoice({customer:'Example Void Customer',number:'VOID-100',total:700,status:'void'});
+    await f.addInvoice({customer:'Example Cancelled Customer',number:'CANCELLED-100',total:700,status:'cancelled'});
+    const before=await f.snapshot(),reply=await f.turn('unpaid-invoice-list','show me my unpaid invoices');
+    const draftReply=invoiceReadAnalysisReply(f.outputs[0]);
+    assert.match(reply.answer,/834\.56/,JSON.stringify({reply,outputs:f.outputs,executions:f.executions,draftReply,safety:ownerReplySafetyIssue(draftReply),grounding:ownerGroundingIssue(draftReply,f.outputs,'show me my unpaid invoices')}));assert.match(reply.answer,/INR 900\.00/);assert.match(reply.answer,new RegExp(draft.invoice_number));
+    assert.match(reply.answer,/draft/i);assert.doesNotMatch(reply.answer,/PAID-100|VOID-100|CANCELLED-100|9999999|unavailable/i);
+    assert.equal(f.executions.length,1);assert.equal(f.executions[0].args.operation,'read');
+    assert.equal(f.providerCalls.length,0,'ordinary unpaid listing must not rely on model-selected status aliases');
+    const result=f.outputs[0];assert.equal(result.invoiceReadAnalysis.complete,true);
+    assert.equal(result.invoiceReadAnalysis.invoices.length,2);
+    assert.equal(result.invoiceReadAnalysis.invoices.find(row=>row.invoiceNumber===draft.invoice_number).outstanding,'900.00');
+    assert.equal(result.invoiceReadAnalysis.invoices.some(row=>row.invoiceNumber===paid.invoice_number),false);
+    assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});
+
+test('invalid invoice status filters are rejected before the real SQL enum or any ledger write',async()=>{
+  const f=await fixture();try{
+    const before=await f.snapshot(),tool=createWorkspaceDataTool({supabase:f.supabase,scope:f.scope,authorize:async()=>true});
+    for(const filter of [{column:'status',operator:'eq',value:'unpaid'},{column:'status',operator:'in',value:['sent','unknown-status']},
+      {column:'status',operator:'ilike',value:'sent'},{column:'status',operator:'eq',value:null}]){
+      const start=f.requests.length;
+      const result=await tool.execute({operation:'read',table:'invoices',filters:[filter]});
+      assert.equal(result.code,'INVALID');assert.equal(result.validationCode,'INVALID_STATUS');
+      assert.doesNotMatch(result.message,/unavailable/i);
+      assert.equal(f.requests.slice(start).some(row=>new URL(row.url).pathname==='/rest/v1/invoices'),false);
+    }
+    assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});
+
+test('a truncated unpaid list fails closed without inventing an empty or complete list',async()=>{
+  const f=await fixture();try{
+    for(let i=0;i<51;i++)await f.addInvoice({customer:'Large Synthetic Customer',number:`UNPAID-${i}`,total:100,status:'sent'});
+    const before=await f.snapshot(),reply=await f.turn('unpaid-list-truncated','show me my unpaid invoices');
+    assert.match(reply.answer,/could not verify the complete unpaid-invoice list/i);
+    assert.doesNotMatch(reply.answer,/No unpaid invoices|USD 100\.00/i);
+    assert.equal(f.providerCalls.length,0);assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});
 
 function assertNoCalculation(answer){
   assert.match(answer,/could not verify|could not calculate|unable|cannot calculate|not available/i,answer);
@@ -202,5 +254,7 @@ test('foreign workspace scope cannot read or summarize the invoice',async()=>{
   const f=await fixture();try{
     const before=await f.snapshot(),reply=await f.turn('event269-wrong-scope',invoiceQuestion(1000),{...f.scope,workspaceId:f.foreignWorkspaceId});
     assert.equal(reply,'');assert.equal(f.executions.length,0);assert.equal(f.providerCalls.length,0);assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
+    const list=await f.turn('unpaid-list-wrong-scope','show me my unpaid invoices',{...f.scope,workspaceId:f.foreignWorkspaceId});
+    assert.equal(list,'');assert.equal(f.executions.length,0);assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
   }finally{await f.close();}
 });

@@ -19,6 +19,7 @@ const OPERATIONS = Object.freeze([
   'analyzeAttachment','checkAttachment','saveAttachment','reviewAttachment','sendFile',
 ]);
 const FILTER_OPERATORS = Object.freeze(['eq','neq','gt','gte','lt','lte','ilike','in','is']);
+const INVOICE_STATUSES = Object.freeze(['draft','sent','overdue','paid','void','cancelled']);
 const ALLOWED_ARGS = new Set(['request','operations','operation','table','columns','filters','values','limit','offset','order']);
 const FORBIDDEN_KEY = /^(?:workspace|tenant|owner)(?:id|_id)$/i;
 const SECRET_KEY = /(?:token|secret|password|api.?key|credential|authorization|cookie|storage.?path|code.?hash|private.?key)/i;
@@ -151,6 +152,7 @@ function catalog(table=null) {
       reviewAttachment:'Supply missing owner-evidenced facts or acknowledge unchanged known fields. Only invoice_number may be explicitly overridden to workspace numbering: include invoice_number_intent use_workspace_numbering with invoice_number AUTO. Concrete number or pattern replacement is unsupported. The workspace sequence assigns the unique ledger number on save and original extraction is audited. Other extracted fields cannot be overwritten.'},
     tables:Object.fromEntries(Object.entries(TABLES).filter(([name])=>!table||name===table).map(([name,spec])=>[name,{
       label:spec.label,columns:spec.columns,filters:spec.filters,
+      ...(name==='invoices'?{readValueConstraints:{status:INVOICE_STATUSES,unpaid:'Unpaid is a positive outstanding balance, not a stored invoice status. Read current total_amount and amount_paid using valid statuses; include partial payments and label drafts.'}}:{}),
       writeFields:WRITE_SCHEMA[name]||{},
       ...(name==='invoices'?{correctionValuesSchema:invoiceCorrectionValueSchema()}:{}),
       ...(['business_records','customers'].includes(name)?{writeTargetConstraints:{requiredFor:['update',...(name==='customers'?['delete']:[])],filtersRequired:true,operators:{eq:spec.filters,ilike:spec.filters.filter(field=>['name','company_name'].includes(field))},oneUnambiguousRecord:true}}:{}),
@@ -270,6 +272,8 @@ function validateFilter(filter,table) {
   } else if(!scalarSafe(value))throw new TypeError('invalid filter value');
   const type=TYPE_BY_COLUMN[column]||'string';
   const values=operator==='in'?value:[value];
+  if(table==='invoices'&&column==='status'&&(operator==='ilike'
+      ||values.some(item=>item===null?operator!=='is':!INVOICE_STATUSES.includes(item))))throw new TypeError('invalid invoice status');
   if(values.some(item=>item!==null&&(type==='number'?typeof item!=='number'||!Number.isFinite(item)
     :type==='string'?typeof item!=='string':type==='date'?typeof item!=='string':false)))throw new TypeError('filter type mismatch');
   if(['gt','gte','lt','lte','ilike'].includes(operator)&&value===null)throw new TypeError('invalid comparison');
@@ -1150,6 +1154,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         return result;
       }
       const errors={
+        'invalid invoice status':['INVALID_STATUS','Use the catalog invoice status values: draft, sent, overdue, paid, void or cancelled. Unpaid is a positive outstanding balance, not a stored status; use current total_amount and amount_paid, including partial payments. No database write was attempted.'],
         'invalid batch':['BATCH_SHAPE','Atomic batches support 2–10 create/update items in operations, each with table, filters and values. One unambiguous record per item; all commit or all roll back. Nest custom business fields in values.custom_fields. Payment creates, status changes and deletes are separate operations. No write was attempted.'],
         'invoice action requires exactly one canonical target':['TARGET_REQUIRED','Which invoice do you mean? Send its invoice number or customer name. If that customer has several invoices, I will ask you to choose. No change was made.'],
         'invalid invoice fields':['INVALID_FIELDS','Use the catalog invoice correction fields: total_amount, subtotal, tax, discount, currency, dates and typed line_items. Keep status paid/unpaid separate. Reopening preserves original payments and requires explicit confirmation. Put the invoice target in filters, not values. No write was attempted.'],

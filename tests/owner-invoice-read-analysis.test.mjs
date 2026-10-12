@@ -6,6 +6,29 @@ import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 
 const question='If Offline Ledger Company pays USD 1000 against QA-2048, how much would be overpaid? Just explain; do not record a payment or change anything.';
 const row={invoice_number:'INV-2048-1',currency:'USD',total_amount:'1234.56',amount_paid:'400',metadata:{source_invoice_number:'QA-2048'}};
+test('plain unpaid list requests are read-only and derive net balances without equating unpaid with a status',()=>{
+  for(const message of ['show me my unpaid invoices','Please list outstanding invoices.','show unpaid invoices'])
+    assert.equal(ownerInvoiceReadAnalysis(message)?.kind,'unpaidInvoices');
+  for(const message of ['show me my unpaid invoices and record a payment','mark my invoices unpaid','show unpaid invoices for Example'])
+    assert.equal(ownerInvoiceReadAnalysis(message),null);
+  const parsed=ownerInvoiceReadAnalysis('show me my unpaid invoices');
+  const derived=deriveInvoiceReadAnalysis(parsed,[{...row,status:'draft'},
+    {...row,invoice_number:'REVERSED-1',status:'sent',amount_paid:'0'},
+    {...row,invoice_number:'FULL-1',status:'sent',amount_paid:'1234.56'},
+    {...row,invoice_number:'OVER-1',status:'sent',amount_paid:'1300'},
+    {...row,invoice_number:'BILL-1',status:'draft',metadata:{invoice_direction:'payable'}}]);
+  assert.deepEqual(derived.invoices.map(row=>[row.invoiceNumber,row.outstanding]),[['INV-2048-1','834.56'],['REVERSED-1','1234.56'],['BILL-1','834.56']]);
+  const reply=invoiceReadAnalysisReply({ok:true,readOnly:true,operation:'read',table:'invoices',invoiceReadAnalysis:derived});
+  assert.match(reply,/including drafts/);assert.match(reply,/BILL-1.*payable/);assert.doesNotMatch(reply,/FULL-1|OVER-1|no payments|never paid/i);
+  assert.equal(deriveInvoiceReadAnalysis(parsed,[{...row,status:'draft'}],{truncated:true}),null);
+  assert.equal(deriveInvoiceReadAnalysis(parsed,[{...row,status:'void'}]),null);
+  assert.equal(deriveInvoiceReadAnalysis(parsed,[{...row,status:'sent',amount_paid:null}]),null);
+  const empty=deriveInvoiceReadAnalysis(parsed,[]);
+  assert.match(invoiceReadAnalysisReply({ok:true,readOnly:true,operation:'read',table:'invoices',invoiceReadAnalysis:empty}),/No unpaid invoices/);
+  const many=deriveInvoiceReadAnalysis(parsed,Array.from({length:30},(_,i)=>({...row,invoice_number:`INV-LONG-${i}`,customer_name:'Long synthetic customer name'.repeat(4),status:'draft'})));
+  const shortReply=invoiceReadAnalysisReply({ok:true,readOnly:true,operation:'read',table:'invoices',invoiceReadAnalysis:many});
+  assert(shortReply.length<=1024);assert.match(shortReply,/Showing \d+ of 30/);
+});
 test('conditional analysis is separate from financial instructions and ambiguous scenarios',()=>{
   assert.equal(ownerInvoiceReadAnalysis(question)?.kind,'conditionalPayment');
   for(const text of [question+' Record the payment now.',question.replace('1000','1000.001'),question.replace('USD 1000','USD 0'),
