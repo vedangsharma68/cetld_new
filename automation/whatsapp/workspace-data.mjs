@@ -572,7 +572,7 @@ function validateAdapterSettingsValues(values) {
 }
 
 export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,getRuntimeConfig,planRequest,authorize,executeBatchOperation,
-  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,executeInvoiceReopening=null,executeReopeningDecision=null,confirmationMode='buttons',timezone='UTC',attachmentAvailable=false}={}) {
+  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,executeInvoiceReopening=null,executeReopeningDecision=null,confirmationMode='buttons',timezone='UTC',attachmentAvailable=false,invoiceEditContext=null}={}) {
   if(!supabase?.from||typeof scope?.workspaceId!=='string')throw new TypeError('Supabase and verified workspace scope required');
   let replyRequirement=null;
   let writeAttempted=false;
@@ -987,6 +987,18 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
       const params=await normalizeRequest(raw,scope,planRequest,ctx,validationFeedback);
       ctx.phase='dispatch';
+      if(invoiceEditContext&&params.operation!=='describe'&&params.operation!=='read'){
+        if(params.operation!=='update'||params.table!=='invoices'||params.filters.length!==1
+          ||params.filters[0].column!=='id'||params.filters[0].operator!=='eq'||params.filters[0].value!==invoiceEditContext.id
+          ||JSON.stringify(params.values)!==JSON.stringify(invoiceEditContext.values))
+          return {...fail('INVALID','This field reply may only update the selected invoice with the requested field and value. No change was made.'),writeAttempted:false};
+        const current=await resolveWorkspaceRecord({supabase,scope,table:'invoices',operation:'update',filters:params.filters,select:'id,updated_at',
+          assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
+        if(!current.ok)return safeError(current);
+        if(current.row.id!==invoiceEditContext.id||current.row.updated_at!==invoiceEditContext.updatedAt)
+          return {...fail('STALE','The selected invoice changed. Select its details again before editing.'),writeAttempted:false};
+        ctx.invoiceCorrectionReadGuard={id:invoiceEditContext.id,updatedAt:invoiceEditContext.updatedAt};
+      }
       const analysis=ownerInvoiceReadAnalysis(message);
       if(analysis&&params.operation!=='describe'){
         const expected=invoiceReadAnalysisArgs(analysis);

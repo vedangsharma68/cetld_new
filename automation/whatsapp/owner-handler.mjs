@@ -1,6 +1,6 @@
 import {normalizeOwnerBotPreferences,normalizeOwnerServiceReplyText} from './bot-preferences.mjs';
 import {ownerCalendar} from './workspace-records.mjs';
-import {isOwnerNextButton,runOwnerNextAction,planOwnerNextActions,createOwnerNextButtons,pendingBlocksOwnerNextActions} from './owner-next-actions.mjs';
+import {isOwnerNextButton,runOwnerNextAction,planOwnerNextActions,createOwnerNextButtons,pendingBlocksOwnerNextActions,ownerMenuInvoiceEdit,loadOwnerMenuEditTarget,NEXT_ACTION_STALE_REPLY} from './owner-next-actions.mjs';
 import {createOwnerActionButtons,verifyOwnerActionButton} from './owner-action-buttons.mjs';
 import {AIProvider, CF_PRIMARY_MODEL, GEMINI_FALLBACK_MODEL, sanitizeModelSettings} from '../../ai/provider.mjs';
 import {createInvoiceLifecycleService} from '../../ai/invoice-lifecycle.mjs';
@@ -13,7 +13,7 @@ import {runOwnerAgent, ownerAgentFailureReply} from './owner-agent.mjs';
 import {createOwnerWorkspaceTools} from './owner-workspace-tools.mjs';
 import {createOwnerReplyStore} from './owner-reply-store.mjs';
 import {createProviderHealthStore} from '../../ai/provider-health.mjs';
-import {ownerButtonClaimIssue} from './owner-grounding.mjs';
+import {ownerButtonClaimIssue,invoiceCorrectionFallback} from './owner-grounding.mjs';
 
 // Exact standalone messages only. Mixed greetings and business requests go to
 // the model, and authorization/replay happen before this shortcut is considered.
@@ -200,6 +200,15 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     const {history,available:historyAvailable}=historyState;
     const {lifecycle,lifecyclePending,available:lifecycleAvailable}=lifecycleState;
     ownerStore=ownerStoreState;
+    const menuEditValues=!scope.interactionId&&!media&&!mediaError&&!scope.checkpoint?ownerMenuInvoiceEdit(message):null;
+    let menuEditTarget=null;
+    if(menuEditValues){
+      try{menuEditTarget=await loadOwnerMenuEditTarget({supabase,scope,authorize:authorizeTurn,clock});}
+      catch{return {answer:'I could not verify the selected invoice. Ask again before changing its details.'};}
+      if(!menuEditTarget)return {answer:'Which invoice should I change? Select its Edit details and Other fields options, then send the field and new value. No change was made.'};
+      if(menuEditTarget&&(pendingBlocksOwnerNextActions(pendingAtStart)||Boolean(lifecyclePending?.pending)||!pendingStoreAvailable||!lifecycleAvailable))
+        return {answer:'Please finish or cancel the current approval before changing invoice details.'};
+    }
     const hasSavedPrimary=typeof settings.primary_model==='string'&&settings.primary_model.trim().length>0;
     const configurationSource=!settingsAvailable?'defaults_after_settings_error':hasSavedPrimary?'workspace':'defaults';
     const config=configurationSource==='workspace'
@@ -218,6 +227,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
       lifecyclePending,invoiceStoreFactory:invoiceStore,settingsStore:createOwnerSettingsStore(supabase),config,signal,deadlineAt,ownerHistory:history,
       sourceMediaReader:input=>readOwnerSourceMedia({supabase,...input}),
       configurationAvailable:settingsAvailable,configurationSource,historyAvailable,ownerStoreAvailable,lifecycleAvailable,
+      invoiceEditContext:menuEditTarget?.stale?null:menuEditTarget?{...menuEditTarget,values:menuEditValues}:null,
       planRequest:createOwnerWorkspacePlanner({provider,message,history,timezone,clock,signal,deadlineAt}),
       pendingStoreAvailable,message,messageId,media,mediaError,authorize:reauthorize,lifecycle,providerFactory,env,fetchImpl,clock,logger});}
     catch(error){
@@ -242,6 +252,20 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     let initialToolResults=[];
     const recovered=await tools.lookupCompleted?.();
     if(recovered?.ok&&recovered.completed)initialToolResults=[{name:'workspaceData',args:{operation:'verifiedReceipt'},result:recovered}];
+    if(menuEditTarget){
+      // A committed update changes the menu version. Recover its immutable
+      // message receipt before treating that old prompt as a fresh stale edit.
+      if(menuEditTarget.stale&&!recovered?.completed)return {answer:NEXT_ACTION_STALE_REPLY};
+      const result=recovered?.completed?recovered:await tools.execute('workspaceData',{operation:'update',table:'invoices',
+        filters:[{column:'id',operator:'eq',value:menuEditTarget.id}],values:menuEditValues},{signal});
+      if(!await authorizeTurn(scope))return '';
+      const answer=invoiceCorrectionFallback(message,[result]);
+      if(answer)return {answer};
+      if(result?.ok===false)return {...(result.code==='NOT_FOUND'&&menuEditValues.customer_name?{ownerNextActionRef:menuEditTarget.reference}:{}),answer:result.code==='STALE'?NEXT_ACTION_STALE_REPLY:
+        result.code==='NOT_FOUND'?'I could not find that customer in this workspace. Send an existing customer name to reassign this invoice. No change was made.':
+        result.message||'I could not verify the invoice change. Please check the invoice before trying again.'};
+      initialToolResults=[{name:'workspaceData',args:{operation:'update',table:'invoices'},result}];
+    }
     if(!recovered?.completed&&!scope.interactionId&&!media&&!mediaError&&!scope.checkpoint
         &&/^\s*cancel[.!\s]*$/i.test(message||'')&&pendingStoreAvailable&&lifecycleAvailable
         &&tools.definitions?.some(item=>item?.function?.name==='workspaceData')){
