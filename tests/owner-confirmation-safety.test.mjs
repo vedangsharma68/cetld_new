@@ -22,7 +22,7 @@ function createHarness(options={}){
   const pendingAtStart=Object.hasOwn(options,'pendingAtStart')?options.pendingAtStart
     :{id:17,version:4,generation:9,action:actionFor(type),consumed_at:null};
   const pendingStateAction=Object.hasOwn(options,'pendingStateAction')?options.pendingStateAction:pendingAtStart?.action||null;
-  const calls={rpc:[],consume:[],settingsRead:0,settingsWrite:0,invoiceWrite:0};
+  const calls={rpc:[],receiptRead:[],consume:[],settingsRead:0,settingsWrite:0,invoiceWrite:0};
   const pending={
     async consumePendingAction(input){calls.consume.push(input);return {id:input.id};},
     async loadPendingActionState(){return {generation:9,id:pendingAtStart?.id??null,version:pendingAtStart?.version??null,action:pendingStateAction};},
@@ -35,7 +35,14 @@ function createHarness(options={}){
     async findAssistantInvoice(){calls.invoiceWrite++;throw new Error('JS invoice lookup must not run');},
     async createAssistantInvoice(){calls.invoiceWrite++;throw new Error('JS invoice write must not run');},
   });
-  const supabase=withRpc?{async rpc(name,args){calls.rpc.push({name,args});return rpcResult||{data:{ok:true,actionType:type},error:null};}}:{};
+  const supabase=withRpc?{
+    async rpc(name,args){calls.rpc.push({name,args});return rpcResult||{data:{ok:true,actionType:type},error:null};},
+    from(table){
+      const query={table,columns:null,filters:{}};
+      return {select(columns){query.columns=columns;return this;},eq(column,value){query.filters[column]=value;return this;},
+        async maybeSingle(){calls.receiptRead.push(query);return {data:null,error:options.receiptReadError||null};}};
+    },
+  }:{};
   const tools=createOwnerAgentTools({supabase,scope,ownerStore:{query:async()=>[]},pending,pendingAtStart,
     lifecyclePending:null,invoiceStoreFactory,settingsStore,config:{},message,messageId,
     authorize:async()=>true,pendingStoreAvailable:true,clock:()=>new Date('2026-10-02T08:00:00.000Z'),logger:{error(){}}});
@@ -120,6 +127,9 @@ test('a consumed create receipt is exposed and confirmed from the current inboun
   assert.equal(pendingResult.completed,true);
   assert.equal(pendingResult.action,'invoice_created');
   assert.equal(pendingResult.invoiceNumber,'INV-2026-0018');
+  assert.deepEqual(calls.receiptRead,[{table:'whatsapp_owner_action_receipts',columns:'result',filters:{
+    workspace_id:scope.workspaceId,owner_id:scope.ownerId,phone:scope.phone,provider_message_id:'wamid.retry-confirm',
+  }}]);
 
   const confirmation=await tools.execute('confirmPendingOwnerChange',{});
   assert.equal(confirmation.ok,true);
@@ -154,6 +164,15 @@ test('a consumed proposal with no matching current-turn receipt remains no actio
   assert.equal(calls.consume.length,0);
   assert.equal(calls.settingsWrite,0);
   assert.equal(calls.invoiceWrite,0);
+});
+
+test('an unavailable scoped payment receipt cannot be reported as no pending action',async()=>{
+  const {tools,calls}=createHarness({pendingAtStart:null,pendingStateAction:null,
+    receiptReadError:{code:'08006',message:'isolated receipt read unavailable'}});
+  const result=await tools.execute('getPendingOwnerAction',{});
+  assert.equal(result.ok,false);assert.equal(result.code,'DATABASE_UNAVAILABLE');assert.equal(result.pending,undefined);
+  assert.equal(calls.receiptRead.length,1);assert.equal(calls.rpc.length,0);assert.equal(calls.consume.length,0);
+  assert.equal(calls.settingsWrite,0);assert.equal(calls.invoiceWrite,0);
 });
 
 test('same-message confirmation never reaches the RPC',async()=>{
