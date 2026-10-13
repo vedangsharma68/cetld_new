@@ -1,7 +1,7 @@
 import {verifyOwnerPaymentReceipt,ownerPartialPaymentAvailable} from './owner-payment-readback.mjs';
 import {requestedOwnerPayment,ownerPaymentAmountMentioned} from './owner-payment-intent.mjs';
 import {ownerInvoiceReadIntent} from './owner-invoice-read-intent.mjs';
-import {ownerInvoiceReadAnalysis,invoiceReadAnalysisArgs,invoiceReadAnalysisReply} from './owner-invoice-read-analysis.mjs';
+import {ownerInvoiceReadAnalysis,ownerHypotheticalOverpayment,invoiceReadAnalysisArgs,invoiceReadAnalysisReply} from './owner-invoice-read-analysis.mjs';
 import {isExternallyManagedInvoice} from '../../invoice/business-fields.mjs';
 import {requestedInvoiceDateChange,requestedInvoiceMoneyChange} from './invoice-corrections.mjs';
 import {internalToolEnvelope} from '../../ai/tool-calls.mjs';
@@ -1718,6 +1718,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
   let dateReadRecoveryUsed=checkpoint?.version===1&&checkpoint.dateReadRecoveryUsed===true;
   const requestedDateChange=requestedInvoiceDateChange(message);
   const requestedReadAnalysis=ownerInvoiceReadAnalysis(message);
+  const requestedHypotheticalOverpayment=requestedReadAnalysis?null:ownerHypotheticalOverpayment(message);
   const requestedPayment=requestedReadAnalysis?null:requestedOwnerPayment(message);
   const boundedPaymentReadArgs=requestedPayment?{
     operation:'read',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:requestedPayment.invoiceNumber},
@@ -1901,6 +1902,18 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
       ?tools.getAttachmentReviewRefusal?.():null;
     let reviewQuestion=!checkpoint&&!requireAttachmentIngest&&!requireAttachmentLookup&&attachmentDescriptor?.available!==true
       &&attachmentTool?.function?.name==='workspaceData'&&tools.getAttachmentReviewQuestionIntent?.()===true;
+    if(requestedHypotheticalOverpayment&&!checkpoint&&!initialToolResults.length
+      &&attachmentDescriptor?.available!==true&&!attachmentDescriptor?.errorCode&&!mediaReference
+      &&!requireAttachmentIngest&&!requireAttachmentLookup&&!reviewContinuation&&!reviewDecision&&!paymentDecision&&!reviewRefusal&&!reviewQuestion
+      &&!replyRequirement()?.confirmationText&&!tools.getAttachmentReviewContext?.()&&!writeMayHaveBeenAttempted()){
+      const scenario=requestedHypotheticalOverpayment;
+      const formatCents=value=>`${Math.floor(value/100)}.${String(value%100).padStart(2,'0')}`;
+      const answer=`For a hypothetical ${scenario.currency} ${formatCents(scenario.paymentCents)} payment on a ${scenario.currency} ${formatCents(scenario.invoiceTotalCents)} invoice, there would be ${scenario.currency} ${formatCents(scenario.overpaymentCents)} overpaid. This is arithmetic only; no payment was recorded and no changes were made.`;
+      // The strict parser only admits a self-contained arithmetic hypothetical;
+      // this answer makes no claim about any workspace invoice or stored fact.
+      if(!ownerReplySafetyIssue(answer,replyRequirement()))
+        return resultFor(answer,{hypotheticalInvoiceArithmetic:true});
+    }
     const requestProvider=async({messages,toolOptions={},phase='work',maxTokens=1200,temperature=0.2})=>{
       const round={number:++diagnostics.rounds,toolNames:[],toolResults:[],outcome:'ok',safetyIssueCodes:[],logged:false};
       activeRound=round;

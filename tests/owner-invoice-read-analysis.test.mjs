@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {ownerInvoiceReadAnalysis,deriveInvoiceReadAnalysis,invoiceReadAnalysisReply} from '../automation/whatsapp/owner-invoice-read-analysis.mjs';
+import {ownerInvoiceReadAnalysis,ownerHypotheticalOverpayment,deriveInvoiceReadAnalysis,invoiceReadAnalysisReply,invoiceReadAnalysisArgs} from '../automation/whatsapp/owner-invoice-read-analysis.mjs';
 import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 
@@ -29,11 +29,29 @@ test('plain unpaid list requests are read-only and derive net balances without e
   const shortReply=invoiceReadAnalysisReply({ok:true,readOnly:true,operation:'read',table:'invoices',invoiceReadAnalysis:many});
   assert(shortReply.length<=1024);assert.match(shortReply,/Showing \d+ of 30/);
 });
+test('explicit all-customer unpaid listing accepts only bounded global, draft, and no-change clauses',()=>{
+  assert.deepEqual(ownerInvoiceReadAnalysis('now show me my unpaid invoices'),{kind:'unpaidInvoices',includeDrafts:true});
+  assert.equal(ownerInvoiceReadAnalysis('show me my unpaid invoices now'),null);
+  const message='Show me all unpaid invoices across all customers, including drafts. Do not change anything.';
+  const parsed=ownerInvoiceReadAnalysis(message);
+  assert.deepEqual(parsed,{kind:'unpaidInvoices',includeDrafts:true});
+  assert.deepEqual(invoiceReadAnalysisArgs(parsed).filters,[{column:'status',operator:'in',value:['draft','sent','overdue']}]);
+  for(const text of [message+' Send reminders.','Show all unpaid invoices for Example Customer, including drafts. Do not change anything.',
+    'Show all unpaid invoices across all customers, including drafts, and mark them reviewed.'])
+    assert.equal(ownerInvoiceReadAnalysis(text),null,text);
+});
 test('conditional analysis is separate from financial instructions and ambiguous scenarios',()=>{
   assert.equal(ownerInvoiceReadAnalysis(question)?.kind,'conditionalPayment');
   for(const text of [question+' Record the payment now.',question.replace('1000','1000.001'),question.replace('USD 1000','USD 0'),
     'Record USD 1000 payment for Offline Ledger Company invoice QA-2048.',
     question.replace('USD 1000','USD 1000 or USD 1200')])assert.equal(ownerInvoiceReadAnalysis(text),null,text);
+});
+test('abstract hypothetical overpayment is strict, same-currency integer-cent arithmetic',()=>{
+  const question='If a customer pays USD 120 on an invoice for USD 100, how much is overpaid? Just explain, do not record a payment.';
+  assert.deepEqual(ownerHypotheticalOverpayment(question),{currency:'USD',paymentCents:12000,invoiceTotalCents:10000,overpaymentCents:2000});
+  assert.equal(ownerHypotheticalOverpayment(question.replace('USD 120','INR 120')),null);
+  for(const text of [question.replace('USD 100','USD 100 or USD 90'),question.replace('USD 120','USD 0'),
+    question+' Record it.',question.replace('USD 120','USD 120.001')])assert.equal(ownerHypotheticalOverpayment(text),null,text);
 });
 test('scenario calculation uses integer cents and refuses currency mismatch, incomplete and ambiguous reads',()=>{
   const parsed=ownerInvoiceReadAnalysis(question),derived=deriveInvoiceReadAnalysis(parsed,[row]);

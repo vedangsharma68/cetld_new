@@ -89,7 +89,7 @@ test('unpaid invoice listing uses current SQL balances and valid statuses instea
     const paid=await f.addInvoice({customer:'Example Paid Customer',number:'PAID-100',total:100,paid:100});
     await f.addInvoice({customer:'Example Void Customer',number:'VOID-100',total:700,status:'void'});
     await f.addInvoice({customer:'Example Cancelled Customer',number:'CANCELLED-100',total:700,status:'cancelled'});
-    const before=await f.snapshot(),reply=await f.turn('unpaid-invoice-list','show me my unpaid invoices');
+    const before=await f.snapshot(),reply=await f.turn('unpaid-invoice-list','now show me my unpaid invoices');
     const draftReply=invoiceReadAnalysisReply(f.outputs[0]);
     assert.match(reply.answer,/834\.56/,JSON.stringify({reply,outputs:f.outputs,executions:f.executions,draftReply,safety:ownerReplySafetyIssue(draftReply),grounding:ownerGroundingIssue(draftReply,f.outputs,'show me my unpaid invoices')}));assert.match(reply.answer,/INR 900\.00/);assert.match(reply.answer,new RegExp(draft.invoice_number));
     assert.match(reply.answer,/draft/i);assert.doesNotMatch(reply.answer,/PAID-100|VOID-100|CANCELLED-100|9999999|unavailable/i);
@@ -100,6 +100,34 @@ test('unpaid invoice listing uses current SQL balances and valid statuses instea
     assert.equal(result.invoiceReadAnalysis.invoices.find(row=>row.invoiceNumber===draft.invoice_number).outstanding,'900.00');
     assert.equal(result.invoiceReadAnalysis.invoices.some(row=>row.invoiceNumber===paid.invoice_number),false);
     assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});
+
+test('explicit global unpaid listing includes unpaid invoices across customers and drafts without inheriting a customer filter',async()=>{
+  const f=await fixture();try{
+    const alpha=await f.addInvoice({customer:'Global Alpha Ltd',number:'GLOBAL-A',status:'sent',total:240});
+    const beta=await f.addInvoice({customer:'Global Beta Inc',number:'GLOBAL-B',status:'draft',currency:'INR',total:500});
+    const paid=await f.addInvoice({customer:'Global Paid Customer',number:'GLOBAL-PAID',status:'sent',total:100,paid:100});
+    const before=await f.snapshot();
+    const reply=await f.turn('global-unpaid-all-customers','Show me all unpaid invoices across all customers, including drafts. Do not change anything.');
+    assert.match(reply.answer,new RegExp(`${alpha.invoice_number}.*Global Alpha Ltd.*USD 240\\.00`,'s'));
+    assert.match(reply.answer,new RegExp(`${beta.invoice_number}.*Global Beta Inc.*INR 500\\.00`,'s'));
+    assert.match(reply.answer,/including drafts/i);assert.doesNotMatch(reply.answer,new RegExp(paid.invoice_number));
+    assert.equal(f.executions.length,1);assert.deepEqual(f.executions[0].args.filters,[{column:'status',operator:'in',value:['draft','sent','overdue']}]);
+    assert.equal(f.providerCalls.length,0);assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
+    assert.ok(alpha.id&&beta.id&&paid.id);
+  }finally{await f.close();}
+});
+
+test('abstract hypothetical overpayment is answered with arithmetic only and no provider, tool, or ledger calls',async()=>{
+  const f=await fixture();try{
+    const before=await f.snapshot();
+    const reply=await f.turn('abstract-overpayment','If a customer pays USD 120 on an invoice for USD 100, how much is overpaid? Just explain, do not record a payment.');
+    assert.match(reply.answer,/USD 20\.00 overpaid/);assert.match(reply.answer,/hypothetical/i);
+    assert.match(reply.answer,/no payment was recorded/i);assert.doesNotMatch(reply.answer,/SIM-2048|current outstanding|current balance/i);
+    const under=await f.turn('abstract-underpayment','If a customer pays USD 100 on an invoice for USD 120, how much is overpaid? Just explain, do not record a payment.');
+    assert.match(under.answer,/USD 0\.00 overpaid/);assert.doesNotMatch(under.answer,/minus|leaves|current balance/i);
+    assert.equal(f.executions.length,0);assert.equal(f.providerCalls.length,0);assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
   }finally{await f.close();}
 });
 

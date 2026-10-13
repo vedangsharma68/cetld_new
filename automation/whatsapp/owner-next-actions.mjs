@@ -69,6 +69,25 @@ async function currentRecord({supabase,scope,choice,authorize}) {
 function refFor(choices,clock) {
   return normalizeOwnerNextActionRef({v:1,key:randomUUID(),expiresAt:new Date(now(clock)+30*60*1000).toISOString(),choices});
 }
+// A field-only reply may use only the immediately preceding, scoped edit
+// prompt. General questions never inherit a record from conversation history.
+export function ownerMenuInvoiceEdit(message){
+  const match=/^(?:(?:change|set|update)\s+(?:the\s+)?)?(customer\s+name|notes?|due\s+date|issue\s+date|invoice\s+date)\s*(?::|=|\bto\b)?\s+([^\r\n;]{1,2000})$/i.exec(String(message||'').trim());
+  if(!match||/\b(?:and|then)\s+(?:create|record|update|change|delete|send|refund)\b/i.test(match[2]))return null;
+  const field={'customer name':'customer_name',note:'notes',notes:'notes','due date':'due_date','issue date':'issue_date','invoice date':'issue_date'}[match[1].toLowerCase().replace(/\s+/g,' ')];
+  return {[field]:match[2].trim()};
+}
+export async function loadOwnerMenuEditTarget({supabase,scope,authorize,clock=()=>new Date()}={}){
+  if(!await authorize(scope))return {stale:true};
+  const row=data(await supabase.from('whatsapp_messages').select('owner_next_action_ref')
+    .eq('workspace_id',scope.workspaceId).eq('phone',scope.phone).eq('audience','owner').eq('direction','outbound').eq('kind','normal')
+    .order('created_at',{ascending:false}).limit(1).maybeSingle());
+  const reference=normalizeOwnerNextActionRef(row?.owner_next_action_ref);
+  if(!reference||reference.choices.length!==1||!['edit_more','edit_due_date'].includes(reference.choices[0].action))return null;
+  if(Date.parse(reference.expiresAt)<=now(clock))return {stale:true};
+  const choice=reference.choices[0],record=await currentRecord({supabase,scope,choice,authorize});
+  return record?{id:record.id,updatedAt:record.updated_at,invoiceNumber:record.invoice_number,reference:{...reference,key:randomUUID()}}:{stale:true};
+}
 function explicitlyMentionedRecords(records,table,message){
   const words=value=>String(value||'').normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu)||[];
   const request=words(message);
@@ -161,8 +180,8 @@ export async function runOwnerNextAction({supabase,scope,env=process.env,clock=(
     const history=payment.data||reversal.data?' Payment and reversal history will stay intact; excess paid will be shown as overpayment, with no automatic refund, transfer or allocation.':'';
     return {answer:`What should the new total for ${label} be? It is currently ${record.currency||''} ${record.total_amount}.${history} I will verify the ledger and totals and follow your confirmation preference before saving. Nothing has changed yet.`};
   }
-  if(choice.action==='edit_due_date')return {answer:`What should the new due date for ${label} be? It is currently ${record.due_date||'not set'}. Nothing has changed yet.`};
-  if(choice.action==='edit_more')return {answer:`What other details should I change for ${label}? Tell me the field and new value. Nothing has changed yet.`};
+  if(choice.action==='edit_due_date')return {answer:`What should the new due date for ${label} be? It is currently ${record.due_date||'not set'}. Nothing has changed yet.`,ownerNextActionRef:refFor([choice],clock)};
+  if(choice.action==='edit_more')return {answer:`What other details should I change for ${label}? Tell me the field and new value. Nothing has changed yet.`,ownerNextActionRef:refFor([choice],clock)};
   if(choice.action==='record_payment') {
     if(!['draft','sent','overdue'].includes(record.status)||Number(record.total_amount)<=Number(record.amount_paid))return {answer:NEXT_ACTION_STALE_REPLY};
     return {answer:`For invoice ${label}, what payment did you receive? To settle the remaining balance, send "mark invoice ${label} paid". I will check the current balance and your confirmation preference. Nothing has been recorded by this tap.`};

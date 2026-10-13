@@ -16,8 +16,18 @@ function explanationTail(tail){
 export function ownerInvoiceReadAnalysis(message){
   const text=clean(message);
   if(!text||text.length>1200)return null;
-  if(/^(?:please\s+)?(?:show|list)(?:\s+me)?(?:\s+(?:my|our|the))?\s+(?:unpaid|outstanding)\s+invoices[.!?]?$/i.test(text))
+  if(/^(?:now\s+)?(?:please\s+)?(?:show|list)(?:\s+me)?(?:\s+(?:my|our|the))?\s+(?:unpaid|outstanding)\s+invoices[.!?]?$/i.test(text))
     return {kind:'unpaidInvoices',includeDrafts:true};
+  const globalUnpaid=/^(?:now\s+)?(?:please\s+)?(?:show|list)(?:\s+me)?\s+all\s+(?:unpaid|outstanding)\s+invoices\b(.*)$/i.exec(text);
+  if(globalUnpaid){
+    const tail=globalUnpaid[1];
+    const hasGlobalScope=/\b(?:across|for)\s+all\s+customers\b/i.test(tail);
+    const rest=tail.replace(/\b(?:across|for)\s+all\s+customers\b/gi,'')
+      .replace(/\bincluding\s+drafts?\b/gi,'')
+      .replace(/\bdo\s+not\s+change\s+anything\b/gi,'')
+      .replace(/[.!?;,\s]/g,'');
+    if(hasGlobalScope&&!rest)return {kind:'unpaidInvoices',includeDrafts:true};
+  }
   const scenario=/^(?:what\s+)?if\s+([^,;!?]{1,100}?)\s+(?:pays|paid|were\s+to\s+pay)\s+([A-Z]{3})\s+(\d{1,12}(?:\.\d{1,2})?)\s+(?:against|on|for)\s+(?:invoice\s+)?([A-Z0-9][A-Z0-9/-]{1,99})\s*,?\s*(?:how\s+much\s+(?:would\s+be\s+)?(?:overpaid|overpayment)|what\s+would\s+(?:the\s+)?(?:remaining\s+balance|overpayment)\s+be)\s*\?\s*(.*)$/i.exec(text);
   if(scenario&&explanationTail(scenario[5])&&!/\b(?:record|save|change|update|send|refund|reverse|reopen|delete)\b/i.test(scenario[1])){
     const cents=money(scenario[3]);
@@ -35,6 +45,16 @@ export function ownerInvoiceReadAnalysis(message){
   if(customerNames.length<1||customerNames.length>10||customerNames.some(name=>!name||name.length>100||/[\x00-\x1f]/.test(name))
     ||new Set(customerNames.map(name=>name.toLowerCase())).size!==customerNames.length)return null;
   return {kind:'currencyBalances',customerNames,includeDrafts};
+}
+export function ownerHypotheticalOverpayment(message){
+  const text=clean(message);
+  if(!text||text.length>1200)return null;
+  const match=/^if\s+(?:a\s+customer|someone)\s+(?:pays|paid|were\s+to\s+pay)\s+([A-Z]{3})\s+(\d{1,12}(?:\.\d{1,2})?)\s+on\s+an?\s+invoice\s+for\s+([A-Z]{3})\s+(\d{1,12}(?:\.\d{1,2})?)\s*,?\s*how\s+much\s+(?:(?:is|would\s+be)\s+)?overpaid\s*\?\s*(.*)$/i.exec(text);
+  if(!match||!explanationTail(match[5])||match[1].toUpperCase()!==match[3].toUpperCase())return null;
+  const payment=money(match[2]),invoiceTotal=money(match[4]);
+  if(payment===null||invoiceTotal===null||payment<=0||invoiceTotal<=0)return null;
+  return {currency:match[1].toUpperCase(),paymentCents:payment,invoiceTotalCents:invoiceTotal,
+    overpaymentCents:Math.max(payment-invoiceTotal,0)};
 }
 export function invoiceReadAnalysisArgs(analysis){
   if(!analysis)return null;
