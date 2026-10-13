@@ -14,6 +14,16 @@ import {createOwnerWorkspaceTools} from './owner-workspace-tools.mjs';
 import {createOwnerReplyStore} from './owner-reply-store.mjs';
 import {createProviderHealthStore} from '../../ai/provider-health.mjs';
 import {ownerButtonClaimIssue,invoiceCorrectionFallback} from './owner-grounding.mjs';
+import {requestedOwnerInvoiceTotalChange,invoiceTotalCorrectionValues} from './invoice-corrections.mjs';
+import {invoiceBalanceFields} from '../../invoice/business-fields.mjs';
+
+function totalCorrectionReply(message,result){
+  const answer=invoiceCorrectionFallback(message,[result]),row=result?.record;
+  if(!answer||!row)return null;
+  const balances=invoiceBalanceFields(row),paid=Number(row.amount_paid);
+  if(!Number.isFinite(paid)||paid<0||balances.outstanding_amount===null||balances.overpayment_amount===null)return null;
+  return `${answer}\nPaid: ${row.currency} ${paid.toFixed(2)}\nOutstanding: ${row.currency} ${balances.outstanding_amount.toFixed(2)}\nOverpayment: ${row.currency} ${balances.overpayment_amount.toFixed(2)}`;
+}
 
 // Exact standalone messages only. Mixed greetings and business requests go to
 // the model, and authorization/replay happen before this shortcut is considered.
@@ -279,6 +289,37 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         result.code==='NOT_FOUND'?'I could not find that customer in this workspace. Send an existing customer name to reassign this invoice. No change was made.':
         result.message||'I could not verify the invoice change. Please check the invoice before trying again.'};
       initialToolResults=[{name:'workspaceData',args:{operation:'update',table:'invoices'},result}];
+    }
+    const totalChange=requestedOwnerInvoiceTotalChange(message);
+    if(totalChange&&!menuEditTarget&&!scope.interactionId&&!media&&!mediaError&&tools.supportsBoundedInvoiceTotalCorrection===true){
+      const recoveredReply=recovered?.completed?totalCorrectionReply(message,recovered):null;
+      if(recoveredReply)return {answer:recoveredReply};
+      if(recovered?.ok===false&&recovered.code!=='NO_RECEIPT'){
+        if(!await authorizeTurn(scope))return '';
+        return {answer:'I could not verify the prior invoice correction state. Check the invoice before trying again.'};
+      }
+      if(!recovered?.completed&&!scope.checkpoint&&botPreferences.confirmationMode==='direct'
+        &&pendingStoreAvailable&&lifecycleAvailable&&!pendingBlocksOwnerNextActions(pendingAtStart)&&!lifecyclePending?.pending){
+        const read=await tools.execute('workspaceData',{operation:'read',table:'invoices',
+          filters:[{column:'invoice_number',operator:'eq',value:totalChange.invoiceNumber}],
+          columns:['invoice_number','currency','total_amount','amount_paid','updated_at','subtotal','tax','discount','line_items']},{signal});
+        if(!await authorizeTurn(scope))return '';
+        if(read?.ok===false)return {answer:read.message||'The invoice could not be read safely. No change was made.'};
+        const records=tools.getNextActionContext?.()?.records;
+        if(read?.readOnly!==true||read.truncated||read.rows?.length!==1||records?.length!==1
+          ||records[0].updated_at!==read.rows[0].updated_at)
+          return {answer:'I could not identify one current invoice for that number. No change was made.'};
+        const correction=invoiceTotalCorrectionValues(totalChange,read.rows[0]);
+        if(!correction.ok)return {answer:correction.message};
+        const result=await tools.execute('workspaceData',{operation:'update',table:'invoices',
+          filters:[{column:'id',operator:'eq',value:records[0].id}],values:correction.values},
+          {signal,invoiceCorrectionReadGuard:{id:records[0].id,updatedAt:records[0].updated_at}});
+        if(!await authorizeTurn(scope))return '';
+        const answer=totalCorrectionReply(message,result);
+        if(answer)return {answer};
+        return {answer:result?.code==='STALE'?'The invoice changed while I checked it. Send the correction again after checking its current details. No change was made.':
+          result?.message||'I could not verify the invoice correction. Check the invoice before trying again.'};
+      }
     }
     if(!recovered?.completed&&!scope.interactionId&&!media&&!mediaError&&!scope.checkpoint
         &&/^\s*cancel[.!\s]*$/i.test(message||'')&&pendingStoreAvailable&&lifecycleAvailable
