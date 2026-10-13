@@ -987,6 +987,14 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
       const params=await normalizeRequest(raw,scope,planRequest,ctx,validationFeedback);
       ctx.phase='dispatch';
+      // This private execution option comes from the server's scoped preread,
+      // never from model-visible arguments. Preserve its version through SQL.
+      if(executionOptions.invoiceCorrectionReadGuard){
+        const guard=executionOptions.invoiceCorrectionReadGuard;
+        if(params.operation!=='update'||params.table!=='invoices'||!UUID.test(guard.id||'')||typeof guard.updatedAt!=='string')
+          return {...fail('INVALID','The invoice correction read could not be verified.'),writeAttempted:false};
+        ctx.invoiceCorrectionReadGuard={id:guard.id,updatedAt:guard.updatedAt};
+      }
       if(invoiceEditContext&&params.operation!=='describe'&&params.operation!=='read'){
         if(params.operation!=='update'||params.table!=='invoices'||params.filters.length!==1
           ||params.filters[0].column!=='id'||params.filters[0].operator!=='eq'||params.filters[0].value!==invoiceEditContext.id
@@ -1065,7 +1073,9 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
               assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
             if(!found.ok)return safeError(found);
             if(found.row.currency!==requestedMoney.currency)throw new TypeError('invoice correction omits requested money');
-            ctx.invoiceCorrectionReadGuard={id:found.row.id,updatedAt:found.row.updated_at};
+            if(ctx.invoiceCorrectionReadGuard&&(ctx.invoiceCorrectionReadGuard.id!==found.row.id
+              ||ctx.invoiceCorrectionReadGuard.updatedAt!==found.row.updated_at))return {...safeError({code:'STALE'}),writeAttempted:false};
+            ctx.invoiceCorrectionReadGuard??={id:found.row.id,updatedAt:found.row.updated_at};
           }
         }
         if(confirmationMode!=='direct'&&Object.keys(params.values).some(key=>INVOICE_EXTENDED_CORRECTION_FIELDS.includes(key)))return fail('UNAVAILABLE','These audited invoice corrections require direct owner mode. No change was made.');

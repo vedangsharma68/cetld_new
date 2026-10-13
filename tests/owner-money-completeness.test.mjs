@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {requestedInvoiceMoneyChange} from '../automation/whatsapp/invoice-corrections.mjs';
+import {requestedInvoiceMoneyChange,requestedOwnerInvoiceTotalChange} from '../automation/whatsapp/invoice-corrections.mjs';
 
 test('current explicit ISO money instructions bind the named fields and exact decimal value',()=>{
  for(const [message,expected] of [
@@ -11,10 +11,26 @@ test('current explicit ISO money instructions bind the named fields and exact de
   ['Change QA-OVERNIGHT-001 total and subtotal to INR 6670, keep tax zero and due date 2026-10-20.',{currency:'INR',values:{total_amount:6670,subtotal:6670}}],
   ['Set total to INR 6670 and tax to zero',{currency:'INR',values:{total_amount:6670,tax:0}}],
   ['Set total to INR 6670 and tax to 0',{currency:'INR',values:{total_amount:6670,tax:0}}],
+  ['Change test invoice INV-2026-6771 total to USD 30 with zero tax. Keep its existing USD 40 payment.',{currency:'USD',values:{total_amount:30,tax:0}}],
+  ['Set total to USD 30 with no tax',{currency:'USD',values:{total_amount:30,tax:0}}],
   ['Set subtotal 100 and total to INR 6670',{currency:'INR',values:{subtotal:100,total_amount:6670}}],
   ['Set subtotal to INR 6670 and total to 6670',{currency:'INR',values:{subtotal:6670,total_amount:6670}}],
   ['Set subtotal to INR 6670; set total to INR 6670',{currency:'INR',values:{subtotal:6670,total_amount:6670}}],
  ])assert.deepEqual(requestedInvoiceMoneyChange(message),expected,message);
+});
+
+test('bounded total edits select only a complete current invoice instruction and treat retained payment as history',()=>{
+ assert.deepEqual(requestedOwnerInvoiceTotalChange('Change test invoice INV-2026-6771 total to USD 30 with zero tax. Keep its existing USD 40 payment.'),
+  {invoiceNumber:'INV-2026-6771',currency:'USD',totalAmount:30,zeroTax:true,retainedPayment:40});
+ for(const message of [
+  'Could you change invoice INV-1 total to USD 30?', 'Do not change invoice INV-1 total to USD 30.',
+  '"Change invoice INV-1 total to USD 30"', 'Change invoice INV-1 total to USD 30 if approved.',
+  'Change invoice INV-1 total to USD 30 or USD 40.', 'Change invoice INV-1 total to USD 30 and invoice INV-2 to USD 20.',
+  'Change invoice INV-1 total to USD 30 and refund USD 10.', 'Change invoice INV-1 total to USD 30. Record a USD 40 payment.',
+  'Change invoice INV-1 total to USD 30 with zero tax. Keep its existing EUR 40 payment.',
+  'Change invoice INV-1 total to USD 30.001.', 'Change invoice INV-1 total to USD 3,00.',
+  'Change invoice INV-1 total to USD 30 and clear all line items.', 'Previously change invoice INV-1 total to USD 30.',
+ ])assert.equal(requestedOwnerInvoiceTotalChange(message),null,message);
 });
 test('quoted, negative, hypothetical, ambiguous and imprecise text cannot ground monetary constraints',()=>{
  for(const message of [

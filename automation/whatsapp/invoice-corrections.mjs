@@ -26,7 +26,9 @@ export function requestedInvoiceDateChange(message){
 // neither authorize ledger currency changes nor synthesize financial writes.
 export function requestedInvoiceMoneyChange(message){
   const requests=[],ambiguous=()=>({ambiguous:true});
-  for(const clause of String(message||'').split(/(?:[;!?\n]|\.(?=\s|$))+/)){
+  for(const original of String(message||'').split(/(?:[;!?\n]|\.(?=\s|$))+/)){
+    // Prefix zero-tax wording assigns zero to tax, not a second total value.
+    const clause=original.replace(/\b(?:with|and)\s+(?:zero|no|0(?:\.00)?)\s+(tax|discount)\b/gi,'and $1 to zero');
     if(!/^\s*(?:please\s+)?(?:set|change|update)\b/i.test(clause)||/["'“”]/.test(clause)
       ||/\b(?:not|never|avoid|if|unless|maybe|previously|earlier)\b/i.test(clause))continue;
     const labels=[...clause.matchAll(/\b(subtotal|total(?:_amount)?|tax|discount)\b/gi)].filter(label=>{
@@ -68,6 +70,47 @@ export function requestedInvoiceMoneyChange(message){
     }
   }
   return {currency,values};
+}
+
+// Only a complete current instruction selects this model-independent route.
+// Questions, quoted text, extra edits and alternative amounts remain unselected.
+export function requestedOwnerInvoiceTotalChange(message){
+  const match=/^\s*(?:please\s+)?(?:change|update|set)\s+(?:the\s+)?(?:test\s+)?invoice\s+(?<invoiceNumber>[A-Z0-9][A-Z0-9_./-]{0,99})\s+total(?:_amount)?\s+to\s+(?<currency>[A-Z]{3})\s+(?<amount>\d[\d,]*(?:\.\d+)?)\s*(?<taxClause>(?:(?:with|and)\s+(?:zero|no|0(?:\.00)?)\s+tax|and\s+tax\s+(?:to\s+)?(?:zero|0(?:\.00)?)))?[.!]?(?:\s+keep\s+(?:its|the)\s+(?:existing\s+(?<paidCurrency>[A-Z]{3})\s+(?<paidAmount>\d[\d,]*(?:\.\d+)?)\s+payment|payment\s+history)[.!]?)?\s*$/i.exec(String(message||''));
+  if(!match)return null;
+  const {invoiceNumber,currency,amount,taxClause,paidCurrency,paidAmount}=match.groups;
+  const iso=currency.toUpperCase();if(!isSupportedCurrency(iso)||paidCurrency&&paidCurrency.toUpperCase()!==iso)return null;
+  try{
+    if(!/^(?:\d{1,12}|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?$/.test(amount)
+      ||paidAmount&&!/^(?:\d{1,12}|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?$/.test(paidAmount))return null;
+    return {invoiceNumber,currency:iso,totalAmount:money(amount.replaceAll(',','')).value,zeroTax:Boolean(taxClause),
+      retainedPayment:paidAmount===undefined?null:money(paidAmount.replaceAll(',','')).value};
+  }catch{return null;}
+}
+
+export function invoiceTotalCorrectionValues(intent,row){
+  const fail=message=>({ok:false,message:message+' No change was made.'});
+  if(row.currency!==intent.currency)return fail('Use the invoice\'s current currency for a total correction.');
+  try{
+    const total=money(intent.totalAmount),paid=money(row.amount_paid);
+    if(total.minor<=0n)return fail('The corrected total must be positive.');
+    if(intent.retainedPayment!==null&&money(intent.retainedPayment).minor!==paid.minor)
+      return fail('The recorded paid amount differs from the payment amount in your request. Check the current payment history before editing.');
+    const tax=money(intent.zeroTax?0:row.tax??0),discount=money(row.discount??0),subtotal=total.minor+discount.minor-tax.minor;
+    if(subtotal<0n||subtotal>BigInt(Number.MAX_SAFE_INTEGER))return fail('Provide the corrected subtotal, tax and discount together.');
+    const values={total_amount:total.value,currency:row.currency,subtotal:Number(subtotal)/100,...(intent.zeroTax?{tax:0}:{})};
+    if(!Array.isArray(row.line_items))return fail('The current invoice itemization could not be verified.');
+    const sum=row.line_items.reduce((amount,item)=>amount+money(item.amount).minor,0n);
+    if(row.line_items.length&&sum!==subtotal){
+      const item=row.line_items[0];
+      // A sole quantity-one line has one unambiguous corrected service price.
+      // Never distribute a total across multiple items or erase itemization.
+      if(row.line_items.length!==1||item.quantity!==1
+        ||item.unitPrice!==undefined&&item.unitPrice!==null&&money(item.unitPrice).minor!==money(item.amount).minor)
+        return fail('Send the corrected line item amounts so they add up to the new subtotal.');
+      values.line_items=[{...item,amount:values.subtotal,...(item.unitPrice!==undefined&&item.unitPrice!==null?{unitPrice:values.subtotal}:{})}];
+    }
+    return {ok:true,values:validateInvoiceCorrection(values)};
+  }catch{return fail('The current invoice amounts could not be verified.');}
 }
 function money(value){
   if(!['string','number'].includes(typeof value)||!/^\d{1,12}(?:\.\d{1,2})?$/.test(String(value)))return invalid();

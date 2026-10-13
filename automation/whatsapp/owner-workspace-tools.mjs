@@ -85,6 +85,7 @@ export function createOwnerWorkspaceTools(options = {}) {
     // Server-selected amount proposals still use this adapter's full scope,
     // capability and pending-action checks, followed by a later confirmation.
     supportsBoundedPaymentProposal:true,
+    supportsBoundedInvoiceTotalCorrection:true,
     supportsAttachmentDuplicateLookup:true,
     supportsInvoiceReadAnalysis:true,
     definitions:[{type:'function',function:{name:'getAIProviderConfiguration',description:'Read this turn\'s actual primary, fallback and serving model configuration.',parameters:{type:'object',properties:{},additionalProperties:false}}},tool.definition],
