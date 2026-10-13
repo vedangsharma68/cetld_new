@@ -9,7 +9,7 @@ import {authorizeOwnerPhone,isVerifiedOwnerBinding} from './owner-binding.mjs';
 import {createWhatsAppInvoiceStore} from './invoice-store.mjs';
 import {createWhatsAppPendingActionStore} from './pending-actions.mjs';
 import {createOwnerSettingsStore} from './owner-settings.mjs';
-import {runOwnerAgent, ownerAgentFailureReply} from './owner-agent.mjs';
+import {runOwnerAgent, ownerAgentFailureReply,ownerIsConfirmation} from './owner-agent.mjs';
 import {createOwnerWorkspaceTools} from './owner-workspace-tools.mjs';
 import {createOwnerReplyStore} from './owner-reply-store.mjs';
 import {createProviderHealthStore} from '../../ai/provider-health.mjs';
@@ -252,6 +252,20 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     let initialToolResults=[];
     const recovered=await tools.lookupCompleted?.();
     if(recovered?.ok&&recovered.completed)initialToolResults=[{name:'workspaceData',args:{operation:'verifiedReceipt'},result:recovered}];
+    if(!recovered?.completed&&!scope.interactionId&&!media&&!mediaError&&!scope.checkpoint
+      &&ownerIsConfirmation(message)&&pendingStoreAvailable&&lifecycleAvailable
+      &&!pendingBlocksOwnerNextActions(pendingAtStart)&&!lifecyclePending?.pending
+      &&tools.definitions?.some(item=>item?.function?.name==='workspaceData')){
+      // A bare decision cannot revive a canceled proposal from chat history.
+      // The existing scoped pending read also recovers legacy confirmation
+      // receipts; a failed or uncertain read must not claim an empty state.
+      const state=await tools.execute('workspaceData',{operation:'pending'},{signal});
+      if(!await authorizeTurn(scope))return '';
+      if(state?.readOnly===true&&state.ok!==false&&state.pending===false&&!state.completed&&!state.saved&&!state.code)
+        return {answer:'There is no pending action to confirm. Nothing was changed.',
+          agentDiagnostics:{rounds:0,toolRounds:0,cacheHits:0,safetyRejects:[]}};
+      initialToolResults=[{name:'workspaceData',args:{operation:'pending'},result:state?.completed&&state.ok!==false&&!state.code?{...state,ok:true}:state}];
+    }
     if(menuEditTarget){
       // A committed update changes the menu version. Recover its immutable
       // message receipt before treating that old prompt as a fresh stale edit.
