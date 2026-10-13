@@ -22,6 +22,7 @@ import {invoiceReviewUnpaidResolution} from './invoice-review-payment-resolution
 import {isSupportedCurrency} from '../../currency-contract.mjs';
 
 const YES = /^\s*(?:yes|y|ok|okay|confirm|confirmed|do it|go ahead|proceed|approve)\s*[.!]?\s*$/i;
+export const ownerIsConfirmation=message=>YES.test(String(message||''));
 const CANCEL = /^\s*(?:no|cancel|never mind|nevermind|discard)\s*[.!]?\s*$/i;
 const DELETE_CONFIRM = /^\s*DELETE\s+([A-Za-z0-9][A-Za-z0-9 _./-]{0,99})\s*$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -458,7 +459,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     return {invoice:found.invoices[0]};
   };
   const expiry = () => new Date(clock().getTime() + 10 * 60_000).toISOString();
-  const canConfirm = () => YES.test(message);
+  const canConfirm = () => ownerIsConfirmation(message);
   const canCancel = () => CANCEL.test(message);
   const setDeletionReplyRequirement = action => {
     replyRequirement={confirmationText:action.requiresExactConfirmation?`DELETE ${action.invoiceNumber}`:'yes',requiresCancel:true,requiresReplyCue:true,
@@ -1012,6 +1013,20 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
           currency:lifecyclePending.currency,status:lifecyclePending.status,expiresAt:lifecyclePending.expiresAt,
           requiresExactConfirmation:lifecyclePending.requiresExactConfirmation===true};
         if(!actionableAction(local)&&canConfirm()){
+          // A confirmation can commit before its outgoing reply is saved.
+          // Read back that exact message's payment receipt before declaring
+          // the consumed proposal empty; never replay the confirmation RPC.
+          await active();
+          const receipt=await supabase.from('whatsapp_owner_action_receipts').select('result')
+            .eq('workspace_id',scope.workspaceId).eq('owner_id',scope.ownerId).eq('phone',scope.phone).eq('provider_message_id',messageId).maybeSingle();
+          await active();
+          if(receipt.error)return {ok:false,code:'DATABASE_UNAVAILABLE',message:SAFE_ERRORS.DATABASE_UNAVAILABLE};
+          if(receipt.data?.result?.paymentId){
+            const verified=await verifyOwnerPaymentReceipt({supabase,scope,messageId});
+            await active();
+            return verified?{...verified,pending:false,replayed:true}:
+              {ok:false,code:'WRITE_UNCONFIRMED',message:'The payment receipt could not be verified. Check the ledger before retrying.'};
+          }
           const completed=await lookupCreateSettingsReceipt();
           if(completed.ok)return {pending:false,completed:true,action:completed.action,
             ...Object.fromEntries(['invoiceNumber','customerName','total','currency','dueDate','businessName','changed','replayed']

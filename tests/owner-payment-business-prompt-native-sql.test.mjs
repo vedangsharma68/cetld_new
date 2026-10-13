@@ -172,12 +172,34 @@ test('event278 exact bookkeeping request proposes through native SQL; cancel and
   assert.equal(run.calls(),0,JSON.stringify({proposed,outputs:run.outputs}));assert.match(proposed.answer,/Proposed a USD 40\.00/);assert.match(proposed.answer,/USD 60\.00/);assert.doesNotMatch(proposed.answer,/external|connected ledger|Recorded/i);
   assert.deepEqual(run.executions[0].args.filters,[{column:'invoice_number',operator:'eq',value:'INV-2026-6771'}]);assert.deepEqual(await f.snapshot(),before);
   const canceled=await turn('event278-cancel','cancel');assert.match(canceled.answer,/cancel/i);assert.deepEqual(await f.snapshot(),before);
-  run.confirm();const stale=await turn('event278-stale-yes','yes');assert.doesNotMatch(stale.answer,/Recorded/);assert.deepEqual(await f.snapshot(),before);
+  run.confirm();const staleCalls=run.calls(),stale=await turn('event278-stale-yes','yes');
+  assert.match(stale.answer,/no pending action to confirm/i);assert.doesNotMatch(stale.answer,/could not confirm|could not prepare|Recorded/i);
+  assert.equal(run.calls(),staleCalls,'a verified empty confirmation must not reach the model');assert.deepEqual(await f.snapshot(),before);
   const fresh=await turn('event278-fresh-propose',bookkeepingPrompt);assert.match(fresh.answer,/Proposed a USD 40\.00/);assert.deepEqual(await f.snapshot(),before);
   const saved=await turn('event278-fresh-yes','yes');assert.match(saved.answer,/Recorded USD 40/);assert.match(saved.answer,/USD 60/);
   const after=await f.snapshot(),invoice=after.invoices.find(x=>x.id===f.ids[0]);assert.equal(invoice.total_amount,100);assert.equal(invoice.amount_paid,40);assert.equal(invoice.currency,'USD');assert.equal(invoice.metadata.followup_state,'paused');assert.equal(invoice.metadata.next_follow_up_at,null);
   assert.equal(after.payments.length,1);assert.equal(after.payments[0].amount,40);assert.equal(after.payments[0].settle_remaining,false);assert.deepEqual(after.files,before.files);assert.deepEqual(after.invoices.find(x=>x.id===f.ids[1]),before.invoices.find(x=>x.id===f.ids[1]));assert.equal(after.outbound,0);
   assert.equal((await run.handler({...f.scope,messageId:'event278-fresh-yes',message:'yes'})).replayed,true);assert.deepEqual(await f.snapshot(),after);assert.deepEqual(f.errors,[]);
+  await f.db.query('delete from whatsapp_messages where workspace_id=$1 and idempotency_key=$2',[f.scope.workspaceId,'reply:event278-fresh-yes']);
+  const recovered=await run.handler({...f.scope,messageId:'event278-fresh-yes',message:'yes'});
+  assert.match(recovered.answer,/Recorded USD 40/);assert.equal(run.outputs.at(-1).completed,true);
+  assert.deepEqual(await f.snapshot(),after,'lost reply recovers the exact receipt without another payment');assert.deepEqual(f.errors,[]);
+ }finally{await f.close();}
+});
+test('event301 exact canceled legacy payment confirmation returns a scoped no-pending reply without a model',async()=>{
+ const f=await fixture();try{
+  await disposableInvoice(f);const before=await f.snapshot(),run=nativeHandler(f);
+  const turn=async(id,message)=>{await f.inbound(id,message);return run.handler({...f.scope,messageId:id,message});};
+  assert.match((await turn('event299-legacy-proposal','Record a USD 40 payment on test invoice INV-2026-6771.')).answer,/Proposed a USD 40\.00/);
+  assert.match((await turn('event300-legacy-cancel','cancel')).answer,/Canceled the payment proposal/i);
+  run.confirm();const calls=run.calls(),executions=run.executions.length;
+  const stale=await turn('event301-stale-yes','yes');
+  assert.equal(stale.answer,'There is no pending action to confirm. Nothing was changed.');
+  assert.equal(stale.plannerFailure,undefined);assert.equal(run.calls(),calls);
+  assert.deepEqual(run.executions.slice(executions).map(x=>x.args.operation),['pending']);
+  assert.deepEqual(await f.snapshot(),before);
+  assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions where workspace_id=$1 and consumed_at is null',[f.scope.workspaceId])).rows[0].n,0);
+  assert.equal((await run.handler({...f.scope,messageId:'event301-stale-yes',message:'yes'})).replayed,true);assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });
 for(const fault of ['missing-feature','external-ledger','wrong-remainder'])test(`event278 ${fault} gives grounded refusal without planner fallback or writes`,async()=>{
