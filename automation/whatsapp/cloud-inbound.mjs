@@ -19,6 +19,14 @@ const DEFAULT_PROCESS_BUDGET_MS = 240_000;
 const MIN_EVENT_BUDGET_MS = 5_000;
 const SAFE_FALLBACK_REPLY = "Something broke on my side while handling that message, so I did not process it. Please send it again. If it keeps failing, tell Vedang.";
 const MEDIA_FETCH_FAILED_REPLY = "I couldn't fetch that photo. Please resend it and I'll try again.";
+const EMPTY_CONTENT_REPLY = "I couldn't read that message. Please resend it as plain text, a photo, or a PDF. No business changes were made.";
+function hasEmptyIncomingContent(event) {
+  const interactionId = event.interaction_id ?? event.interactionId;
+  return !String(event.message_text || '').trim()
+    && !(['image','document'].includes(event.message_type) && (event.media_ref || event.media_error))
+    && !(event.message_type === 'interactive' && typeof interactionId === 'string'
+      && interactionId.trim() && Buffer.byteLength(interactionId, 'utf8') <= MAX_INTERACTION_ID_LENGTH);
+}
 const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
 const E164 = /^\+[1-9]\d{6,14}$/;
 const refusal = /^(?:stop(?: messaging me)?|unsubscribe|opt[ -]?out|cancel(?: whatsapp)?|remove me|no more (?:messages|texts|whatsapp(?: updates)?)|(?:do not|don't) (?:message|text|contact) me|(?:do not|don't) send me (?:messages|texts|whatsapp updates)|please (?:stop(?: messaging me| sending me (?:messages|texts|whatsapp updates))?|remove me|(?:do not|don't) (?:message|text|contact) me)|i (?:do not|don't|no longer) (?:consent|agree|want (?:these |whatsapp )?(?:messages|updates)))\b[.!\s]*$/i;
@@ -224,6 +232,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       return {verifiedOwner:false,bindingUnavailable:true};
     }
     if(!binding)return {verifiedOwner:false};
+    if(hasEmptyIncomingContent(event))return {verifiedOwner:true,binding,reply:EMPTY_CONTENT_REPLY};
     if(!ownerHandler)ownerHandler=createOwnerMessageHandler({supabase,env,fetchImpl});
     if(typeof ownerHandler.createSafeFailureReply!=='function')return {verifiedOwner:true,binding,reply:null};
     const reply=await ownerHandler.createSafeFailureReply({workspaceId:binding.workspaceId,
@@ -393,6 +402,18 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       audience:owner?'owner':'customer',direction:'inbound',body:event.message_text||`[${event.message_type} attachment]`,
       kind:event.message_type,status:'received',providerMessageId:event.provider_message_id,key:`inbound:${event.provider_message_id}`,
       createdAt:event.provider_timestamp||event.received_at});
+    // An unreadable turn cannot authorize work or revive intent from history.
+    // Keep sender authorization and transport bookkeeping, but exit before
+    // customer follow-up writes, pending-action handling, or model routing.
+    if(hasEmptyIncomingContent(event)){
+      const sender=await getOutbound();
+      const sent=await sender.sendServiceReply({workspaceId:binding.workspaceId,to:event.sender_phone,
+        body:EMPTY_CONTENT_REPLY,lastInboundAt:event.provider_timestamp||event.received_at,
+        kind:'normal',audience:owner?'owner':'customer',messageId:event.provider_message_id,
+        businessName:await businessName(binding.workspaceId)});
+      if(owner&&sent?.status!=='accepted')throw Object.assign(new Error('Owner reply was not accepted for delivery.'),{code:'OWNER_REPLY_NOT_ACCEPTED'});
+      return 'bound';
+    }
     if(!owner)dataOrThrow(await supabase.rpc('whatsapp_pause_customer_followups',{
       p_workspace_id:binding.workspaceId,p_customer_id:binding.customerId,p_message_id:event.provider_message_id}),'pause customer follow-ups');
     const handle=owner?runOwnerMessage:onBoundMessage;
