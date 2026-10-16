@@ -1,6 +1,6 @@
 import {APIError} from '../../ai/http.mjs';
 import {getSendEligibility} from './consent.mjs';
-import {selectReminderTemplate,buildReminderTemplate,APPROVED_REMINDER_WABA} from './reminder-templates.mjs';
+import {selectReminderTemplate,buildReminderTemplate,APPROVED_REMINDER_WABA,matchesApprovedReminderTemplate} from './reminder-templates.mjs';
 import {readApprovedReminderTemplates} from './template-diagnostic.mjs';
 import {createConversationStore,conversationCallbackToken} from './conversation-store.mjs';
 import {readBounded} from '../../ai/http.mjs';
@@ -22,13 +22,12 @@ export async function approvedReminderProof({workspaceId,ownerId,env,supabase,fe
   let rendered;try{rendered=buildReminderTemplate(entry,parameters);}catch{throw new APIError(409,'TEST_FACTS_REQUIRED');}
   const metadata=await readApprovedReminderTemplates({env,fetchImpl});
   const actual=metadata.templates.find(t=>t.name===entry.name&&t.language==='en');
-  const bodies=actual?.components?.filter(c=>c.type==='BODY')||[];
-  if(!actual?.found||actual.status!=='APPROVED'||actual.category!=='UTILITY'||bodies.length!==1||bodies[0].text!==entry.body
-    ||actual.components.some(c=>c.type==='HEADER'||c.type==='BUTTONS'))throw new APIError(409,'APPROVED_TEST_TEMPLATE_MISMATCH');
+  if(!matchesApprovedReminderTemplate(actual,entry))throw new APIError(409,'APPROVED_TEST_TEMPLATE_MISMATCH');
   const intent={workspaceId,customerId:eligibility.customer.id,invoiceId:null,phone:REMINDER_PROOF_PHONE,
     direction:'outbound',audience:'customer',body:rendered.body,kind:'invoice_update',status:'pending',key:reminderProofKey};
   if(!send)return {test:true,synthetic:true,recipient:REMINDER_PROOF_PHONE,templateName:entry.name,language:'en',
-    parameters,text:rendered.body,providerTemplateId:actual.id,migrationRequired:true,idempotencyKey:reminderProofKey};
+    parameters,text:rendered.body,footer:actual.components.find(c=>c.type==='FOOTER')?.text||null,
+    providerTemplateId:actual.id,migrationRequired:true,idempotencyKey:reminderProofKey};
   const callbackToken=conversationCallbackToken(workspaceId,reminderProofKey);
   const claim=await supabase.rpc('cetld_core_claim_reminder_proof',{
     p_owner_id:ownerId,p_workspace_id:workspaceId,p_customer_id:eligibility.customer.id,

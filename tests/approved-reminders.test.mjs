@@ -94,12 +94,13 @@ test('single synthetic own-number proof verifies live-shaped metadata, reserves 
       if(options.method==='GET'&&url.origin==='https://graph.facebook.com'){
         if(url.pathname.endsWith('/phone_numbers'))return Response.json({data:[{id:env.WHATSAPP_PHONE_NUMBER_ID,display_phone_number:'+917303338959'}]});
         const name=url.searchParams.get('name'),entry=REMINDER_TEMPLATES.find(t=>t.name===name);
-        return Response.json({data:[{id:'123456789012345',name,language:'en',status:'APPROVED',category:'UTILITY',components:[{type:'BODY',text:entry.body}]}]});
+        return Response.json({data:[{id:'123456789012345',name,language:'en',status:'APPROVED',category:'UTILITY',parameter_format:'POSITIONAL',components:[{type:'BODY',text:entry.body},{type:'FOOTER',text:'Reply STOP to opt out'}]}]});
       }
       return f.fetchImpl(input,options);
     };
     const options={workspaceId:f.scope.workspaceId,ownerId:f.scope.ownerId,env:f.configured,supabase:f.supabase,fetchImpl};
     const preview=await approvedReminderProof(options);assert.equal(preview.synthetic,true);assert.equal(preview.recipient,phone);assert.ok(preview.text.includes('CETLD-TEST-20261005'));
+    assert.equal(preview.footer,'Reply STOP to opt out');
     assert.equal(f.graph.length,0);
     const sent=await approvedReminderProof({...options,send:true});assert.equal(sent.status,'accepted');assert.equal(f.graph.length,1);
     const repeat=await approvedReminderProof({...options,send:true});assert.equal(repeat.status,'blocked');assert.equal(f.graph.length,1);

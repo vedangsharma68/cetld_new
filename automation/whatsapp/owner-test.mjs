@@ -3,7 +3,7 @@ import {APIError} from '../../ai/http.mjs';
 import {resolveOwnerBinding} from './owner-binding.mjs';
 import {getSendEligibility} from './consent.mjs';
 import {readApprovedReminderTemplates} from './template-diagnostic.mjs';
-import {APPROVED_REMINDER_WABA,selectReminderTemplate,buildReminderTemplate} from './reminder-templates.mjs';
+import {APPROVED_REMINDER_WABA,selectReminderTemplate,buildReminderTemplate,matchesApprovedReminderTemplate} from './reminder-templates.mjs';
 
 // One explicitly authorized fixture, never an arbitrary customer/recipient send.
 export const OWNER_TEST_SCOPE=Object.freeze({workspaceId:'9a83b58d-6b02-4b17-8de5-c67136f26434',
@@ -40,8 +40,7 @@ export async function readOwnerTestReview({supabase,env,workspaceId,ownerId,invo
   const rendered=buildReminderTemplate(entry,[binding.businessName,`TEST ONLY - ${invoice.invoice_number}`,'owner test only']);
   const metadata=await readApprovedReminderTemplates({env,fetchImpl});
   const actual=metadata.templates.find(t=>t.name===entry.name&&t.language==='en');
-  if(!actual?.found||actual.status!=='APPROVED'||actual.category!=='UTILITY'
-    ||actual.components?.length!==1||actual.components[0].type!=='BODY'||actual.components[0].text!==entry.body)
+  if(!matchesApprovedReminderTemplate(actual,entry))
     throw new APIError(409,'APPROVED_TEST_TEMPLATE_MISMATCH');
   // Metadata reads can take time. Recheck consent/suppression and the verified
   // owner after them, including on the final check immediately before POST.
@@ -58,7 +57,8 @@ export async function readOwnerTestReview({supabase,env,workspaceId,ownerId,invo
     throw new APIError(409,'OWNER_TEST_INVOICE_REQUIRED');
   return {workspaceId,ownerId,invoiceId,recipient:scope.phone,businessName:binding.businessName,
     customerId:binding.customerId,invoiceUpdatedAt:invoice.updated_at,providerTemplateId:actual.id,
-    idempotencyKey:ownerTestKey,text:rendered.body,template:rendered.template};
+    idempotencyKey:ownerTestKey,text:rendered.body,template:rendered.template,
+    footer:actual.components.find(c=>c.type==='FOOTER')?.text||null};
 }
 
 // Conditional UPDATE is an atomic claim on the existing uniquely keyed message.
