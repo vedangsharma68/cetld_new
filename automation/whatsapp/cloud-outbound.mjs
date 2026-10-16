@@ -3,6 +3,7 @@ import {createConversationStore,conversationCallbackToken} from './conversation-
 import {getSendEligibility} from './consent.mjs';
 import {normalizeOwnerActionButtons} from './owner-action-buttons.mjs';
 import {ownerButtonClaimIssue} from './owner-grounding.mjs';
+import {readOwnerTestReview,claimOwnerTest} from './owner-test.mjs';
 import {OWNER_ACTION_CHOICES_UNAVAILABLE_REPLY,normalizeOwnerActionRef} from './owner-reply-store.mjs';
 
 const APPROVED_QA_RECIPIENTS = new Set(['+919871367051', '+919818685252']);
@@ -398,6 +399,27 @@ export function createWhatsAppOutbound({
     return postMessage({workspaceId,to,kind,key,payload});
   }
 
-  // Intentionally no sendReminder method. Collection content remains on hold.
-  return Object.freeze({sendInvoiceUpdateTemplate, sendServiceReply, sendServiceMedia, sendTypingIndicator});
+  async function sendOwnerTestTemplate({review}={}) {
+    const {workspaceId,ownerId,invoiceId,recipient:to,idempotencyKey:key}=review||{};
+    const kind='invoice_update';
+    const blocked=preflight({workspaceId,to,kind});
+    if(blocked)return blocked;
+    if(!conversationStore)return block(logger,'missing_store',{workspaceId,to,kind});
+    const read=()=>readOwnerTestReview({supabase,env,fetchImpl,workspaceId,ownerId,invoiceId});
+    const current=await read();
+    if(JSON.stringify(current)!==JSON.stringify(review))return block(logger,'owner_test_review_changed',{workspaceId,to,kind});
+    const payload=await prepareMessage({workspaceId,to,key,kind,audience:'owner',invoiceId,
+      customerId:current.customerId,payload:{type:'template',template:current.template}});
+    if(!await claimOwnerTest({supabase,workspaceId,key}))return block(logger,'duplicate_owner_test',{workspaceId,to,kind});
+    try {
+      if(JSON.stringify(await read())!==JSON.stringify(review))
+        return denyPrepared({workspaceId,to,key,kind,reason:'owner_test_review_changed',claimed:true});
+    }catch{
+      return denyPrepared({workspaceId,to,key,kind,reason:'owner_test_authorization_changed',claimed:true});
+    }
+    return postMessage({workspaceId,to,key,kind,payload});
+  }
+
+  // Intentionally no scheduler or arbitrary reminder send method.
+  return Object.freeze({sendInvoiceUpdateTemplate, sendOwnerTestTemplate, sendServiceReply, sendServiceMedia, sendTypingIndicator});
 }
