@@ -51,7 +51,10 @@ for(const change of ['demo','foreign-user','foreign-workspace','foreign-owner','
 
 for(const patch of [{recipient:'+919818685252'},{workspaceId:'other'},{audience:'customer'},{test:false},{template:{name:'other',language:{code:'en'}}}])
 test(`mismatched server preview cannot expose send action ${JSON.stringify(patch)}`,async()=>{
-  const f=setup({reply:{...preview,...patch}});await f.ui.review(f.control(),invoiceId);assert.equal(f.snapshots.length,1);assert.equal(f.errors.length,1);
+  const f=setup({reply:{...preview,...patch}});await f.ui.review(f.control(),invoiceId);
+  assert.match(f.snapshots.at(-1).body,/Preview unavailable/);
+  assert.ok(f.snapshots.every(snapshot=>!snapshot.body.includes('data-action="owner-template-test-send"')));
+  assert.equal(f.errors.length,1);
   await assert.rejects(f.ui.send(f.control()));assert.equal(f.calls.length,1);
 });
 
@@ -63,6 +66,26 @@ for(const change of ['workspace','user','closed-dialog'])test(`late preview afte
 
 test('account switching after preview blocks send before the application request helper',async()=>{
   const f=setup();await f.ui.review(f.control(),invoiceId);f.state.workspace.id='other';await assert.rejects(f.ui.send(f.control()));assert.equal(f.calls.length,1);
+});
+
+test('rejected owner preview replaces loading with a recoverable error and never exposes send',async()=>{
+  const f=setup({request:async()=>{throw Error('APPROVED_TEST_TEMPLATE_MISMATCH');}}),control=f.control();
+  await f.ui.review(control,invoiceId);
+  const html=f.snapshots.at(-1).body;
+  assert.doesNotMatch(html,/Preparing owner test preview|aria-busy="true"/);
+  assert.match(html,/Preview unavailable/);
+  assert.match(html,/data-action="owner-template-test-review"/);
+  assert.doesNotMatch(html,/data-action="owner-template-test-send"/);
+  assert.equal(control.disabled,false);
+  assert.equal(f.errors.length,1);
+  await assert.rejects(f.ui.send(f.control()),/fresh owner test preview/);
+});
+
+test('owner review displays the approved static opt-out footer',async()=>{
+  const f=setup({reply:{...preview,footer:'Reply STOP to opt out'}});
+  await f.ui.review(f.control(),invoiceId);
+  assert.match(f.snapshots.at(-1).body,/Reply STOP to opt out/);
+  assert.equal(f.errors.length,0);
 });
 
 test('Zoho diagnostics distinguish empty and error results, escape data and contain no connect/sync controls',()=>{

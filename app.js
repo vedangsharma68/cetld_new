@@ -297,7 +297,7 @@ async function reminderProofReview(control){
     if(!current())return;
     if(preview?.test!==true||preview.synthetic!==true||preview.recipient!=='+919871367051'||preview.language!=='en'||typeof preview.text!=='string'||!preview.text.trim()||typeof preview.templateName!=='string'||!preview.templateName.trim())throw Error('The test preview could not be verified. No message was sent.');
     state.reminderProofPreview={workspaceId:pending.workspaceId,preview};
-    openDialog('One reminder test',`<div class="dialog-body"><p>This test goes only to <strong>${escape(preview.recipient)}</strong>. It uses a clearly labelled test reference.</p><blockquote>${escape(preview.text)}</blockquote><p>Template: ${escape(preview.templateName)} · English</p><p class="error hidden" data-error role="alert"></p></div><div class="dialog-foot">${button('close','Cancel','ghost')}${button('reminder-proof-send','Send one test','primary')}</div>`);
+    openDialog('One reminder test',`<div class="dialog-body"><p>This test goes only to <strong>${escape(preview.recipient)}</strong>. It uses a clearly labelled test reference.</p><blockquote>${escape(preview.text)}${preview.footer?`<br><small>${escape(preview.footer)}</small>`:''}</blockquote><p>Template: ${escape(preview.templateName)} · English</p><p class="error hidden" data-error role="alert"></p></div><div class="dialog-foot">${button('close','Cancel','ghost')}${button('reminder-proof-send','Send one test','primary')}</div>`);
   }catch(error){
     if(!current())return;
     $('#dialog .dialog-body').removeAttribute('aria-busy');$('#dialog [data-reminder-preview-status]').textContent='Preview unavailable';

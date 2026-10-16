@@ -36,9 +36,12 @@ export function createOwnerTemplateTestUI({state,request,openDialog,dialog,escap
         ||typeof preview.text!=='string'||!preview.text.includes('TEST ONLY - INV-2026-6771')||!preview.previewToken)
         throw Error('The owner test preview could not be verified. No message was sent.');
       reviewed={...context,preview};
-      openDialog('Review owner test',`<div class="dialog-body"><span class="tag">Owner test · one message</span><dl class="detail-facts"><div><dt>Actual recipient</dt><dd>${escape(preview.recipient)}</dd></div><div><dt>Sending bot</dt><dd>+917303338959</dd></div><div><dt>Synthetic invoice</dt><dd>INV-2026-6771</dd></div><div><dt>Template</dt><dd>${escape(preview.template.name)} · English</dd></div></dl><div class="detail-note"><span class="eyebrow">Exact message</span><p>${escape(preview.text)}</p></div><p>This sends one test to the verified owner. Invoice and payment records stay unchanged.</p><p class="error hidden" data-error role="alert"></p></div><div class="dialog-foot">${button('close','Cancel')}${button('owner-template-test-send','Send one owner test','primary')}</div>`);
+      openDialog('Review owner test',`<div class="dialog-body"><span class="tag">Owner test · one message</span><dl class="detail-facts"><div><dt>Actual recipient</dt><dd>${escape(preview.recipient)}</dd></div><div><dt>Sending bot</dt><dd>+917303338959</dd></div><div><dt>Synthetic invoice</dt><dd>INV-2026-6771</dd></div><div><dt>Template</dt><dd>${escape(preview.template.name)} · English</dd></div></dl><div class="detail-note"><span class="eyebrow">Exact message</span><p>${escape(preview.text)}</p>${preview.footer?`<small>${escape(preview.footer)}</small>`:''}</div><p>This sends one test to the verified owner. Invoice and payment records stay unchanged.</p><p class="error hidden" data-error role="alert"></p></div><div class="dialog-foot">${button('close','Cancel')}${button('owner-template-test-send','Send one owner test','primary')}</div>`);
     }catch(error){
-      if(visible()){dialog()?.querySelector('.dialog-body')?.removeAttribute('aria-busy');showError(dialog(),error);}
+      if(visible()){
+        openDialog('Review owner test',`<div class="dialog-body"><p role="status">Preview unavailable</p><p>No message was sent. You can try the preview again after resolving the error.</p><p class="error hidden" data-error role="alert"></p></div><div class="dialog-foot">${button('close','Cancel')}${button('owner-template-test-review','Try preview again','',invoiceId)}</div>`);
+        showError(dialog(),error);
+      }
     }finally{clearTimeout(timer);if(pending===context)pending=null;context.controller.abort();control.disabled=false;}
   }
   async function send(control){

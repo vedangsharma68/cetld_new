@@ -11,7 +11,7 @@ const env={WHATSAPP_OUTBOUND_ENABLED:'true',WHATSAPP_TEST_OPERATOR_USER_ID:scope
   WHATSAPP_TEST_ALLOWLIST:scope.phone,WHATSAPP_WABA_ID:'1734116767674237',
   WHATSAPP_ACCESS_TOKEN:'fixture-secret-token',WHATSAPP_PHONE_NUMBER_ID:'1234567890',WHATSAPP_GRAPH_API_VERSION:'v24.0'};
 const input={workspaceId:scope.workspaceId,invoiceId:scope.invoiceId,action:'owner-template-test'};
-function setup({environment={},role='owner',userId=scope.ownerId,unauthenticated=false,onClaim=()=>{},graphResult='accepted',templateStatus='APPROVED'}={}){
+function setup({environment={},role='owner',userId=scope.ownerId,unauthenticated=false,onClaim=()=>{},graphResult='accepted',templateStatus='APPROVED',footer=null}={}){
   const business={invoices:[{id:scope.invoiceId,workspace_id:scope.workspaceId,invoice_number:scope.invoiceNumber,
     customer_id:'22222222-2222-4222-8222-222222222222',status:'sent',updated_at:'2026-10-14T02:59:38.207081Z',deleted_at:null}],
     customers:[{id:customerId,workspace_id:scope.workspaceId,phone:scope.phone,name:'Fixture owner'}],
@@ -56,7 +56,7 @@ function setup({environment={},role='owner',userId=scope.ownerId,unauthenticated
       assert.equal(options.method,'GET');
       if(u.pathname.endsWith('/phone_numbers'))return Response.json({data:[{id:env.WHATSAPP_PHONE_NUMBER_ID,display_phone_number:'+917303338959'}]});
       const entry=REMINDER_TEMPLATES.find(t=>t.name===u.searchParams.get('name'));
-      return Response.json({data:[{id:'1234567',name:entry.name,language:'en',status:templateStatus,category:'UTILITY',components:[{type:'BODY',text:entry.body}]}]});
+      return Response.json({data:[{id:'1234567',name:entry.name,language:'en',status:templateStatus,category:'UTILITY',components:[{type:'BODY',text:entry.body},...(footer?[{type:'FOOTER',text:footer}]:[])]}]});
     }});
   async function run(method='GET',values=input,token){
     const res={code:null,body:null,setHeader(){},status(code){this.code=code;return this;},json(body){this.body=body;return this;}};
@@ -65,6 +65,18 @@ function setup({environment={},role='owner',userId=scope.ownerId,unauthenticated
   return {business,before,messages,writes,claims,network,run,setVerified:value=>{verified=value;},supabase};
 }
 const sends=f=>f.network.filter(row=>row.method==='POST');
+
+test('approved Meta opt-out footer is accepted and appears in the owner preview',async()=>{
+  const f=setup({footer:'Reply STOP to opt out'}),r=await f.run();
+  assert.equal(r.code,200);assert.equal(r.body.footer,'Reply STOP to opt out');
+  assert.equal(sends(f).length,0);
+});
+
+test('unreviewed Meta footer still fails closed before dispatch',async()=>{
+  const f=setup({footer:'Visit a new payment link'}),r=await f.run();
+  assert.equal(r.code,409);assert.equal(r.body.error,'APPROVED_TEST_TEMPLATE_MISMATCH');
+  assert.equal(sends(f).length,0);
+});
 
 test('owner review shows exact test wording/recipient and has no message or business writes',async()=>{
   const f=setup(),r=await f.run();assert.equal(r.code,200);
