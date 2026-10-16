@@ -7,7 +7,7 @@ import {getSendEligibility} from './consent.mjs';
 import {createWhatsAppInvoiceUpdateStore} from './invoice-update-store.mjs';
 import {readApprovedReminderTemplates} from './template-diagnostic.mjs';
 import {approvedReminderProof} from './reminder-proof.mjs';
-import {readOwnerTestReview} from './owner-test.mjs';
+import {readOwnerTestReview,readOwnerTestReceipt} from './owner-test.mjs';
 
 const APPROVED_QA_RECIPIENTS = new Set(['+919871367051', '+919818685252']);
 import {buildReminderTemplate,selectReminderTemplate} from './reminder-templates.mjs';
@@ -114,13 +114,15 @@ export function createWhatsAppInvoiceTestHandler({env = process.env, fetchImpl =
       }
       const supabase = loadSupabase(env, fetchImpl);
       if(ownerTest){
+        const receipt=await readOwnerTestReceipt({supabase,workspaceId,ownerId:user.userId,invoiceId});
+        if(receipt&&receipt.deliveryStatus!=='pending')return res.status(200).json(receipt);
         const review=await readOwnerTestReview({supabase,env,fetchImpl,workspaceId,ownerId:user.userId,invoiceId});
         if(req.method==='GET')return res.status(200).json({test:true,audience:'owner',...review,
           previewToken:previewToken(env,review)});
         verifyPreviewToken(env,req.headers?.['x-whatsapp-test-preview'],review);
         const outbound=outboundFactory({env,fetchImpl,supabase,logger});
         const result=await outbound.sendOwnerTestTemplate({review});
-        return res.status(result.status==='accepted'?200:result.status==='unknown'?202:result.status==='blocked'?409:502).json(result);
+        return res.status(['accepted','existing'].includes(result.status)?200:result.status==='unknown'?202:result.status==='blocked'?409:502).json(result);
       }
       if(reminderProof){
         const result=await approvedReminderProof({workspaceId,ownerId:user.userId,env,supabase,fetchImpl,send:req.method==='POST'});

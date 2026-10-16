@@ -65,6 +65,63 @@ function setup({environment={},role='owner',userId=scope.ownerId,unauthenticated
   return {business,before,messages,writes,claims,network,run,setVerified:value=>{verified=value;},supabase};
 }
 const sends=f=>f.network.filter(row=>row.method==='POST');
+const receipt=(status,patch={})=>({workspace_id:scope.workspaceId,idempotency_key:ownerTestKey,invoice_id:scope.invoiceId,
+  phone:scope.phone,audience:'owner',direction:'outbound',kind:'invoice_update',status,...patch});
+
+for(const status of ['accepted','sent','delivered','read','unknown','failed','blocked','unexpected'])
+test(`existing ${status} owner dispatch returns only its saved status without review, writes or transport`,async()=>{
+  const f=setup({templateStatus:'PAUSED'});
+  f.messages.push(receipt(status,{body:'Private stored body',provider_message_id:'private-provider-id'}));
+  // A revised invoice or stale/missing browser preview must not turn an old
+  // receipt into a second send or obscure the recorded delivery status.
+  f.business.invoices[0].updated_at='2026-10-16';
+  const businessBefore=structuredClone(f.business),messagesBefore=structuredClone(f.messages);
+  for(const method of ['GET','POST']){
+    const r=await f.run(method,input,'stale-preview');
+    assert.equal(r.code,200);assert.equal(r.body.status,'existing');
+    assert.equal(r.body.deliveryStatus,status==='unexpected'?'unknown':status);
+    assert.equal(r.body.invoiceId,scope.invoiceId);assert.equal(r.body.recipient,scope.phone);
+    assert.ok(!JSON.stringify(r.body).includes('Private stored body'));
+    assert.ok(!JSON.stringify(r.body).includes('private-provider-id'));
+    assert.ok(!Object.hasOwn(r.body,'previewToken'));
+  }
+  assert.equal(f.network.length,0);assert.deepEqual(f.writes,[]);assert.deepEqual(f.messages,messagesBefore);
+  assert.deepEqual(f.business,businessBefore);
+});
+
+for(const patch of [{workspace_id:'other'},{idempotency_key:'other'},{invoice_id:'other'},{phone:'+919818685252'},
+  {audience:'customer'},{direction:'inbound'},{kind:'normal'}])
+test(`existing receipt read excludes mismatched scope ${Object.keys(patch)}`,async()=>{
+  const f=setup();f.messages.push(receipt('delivered',patch));
+  const r=await f.run();assert.equal(r.code,200);assert.ok(r.body.previewToken);
+  assert.ok(!r.body.deliveryStatus);assert.equal(sends(f).length,0);assert.deepEqual(f.writes,[]);
+});
+
+test('an unclaimed pending intent still requires the original reviewed dispatch and cannot report delivery',async()=>{
+  const f=setup();f.messages.push(receipt('pending'));
+  const r=await f.run();assert.equal(r.code,200);assert.ok(r.body.previewToken);assert.ok(!r.body.deliveryStatus);
+  assert.equal((await f.run('POST',input,'invalid')).code,409);assert.equal(sends(f).length,0);
+});
+
+for(const options of [{unauthenticated:true},{role:'member'},{role:'admin'},{userId:'33333333-3333-4333-8333-333333333333'}])
+test(`saved delivery cannot bypass owner/operator authorization ${JSON.stringify(options)}`,async()=>{
+  const f=setup(options);f.messages.push(receipt('delivered'));
+  for(const method of ['GET','POST']){
+    const r=await f.run(method);assert.ok(r.code>=400);assert.ok(!r.body.deliveryStatus);
+  }
+  assert.equal(f.network.length,0);assert.deepEqual(f.writes,[]);
+});
+
+test('receipt read failure fails closed without transport, mutations or raw database errors',async()=>{
+  const f=setup(),original=f.supabase.from;
+  f.supabase.from=table=>{
+    if(table!=='whatsapp_messages')return original(table);
+    const q={select(){return q;},eq(){return q;},async maybeSingle(){return {error:Error('private fixture database detail')};}};
+    return q;
+  };
+  const r=await f.run('POST');assert.equal(r.code,503);assert.deepEqual(r.body,{error:'WHATSAPP_UNAVAILABLE'});
+  assert.equal(f.network.length,0);assert.deepEqual(f.writes,[]);assert.deepEqual(f.business,f.before);
+});
 
 test('approved Meta opt-out footer is accepted and appears in the owner preview',async()=>{
   const f=setup({footer:'Reply STOP to opt out'}),r=await f.run();
@@ -133,7 +190,9 @@ for(const graphResult of ['accepted','failed','unknown'])test(`one durable owner
   assert.equal(sent.template.name,'cetld_invoice_update_v2');assert.equal(sent.biz_opaque_callback_data.length,64);
   assert.ok(!ownerTestKey.includes('approved-template-proof'));assert.ok(!f.messages[0].idempotency_key.startsWith('reply:'));
   f.business.invoices[0].updated_at='2026-10-16T00:00:00Z';const revised=await f.run();
-  assert.equal((await f.run('POST',input,revised.body.previewToken)).code,409);assert.equal(sends(f).length,1);
+  const duplicate=await f.run('POST',input,revised.body.previewToken);
+  assert.equal(duplicate.code,200);assert.equal(duplicate.body.status,'existing');assert.equal(duplicate.body.deliveryStatus,graphResult);
+  assert.equal(sends(f).length,1);
   // The only business fixture change here was our test's revision update.
   f.business.invoices[0].updated_at=f.before.invoices[0].updated_at;assert.deepEqual(f.business,f.before);
 });
@@ -164,7 +223,7 @@ test('native Postgres conditional claim survives concurrency and process restart
   try{
     const results=await Promise.all(Array.from({length:5},()=>claimOwnerTest({supabase:client(),workspaceId:scope.workspaceId,key:ownerTestKey})));
     assert.equal(results.filter(Boolean).length,1);
-    for(const status of ['unknown','failed','accepted']){
+    for(const status of ['unknown','failed','accepted','sent','delivered','read','blocked']){
       await db.query('update whatsapp_messages set status=$1',[status]);
       assert.equal(await claimOwnerTest({supabase:client(),workspaceId:scope.workspaceId,key:ownerTestKey}),false);
     }

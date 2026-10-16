@@ -13,6 +13,20 @@ export const ownerTestKey='owner-template-test:v1:'+createHash('sha256')
   .update(JSON.stringify(OWNER_TEST_SCOPE)).digest('hex');
 const unwrap=result=>{if(result?.error)throw result.error;return result?.data;};
 
+// A consumed dispatch is a receipt, never another opportunity to send. Project
+// only its status, scoped independently of caller-supplied review/token values.
+export async function readOwnerTestReceipt({supabase,workspaceId,ownerId,invoiceId}){
+  if(workspaceId!==OWNER_TEST_SCOPE.workspaceId||ownerId!==OWNER_TEST_SCOPE.ownerId||invoiceId!==OWNER_TEST_SCOPE.invoiceId)
+    throw new APIError(403,'OWNER_TEST_SCOPE_REQUIRED');
+  const row=unwrap(await supabase.from('whatsapp_messages').select('status')
+    .eq('workspace_id',workspaceId).eq('idempotency_key',ownerTestKey)
+    .eq('invoice_id',invoiceId).eq('phone',OWNER_TEST_SCOPE.phone)
+    .eq('audience','owner').eq('direction','outbound').eq('kind','invoice_update').maybeSingle());
+  if(!row)return null;
+  return {test:true,audience:'owner',workspaceId,ownerId,invoiceId,recipient:OWNER_TEST_SCOPE.phone,
+    status:'existing',deliveryStatus:['pending','unknown','accepted','sent','delivered','read','failed','blocked'].includes(row.status)?row.status:'unknown'};
+}
+
 export async function readOwnerTestReview({supabase,env,workspaceId,ownerId,invoiceId,fetchImpl}){
   const scope=OWNER_TEST_SCOPE;
   if(workspaceId!==scope.workspaceId||ownerId!==scope.ownerId||invoiceId!==scope.invoiceId)

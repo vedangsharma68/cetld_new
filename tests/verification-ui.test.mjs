@@ -35,6 +35,33 @@ test('visible send consumes one reviewed preview, remains disabled and reports a
   await assert.rejects(f.ui.send(f.control()),/fresh owner test preview/);assert.equal(f.calls.filter(c=>c.options.method==='POST').length,1);
 });
 
+for(const [deliveryStatus,label] of [['delivered','Already delivered'],['read','Already read'],['sent','Already sent'],
+  ['accepted','Already accepted by Meta'],['failed','Previous dispatch failed'],['blocked','Previous dispatch blocked'],
+  ['pending','Previous dispatch unconfirmed'],['unknown','Previous dispatch unconfirmed']])
+test(`existing ${deliveryStatus} receipt never offers or repeats a send or overstates delivery`,async()=>{
+  const existing={test:true,audience:'owner',workspaceId,ownerId:userId,invoiceId,recipient:preview.recipient,status:'existing',deliveryStatus};
+  const f=setup({reply:existing}),before=structuredClone(f.state.invoices);
+  await f.ui.review(f.control(),invoiceId);
+  const html=f.snapshots.at(-1).body;assert.ok(html.includes(label));assert.match(html,/No new message was sent/);
+  assert.doesNotMatch(html,/data-action="owner-template-test-send"|Preparing owner test preview/);
+  if(!['delivered','read'].includes(deliveryStatus))assert.doesNotMatch(html,/Already delivered|Already read/);
+  await assert.rejects(f.ui.send(f.control()),/fresh owner test preview/);
+  assert.equal(f.calls.length,1);assert.deepEqual(f.state.invoices,before);
+  const race=setup({request:async(_id,options)=>options.method==='POST'?existing:preview});
+  await race.ui.review(race.control(),invoiceId);const control=race.control();await race.ui.send(control);
+  assert.equal(control.textContent,label);assert.equal(control.disabled,true);assert.equal(control.dataset.keepDisabled,'true');
+  assert.match(race.toasts[0],/No new message was sent/);
+  await assert.rejects(race.ui.send(race.control()),/fresh owner test preview/);
+  assert.equal(race.calls.filter(c=>c.options.method==='POST').length,1);
+});
+
+test('a foreign existing receipt cannot expose its status or a send action',async()=>{
+  const f=setup({reply:{...preview,status:'existing',deliveryStatus:'delivered',recipient:'+919818685252'}});
+  await f.ui.review(f.control(),invoiceId);
+  assert.doesNotMatch(f.snapshots.at(-1).body,/Already delivered|data-action="owner-template-test-send"/);
+  assert.equal(f.errors.length,1);
+});
+
 for(const result of ['unknown','network-error'])test(`visible ${result} result never retries or reenables send`,async()=>{
   const f=setup({request:async(_id,options)=>{if(options.method!=='POST')return preview;if(result==='network-error')throw Error('Fixture network unavailable');return {status:'unknown'};}});
   await f.ui.review(f.control(),invoiceId);const control=f.control();await f.ui.send(control);

@@ -3,7 +3,7 @@ import {createConversationStore,conversationCallbackToken} from './conversation-
 import {getSendEligibility} from './consent.mjs';
 import {normalizeOwnerActionButtons} from './owner-action-buttons.mjs';
 import {ownerButtonClaimIssue} from './owner-grounding.mjs';
-import {readOwnerTestReview,claimOwnerTest} from './owner-test.mjs';
+import {readOwnerTestReview,readOwnerTestReceipt,claimOwnerTest} from './owner-test.mjs';
 import {OWNER_ACTION_CHOICES_UNAVAILABLE_REPLY,normalizeOwnerActionRef} from './owner-reply-store.mjs';
 
 const APPROVED_QA_RECIPIENTS = new Set(['+919871367051', '+919818685252']);
@@ -410,7 +410,8 @@ export function createWhatsAppOutbound({
     if(JSON.stringify(current)!==JSON.stringify(review))return block(logger,'owner_test_review_changed',{workspaceId,to,kind});
     const payload=await prepareMessage({workspaceId,to,key,kind,audience:'owner',invoiceId,
       customerId:current.customerId,payload:{type:'template',template:current.template}});
-    if(!await claimOwnerTest({supabase,workspaceId,key}))return block(logger,'duplicate_owner_test',{workspaceId,to,kind});
+    if(!await claimOwnerTest({supabase,workspaceId,key}))return await readOwnerTestReceipt({supabase,workspaceId,ownerId,invoiceId})
+      ||block(logger,'duplicate_owner_test',{workspaceId,to,kind});
     try {
       if(JSON.stringify(await read())!==JSON.stringify(review))
         return denyPrepared({workspaceId,to,key,kind,reason:'owner_test_review_changed',claimed:true});
