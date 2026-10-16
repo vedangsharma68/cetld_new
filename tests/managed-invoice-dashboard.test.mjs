@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import {isExternallyManagedInvoice} from '../invoice/business-fields.mjs';
 import {invoiceCorrectionFormView,correctionValues} from '../invoice/correction-form.mjs';
+import {createOwnerTemplateTestUI} from '../verification-ui.mjs';
 
 const invoice={id:'own-invoice',workspace_id:'own-workspace',customer_id:'own-customer',client:'John Smith',number:'QB-1',
   invoice_number:'QB-1',status:'sent',invoice_direction:'receivable',currency:'USD',total_amount:100,amount_minor:10000,paid_minor:0,
@@ -42,8 +43,9 @@ test('real incoming payment action and detail drawer deny managed invoices witho
       state:{invoices:[current]},isExternallyManagedInvoice,openDialog(){opened=true},terminalInvoice:()=>false,
     });
     assert.equal(opened,false);
+    const drawerState={invoices:[current],demo:true};
     vm.runInNewContext(detailSource+'detail("own-invoice")',{
-      state:{invoices:[current],demo:true},isExternallyManagedInvoice,terminalInvoice:()=>false,remaining:()=>10000,
+      state:drawerState,ownerTemplateTestUI:createOwnerTemplateTestUI({state:drawerState}),isExternallyManagedInvoice,terminalInvoice:()=>false,remaining:()=>10000,
       activeException:()=>null,followupStage:()=>['Draft',''],openDialog:(_,html)=>detail=html,escape:String,status:()=> 'Open',
       money:()=>'$100',tag:()=>'',day:()=>'',deliveryState:()=>'',invoiceBusinessDetails:()=>'',customFieldsView:()=>'',icon:()=>'',
       button:action=>`<button data-action="${action}">${action}</button>`,
