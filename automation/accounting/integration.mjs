@@ -126,11 +126,15 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
         lastSyncedAt: connection.lastSyncedAt || null,
         syncStatus: connection.lastSyncStatus || 'never',
         problem,
+        ...(provider==='zoho_books'?{organizationDiscovery:organizations.discovery||{
+          status:organizations.length?'available':'empty',organizationCount:organizations.length}}:{}),
       };
-    } catch {
-      const problem = `${provider === 'quickbooks' ? 'QuickBooks' : 'Zoho'} authorization needs to be renewed.`;
+    } catch (error) {
+      const discovery=provider==='zoho_books'?error?.organizationDiscovery:null;
+      const problem = discovery?.message || `${provider === 'quickbooks' ? 'QuickBooks' : 'Zoho'} authorization needs to be renewed.`;
       if (store.setConnectionStatus) await store.setConnectionStatus(context, 'needs_attention', problem).catch(() => {});
-      return { provider, status: 'needs_attention', organizationId: connection.providerAccountId || null, organizationName: connection.organizationName || null, organizations: [], lastSyncedAt: connection.lastSyncedAt || null, syncStatus: connection.lastSyncStatus || 'never', problem };
+      return { provider, status: 'needs_attention', organizationId: connection.providerAccountId || null, organizationName: connection.organizationName || null, organizations: [], lastSyncedAt: connection.lastSyncedAt || null, syncStatus: connection.lastSyncStatus || 'never', problem,
+        ...(discovery?{organizationDiscovery:discovery}:{}) };
     }
   }
 

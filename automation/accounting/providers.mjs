@@ -1,5 +1,5 @@
 import { providerFetch, jsonResponse, formBody } from './http.mjs';
-import { AccountingError } from './errors.mjs';
+import { AccountingError, AccountingProviderError } from './errors.mjs';
 
 const ZOHO_DEFAULT_ACCOUNTS = 'https://accounts.zoho.com';
 const ZOHO_DEFAULT_API = 'https://www.zohoapis.com';
@@ -196,9 +196,31 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
     },
     async fetchOrganizations({ token }) {
       const url = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/organizations`);
-      const response = await providerFetch(fetchImpl, 'zoho_books', url, { headers: { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' } });
-      const body = await jsonResponse(response, 'zoho_books');
-      return (Array.isArray(body.organizations) ? body.organizations : []).filter(item => item?.organization_id).map(item => ({ id: String(item.organization_id), name: String(item.name || item.org_name || 'Zoho Books organization') }));
+      let response;
+      try {
+        response = await providerFetch(fetchImpl, 'zoho_books', url, { headers: { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' } });
+        const body = await jsonResponse(response, 'zoho_books');
+        // Zoho also reports failures in HTTP 200 envelopes. Never turn an
+        // error/malformed response into a successful empty organization list.
+        if(body?.code!=null&&String(body.code)!=='0')
+          throw new AccountingProviderError('zoho_books',response.status,body.code);
+        if(!Array.isArray(body?.organizations))
+          throw new AccountingProviderError('zoho_books',502,'invalid_organizations_response');
+        const organizations=body.organizations.filter(item => item?.organization_id).map(item => ({ id: String(item.organization_id), name: String(item.name || item.org_name || 'Zoho Books organization') }));
+        Object.defineProperty(organizations,'discovery',{value:{status:organizations.length?'available':'empty',
+          httpStatus:response.status,providerCode:body.code==null?null:'0',organizationCount:organizations.length,
+          message:organizations.length?'Zoho organization discovery succeeded.':'Zoho returned no organizations.'}});
+        return organizations;
+      }catch(error){
+        // Only a constrained code and generated message cross the status API.
+        // Arbitrary provider messages can contain credentials, so omit them.
+        const raw=String(error?.providerCode||'');
+        const code=/^-?\d{1,8}$/.test(raw)?raw:['network_error','invalid_json','invalid_organizations_response'].includes(raw)?raw:null;
+        const safeError=new AccountingProviderError('zoho_books',error?.status||502,code||'provider_error');
+        safeError.organizationDiscovery={status:'error',httpStatus:safeError.status,providerCode:code,
+          organizationCount:null,message:code?`Zoho organization discovery failed (provider code ${code}).`:'Zoho organization discovery failed.'};
+        throw safeError;
+      }
     },
     async fetchInvoices({ token, accountId, page = 1, perPage = 200 }) {
       if (!accountId) throw new Error('Zoho Books organization ID is required');
