@@ -11,6 +11,14 @@ export function zohoDiscoveryView(value,escape){
   return `<details data-zoho-discovery><summary>Organization check</summary><p>${label}</p><dl class="detail-facts"><div><dt>Organizations</dt><dd>${count}</dd></div><div><dt>Provider code</dt><dd>${escape(value.providerCode??'Not returned')}</dd></div><div><dt>HTTP status</dt><dd>${escape(value.httpStatus??'Not returned')}</dd></div></dl></details>`;
 }
 
+export function ownerTemplateCheckView(check,escape){
+  if(!check||!check.observed||!check.expected||!Array.isArray(check.observed.components)
+    ||!Array.isArray(check.expected.components))return '';
+  const fields=[['Approval status','status'],['Category','category'],['Language','language'],['Parameter format','parameterFormat']];
+  const components=items=>`<ul>${items.slice(0,10).map(component=>`<li><strong>${escape(component.type)}</strong>${component.optional?' (optional)':''}<pre>${escape(component.text??'No text')}</pre></li>`).join('')}</ul>`;
+  return `<details data-owner-template-check open><summary>Template check</summary><dl class="detail-facts"><div><dt>Mismatch</dt><dd>${escape(check.issue)}</dd></div><div><dt>Template</dt><dd>${escape(check.templateName)}</dd></div></dl><table><thead><tr><th>Field</th><th>Expected</th><th>Observed</th></tr></thead><tbody>${fields.map(([label,key])=>`<tr><th>${label}</th><td>${escape(check.expected[key])}${key==='parameterFormat'&&check.expected.parameterFormatOptional?' (may be omitted)':''}</td><td>${escape(check.observed[key]??'Not returned')}</td></tr>`).join('')}</tbody></table><p>Expected components</p>${components(check.expected.components)}<p>Observed components</p>${components(check.observed.components)}</details>`;
+}
+
 export function createOwnerTemplateTestUI({state,request,openDialog,dialog,escape,button,toast,showError}){
   let pending=null,reviewed=null;
   const label=(control,text)=>{control.textContent=text;control.setAttribute('aria-label',text);};
@@ -24,7 +32,7 @@ export function createOwnerTemplateTestUI({state,request,openDialog,dialog,escap
     reviewed=null;
     const context={userId:state.user.id,workspaceId:state.workspace.id,invoiceId,controller:new AbortController()};
     pending=context;control.disabled=true;
-    openDialog('Review owner test',`<div class="dialog-body" aria-busy="true"><p role="status">Preparing owner test preview…</p><p class="error hidden" data-error role="alert"></p></div><div class="dialog-foot">${button('close','Cancel')}</div>`);
+    openDialog('Review owner test',`<div class="dialog-body" aria-busy="true"><p role="status" data-owner-test-preview-status>Preparing owner test preview…</p><p class="error hidden" data-error role="alert"></p></div><div class="dialog-foot">${button('close','Cancel')}</div>`);
     const head=dialog()?.querySelector('.dialog-head');
     const visible=()=>pending===context&&current(context)&&dialog()?.open&&dialog()?.querySelector('.dialog-head')===head;
     let timer;
@@ -47,7 +55,7 @@ export function createOwnerTemplateTestUI({state,request,openDialog,dialog,escap
       openDialog('Review owner test',`<div class="dialog-body"><span class="tag">Owner test · one message</span><dl class="detail-facts"><div><dt>Actual recipient</dt><dd>${escape(preview.recipient)}</dd></div><div><dt>Sending bot</dt><dd>+917303338959</dd></div><div><dt>Synthetic invoice</dt><dd>INV-2026-6771</dd></div><div><dt>Template</dt><dd>${escape(preview.template.name)} · English</dd></div></dl><div class="detail-note"><span class="eyebrow">Exact message</span><p>${escape(preview.text)}</p>${preview.footer?`<small>${escape(preview.footer)}</small>`:''}</div><p>This sends one test to the verified owner. Invoice and payment records stay unchanged.</p><p class="error hidden" data-error role="alert"></p></div><div class="dialog-foot">${button('close','Cancel')}${button('owner-template-test-send','Send one owner test','primary')}</div>`);
     }catch(error){
       if(visible()){
-        openDialog('Review owner test',`<div class="dialog-body"><p role="status">Preview unavailable</p><p>No message was sent. You can try the preview again after resolving the error.</p><p class="error hidden" data-error role="alert"></p></div><div class="dialog-foot">${button('close','Cancel')}${button('owner-template-test-review','Try preview again','',invoiceId)}</div>`);
+        openDialog('Review owner test',`<div class="dialog-body"><p role="status" data-owner-test-preview-status>Preview unavailable. No message was sent.</p><p>You can try the preview again after resolving the error.</p>${ownerTemplateCheckView(error?.templateCheck,escape)}<p class="error hidden" data-error role="alert"></p></div><div class="dialog-foot">${button('close','Cancel')}${button('owner-template-test-review','Try preview again','',invoiceId)}</div>`);
         showError(dialog(),error);
       }
     }finally{clearTimeout(timer);if(pending===context)pending=null;context.controller.abort();control.disabled=false;}

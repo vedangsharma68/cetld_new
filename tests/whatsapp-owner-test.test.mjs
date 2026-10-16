@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {PGlite} from '@electric-sql/pglite';
 import {createWhatsAppInvoiceTestHandler} from '../automation/whatsapp/test-send.mjs';
-import {OWNER_TEST_SCOPE as scope,ownerTestKey,claimOwnerTest} from '../automation/whatsapp/owner-test.mjs';
-import {REMINDER_TEMPLATES} from '../automation/whatsapp/reminder-templates.mjs';
+import {OWNER_TEST_SCOPE as scope,ownerTestKey,claimOwnerTest,ownerTestTemplateCheck} from '../automation/whatsapp/owner-test.mjs';
+import {REMINDER_TEMPLATES,APPROVED_REMINDER_FOOTER,matchesApprovedReminderTemplate} from '../automation/whatsapp/reminder-templates.mjs';
 import {APIError} from '../ai/http.mjs';
 
 const customerId='11111111-1111-4111-8111-111111111111';
@@ -11,7 +11,7 @@ const env={WHATSAPP_OUTBOUND_ENABLED:'true',WHATSAPP_TEST_OPERATOR_USER_ID:scope
   WHATSAPP_TEST_ALLOWLIST:scope.phone,WHATSAPP_WABA_ID:'1734116767674237',
   WHATSAPP_ACCESS_TOKEN:'fixture-secret-token',WHATSAPP_PHONE_NUMBER_ID:'1234567890',WHATSAPP_GRAPH_API_VERSION:'v24.0'};
 const input={workspaceId:scope.workspaceId,invoiceId:scope.invoiceId,action:'owner-template-test'};
-function setup({environment={},role='owner',userId=scope.ownerId,unauthenticated=false,onClaim=()=>{},graphResult='accepted',templateStatus='APPROVED',footer=null}={}){
+function setup({environment={},role='owner',userId=scope.ownerId,unauthenticated=false,onClaim=()=>{},graphResult='accepted',templateStatus='APPROVED',footer=null,templateOverride={}}={}){
   const business={invoices:[{id:scope.invoiceId,workspace_id:scope.workspaceId,invoice_number:scope.invoiceNumber,
     customer_id:'22222222-2222-4222-8222-222222222222',status:'sent',updated_at:'2026-10-14T02:59:38.207081Z',deleted_at:null}],
     customers:[{id:customerId,workspace_id:scope.workspaceId,phone:scope.phone,name:'Fixture owner'}],
@@ -56,7 +56,7 @@ function setup({environment={},role='owner',userId=scope.ownerId,unauthenticated
       assert.equal(options.method,'GET');
       if(u.pathname.endsWith('/phone_numbers'))return Response.json({data:[{id:env.WHATSAPP_PHONE_NUMBER_ID,display_phone_number:'+917303338959'}]});
       const entry=REMINDER_TEMPLATES.find(t=>t.name===u.searchParams.get('name'));
-      return Response.json({data:[{id:'1234567',name:entry.name,language:'en',status:templateStatus,category:'UTILITY',components:[{type:'BODY',text:entry.body},...(footer?[{type:'FOOTER',text:footer}]:[])]}]});
+      return Response.json({data:[{id:'1234567',name:entry.name,language:'en',status:templateStatus,category:'UTILITY',components:[{type:'BODY',text:entry.body},...(footer?[{type:'FOOTER',text:footer}]:[])],...templateOverride}]});
     }});
   async function run(method='GET',values=input,token){
     const res={code:null,body:null,setHeader(){},status(code){this.code=code;return this;},json(body){this.body=body;return this;}};
@@ -209,6 +209,55 @@ for(const change of ['revoke','unverify','invoice-change'])test(`post-claim ${ch
 
 test('unapproved provider template cannot be reviewed or sent',async()=>{
   const f=setup({templateStatus:'PAUSED'});assert.equal((await f.run()).code,409);assert.deepEqual(f.writes,[]);assert.equal(sends(f).length,0);
+});
+
+for(const [issue,templateOverride] of [
+  ['not_found',{language:'hi'}],
+  ['approval_status',{status:'PAUSED'}],['category',{category:'MARKETING'}],
+  ['component_count',{components:[{type:'BODY',text:REMINDER_TEMPLATES[0].body},{type:'BODY',text:REMINDER_TEMPLATES[0].body}]}],
+  ['footer_text',{components:[{type:'BODY',text:REMINDER_TEMPLATES[0].body},{type:'FOOTER',text:'Synthetic diagnostic footer'}]}],
+  ['parameter_format',{parameter_format:'NAMED'}],
+  ['component_type',{components:[{type:'HEADER',text:REMINDER_TEMPLATES[0].body}]}],
+  ['body_text',{components:[{type:'BODY',text:'An unapproved body {{1}} {{2}} {{3}}'}]}],
+])test(`template mismatch ${issue} reports sanitized current fields and cannot claim or send`,async()=>{
+  const f=setup({templateOverride}),r=await f.run();
+  assert.equal(r.code,409);assert.equal(r.body.error,'APPROVED_TEST_TEMPLATE_MISMATCH');
+  assert.equal(r.body.templateCheck.issue,issue);assert.deepEqual(r.body.templateCheck.expected,{status:'APPROVED',category:'UTILITY',language:'en',parameterFormat:'POSITIONAL',parameterFormatOptional:true,
+    components:[{type:'BODY',text:REMINDER_TEMPLATES[0].body},{type:'FOOTER',text:APPROVED_REMINDER_FOOTER,optional:true}]});
+  assert.equal(r.body.templateCheck.templateName,'cetld_invoice_update_v2');
+  if(templateOverride.components)assert.deepEqual(r.body.templateCheck.observed.components,templateOverride.components);
+  assert.equal(sends(f).length,0);assert.deepEqual(f.writes,[]);assert.deepEqual(f.claims,[]);assert.deepEqual(f.business,f.before);
+  assert.ok(!JSON.stringify(r.body).includes(env.WHATSAPP_ACCESS_TOKEN));
+});
+
+test('owner template diagnostic agrees with the approved BODY and optional FOOTER validator',async()=>{
+  const entry=REMINDER_TEMPLATES[0],body={type:'BODY',text:entry.body},footer={type:'FOOTER',text:APPROVED_REMINDER_FOOTER};
+  const actual={found:true,name:entry.name,status:'APPROVED',category:'UTILITY',language:'en',parameter_format:'POSITIONAL'};
+  for(const components of [[body],[body,footer],[footer,body]])for(const parameter_format of [undefined,'POSITIONAL']){
+    const metadata={...actual,components,parameter_format};
+    assert.equal(matchesApprovedReminderTemplate(metadata,entry),true);
+    assert.equal(ownerTestTemplateCheck(metadata,entry).issue,null);
+    const f=setup({templateOverride:{components,parameter_format}}),r=await f.run();
+    assert.equal(r.code,200);assert.equal(r.body.footer,components.includes(footer)?APPROVED_REMINDER_FOOTER:null);
+    assert.deepEqual(f.writes,[]);assert.deepEqual(f.claims,[]);assert.equal(sends(f).length,0);
+  }
+  for(const [patch,issue] of [
+    [{name:'other'},'template_name'],[{language:'hi'},'language'],[{parameter_format:'NAMED'},'parameter_format'],
+    [{components:[]},'component_count'],[{components:[footer]},'component_count'],
+    [{components:[body,footer,footer]},'component_count'],[{components:[body,{type:'HEADER',text:'Extra'}]},'component_type'],
+    [{components:[body,{...footer,text:'Changed footer'}]},'footer_text'],[{components:[{...body,text:'Changed body'},footer]},'body_text']
+  ]){
+    const metadata={...actual,components:[body,footer],...patch};
+    assert.equal(matchesApprovedReminderTemplate(metadata,entry),false);
+    assert.equal(ownerTestTemplateCheck(metadata,entry).issue,issue);
+  }
+});
+
+test('template metadata containing credential material never reaches mismatch diagnostics',async()=>{
+  const f=setup({templateOverride:{components:[{type:'BODY',text:REMINDER_TEMPLATES[0].body},{type:'FOOTER',text:env.WHATSAPP_ACCESS_TOKEN}]}});
+  const r=await f.run();assert.equal(r.code,502);assert.equal(r.body.error,'INVALID_TEMPLATE_METADATA');
+  assert.equal(r.body.templateCheck,undefined);assert.ok(!JSON.stringify(r.body).includes(env.WHATSAPP_ACCESS_TOKEN));
+  assert.deepEqual(f.writes,[]);assert.equal(sends(f).length,0);
 });
 
 test('native Postgres conditional claim survives concurrency and process restart; no failed/unknown retry',async()=>{

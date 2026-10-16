@@ -3,7 +3,7 @@ import {APIError} from '../../ai/http.mjs';
 import {resolveOwnerBinding} from './owner-binding.mjs';
 import {getSendEligibility} from './consent.mjs';
 import {readApprovedReminderTemplates} from './template-diagnostic.mjs';
-import {APPROVED_REMINDER_WABA,selectReminderTemplate,buildReminderTemplate,matchesApprovedReminderTemplate} from './reminder-templates.mjs';
+import {APPROVED_REMINDER_WABA,APPROVED_REMINDER_FOOTER,selectReminderTemplate,buildReminderTemplate,matchesApprovedReminderTemplate} from './reminder-templates.mjs';
 
 // One explicitly authorized fixture, never an arbitrary customer/recipient send.
 export const OWNER_TEST_SCOPE=Object.freeze({workspaceId:'9a83b58d-6b02-4b17-8de5-c67136f26434',
@@ -25,6 +25,28 @@ export async function readOwnerTestReceipt({supabase,workspaceId,ownerId,invoice
   if(!row)return null;
   return {test:true,audience:'owner',workspaceId,ownerId,invoiceId,recipient:OWNER_TEST_SCOPE.phone,
     status:'existing',deliveryStatus:['pending','unknown','accepted','sent','delivered','read','failed','blocked'].includes(row.status)?row.status:'unknown'};
+}
+
+// Project only metadata already sanitized by readApprovedReminderTemplates.
+// No raw provider response, credentials or sender/contact records leave here.
+export function ownerTestTemplateCheck(actual,entry){
+  const components=Array.isArray(actual?.components)?actual.components:[];
+  const bodies=components.filter(c=>c.type==='BODY'),footers=components.filter(c=>c.type==='FOOTER');
+  const issue=matchesApprovedReminderTemplate(actual,entry)?null
+    :!actual?.found?'not_found':actual.name!==entry.name?'template_name'
+    :actual.status!==entry.status?'approval_status':actual.category!==entry.category?'category'
+    :actual.language!==entry.language?'language'
+    :actual.parameter_format!==undefined&&actual.parameter_format!=='POSITIONAL'?'parameter_format'
+    :components.some(c=>c.type!=='BODY'&&c.type!=='FOOTER')?'component_type'
+    :bodies.length!==1||footers.length>1?'component_count'
+    :bodies[0].text!==entry.body?'body_text'
+    :footers.some(c=>c.text!==APPROVED_REMINDER_FOOTER)?'footer_text':'template_contract';
+  return {issue,templateName:entry.name,expected:{status:entry.status,category:entry.category,language:entry.language,
+      parameterFormat:'POSITIONAL',parameterFormatOptional:true,
+      components:[{type:'BODY',text:entry.body},{type:'FOOTER',text:APPROVED_REMINDER_FOOTER,optional:true}]},
+    observed:{found:actual?.found===true,status:actual?.status??null,category:actual?.category??null,
+      language:actual?.language??null,parameterFormat:actual?.parameter_format??null,
+      components:components.map(component=>({type:component.type,text:component.text??null}))}};
 }
 
 export async function readOwnerTestReview({supabase,env,workspaceId,ownerId,invoiceId,fetchImpl}){
@@ -55,7 +77,7 @@ export async function readOwnerTestReview({supabase,env,workspaceId,ownerId,invo
   const metadata=await readApprovedReminderTemplates({env,fetchImpl});
   const actual=metadata.templates.find(t=>t.name===entry.name&&t.language==='en');
   if(!matchesApprovedReminderTemplate(actual,entry))
-    throw new APIError(409,'APPROVED_TEST_TEMPLATE_MISMATCH');
+    throw Object.assign(new APIError(409,'APPROVED_TEST_TEMPLATE_MISMATCH'),{templateCheck:ownerTestTemplateCheck(actual,entry)});
   // Metadata reads can take time. Recheck consent/suppression and the verified
   // owner after them, including on the final check immediately before POST.
   const finalEligibility=await getSendEligibility({supabase,workspaceId,phone:scope.phone});

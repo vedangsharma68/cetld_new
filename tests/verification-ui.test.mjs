@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
-import {createOwnerTemplateTestUI,zohoDiscoveryView} from '../verification-ui.mjs';
+import {createOwnerTemplateTestUI,zohoDiscoveryView,ownerTemplateCheckView} from '../verification-ui.mjs';
 
 const workspaceId='9a83b58d-6b02-4b17-8de5-c67136f26434',userId='40ff343c-4334-4aec-b49a-ca772f0cf8ad',invoiceId='f86e28bd-16a8-4c83-a03d-05302f7f3ff6';
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -11,12 +11,45 @@ const preview={test:true,audience:'owner',workspaceId,ownerId:userId,invoiceId,r
 function setup({reply=preview,request}={}){
   const state={demo:false,user:{id:userId},workspace:{id:workspaceId,owner_id:userId},invoices:[{id:invoiceId,total:140,paid:40,paused:true}]};
   const snapshots=[],errors=[],toasts=[],calls=[];let head={};
-  const dialog={open:false,querySelector(selector){return selector==='.dialog-head'?head:selector==='.dialog-body'?{removeAttribute(){}}:null;}};
+  const dialog={open:false,querySelector(selector){return selector==='.dialog-head'?head:null;}};
   const ui=createOwnerTemplateTestUI({state,escape,dialog:()=>dialog,button:(action,label)=>`<button data-action="${action}">${label}</button>`,
     openDialog(title,body){snapshots.push({title,body});head={};dialog.open=true;},showError(_dialog,error){errors.push(error.message);},toast:message=>toasts.push(message),
     request:async(id,options)=>{calls.push({id,options});return request?request(id,options):options.method==='POST'?{status:'accepted'}:reply;}});
   return {state,ui,snapshots,errors,toasts,calls,dialog,control:()=>({disabled:false,dataset:{},textContent:'',setAttribute(key,value){this[key]=value;}})};
 }
+
+test('sanitized template-check fields are visible in terminal failure and all text is escaped',async()=>{
+  const check={issue:'footer_text',templateName:'cetld_invoice_update_v2',
+    expected:{status:'APPROVED',category:'UTILITY',language:'en',parameterFormat:'POSITIONAL',parameterFormatOptional:true,
+      components:[{type:'BODY',text:'Approved {{1}} {{2}} {{3}}'},{type:'FOOTER',text:'Reply STOP to opt out',optional:true}]},
+    observed:{status:'PAUSED',category:'MARKETING',language:'en',parameterFormat:'NAMED',components:[{type:'BODY',text:'Approved {{1}} {{2}} {{3}}'},{type:'FOOTER',text:'Synthetic <footer>'}]}};
+  const f=setup({request:async()=>{throw Object.assign(Error('APPROVED_TEST_TEMPLATE_MISMATCH'),{templateCheck:check});}});
+  await f.ui.review(f.control(),invoiceId);
+  const html=f.snapshots.at(-1).body;
+  for(const value of ['Template check','footer_text','Expected','Observed','Approval status','APPROVED','PAUSED','Category','UTILITY','MARKETING',
+    'Language','en','Parameter format','POSITIONAL','NAMED','BODY','FOOTER','Approved {{1}} {{2}} {{3}}','Reply STOP to opt out','(optional)','may be omitted'])assert.ok(html.includes(value),value);
+  assert.match(html,/Synthetic &lt;footer&gt;/);assert.doesNotMatch(html,/Synthetic <footer>|aria-busy="true"/);
+  const hostile=structuredClone(check);hostile.issue=hostile.templateName=hostile.expected.status=hostile.observed.status='<img src=x>';
+  hostile.expected.components[0]={type:'<BODY>',text:'<script>'};
+  const escaped=ownerTemplateCheckView(hostile,escape);assert.doesNotMatch(escaped,/<img|<BODY>|<script>/);assert.match(escaped,/&lt;script&gt;/);
+  assert.equal(f.calls.filter(call=>call.options.method==='POST').length,0);await assert.rejects(f.ui.send(f.control()));
+  assert.equal(ownerTemplateCheckView(null,escape),'');
+});
+
+for(const message of ['APPROVED_TEST_TEMPLATE_MISMATCH','WHATSAPP_TEMPLATE_READ_UNAVAILABLE','Preview timed out. No message was sent.'])
+test(`terminal preview error clears busy/loading text without enabling send: ${message}`,async()=>{
+  const f=setup({request:async()=>{throw Error(message);}}),before=structuredClone(f.state.invoices);
+  const control=f.control();await f.ui.review(control,invoiceId);
+  assert.match(f.snapshots[0].body,/aria-busy="true"/);
+  const html=f.snapshots.at(-1).body;
+  assert.match(html,/role="status"[^>]*>Preview unavailable\. No message was sent\.</);
+  assert.doesNotMatch(html,/Preparing|aria-busy="true"/);assert.match(html,/owner-template-test-review/);
+  assert.deepEqual(f.errors,[message]);assert.equal(control.disabled,false);
+  assert.ok(f.snapshots.every(snapshot=>!snapshot.body.includes('owner-template-test-send')));
+  await assert.rejects(f.ui.send(f.control()),/fresh owner test preview/);
+  assert.equal(f.calls.length,1);assert.equal(f.calls.filter(call=>call.options.method==='POST').length,0);
+  assert.deepEqual(f.state.invoices,before);
+});
 
 test('visible owner review shows exact recipient/message and does not render tokens or send',async()=>{
   const f=setup(),before=structuredClone(f.state.invoices);assert.equal(f.ui.canReview(f.state.invoices[0]),true);
