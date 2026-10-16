@@ -1,6 +1,8 @@
 // Visibility hints only. The authenticated API independently enforces this scope.
 const scope={workspaceId:'9a83b58d-6b02-4b17-8de5-c67136f26434',ownerId:'40ff343c-4334-4aec-b49a-ca772f0cf8ad',
   invoiceId:'f86e28bd-16a8-4c83-a03d-05302f7f3ff6',recipient:'+919871367051'};
+const receiptLabel=result=>result?.status==='existing'?({delivered:'Already delivered',read:'Already read',sent:'Already sent',
+  accepted:'Already accepted by Meta',failed:'Previous dispatch failed',blocked:'Previous dispatch blocked'}[result.deliveryStatus]||'Previous dispatch unconfirmed'):null;
 
 export function zohoDiscoveryView(value,escape){
   if(!value||!['available','empty','error'].includes(value.status))return '';
@@ -31,8 +33,14 @@ export function createOwnerTemplateTestUI({state,request,openDialog,dialog,escap
       const preview=await Promise.race([request(invoiceId,{signal:context.controller.signal}),aborted]);
       if(!visible())return;
       if(preview?.workspaceId!==scope.workspaceId||preview.ownerId!==scope.ownerId||preview.invoiceId!==scope.invoiceId
-        ||preview.recipient!==scope.recipient||preview.audience!=='owner'||preview.test!==true
-        ||preview.template?.name!=='cetld_invoice_update_v2'||preview.template?.language?.code!=='en'
+        ||preview.recipient!==scope.recipient||preview.audience!=='owner'||preview.test!==true)
+        throw Error('The owner test preview could not be verified. No message was sent.');
+      const existing=receiptLabel(preview);
+      if(existing){
+        openDialog('Review owner test',`<div class="dialog-body"><p role="status">${escape(existing)}</p><p>No new message was sent. This owner test will not be sent again. Check Conversations for its delivery history.</p></div><div class="dialog-foot">${button('close','Close')}</div>`);
+        return;
+      }
+      if(preview.template?.name!=='cetld_invoice_update_v2'||preview.template?.language?.code!=='en'
         ||typeof preview.text!=='string'||!preview.text.includes('TEST ONLY - INV-2026-6771')||!preview.previewToken)
         throw Error('The owner test preview could not be verified. No message was sent.');
       reviewed={...context,preview};
@@ -50,8 +58,10 @@ export function createOwnerTemplateTestUI({state,request,openDialog,dialog,escap
     reviewed=null;control.disabled=true;control.dataset.keepDisabled='true';label(control,'Sending once…');
     try{
       const result=await request(context.invoiceId,{method:'POST',previewToken:context.preview.previewToken});
-      label(control,result.status==='accepted'?'Accepted by Meta':'Result unconfirmed');
-      toast(result.status==='accepted'?'Owner test accepted. Check Conversations for delivery status.':'Owner test result is unconfirmed. It will not be retried.');
+      const existing=receiptLabel(result);
+      label(control,existing||(result.status==='accepted'?'Accepted by Meta':'Result unconfirmed'));
+      toast(existing?`${existing}. No new message was sent. This owner test will not be sent again.`
+        :result.status==='accepted'?'Owner test accepted. Check Conversations for delivery status.':'Owner test result is unconfirmed. It will not be retried.');
     }catch(error){label(control,'Result unconfirmed');showError(dialog(),Error(`${error?.message||'The result could not be confirmed.'} Check Conversations before taking further action.`));}
   }
   return {canReview,review,send};
