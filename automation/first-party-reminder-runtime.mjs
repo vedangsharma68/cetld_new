@@ -11,8 +11,8 @@ export function firstPartyReminderEnabled(env){
     &&['AUTOMATION_OUTBOUND_ENABLED','WHATSAPP_OUTBOUND_ENABLED','WHATSAPP_REMINDERS_ENABLED',
       'WHATSAPP_REMINDER_RECEIPTS_ENABLED','WHATSAPP_REMINDER_SCHEDULER_ENABLED'].every(key=>env[key]==='true');
 }
-export function createFirstPartyReminderRuntime({env=process.env,scope,store,supabase,fetchImpl=fetch}={}){
-  const test=scheduledOwnerTestMode(env);
+export function createFirstPartyReminderRuntime({env=process.env,scope,store,supabase,fetchImpl=fetch,clock=()=>new Date()}={}){
+  const test=scheduledOwnerTestMode(env,clock());
   if(test.mode==='blocked'||(test.mode==='test'&&!scheduledOwnerTestScopeMatches(test,scope)))throw Error('Scheduled owner test unavailable');
   if(!firstPartyReminderEnabled(env))throw Error('First-party reminders disabled');
   let scopes;
@@ -25,9 +25,9 @@ export function createFirstPartyReminderRuntime({env=process.env,scope,store,sup
     auth:{persistSession:false,autoRefreshToken:false},global:{fetch:fetchImpl}});
   const receiptStore=createFirstPartyReminderReceiptStore({supabase,env});
   if(!receiptStore.isEnabled())throw Error('Reminder receipt backend unavailable');
-  const testGate=test.mode==='test'?createScheduledOwnerTestGate({test,env,supabase,store,fetchImpl}):null;
+  const testGate=test.mode==='test'?createScheduledOwnerTestGate({test,env,supabase,store,fetchImpl,clock}):null;
   const provider=createDurableReminderProvider({receiptStore,provider:createApprovedReminderProvider({
-    env,supabase,store,ownerId:scope.ownerId,workspaceId:scope.workspaceId,fetchImpl})});
+    env,supabase,store,ownerId:scope.ownerId,workspaceId:scope.workspaceId,fetchImpl,clock})});
   return {provider,paymentChecker:createLocalReminderPaymentChecker({supabase,...scope}),testGate,async sweep(){
     if(testGate)return 0; // A test must not quarantine other invoices' leases.
     // Let PostgreSQL supply its current clock; never use worker-controlled time.

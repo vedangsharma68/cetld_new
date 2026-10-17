@@ -9,11 +9,11 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const QA=new Set(['+919871367051','+919818685252']);
 const blocked=reason=>({status:'blocked',reason});
 
-export function createApprovedReminderProvider({env=process.env,supabase,store,ownerId,workspaceId,fetchImpl=fetch}={}){
-  const test=scheduledOwnerTestMode(env);
-  const testGate=test.mode==='test'?createScheduledOwnerTestGate({test,env,supabase,store,fetchImpl}):null;
+export function createApprovedReminderProvider({env=process.env,supabase,store,ownerId,workspaceId,fetchImpl=fetch,clock=()=>new Date()}={}){
+  const test=scheduledOwnerTestMode(env,clock());
+  const testGate=test.mode==='test'?createScheduledOwnerTestGate({test,env,supabase,store,fetchImpl,clock}):null;
   function enabled(){return ['WHATSAPP_REMINDERS_ENABLED','AUTOMATION_OUTBOUND_ENABLED','WHATSAPP_OUTBOUND_ENABLED'].every(k=>env[k]==='true')
-    &&test.mode!=='blocked'&&(test.mode!=='test'||scheduledOwnerTestScopeMatches(test,{ownerId,workspaceId}))
+    &&test.mode!=='blocked'&&(test.mode!=='test'||testGate.isOpen()&&scheduledOwnerTestScopeMatches(test,{ownerId,workspaceId}))
     &&env.WHATSAPP_WABA_ID===APPROVED_REMINDER_WABA&&/^\d{5,30}$/.test(env.WHATSAPP_PHONE_NUMBER_ID||'')
     &&/^v\d+\.\d+$/.test(env.WHATSAPP_GRAPH_API_VERSION||'')&&!!env.WHATSAPP_ACCESS_TOKEN;}
   function scope(input){return UUID.test(ownerId||'')&&UUID.test(workspaceId||'')&&input.workspaceId===workspaceId&&UUID.test(input.invoiceId||'')
@@ -63,6 +63,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
         callbackToken=receipt.callback_token;payload.biz_opaque_callback_data=callbackToken;
       }catch{return blocked('eligibility_unavailable');}
       // No asynchronous operation between the final atomic reservation and POST.
+      if(testGate&&!testGate.isOpen())return blocked('scheduled_owner_test_window_closed');
       try{
         const response=await fetchImpl(`https://graph.facebook.com/${env.WHATSAPP_GRAPH_API_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,{
           method:'POST',redirect:'error',headers:{Authorization:`Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,'Content-Type':'application/json'},

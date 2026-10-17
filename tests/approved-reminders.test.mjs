@@ -221,3 +221,33 @@ test('scheduled route reuses CRON_SECRET, defaults disabled, and runs only confi
   const enabled=createReminderCronHandler({env:{...env,CRON_SECRET:'fixture-cron',AUTOMATION_WORKSPACES:JSON.stringify([{ownerId,workspaceId}])},runtimeFactory:()=>({async tick(scope){assert.deepEqual(scope,{ownerId,workspaceId});calls++;return {processed:0};}})});
   const result=res();await enabled({method:'GET',headers:{authorization:'Bearer fixture-cron'}},result);assert.equal(result.code,200);assert.equal(calls,1);
 });
+
+
+test('Settings proof preview validates current Meta approval and Utility category before any write or send',async()=>{
+  const f=await setup();try{
+    let invalid=null,omitFooter=false;
+    const fetchImpl=async(input,options)=>{
+      const url=new URL(String(input));
+      if(options.method==='GET'&&url.origin==='https://graph.facebook.com'){
+        if(url.pathname.endsWith('/phone_numbers'))return Response.json({data:[{id:env.WHATSAPP_PHONE_NUMBER_ID,display_phone_number:'+917303338959'}]});
+        const name=url.searchParams.get('name'),entry=REMINDER_TEMPLATES.find(t=>t.name===name);
+        const target=name==='cetld_invoice_update_v2';
+        const row={id:'123456789012345',name,language:'en',status:target&&invalid==='approval'?'PENDING':'APPROVED',category:target&&invalid==='category'?'MARKETING':'UTILITY',parameter_format:'POSITIONAL',components:[{type:'BODY',text:target&&invalid==='body'?'Changed template body':entry.body},...(!omitFooter?[{type:'FOOTER',text:target&&invalid==='footer'?'Wrong footer':'Reply STOP to opt out'}]:[])]};
+        return Response.json({data:[row]});
+      }
+      return f.fetchImpl(input,options);
+    };
+    const options={workspaceId:f.scope.workspaceId,ownerId:f.scope.ownerId,env:f.configured,supabase:f.supabase,fetchImpl};
+    assert.equal((await approvedReminderProof(options)).footer,'Reply STOP to opt out');
+    for(const mismatch of ['approval','category','body','footer']){
+      invalid=mismatch;await assert.rejects(approvedReminderProof(options),error=>error.code==='APPROVED_TEST_TEMPLATE_MISMATCH');
+    }
+    // Current preview permits no footer; the isolated scheduled gate separately
+    // requires it. A visible matching footer therefore adds evidence.
+    invalid=null;omitFooter=true;assert.equal((await approvedReminderProof(options)).footer,null);
+    assert.equal(f.graph.length,0);
+    assert.equal((await f.db.query('select count(*)::int n from whatsapp_messages')).rows[0].n,0);
+    assert.equal((await f.db.query('select count(*)::int n from cetld_core_automation_events')).rows[0].n,0);
+    assert.equal((await f.db.query('select count(*)::int n from payments')).rows[0].n,0);
+  }finally{await f.close();}
+});
