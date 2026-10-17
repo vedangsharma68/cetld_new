@@ -89,13 +89,26 @@ export function timezoneParts(value, timeZone = "UTC") {
 
 function utcGuessForLocal(local, timeZone) {
   // The offset is obtained by comparing the requested local fields with the
-  // timezone's fields at a nearby instant. Two iterations cover DST changes.
-  let guess = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute, local.second || 0);
+  // timezone's fields at a nearby instant. A missing DST wall time can oscillate
+  // across the gap; resolve that case forward to its first real instant.
+  const wantMs = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute, local.second || 0);
+  let guess = wantMs;
+  const candidates=[];
   for (let i = 0; i < 4; i += 1) {
     const got = timezoneParts(new Date(guess), timeZone);
-    const wantMs = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute, local.second || 0);
     const gotMs = Date.UTC(got.year, got.month - 1, got.day, got.hour, got.minute, got.second);
+    if(gotMs===wantMs)return new Date(guess);
+    candidates.push({instant:guess,wall:gotMs});
     guess += wantMs - gotMs;
+  }
+  const before=candidates.filter(c=>c.wall<wantMs),after=candidates.filter(c=>c.wall>wantMs);
+  if(before.length&&after.length){
+    let low=Math.max(...before.map(c=>c.instant)),high=Math.min(...after.map(c=>c.instant));
+    while(high-low>1){
+      const middle=Math.floor((low+high)/2),got=timezoneParts(new Date(middle),timeZone);
+      if(Date.UTC(got.year,got.month-1,got.day,got.hour,got.minute,got.second)<wantMs)low=middle;else high=middle;
+    }
+    return new Date(high);
   }
   return new Date(guess);
 }
@@ -131,23 +144,35 @@ export function isWithinContactHours(value, settings = {}, timeZone = "UTC") {
   return current >= from && current < until && allowedWeekdays(settings).has(WEEKDAYS[local.weekday]);
 }
 
+function contactStartInstants(local,timeZone){
+  const nominal=Date.UTC(local.year,local.month-1,local.day,local.hour,local.minute,0);
+  const instants=new Set([localDateTimeToDate(local,timeZone).getTime()]);
+  // Both neighboring offsets are needed when a clock repeats the contact start.
+  for(const delta of [-36*3600000,36*3600000]){
+    const sample=nominal+delta,got=timezoneParts(new Date(sample),timeZone);
+    const offset=Date.UTC(got.year,got.month-1,got.day,got.hour,got.minute,got.second)-sample;
+    instants.add(nominal-offset);
+  }
+  return [...instants].sort((a,b)=>a-b).map(instant=>new Date(instant));
+}
+
 /** Return the first allowed contact instant on or after `value`. */
 export function nextContactTime(value, settings = {}, timeZone = "UTC") {
   const date = value instanceof Date ? new Date(value) : new Date(value);
   if (!Number.isFinite(date.getTime())) throw new TypeError("Invalid date");
   const start = parseClock(settings.hoursStart ?? settings.contactHoursStart, { hour: 9, minute: 0 });
-  const end = parseClock(settings.hoursEnd ?? settings.contactHoursEnd, { hour: 18, minute: 0 });
   const weekdays = allowedWeekdays(settings);
   let local = timezoneParts(date, timeZone);
   let first = true;
   for (let i = 0; i < 370; i += 1) {
     const weekday = WEEKDAYS[local.weekday];
     if (weekdays.has(weekday)) {
-      const current = local.hour * 60 + local.minute;
-      const from = start.hour * 60 + start.minute;
-      const until = end.hour * 60 + end.minute;
-      if (current < from) return localDateTimeToDate({ ...local, hour: start.hour, minute: start.minute, second: 0 }, timeZone);
-      if (current >= from && current < until) return first ? date : localDateTimeToDate({ ...local, second: 0 }, timeZone);
+      if(first&&isWithinContactHours(date,settings,timeZone))return date;
+      for(const candidate of contactStartInstants({...local,hour:start.hour,minute:start.minute,second:0},timeZone)){
+        const got=timezoneParts(candidate,timeZone);
+        if(candidate>=date&&got.year===local.year&&got.month===local.month&&got.day===local.day
+          &&isWithinContactHours(candidate,settings,timeZone))return candidate;
+      }
     }
     const next = addLocalDays({ ...local, hour: 0, minute: 0, second: 0 }, 1);
     local = { ...next, weekday: WEEKDAY_NAMES[new Date(Date.UTC(next.year, next.month - 1, next.day)).getUTCDay()] };

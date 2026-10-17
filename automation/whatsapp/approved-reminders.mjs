@@ -2,6 +2,7 @@ import {getSendEligibility} from './consent.mjs';
 import {reminderFingerprint} from './reminder-fingerprint.mjs';
 import {APPROVED_REMINDER_WABA,selectReminderTemplate,buildReminderTemplate} from './reminder-templates.mjs';
 import {readBounded} from '../../ai/http.mjs';
+import {hasUnresolvedFollowUpException} from '../preferences.mjs';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const QA=new Set(['+919871367051','+919818685252']);
@@ -20,7 +21,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
       store.getWorkspacePreferences({ownerId,workspaceId}),
       getSendEligibility({supabase,workspaceId,phone:input.to,category:'invoice_updates'}),
     ]);
-    if(!eligibility.allowed||!invoice||invoice.deleted_at||!settings||invoice.customer_id!==eligibility.customer.id
+    if(!eligibility.allowed||!invoice||invoice.deleted_at||hasUnresolvedFollowUpException(invoice)||!settings||invoice.customer_id!==eligibility.customer.id
       ||invoice.customerPhone!==input.to||invoice.status!=='sent'||invoice.metadata?.invoice_direction!=='receivable'
       ||!invoice.due_date||Number(invoice.total_amount)<=Number(invoice.amount_paid)
       ||!['approved','active','scheduled'].includes(invoice.followup_state))throw Error('Reminder facts unavailable');

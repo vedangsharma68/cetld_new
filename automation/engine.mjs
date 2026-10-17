@@ -1,6 +1,6 @@
 import { cadenceSettings, isWithinContactHours, nextContactTime, scheduleNextFollowUp } from './cadence.mjs';
 import { createHash } from 'node:crypto';
-import { normalizeFollowUpPreferences, reminderBody, brandedReminder } from './preferences.mjs';
+import { normalizeFollowUpPreferences, reminderBody, brandedReminder,hasUnresolvedFollowUpException } from './preferences.mjs';
 import {isDeletedInvoice} from '../invoice/deleted-at-compat.mjs';
 const value = (row, camel, snake) => row[camel] ?? row[snake];
 const version = row => Number(value(row,'automationVersion','automation_version'));
@@ -41,6 +41,7 @@ export class FollowUpEngine {
       await this.store.updateInvoice({...scope,expectedVersion:version(invoice),followupState:'cancelled',nextFollowUpAt:null});
       return {status:'skipped',reason:'paid'};
     }
+    if(hasUnresolvedFollowUpException(invoice))return {status:'skipped',reason:'unresolved_exception'};
     if (!active(invoice)) return {status:'skipped',reason:state(invoice)};
     const now=this.clock(), settings=await this.settingsFor(scope,invoice), timezone=invoice.debtor_timezone || settings.timezone || 'UTC';
     if(!this.provider.prepareReminder && Object.hasOwn(invoice,'total_amount') && (!settings.businessName || brandedReminder(invoice.metadata.approved_reminder_text,settings.businessName)!==invoice.metadata.approved_reminder_text))return {status:'skipped',reason:'business_name_required'};
@@ -90,10 +91,10 @@ export class FollowUpEngine {
       await this.event(scope,'needs_attention',{reason:'payment_check_failed',claimId:claim.id});
       return {status:'quarantined',reason:'payment_check_failed'};
     }
-    if (isPaid(invoice) || !active(invoice)) {
+    if (isPaid(invoice) || !active(invoice) || hasUnresolvedFollowUpException(invoice)) {
       if (isPaid(invoice)) await this.store.updateInvoice({...scope,expectedVersion:version(invoice),followupState:'cancelled',nextFollowUpAt:null});
       await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:true,error:'payment_or_pause'});
-      return {status:'skipped',reason:isPaid(invoice)?'paid':'paused'};
+      return {status:'skipped',reason:isPaid(invoice)?'paid':hasUnresolvedFollowUpException(invoice)?'unresolved_exception':'paused'};
     }
     const finalSettings=await this.settingsFor(scope,invoice);
     if (!this.provider.prepareReminder && Object.hasOwn(invoice,'total_amount') && invoice.metadata?.approved_reminder_text!==body) {
@@ -119,9 +120,9 @@ export class FollowUpEngine {
       await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'invoice_deleted'});
       return {status:'skipped',reason:'invoice_deleted'};
     }
-    if(isPaid(dispatchInvoice)||!active(dispatchInvoice)){
+    if(isPaid(dispatchInvoice)||!active(dispatchInvoice)||hasUnresolvedFollowUpException(dispatchInvoice)){
       await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'invoice_state_changed'});
-      return {status:'skipped',reason:isPaid(dispatchInvoice)?'paid':'paused'};
+      return {status:'skipped',reason:isPaid(dispatchInvoice)?'paid':hasUnresolvedFollowUpException(dispatchInvoice)?'unresolved_exception':'paused'};
     }
     invoice=dispatchInvoice;
     const authorization=await this.store.authorizeDelivery({...scope,claimId:claim.id,preferencesVersion:finalSettings.version});
