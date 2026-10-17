@@ -13,6 +13,8 @@ import {runWorkerOnce} from '../automation/worker.mjs';
 import {handleAutomationRequest} from '../automation/routes.mjs';
 
 const invoiceId='a1000000-0000-4000-8000-000000000001';
+const utcSecond=ms=>new Date(ms).toISOString().replace(/\.\d{3}Z$/,'Z');
+const windowStart=Math.floor(Date.now()/1000)*1000-60000,windowEnd=windowStart+65*60000;
 const base={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_SERVICE_ROLE_KEY:'fixture-key',
   WHATSAPP_PROVIDER:'first_party_meta',WHATSAPP_REMINDER_PAYMENT_MODE:'local_verified',
   AUTOMATION_OUTBOUND_ENABLED:'true',WHATSAPP_OUTBOUND_ENABLED:'true',WHATSAPP_REMINDERS_ENABLED:'true',
@@ -21,6 +23,7 @@ const base={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABAS
   WHATSAPP_WABA_ID:'1734116767674237',WHATSAPP_GRAPH_API_VERSION:'v24.0',CRON_SECRET:'fixture-cron',
   AUTOMATION_APP_URL:'https://fixture.app.test',AUTOMATION_WORKER_SECRET:'fixture-worker-'.repeat(3),
   WHATSAPP_SCHEDULED_OWNER_TEST_ENABLED:'true',WHATSAPP_SCHEDULED_OWNER_TEST_INVOICE_ID:invoiceId,
+  WHATSAPP_SCHEDULED_OWNER_TEST_START_AT:utcSecond(windowStart),WHATSAPP_SCHEDULED_OWNER_TEST_END_AT:utcSecond(windowEnd),
   AUTOMATION_WORKSPACES:JSON.stringify([{ownerId:fixed.ownerId,workspaceId:fixed.workspaceId}])};
 const response=()=>({code:null,payload:null,setHeader(){},status(code){this.code=code;return this;},json(payload){this.payload=payload;return this;}});
 
@@ -31,6 +34,11 @@ test('scheduled test is absent by default; partial, false, protected and broaden
     {WHATSAPP_SCHEDULED_OWNER_TEST_ENABLED:'false'},{WHATSAPP_SCHEDULED_OWNER_TEST_ENABLED:''},
     {WHATSAPP_SCHEDULED_OWNER_TEST_INVOICE_ID:'invalid'},
     {WHATSAPP_SCHEDULED_OWNER_TEST_INVOICE_ID:'f86e28bd-16a8-4c83-a03d-05302f7f3ff6'},
+    {WHATSAPP_SCHEDULED_OWNER_TEST_START_AT:undefined},{WHATSAPP_SCHEDULED_OWNER_TEST_END_AT:undefined},
+    {WHATSAPP_SCHEDULED_OWNER_TEST_START_AT:'invalid'},{WHATSAPP_SCHEDULED_OWNER_TEST_END_AT:utcSecond(windowStart)},
+    {WHATSAPP_SCHEDULED_OWNER_TEST_END_AT:utcSecond(windowEnd+1000)},
+    {WHATSAPP_SCHEDULED_OWNER_TEST_START_AT:utcSecond(windowStart-86400000),WHATSAPP_SCHEDULED_OWNER_TEST_END_AT:utcSecond(windowEnd-86400000)},
+    {WHATSAPP_SCHEDULED_OWNER_TEST_START_AT:utcSecond(windowStart+86400000),WHATSAPP_SCHEDULED_OWNER_TEST_END_AT:utcSecond(windowEnd+86400000)},
     {WHATSAPP_PROVIDER:'mock'},{AUTOMATION_WORKSPACES:'invalid'},{AUTOMATION_WORKSPACES:'[]'},
     {AUTOMATION_WORKSPACES:JSON.stringify([{ownerId:randomUUID(),workspaceId:fixed.workspaceId}])},
     {AUTOMATION_WORKSPACES:JSON.stringify([{ownerId:fixed.ownerId,workspaceId:randomUUID()}])},
@@ -46,7 +54,7 @@ test('scheduled test is absent by default; partial, false, protected and broaden
   }
 });
 
-async function setup({transport='accepted',footer='Reply STOP to opt out'}={}){
+async function setup({transport='accepted',footer='Reply STOP to opt out',clock=()=>new Date()}={}){
   const graph=[];
   const f=await createOfflineSqlNetwork({externalFetch:async(url,options)=>{
     assert.equal(url.origin,'https://graph.facebook.com');
@@ -85,7 +93,7 @@ async function setup({transport='accepted',footer='Reply STOP to opt out'}={}){
     const store=new CoreAutomationStore({url:base.SUPABASE_URL,key:base.SUPABASE_SERVICE_ROLE_KEY,fetchImpl:f.fetchImpl});
     store.listDueInvoices=()=>assert.fail('test must never scan due invoices');
     store.dailySummary=()=>assert.fail('test must never scan daily events');
-    function runtime(env=base){return createAutomationRuntime({env,store,supabase:f.supabase,fetchImpl:f.fetchImpl});}
+    function runtime(env=base){return createAutomationRuntime({env,store,supabase:f.supabase,fetchImpl:f.fetchImpl,clock});}
     async function cron(){const res=response();await createWhatsAppProcessHandler({processHandler:()=>assert.fail('wrong scheduler'),reminderHandler:createReminderCronHandler({env:base,runtimeFactory:()=>runtime()})})({method:'GET',headers:{'x-vercel-cron-schedule':'0 4 * * *',authorization:'Bearer fixture-cron'}},res);return res;}
     const others=()=>f.db.query('select to_jsonb(i) as row from invoices i where id<>$1 order by id',[invoiceId]).then(r=>r.rows);
     return {...f,graph,scope,store,runtime,cron,others,customerId,foreignOwner,foreignWs,otherId,foreignId,invoice};
@@ -193,5 +201,62 @@ test('overlapping scheduler flows dispatch at most once and preserve every other
     const before=await f.others();await Promise.all([f.cron(),f.cron(),f.cron()]);
     assert.equal(f.graph.length,1);assert.deepEqual(await f.others(),before);assertNarrowQueries(f);
     assert.equal((await f.runtime().tick(fixed)).alreadyAttempted,true);
+  }finally{await f.close();}
+});
+
+
+test('UTC window is required, start-inclusive, end-exclusive and never wider than 65 minutes',()=>{
+  const start=Date.parse('2026-10-20T04:00:00Z'),end=Date.parse('2026-10-20T05:05:00Z');
+  const env={...base,WHATSAPP_SCHEDULED_OWNER_TEST_START_AT:utcSecond(start),WHATSAPP_SCHEDULED_OWNER_TEST_END_AT:utcSecond(end)};
+  for(const [at,mode] of [[start-1,'blocked'],[start,'test'],[end-1,'test'],[end,'blocked'],[end+1,'blocked'],[end+86400000,'blocked']])
+    assert.equal(scheduledOwnerTestMode(env,new Date(at)).mode,mode,utcSecond(at));
+  for(const patch of [
+    {WHATSAPP_SCHEDULED_OWNER_TEST_START_AT:'2026-10-20T04:00:00+00:00'},
+    {WHATSAPP_SCHEDULED_OWNER_TEST_START_AT:'2026-10-20T04:00:00.000Z'},
+    {WHATSAPP_SCHEDULED_OWNER_TEST_START_AT:'2026-02-30T04:00:00Z'},
+    {WHATSAPP_SCHEDULED_OWNER_TEST_END_AT:utcSecond(start)},
+    {WHATSAPP_SCHEDULED_OWNER_TEST_END_AT:utcSecond(start-1000)},
+    {WHATSAPP_SCHEDULED_OWNER_TEST_END_AT:utcSecond(end+1000)},
+  ])assert.equal(scheduledOwnerTestMode({...env,...patch},new Date(start)).mode,'blocked');
+  assert.equal(scheduledOwnerTestMode(env,new Date(NaN)).mode,'blocked');
+  for(const key of ['WHATSAPP_SCHEDULED_OWNER_TEST_START_AT','WHATSAPP_SCHEDULED_OWNER_TEST_END_AT'])
+    assert.equal(scheduledOwnerTestMode({[key]:env[key]},new Date(start)).mode,'blocked','orphan window must not restore broad scheduling');
+  assert.equal(scheduledOwnerTestMode({},new Date(end)).mode,'off');
+});
+
+test('real engine starts at window open once; expiry and later invocations do no database work',async()=>{
+  let at=windowStart-1;const f=await setup({clock:()=>new Date(at)});try{
+    const start=Math.floor(Date.now()/1000)*1000,end=start+65*60000;
+    const env={...base,WHATSAPP_SCHEDULED_OWNER_TEST_START_AT:utcSecond(start),WHATSAPP_SCHEDULED_OWNER_TEST_END_AT:utcSecond(end)};
+    await f.db.query('update invoices set next_follow_up_at=$2 where id=$1',[invoiceId,new Date(start-60000).toISOString()]);
+    const before=await f.others();at=start-1;
+    assert.equal((await f.runtime(env).tick(fixed)).disabled,true);assert.equal(f.requests.length,0);
+    at=start;const result=await f.runtime(env).tick(fixed);
+    assert.equal(result.results[0]?.status,'sent',JSON.stringify({result,errors:f.errors}));
+    assert.equal((await f.runtime(env).tick(fixed)).alreadyAttempted,true);assert.equal(f.graph.length,1);
+    const requests=f.requests.length;at=end;
+    for(let n=0;n<3;n++){assert.equal((await f.runtime(env).tick(fixed)).disabled,true);at+=86400000;}
+    assert.equal(f.requests.length,requests);assert.equal(f.graph.length,1);assert.deepEqual(await f.others(),before);assertNarrowQueries(f);
+  }finally{await f.close();}
+});
+
+for(const phase of ['metadata','attempt-reservation','final-sql'])test(`expiry during ${phase} cannot initiate Graph POST or rearm the permanent identity`,async()=>{
+  let at=Date.now();const f=await setup({clock:()=>new Date(at)});try{
+    const before=await f.others();let crossed=false;
+    f.intercept(async(url,options)=>{
+      const metadata=url.hostname==='graph.facebook.com'&&url.searchParams.get('name')==='cetld_invoice_gentle_btn_v1';
+      const reservation=url.pathname.endsWith('/cetld_core_automation_events')&&options.method==='POST'&&JSON.parse(options.body).idempotency_key===fixed.attemptKey;
+      const finalSql=url.pathname.endsWith('/rpc/cetld_core_authorize_first_party_reminder');
+      if(!crossed&&((phase==='metadata'&&metadata)||(phase==='attempt-reservation'&&reservation)||(phase==='final-sql'&&finalSql))){crossed=true;at=windowEnd;}
+    });
+    await f.cron();assert.equal(crossed,true);assert.equal(f.graph.length,0);assert.deepEqual(await f.others(),before);assertNarrowQueries(f);
+    const markers=(await f.db.query('select count(*)::int n from cetld_core_automation_events where idempotency_key=$1',[fixed.attemptKey])).rows[0].n;
+    assert.equal(markers,phase==='metadata'?0:1);
+    const requests=f.requests.length;assert.equal((await f.runtime().tick(fixed)).disabled,true);assert.equal(f.requests.length,requests);
+    if(markers){
+      const changedWindow={...base,WHATSAPP_SCHEDULED_OWNER_TEST_START_AT:utcSecond(windowEnd-1000),WHATSAPP_SCHEDULED_OWNER_TEST_END_AT:utcSecond(windowEnd+64*60000)};
+      assert.equal((await f.runtime(changedWindow).tick(fixed)).alreadyAttempted,true,'changing window must never reset the reservation');
+      assert.equal(f.graph.length,0);
+    }
   }finally{await f.close();}
 });
