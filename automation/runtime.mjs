@@ -6,7 +6,7 @@ import { createWhatsAppProvider, normalizeInboundEvent } from './whatsapp/index.
 import { createAccountingIntegration, SupabaseAccountingStore, TokenCipher, encryptionKeyFromEnv, createAccountingProviders } from './accounting/index.mjs';
 import { HttpError, required } from './http.mjs';
 import { scheduleInitialFollowUp, nextContactTime, timezoneParts, addLocalDays } from './cadence.mjs';
-import { normalizeFollowUpPreferences } from './preferences.mjs';
+import { normalizeFollowUpPreferences,hasUnresolvedFollowUpException } from './preferences.mjs';
 import {createFirstPartyReminderRuntime,firstPartyReminderEnabled} from './first-party-reminder-runtime.mjs';
 
 export function createAccountingRuntime({env=process.env,fetchImpl=fetch}={}) {
@@ -38,6 +38,7 @@ export function createAutomationRuntime({env=process.env,fetchImpl=fetch,store,p
   async function pause(scope) {const row=await read(scope);await store.updateInvoice({...scope,followupState:isPaid(row)?'cancelled':'paused',nextFollowUpAt:null});await store.recordEvent({...scope,type:'followup_paused',idempotencyKey:`pause:${scope.invoiceId}:${clock().toISOString()}`,payload:{}});return {status:'paused'};}
   async function resume(scope) {
     const row=await read(scope);if(isPaid(row))throw new HttpError(409,'Paid invoices cannot resume');
+    if(hasUnresolvedFollowUpException(row))throw new HttpError(409,'Resolve the invoice exception before resuming follow-up');
     if (Object.hasOwn(row,'total_amount') && (row.metadata?.invoice_direction!=='receivable'||!row.due_date||Number(row.total_amount)<=Number(row.amount_paid)||['void','cancelled','paid'].includes(row.status))) throw new HttpError(409,'Invoice is not eligible for follow-up');
     const owner=typeof store.getWorkspacePreferences==='function'?await store.getWorkspacePreferences(scope):null;
     const settings=owner?normalizeFollowUpPreferences(owner.follow_up_preferences,owner.default_timezone):(row.followUpSettings || row.follow_up_settings || {});

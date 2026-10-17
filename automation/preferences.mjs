@@ -3,6 +3,11 @@ const tones = new Set(['gentle', 'professional', 'firm']);
 const REMINDER_TEMPLATE_PLACEHOLDERS = new Set(['business_name', 'customer_name', 'invoice_number', 'balance', 'due_date']);
 const REMINDER_TEMPLATE_MAX_LENGTH = 1000;
 
+export function hasUnresolvedFollowUpException(invoice){
+  const report=invoice?.metadata?.followup_exception??invoice?.followup_exception;
+  return Boolean(report&&!report.resolved_at);
+}
+
 function normalizeReminderPunctuation(value) {
   return String(value ?? '').replace(/(?:,\s*)?\s*[—–]\s*/g, ', ').replace(/(?:,\s*,\s*)+/g, ', ').replace(/^\s*,\s*|\s*,\s*$/g, '').trim();
 }
