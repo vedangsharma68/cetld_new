@@ -1,4 +1,5 @@
 import { authorizeWorker, authorizeWorkspace, bodyOf, HttpError, respondError, uuid } from './http.mjs';
+import {scheduledOwnerTestMode} from './scheduled-owner-test.mjs';
 
 export async function handleAutomationRequest(request, response, dependencies = {}) {
   response.setHeader('Cache-Control', 'no-store');
@@ -8,16 +9,18 @@ export async function handleAutomationRequest(request, response, dependencies = 
     const body = bodyOf(request);
     const workspaceId = uuid(body.workspaceId);
     let identity;
-    if (body.action === 'tick') {
+    const tick=body.action==='tick'||body.action==='scheduled-owner-test-tick';
+    if (tick) {
       authorizeWorker(request, env);
+      if(body.action==='scheduled-owner-test-tick'&&scheduledOwnerTestMode(env).mode!=='test')throw new HttpError(409,'Scheduled owner test unavailable');
       identity = { workspaceId, ownerId: uuid(body.ownerId) };
     } else {
       identity = await authorizeWorkspace(request, workspaceId, env, dependencies.fetchImpl);
     }
-    if (!['tick', 'pause', 'resume', 'configure', 'mock-reply', 'daily-summary'].includes(body.action)) throw new HttpError(400, 'Unknown automation action');
+    if (!['tick', 'scheduled-owner-test-tick', 'pause', 'resume', 'configure', 'mock-reply', 'daily-summary'].includes(body.action)) throw new HttpError(400, 'Unknown automation action');
     const runtime = dependencies.runtime || await import('./runtime.mjs').then(module => module.createAutomationRuntime({ env }));
     let result;
-    if (body.action === 'tick') result = await runtime.tick(identity);
+    if (tick) result = await runtime.tick(identity);
     else {
       const scope = { ...identity, ...(body.action==='daily-summary'?{}:{invoiceId:uuid(body.invoiceId)}) };
       if (body.action === 'pause') result = await runtime.pause(scope);

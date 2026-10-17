@@ -2,6 +2,7 @@ import {createClient} from '@supabase/supabase-js';
 import {createApprovedReminderProvider} from './whatsapp/approved-reminders.mjs';
 import {createFirstPartyReminderReceiptStore,createDurableReminderProvider} from './whatsapp/reminder-receipts.mjs';
 import {createLocalReminderPaymentChecker} from './local-reminder-payment.mjs';
+import {scheduledOwnerTestMode,scheduledOwnerTestScopeMatches,createScheduledOwnerTestGate} from './scheduled-owner-test.mjs';
 
 // This mode is opt-in server configuration. No account/template/consent approval
 // is inferred from its flags; the final SQL gate independently verifies them.
@@ -11,6 +12,8 @@ export function firstPartyReminderEnabled(env){
       'WHATSAPP_REMINDER_RECEIPTS_ENABLED','WHATSAPP_REMINDER_SCHEDULER_ENABLED'].every(key=>env[key]==='true');
 }
 export function createFirstPartyReminderRuntime({env=process.env,scope,store,supabase,fetchImpl=fetch}={}){
+  const test=scheduledOwnerTestMode(env);
+  if(test.mode==='blocked'||(test.mode==='test'&&!scheduledOwnerTestScopeMatches(test,scope)))throw Error('Scheduled owner test unavailable');
   if(!firstPartyReminderEnabled(env))throw Error('First-party reminders disabled');
   let scopes;
   try{scopes=JSON.parse(env.AUTOMATION_WORKSPACES);}catch{throw Error('Reviewed reminder configuration unavailable');}
@@ -22,9 +25,11 @@ export function createFirstPartyReminderRuntime({env=process.env,scope,store,sup
     auth:{persistSession:false,autoRefreshToken:false},global:{fetch:fetchImpl}});
   const receiptStore=createFirstPartyReminderReceiptStore({supabase,env});
   if(!receiptStore.isEnabled())throw Error('Reminder receipt backend unavailable');
+  const testGate=test.mode==='test'?createScheduledOwnerTestGate({test,env,supabase,store,fetchImpl}):null;
   const provider=createDurableReminderProvider({receiptStore,provider:createApprovedReminderProvider({
     env,supabase,store,ownerId:scope.ownerId,workspaceId:scope.workspaceId,fetchImpl})});
-  return {provider,paymentChecker:createLocalReminderPaymentChecker({supabase,...scope}),async sweep(){
+  return {provider,paymentChecker:createLocalReminderPaymentChecker({supabase,...scope}),testGate,async sweep(){
+    if(testGate)return 0; // A test must not quarantine other invoices' leases.
     // Let PostgreSQL supply its current clock; never use worker-controlled time.
     const result=await supabase.rpc('cetld_core_quarantine_first_party_leases',{
       p_owner_id:scope.ownerId,p_workspace_id:scope.workspaceId});

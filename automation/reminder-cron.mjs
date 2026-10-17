@@ -2,6 +2,7 @@ import {timingSafeEqual} from 'node:crypto';
 import {firstPartyReminderEnabled} from './first-party-reminder-runtime.mjs';
 import {createAutomationRuntime} from './runtime.mjs';
 import {uuid} from './http.mjs';
+import {scheduledOwnerTestMode} from './scheduled-owner-test.mjs';
 
 export function createReminderCronHandler({env=process.env,runtimeFactory=createAutomationRuntime}={}){
   return async(req,res)=>{
@@ -10,6 +11,8 @@ export function createReminderCronHandler({env=process.env,runtimeFactory=create
     const expected=env.CRON_SECRET?Buffer.from('Bearer '+env.CRON_SECRET):null;
     const actual=Buffer.from(String(req.headers?.authorization||''));
     if(!expected||actual.length!==expected.length||!timingSafeEqual(actual,expected))return res.status(401).json({error:'Unauthorized'});
+    const test=scheduledOwnerTestMode(env);
+    if(test.mode==='blocked')return res.status(200).json({disabled:true,processed:0,test:true});
     if(!firstPartyReminderEnabled(env))return res.status(200).json({disabled:true,processed:0});
     try{
       const scopes=JSON.parse(env.AUTOMATION_WORKSPACES||'null');

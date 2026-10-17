@@ -2,8 +2,11 @@
 import { pathToFileURL } from 'node:url';
 import { required, uuid } from './http.mjs';
 import {firstPartyReminderEnabled} from './first-party-reminder-runtime.mjs';
+import {scheduledOwnerTestMode} from './scheduled-owner-test.mjs';
 
 export async function runWorkerOnce({ env = process.env, fetchImpl = fetch } = {}) {
+  const test=scheduledOwnerTestMode(env);
+  if(test.mode==='blocked')return [];
   if(env.WHATSAPP_PROVIDER==='first_party_meta'&&!firstPartyReminderEnabled(env))return [];
   const endpoint = new URL('/api/automation', required(env, 'AUTOMATION_APP_URL'));
   if (endpoint.protocol !== 'https:') throw new Error('Worker target must use HTTPS');
@@ -12,7 +15,7 @@ export async function runWorkerOnce({ env = process.env, fetchImpl = fetch } = {
   const results = [];
   for (const item of workspaces) {
     const workspaceId = uuid(item.workspaceId), ownerId = uuid(item.ownerId);
-    const result = await fetchImpl(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${required(env, 'AUTOMATION_WORKER_SECRET')}` }, body: JSON.stringify({ action: 'tick', workspaceId, ownerId }), signal: AbortSignal.timeout(55000) });
+    const result = await fetchImpl(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${required(env, 'AUTOMATION_WORKER_SECRET')}` }, body: JSON.stringify({ action: test.mode==='test'?'scheduled-owner-test-tick':'tick', workspaceId, ownerId }), signal: AbortSignal.timeout(55000) });
     results.push({ workspaceId, ok: result.ok, status: result.status });
   }
   return results;

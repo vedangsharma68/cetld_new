@@ -8,6 +8,7 @@ import { HttpError, required } from './http.mjs';
 import { scheduleInitialFollowUp, nextContactTime, timezoneParts, addLocalDays } from './cadence.mjs';
 import { normalizeFollowUpPreferences,hasUnresolvedFollowUpException } from './preferences.mjs';
 import {createFirstPartyReminderRuntime,firstPartyReminderEnabled} from './first-party-reminder-runtime.mjs';
+import {scheduledOwnerTestMode,scheduledOwnerTestScopeMatches} from './scheduled-owner-test.mjs';
 
 export function createAccountingRuntime({env=process.env,fetchImpl=fetch}={}) {
   return createAccountingIntegration({
@@ -77,15 +78,21 @@ export function createAutomationRuntime({env=process.env,fetchImpl=fetch,store,p
   return {
     pause,resume,configure,
     async tick(scope) {
-      const summary=await buildDailySummary(scope,true);
+      const test=scheduledOwnerTestMode(env);
+      if(test.mode==='blocked'||(test.mode==='test'&&!scheduledOwnerTestScopeMatches(test,scope)))
+        return {processed:0,results:[],disabled:true,test:true};
+      const summary=test.mode==='test'?{enabled:false}:await buildDailySummary(scope,true);
       if (env.AUTOMATION_OUTBOUND_ENABLED!=='true') return {processed:0,results:[],disabled:true,summary:summary.enabled?{day:summary.day,counts:summary.counts}:null};
       let reminders;
       if(env.WHATSAPP_PROVIDER==='first_party_meta'){
         if(!firstPartyReminderEnabled(env))return {processed:0,results:[],disabled:true,summary:summary.enabled?{day:summary.day,counts:summary.counts}:null};
         reminders=createFirstPartyReminderRuntime({env,scope,store,supabase,fetchImpl});
-        await reminders.sweep();
+        if(test.mode==='test'){
+          if(await reminders.testGate.consumed())return {processed:0,results:[],test:true,alreadyAttempted:true};
+          await reminders.testGate.review();
+        }else await reminders.sweep();
       }
-      const rows=typeof store.listDueInvoices==='function'?await store.listDueInvoices({...scope,now:clock().toISOString()}):await store.request('cetld_invoices',{query:{...store.scopeQuery(scope),select:'id',followup_state:'in.(approved,active,scheduled)',next_follow_up_at:`lte.${clock().toISOString()}`,order:'next_follow_up_at.asc',limit:25}});
+      const rows=test.mode==='test'?[{id:test.invoiceId}]:typeof store.listDueInvoices==='function'?await store.listDueInvoices({...scope,now:clock().toISOString()}):await store.request('cetld_invoices',{query:{...store.scopeQuery(scope),select:'id',followup_state:'in.(approved,active,scheduled)',next_follow_up_at:`lte.${clock().toISOString()}`,order:'next_follow_up_at.asc',limit:25}});
       const engine=makeEngine(reminders), results=[];
       for(const row of rows) {try{results.push({invoiceId:row.id,...await engine.run({...scope,invoiceId:row.id})});}catch{results.push({invoiceId:row.id,status:'blocked'});}}
       return {processed:results.length,results,summary:summary.enabled?{day:summary.day,counts:summary.counts}:null};

@@ -3,16 +3,21 @@ import {reminderFingerprint} from './reminder-fingerprint.mjs';
 import {APPROVED_REMINDER_WABA,selectReminderTemplate,buildReminderTemplate} from './reminder-templates.mjs';
 import {readBounded} from '../../ai/http.mjs';
 import {hasUnresolvedFollowUpException} from '../preferences.mjs';
+import {scheduledOwnerTestMode,scheduledOwnerTestScopeMatches,createScheduledOwnerTestGate} from '../scheduled-owner-test.mjs';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const QA=new Set(['+919871367051','+919818685252']);
 const blocked=reason=>({status:'blocked',reason});
 
 export function createApprovedReminderProvider({env=process.env,supabase,store,ownerId,workspaceId,fetchImpl=fetch}={}){
+  const test=scheduledOwnerTestMode(env);
+  const testGate=test.mode==='test'?createScheduledOwnerTestGate({test,env,supabase,store,fetchImpl}):null;
   function enabled(){return ['WHATSAPP_REMINDERS_ENABLED','AUTOMATION_OUTBOUND_ENABLED','WHATSAPP_OUTBOUND_ENABLED'].every(k=>env[k]==='true')
+    &&test.mode!=='blocked'&&(test.mode!=='test'||scheduledOwnerTestScopeMatches(test,{ownerId,workspaceId}))
     &&env.WHATSAPP_WABA_ID===APPROVED_REMINDER_WABA&&/^\d{5,30}$/.test(env.WHATSAPP_PHONE_NUMBER_ID||'')
     &&/^v\d+\.\d+$/.test(env.WHATSAPP_GRAPH_API_VERSION||'')&&!!env.WHATSAPP_ACCESS_TOKEN;}
-  function scope(input){return UUID.test(ownerId||'')&&UUID.test(workspaceId||'')&&input.workspaceId===workspaceId&&UUID.test(input.invoiceId||'');}
+  function scope(input){return UUID.test(ownerId||'')&&UUID.test(workspaceId||'')&&input.workspaceId===workspaceId&&UUID.test(input.invoiceId||'')
+    &&(test.mode!=='test'||input.invoiceId===test.invoiceId&&input.to===test.phone);}
   function allowed(to){const configured=String(env.WHATSAPP_TEST_ALLOWLIST||'').split(',').map(v=>v.trim());return QA.has(to)&&configured.includes(to);}
   async function facts(input){
     if(!scope(input)||!allowed(input.to))throw Error('Reminder scope unavailable');
@@ -28,6 +33,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
     const entry=selectReminderTemplate(settings.follow_up_preferences);
     const parameters=[settings.business_name,invoice.invoice_number,eligibility.customer.name];
     const rendered=buildReminderTemplate(entry,parameters);
+    if(testGate)await testGate.verifyFacts({invoice,settings,entry});
     return {invoice,settings,eligibility,entry,parameters,...rendered};
   }
   return {async prepareReminder(input){if(!enabled())throw Error('Reminder disabled');const result=await facts(input);return {body:result.body};},
@@ -48,6 +54,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
             wabaId:env.WHATSAPP_WABA_ID,phoneNumberId:env.WHATSAPP_PHONE_NUMBER_ID,parameters:f.parameters}};
         const hash=reminderFingerprint(snapshot);
         payload={messaging_product:'whatsapp',recipient_type:'individual',to:input.to.slice(1),type:'template',template:f.template};
+        if(testGate&&!await testGate.claimAttempt())return blocked('scheduled_owner_test_already_attempted');
         const result=await supabase.rpc('cetld_core_authorize_first_party_reminder',{
           p_owner_id:ownerId,p_workspace_id:workspaceId,p_claim_id:claimId,p_snapshot:snapshot,p_snapshot_hash:hash});
         if(result.error)return blocked('atomic_gate_unavailable');
