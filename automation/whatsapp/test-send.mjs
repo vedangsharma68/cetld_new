@@ -146,7 +146,9 @@ export function createWhatsAppInvoiceTestHandler({env = process.env, fetchImpl =
         : result.status === 'blocked' ? 409 : 502).json(result);
     } catch (error) {
       return res.status(error instanceof APIError ? error.status : 503)
-        .json({error: error instanceof APIError ? error.code : 'WHATSAPP_UNAVAILABLE'});
+        .json({error: error instanceof APIError ? error.code : 'WHATSAPP_UNAVAILABLE',
+          ...(error instanceof APIError&&error.code==='APPROVED_TEST_TEMPLATE_MISMATCH'&&error.templateCheck
+            ?{templateCheck:error.templateCheck}:{})});
     }
   };
 }

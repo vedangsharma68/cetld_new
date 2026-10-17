@@ -416,3 +416,7 @@ input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-to
   input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-toggle input):focus-visible{outline-color:Highlight;box-shadow:none}
 }
 .boot>.brand{justify-self:center}
+
+[data-owner-template-check] pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
+[data-owner-template-check] table{table-layout:fixed;white-space:normal}
+[data-owner-template-check] th,[data-owner-template-check] td{padding:8px;overflow-wrap:anywhere}
