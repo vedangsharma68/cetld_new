@@ -563,3 +563,34 @@ test('customer-scoped store fails closed on capped invoice ownership result', as
   const store = createCustomerScopedStore({supabase, workspaceId, customerId});
   await assert.rejects(() => store.query('payments', {select: 'id,invoice_id,amount'}), /cannot verify invoice ownership/);
 });
+
+test('re-subscribe confirmation is fixed platform text and requires an inbound claim', async () => {
+  let claims = 0;
+  const f = harness({authorizeInboundReply: async input => {
+    claims++;
+    assert.equal(input.kind,'start_confirmation');
+    assert.equal(input.workspaceId,null);
+    return {allowed:claims === 1};
+  }});
+  const input = {workspaceId:null,to:PHONE,kind:'start_confirmation',businessName:'CETLD',
+    messageId:'wamid.fixture.start',lastInboundAt:NOW,body:'An arbitrary body must never be sent'};
+  assert.equal((await f.outbound.sendServiceReply(input)).status,'accepted');
+  const body = JSON.parse(f.calls[0].options.body).text.body;
+  assert.match(body,/re-subscribe request/);
+  assert.match(body,/Reply STOP to opt out/);
+  assert.doesNotMatch(body,/arbitrary/);
+  assert.equal((await f.outbound.sendServiceReply(input)).status,'blocked');
+  assert.equal(f.calls.length,1);
+  assert.equal((await f.outbound.sendServiceReply({...input,businessName:'Forged business'})).reason,'invalid_platform_identity');
+  assert.equal((await f.outbound.sendServiceReply({...input,workspaceId:'workspace-a'})).reason,'verification_must_be_unbound');
+});
+
+test('a STOP committed during re-subscribe confirmation authorization blocks Graph', async () => {
+  let suppressed = false;
+  const f = harness({supabase:fakeSupabase({globallySuppressed:()=>suppressed}),
+    authorizeInboundReply:async()=>{suppressed=true;return {allowed:true};}});
+  const result = await f.outbound.sendServiceReply({workspaceId:null,to:PHONE,kind:'start_confirmation',
+    businessName:'CETLD',messageId:'wamid.fixture.start-race',lastInboundAt:NOW});
+  assert.equal(result.status,'blocked');
+  assert.equal(f.calls.length,0);
+});
