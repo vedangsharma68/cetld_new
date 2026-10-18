@@ -26,7 +26,7 @@ test('failed extraction is closed safely and a fresh JPEG retries through the re
       providerFactory:options=>options.requestPurpose==='extraction'?{async generateStructured(call){
         extractionCalls++;
         if(extractionCalls===1)throw new Error('isolated structured extraction unavailable');
-        return {data:call.validate(structuredClone(wire)),model:'fixture-structured-transport'};
+        return {data:call.validate({...structuredClone(wire),imageContent:'single_invoice'}),model:'fixture-structured-transport'};
       }}:{async generate({messages}){
         const prior=messages.findLast(message=>message.role==='tool');
         if(!prior)return {model:'fixture-chat',toolCalls:[{id:'attachment-save',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({

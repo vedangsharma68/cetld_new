@@ -39,7 +39,7 @@ async function fixture(wire, {providerError} = {}) {
       assert.equal(request.name, 'invoice_extraction');
       assert.equal(request.messages[0].content[1].type, 'image_url');
       if (providerError) throw providerError;
-      return {data:request.validate(structuredClone(wire)), model:'gemini-3.5-flash-lite', usedFallback:false};
+      return {data:request.validate({...structuredClone(wire),imageContent:'single_invoice'}), model:'gemini-3.5-flash-lite', usedFallback:false};
     }}),
     // Run the actual extraction wire adaptation and validation without OCR or
     // any external provider request. Real pending, invoice and file stores run.

@@ -34,7 +34,7 @@ for(const kind of ['paid-conflict-pdf','paid-image','paid-evidence-conflict-imag
   let requests=0,extractions=0,followup=false;
   const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},fetchImpl:async(url,init)=>{
    requests++;const body=JSON.parse(init.body);
-   if(new URL(url).hostname==='generativelanguage.googleapis.com'){extractions++;return Response.json({candidates:[{content:{parts:[{text:JSON.stringify(wire)}]},finishReason:'STOP'}]});}
+   if(new URL(url).hostname==='generativelanguage.googleapis.com'){extractions++;return Response.json({candidates:[{content:{parts:[{text:JSON.stringify({...wire,...(image?{imageContent:'single_invoice'}:{})})}]},finishReason:'STOP'}]});}
    assert.equal(new URL(url).hostname,'api.cloudflare.com');
    const result=body.messages.findLast(item=>item.role==='tool');
    if(!result)return Response.json({choices:[{finish_reason:'tool_calls',message:{content:'',tool_calls:[{id:'generic-create',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(followup?{operation:'confirm'}:{operation:'create',table:'invoices',values:{customer_name:'Invented',total_amount:1,currency:'USD'}})}}]}}]});

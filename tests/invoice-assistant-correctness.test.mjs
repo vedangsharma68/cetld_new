@@ -98,7 +98,7 @@ test('how-many intent leads with a count, keeps currencies separate, and exclude
 test('PDF and image directions survive the real upload-confirm save and metadata update paths',async()=>{
   const fields={direction:{value:'payable',confidence:.99},invoiceNumber:{value:'VENDOR-1',confidence:.99},customerName:{value:'Vendor',confidence:.99},invoiceDate:{value:'2026-10-01',confidence:.99},dueDate:{value:'2026-10-30',confidence:.99},subtotal:{value:100,confidence:.99},tax:{value:18,confidence:.99},total:{value:118,confidence:.99},outstandingAmount:{value:118,confidence:.99},currency:{value:'INR',confidence:.99},clientPhone:{value:null,confidence:0},clientPhoneRaw:{value:null,confidence:0},clientEmail:{value:null,confidence:0},notes:{value:null,confidence:0},lineItems:{value:[],confidence:1}};
   const wire=Object.fromEntries(Object.entries(fields).filter(([k])=>k!=='lineItems').flatMap(([k,v])=>[[k,v.value],[k+'Confidence',v.confidence]]));Object.assign(wire,{lineItems:[],lineItemsConfidence:1});
-  const provider={generateStructured:async options=>({data:options.validate(wire),model:'fixture'})};
+  const provider={generateStructured:async options=>({data:options.validate({...wire,...(options.schema.properties.imageContent?{imageContent:'single_invoice'}:{})}),model:'fixture'})};
   for(const [mimeType,bytes] of [['application/pdf',Buffer.from('%PDF-1.7\ninvalid')],['image/png',Buffer.from([137,80,78,71,13,10,26,10,0])]]){
     const extracted=await extractInvoice({provider,bytes,mimeType,imageExtractor:async()=>null,logger:{info(){}}});
     assert.equal(extracted.direction.value,'payable');

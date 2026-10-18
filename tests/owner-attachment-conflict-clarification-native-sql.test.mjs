@@ -44,7 +44,7 @@ for(const installedLineEndings of ['LF','CRLF'])test(`native Gemini owner clarif
    if(new URL(url).hostname==='api.cloudflare.com')return Response.json({error:{message:'isolated primary unavailable'}},{status:503});
    assert.equal(new URL(url).hostname,'generativelanguage.googleapis.com');
    const native=parts=>Response.json({candidates:[{content:{role:'model',parts},finishReason:'STOP'}]});
-   if(body.generationConfig?.responseMimeType==='application/json'){extractions++;return native([{text:JSON.stringify(wire)}]);}
+   if(body.generationConfig?.responseMimeType==='application/json'){extractions++;return native([{text:JSON.stringify({...wire,imageContent:'single_invoice'})}]);}
    const tool=body.contents.flatMap(item=>item.parts||[]).findLast(part=>part.functionResponse)?.functionResponse;
    // An invented create call must be replaced by the server-selected attachment
    // operation on both ingestion and clarification turns.

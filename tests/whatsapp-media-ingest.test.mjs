@@ -127,7 +127,7 @@ test('production extraction advances an incomplete OCR draft to vision and propo
   const raw = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-10',customerName:'Buyer Co',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:18,total:118,currency:'INR',direction:'receivable'})[name] ?? null, confidence: .98}]));
   raw.lineItems = {value: [], confidence: .8};
-  const provider = {generateStructured: async ({validate}) => { visionCalls++; return {data: validate(invoiceWire(raw)), model: 'vision', usedFallback: false}; }};
+  const provider = {generateStructured: async ({validate}) => { visionCalls++; return {data: validate({...invoiceWire(raw), imageContent:'single_invoice'}), model: 'vision', usedFallback: false}; }};
   const supabase = {from(table) { return {select() { return this; }, eq() { return this; }, async maybeSingle() {
     if (table === 'workspace_ai_settings') return {data: {primary_model: 'space-bunny-free', fallback_model: null}};
     if (table === 'workspace_settings') return {data: {business_name: 'Seller'}};
@@ -158,7 +158,7 @@ test('incomplete media asks for missing facts and retains an incomplete review w
   incomplete.lineItems = {value: [], confidence: 0};
   const provider = {generateStructured: async ({validate}) => {
     visionCalls++;
-    return {data: validate(invoiceWire(incomplete)), model: 'vision', usedFallback: false};
+    return {data: validate({...invoiceWire(incomplete), imageContent:'single_invoice'}), model: 'vision', usedFallback: false};
   }};
   const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase, providerFactory: () => provider,
     channelFactory: () => ({ask: async () => ({answer: 'text reply'})}),

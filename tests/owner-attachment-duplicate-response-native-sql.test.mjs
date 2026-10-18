@@ -28,7 +28,7 @@ async function fixture({badDuplicateReply=false,storeWrap=store=>store}={}){
    if(new URL(url).hostname==='api.cloudflare.com')return Response.json({error:{message:'isolated primary unavailable'}},{status:503});
    assert.equal(new URL(url).hostname,'generativelanguage.googleapis.com');
    const native=parts=>Response.json({candidates:[{content:{role:'model',parts},finishReason:'STOP'}]});
-   if(body.generationConfig?.responseMimeType==='application/json'){extractions++;return native([{text:JSON.stringify(wire)}]);}
+   if(body.generationConfig?.responseMimeType==='application/json'){extractions++;return native([{text:JSON.stringify({...wire,imageContent:'single_invoice'})}]);}
    const tool=body.contents.flatMap(item=>item.parts||[]).findLast(part=>part.functionResponse)?.functionResponse;
    if(!tool)return native([{functionCall:{name:'workspaceData',args:current==='yes'?{operation:'confirm'}:current.includes('my business issued')?{operation:'reviewAttachment',table:'invoices',values:{invoice_direction:'receivable'}}:{operation:'create',table:'invoices',values:{customer_name:'Invented',total_amount:1,currency:'USD'}}},thoughtSignature:'fixture-native-signature'}]);
    const result=tool.response;

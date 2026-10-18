@@ -44,7 +44,7 @@ async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseRep
       attachmentIngestFactory:input=>createWhatsAppBoundMessageHandler({...input,extract:async request=>{
         extractions++;
         return extractionWire?extractInvoice({...request,imageExtractor:async()=>null,
-          provider:{async generateStructured(call){return {data:call.validate(structuredClone(extractionWire)),model:'gemini-3.5-flash-lite'};}}}):structuredClone(extracted);
+          provider:{async generateStructured(call){return {data:call.validate({...structuredClone(extractionWire),...(call.schema.properties.imageContent?{imageContent:'single_invoice'}:{})}),model:'gemini-3.5-flash-lite'};}}}):structuredClone(extracted);
       }})}),
     providerFactory:()=>nativeWire?new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,
       cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,logger:{info(){},warn(){},error(){}},

@@ -53,7 +53,7 @@ for(const [caption,mimeType,declined=false] of captions)test(`default native att
         const parsed=new URL(url),body=JSON.parse(init.body);requests.push(parsed.hostname);
         if(parsed.hostname==='generativelanguage.googleapis.com'){
           assert.ok(body.contents[0].parts.some(part=>mimeType==='application/pdf'?part.text?.includes('INV-R-1048'):part.inlineData?.mimeType===mimeType));
-          return Response.json({candidates:[{content:{parts:[{text:JSON.stringify(wire)}]},finishReason:'STOP'}]});
+          return Response.json({candidates:[{content:{parts:[{text:JSON.stringify({...wire,...(mimeType.startsWith('image/')?{imageContent:'single_invoice'}:{})})}]},finishReason:'STOP'}]});
         }
         assert.equal(parsed.hostname,'api.cloudflare.com');
         const tool=body.messages.findLast(item=>item.role==='tool');
