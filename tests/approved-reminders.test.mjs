@@ -43,7 +43,7 @@ async function setup(preferences={}){
     graph.push(JSON.parse(options.body));if(uncertain)throw Error('interrupted fixture transport');
     return Response.json({messages:[{id:'wamid.fixture.approved'}]});
   }});
-  try{await f.db.exec(await readFile(new URL('../supabase/migrations/20261005070000_approved_whatsapp_reminders.sql',import.meta.url),'utf8'));await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060100_invoice_details_templates.sql',import.meta.url),'utf8'));}catch(error){await f.close();throw error;}
+  try{await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060000_customer_reminder_tone.sql',import.meta.url),'utf8'));await f.db.exec(await readFile(new URL('../supabase/migrations/20261005070000_approved_whatsapp_reminders.sql',import.meta.url),'utf8'));await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060100_invoice_details_templates.sql',import.meta.url),'utf8'));}catch(error){await f.close();throw error;}
   const ownerId=randomUUID(),foreignOwner=randomUUID();
   await f.db.query('insert into auth.users(id) values($1),($2)',[ownerId,foreignOwner]);
   async function workspace(actor){await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${actor}';set role authenticated`);
