@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { AccountingError } from './errors.mjs';
 import {isDeletedInvoice, isMissingDeletedAtColumn} from '../../invoice/deleted-at-compat.mjs';
+import {normalizeZohoPhone} from './zoho-phone.mjs';
 
 function keyOf({ provider, userId, workspaceId }) {
   return `${provider}:${userId}:${workspaceId}`;
@@ -288,9 +289,21 @@ export class SupabaseAccountingStore {
     }
     const syncedAt = new Date().toISOString();
     const customersByExternal = new Map();
+    const invoicePhones = new Map();
+    if (provider === 'zoho_books') for (const invoice of invoices) {
+      const externalId = String(invoice.raw?.customer_id || '');
+      const phone = normalizeZohoPhone(invoice.customerPhone);
+      if (externalId && phone && !invoicePhones.has(externalId)) invoicePhones.set(externalId, phone);
+    }
     for (const customer of customers) {
       if (!customer.externalId || !customer.name) continue;
       const values = { workspace_id: workspaceId, name: customer.name.slice(0, 200), company_name: customer.companyName || null, email: customer.email || null, phone: customer.phone || null, external_provider: provider, external_customer_id: String(customer.externalId), last_synced_at: syncedAt, sync_status: 'synced', last_sync_error: null, metadata: { accounting_provider: provider } };
+      if (provider === 'zoho_books') {
+        const phone = normalizeZohoPhone(customer.phone) || invoicePhones.get(String(customer.externalId));
+        // Missing/invalid upstream values must not erase a saved phone.
+        if (phone) values.phone = phone;
+        else delete values.phone;
+      }
       let saved;
       if (customer.email) {
         const match = await this.request(`customers?${new URLSearchParams({ select: 'id,name,company_name,external_provider,external_customer_id', workspace_id: `eq.${workspaceId}`, email: `ilike.${String(customer.email).replace(/([%_])/g, '\\$1')}`, limit: '2' })}`);
@@ -312,8 +325,14 @@ export class SupabaseAccountingStore {
       const externalCustomerId = String(invoice.raw?.customer_id || invoice.raw?.CustomerRef?.value || '');
       let customerId = customersByExternal.get(externalCustomerId);
       if (!customerId && externalCustomerId) {
-        const linkedCustomer = await this.request(`customers?${new URLSearchParams({ select: 'id', workspace_id: `eq.${workspaceId}`, external_provider: `eq.${provider}`, external_customer_id: `eq.${externalCustomerId}`, limit: '1' })}`);
+        const linkedCustomer = await this.request(`customers?${new URLSearchParams({ select: provider === 'zoho_books' ? 'id,phone' : 'id', workspace_id: `eq.${workspaceId}`, external_provider: `eq.${provider}`, external_customer_id: `eq.${externalCustomerId}`, limit: '1' })}`);
         customerId = Array.isArray(linkedCustomer) ? linkedCustomer[0]?.id : null;
+        const phone = invoicePhones.get(externalCustomerId);
+        if (customerId && phone && !linkedCustomer[0].phone) {
+          await this.request(`customers?${new URLSearchParams({id: `eq.${customerId}`, workspace_id: `eq.${workspaceId}`, external_provider: `eq.${provider}`, external_customer_id: `eq.${externalCustomerId}`, or: '(phone.is.null,phone.eq.)'})}`, {
+            method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({phone}),
+          });
+        }
       }
       if (!customerId || !invoice.number || !invoice.invoiceDate) continue;
       const total = majorAmount(invoice.amountMinor, invoice.currency);

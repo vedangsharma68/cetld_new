@@ -50,6 +50,15 @@ core backend before treating a full import as complete. Every reminder queries
 the specific remote invoice balance, independent of bulk-sync pagination.
 A local/remote currency or invoice-total mismatch blocks the reminder.
 
+Zoho customer phones use the contact mobile, primary person's mobile, contact
+phone, primary person's phone, then other contact people (mobile before phone).
+Invoice `contact_persons_details` and object-valued `contact_persons` use the same
+selection; person IDs are ignored. An invoice phone is a fallback for its exact
+Zoho customer ID. National Indian numbers (including a leading trunk zero) and
+`91`/`+91`/`0091` prefixes normalize to E.164; explicit international codes are
+preserved. Invalid or missing values do not clear a saved phone. Existing
+customers receive the corrected phone on their next sync; no migration is needed.
+
 Owner action for live verification: apply the existing accounting migrations;
 set the server-only variables above; add the exact callback to the matching
 Intuit sandbox app; then use **Connect** from Cetld and consent with a test
