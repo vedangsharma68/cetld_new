@@ -8,7 +8,7 @@ const previewSource=app.slice(app.indexOf('let reminderProofAuthSession=null;'),
 const clickSource=app.slice(app.indexOf("document.addEventListener('click',async e=>"),app.indexOf("document.addEventListener('change',e=>"));
 const accountingSource=app.split('\n').find(line=>line.startsWith("document.addEventListener('click',async event=>{const buttonEl=event.target.closest('button[data-action]');"));
 const closeSource=app.split('\n').find(line=>line.startsWith("$('#dialog').addEventListener('close',"));
-const preview={test:true,synthetic:true,recipient:'+919871367051',language:'en',templateName:'cetld_invoice_update_v2',text:'Clearly labelled offline test.'};
+const preview={test:true,synthetic:true,recipient:'+919871367051',language:'en',templateName:'cetld_invoice_update_v3',text:'Clearly labelled offline test.'};
 function deferred(){let resolve;return {promise:new Promise(r=>{resolve=r}),resolve:value=>resolve(value)}}
 function fixture({token=async()=>'offline-token',fetchImpl=async()=>({ok:true,json:async()=>preview})}={}){
   const state={demo:false,user:{id:'owner'},workspace:{id:'workspace',owner_id:'owner'},invoices:[]},requests=[],listeners={},timers=new Map();

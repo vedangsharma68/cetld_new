@@ -32,7 +32,7 @@ const server=createServer(async(req,res)=>{
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin=`http://127.0.0.1:${server.address().port}`;
 const browser=await chromium.launch({headless:true,executablePath:process.env.CETLD_CHROMIUM_EXECUTABLE||'/usr/bin/chromium',args:['--no-sandbox']});
 const report={baseline:baseline||null,cases:[],whatsappPostRequests:0,serverPostRequests:0,productionRequests:0};
-const preview={test:true,synthetic:true,recipient:'+919871367051',language:'en',templateName:'cetld_invoice_update_v2',text:'Hi, this is Preview QA Business. Invoice CETLD-TEST-20261005 for Preview QA has an update.'};
+const preview={test:true,synthetic:true,recipient:'+919871367051',language:'en',templateName:'cetld_invoice_update_v3',text:'Hi, this is Preview QA Business. Invoice CETLD-TEST-20261005 for Preview QA has an update.'};
 async function scenario(name,{hold=false,error=false,staleSession=false,holdAuth=false}={}){
   const context=await browser.newContext({viewport:{width:1280,height:900}}),page=await context.newPage(),requests=[],held=[];const errors=[];
   page.on('pageerror',e=>errors.push(e.message));

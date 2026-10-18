@@ -3,7 +3,7 @@ import {APIError} from '../../ai/http.mjs';
 import {resolveOwnerBinding} from './owner-binding.mjs';
 import {getSendEligibility} from './consent.mjs';
 import {readApprovedReminderTemplates} from './template-diagnostic.mjs';
-import {APPROVED_REMINDER_WABA,APPROVED_REMINDER_FOOTER,selectReminderTemplate,buildReminderTemplate,matchesApprovedReminderTemplate} from './reminder-templates.mjs';
+import {APPROVED_REMINDER_WABA,selectReminderTemplate,buildReminderTemplate,matchesApprovedReminderTemplate} from './reminder-templates.mjs';
 
 // One explicitly authorized fixture, never an arbitrary customer/recipient send.
 export const OWNER_TEST_SCOPE=Object.freeze({workspaceId:'9a83b58d-6b02-4b17-8de5-c67136f26434',
@@ -40,10 +40,10 @@ export function ownerTestTemplateCheck(actual,entry){
     :components.some(c=>c.type!=='BODY'&&c.type!=='FOOTER')?'component_type'
     :bodies.length!==1||footers.length>1?'component_count'
     :bodies[0].text!==entry.body?'body_text'
-    :footers.some(c=>c.text!==APPROVED_REMINDER_FOOTER)?'footer_text':'template_contract';
+    :footers.length?'footer_text':'template_contract';
   return {issue,templateName:entry.name,expected:{status:entry.status,category:entry.category,language:entry.language,
       parameterFormat:'POSITIONAL',parameterFormatOptional:true,
-      components:[{type:'BODY',text:entry.body},{type:'FOOTER',text:APPROVED_REMINDER_FOOTER,optional:true}]},
+      components:[{type:'BODY',text:entry.body}]},
     observed:{found:actual?.found===true,status:actual?.status??null,category:actual?.category??null,
       language:actual?.language??null,parameterFormat:actual?.parameter_format??null,
       components:components.map(component=>({type:component.type,text:component.text??null}))}};

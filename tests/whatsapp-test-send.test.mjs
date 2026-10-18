@@ -71,5 +71,5 @@ test('real outbound claims one revision once and an unknown result is not retrie
   const graph = []; const setup = makeHandler({fetchImpl: async (url, options) => {graph.push({url, body: JSON.parse(options.body)}); throw Error('uncertain network');}, logger: {error() {}, warn() {}}});
   const review = await preview(setup.handler), first = await send(setup.handler, review.body.previewToken), second = await send(setup.handler, review.body.previewToken);
   assert.equal(first.code, 202); assert.equal(first.body.status, 'unknown'); assert.equal(second.code, 409); assert.equal(graph.length, 1);
-  assert.equal(graph[0].body.to, dad.slice(1)); assert.equal(graph[0].body.template.name, 'cetld_invoice_update_v2');
+  assert.equal(graph[0].body.to, dad.slice(1)); assert.equal(graph[0].body.template.name, 'cetld_invoice_update_v3');
 });

@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {applyNoFooterMigration} from './fixtures/no-footer-reminders.mjs';
 import assert from 'node:assert/strict';
 import {randomUUID,createHmac} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
@@ -29,6 +30,7 @@ async function setup(){
     await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060000_customer_reminder_tone.sql',import.meta.url),'utf8'));
     await f.db.exec(await readFile(new URL('../supabase/migrations/20261005070000_approved_whatsapp_reminders.sql',import.meta.url),'utf8'));
     await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060100_invoice_details_templates.sql',import.meta.url),'utf8'));
+    await applyNoFooterMigration(f.db,{approve:true});
   }
   catch(error){await f.close();throw error;}
   const ownerId=randomUUID(),foreignOwner=randomUUID();
@@ -89,6 +91,7 @@ test('synthetic approved-reminder lifecycle composes tenant gate, owner pause/re
     assert.equal(f.graph.length,graphBeforeStop);
     assert.equal((await f.db.query('select revoked_at is not null as stopped from whatsapp_consents where workspace_id=$1',[f.workspaceId])).rows[0].stopped,true);
     assert.equal((await f.db.query('select count(*)::int n from whatsapp_global_suppressions where phone=$1',[phone])).rows[0].n,1);
+    assert.equal((await f.db.query('select count(*)::int n from whatsapp_suppressions where workspace_id=$1 and phone=$2',[f.workspaceId,phone])).rows[0].n,1);
     assert.equal((await f.store.getInvoice(f.scope)).followup_state,'paused');
     await f.runtime.tick(f.scope);assert.equal(f.graph.length,2);
     assert.equal((await f.supabase.rpc('cetld_core_check_local_reminder_payment',{p_owner_id:f.ownerId,p_workspace_id:f.foreignWs,p_invoice_id:f.scope.invoiceId})).data.ok,false);

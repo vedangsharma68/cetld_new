@@ -1,3 +1,4 @@
+import {selectReminderTemplate} from './automation/whatsapp/reminder-templates.mjs';
 // Visibility hints only. The authenticated API independently enforces this scope.
 const scope={workspaceId:'9a83b58d-6b02-4b17-8de5-c67136f26434',ownerId:'40ff343c-4334-4aec-b49a-ca772f0cf8ad',
   invoiceId:'f86e28bd-16a8-4c83-a03d-05302f7f3ff6',recipient:'+919871367051'};
@@ -48,7 +49,7 @@ export function createOwnerTemplateTestUI({state,request,openDialog,dialog,escap
         openDialog('Review owner test',`<div class="dialog-body"><p role="status">${escape(existing)}</p><p>No new message was sent. This owner test will not be sent again. Check Conversations for its delivery history.</p></div><div class="dialog-foot">${button('close','Close')}</div>`);
         return;
       }
-      if(preview.template?.name!=='cetld_invoice_update_v2'||preview.template?.language?.code!=='en'
+      if(preview.template?.name!==selectReminderTemplate().name||preview.template?.language?.code!=='en'
         ||typeof preview.text!=='string'||!preview.text.includes('TEST ONLY - INV-2026-6771')||!preview.previewToken)
         throw Error('The owner test preview could not be verified. No message was sent.');
       reviewed={...context,preview};

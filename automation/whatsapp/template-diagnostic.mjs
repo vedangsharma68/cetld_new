@@ -1,8 +1,8 @@
 import {APIError, readBounded} from '../../ai/http.mjs';
 
-const NAMES = Object.freeze(['cetld_invoice_update_v2', 'cetld_invoice_update_btn_v2',
-  'cetld_invoice_gentle_v1', 'cetld_invoice_gentle_btn_v1',
-  'cetld_invoice_details_relaxed_v1', 'cetld_invoice_details_firm_v1', 'cetld_invoice_details_professional_v1']);
+import {REMINDER_TEMPLATES} from './reminder-templates.mjs';
+
+const NAMES=Object.freeze(REMINDER_TEMPLATES.map(t=>t.name));
 const RECIPIENT = '+919871367051';
 const SENDER = '+917303338959';
 const MAX_PAGES = 3;
