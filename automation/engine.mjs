@@ -43,7 +43,7 @@ export class FollowUpEngine {
     }
     if(hasUnresolvedFollowUpException(invoice))return {status:'skipped',reason:'unresolved_exception'};
     if (!active(invoice)) return {status:'skipped',reason:state(invoice)};
-    const now=this.clock(), settings=await this.settingsFor(scope,invoice), timezone=invoice.debtor_timezone || settings.timezone || 'UTC';
+    const now=this.clock(), settings=await this.settingsFor(scope,invoice), timezone=settings.timezone || invoice.debtor_timezone || 'UTC';
     if(!this.provider.prepareReminder && Object.hasOwn(invoice,'total_amount') && (!settings.businessName || brandedReminder(invoice.metadata.approved_reminder_text,settings.businessName)!==invoice.metadata.approved_reminder_text))return {status:'skipped',reason:'business_name_required'};
     const due=value(invoice,'nextFollowUpAt','next_follow_up_at');
     if (!due || new Date(due)>now) return {status:'waiting'};
@@ -109,7 +109,7 @@ export class FollowUpEngine {
       await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'reminder_limit'});
       return {status:'skipped',reason:'reminder_limit'};
     }
-    if (!isWithinContactHours(this.clock(),finalSettings,invoice.debtor_timezone || finalSettings.timezone || 'UTC')) {
+    if (!isWithinContactHours(this.clock(),finalSettings,finalSettings.timezone || invoice.debtor_timezone || 'UTC')) {
       await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'contact_hours'});
       return {status:'waiting',reason:'contact_hours'};
     }
