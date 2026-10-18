@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {applyNoFooterMigration} from './fixtures/no-footer-reminders.mjs';
 import assert from 'node:assert/strict';
 import {randomUUID,createHmac} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
@@ -31,19 +32,20 @@ test('four approved templates use en, three facts and Settings tone/button varia
     assert.ok(result.body.includes('INV-001 for Fixture customer'));
     assert.doesNotMatch(result.body,/overdue|unpaid|owed/i);
   }
-  assert.equal(selectReminderTemplate({tone:'firm'}).name,'cetld_invoice_update_v2');
+  assert.equal(selectReminderTemplate({tone:'firm'}).name,'cetld_invoice_update_v3');
   assert.throws(()=>buildReminderTemplate(REMINDER_TEMPLATES[0],['x','y']),/Invalid/);
   assert.throws(()=>buildReminderTemplate(REMINDER_TEMPLATES[0],['x','y','{{injected}}']),/Invalid/);
 });
 
-async function setup(preferences={}){
+async function setup(preferences={},{approve=true}={}){
   const graph=[];let uncertain=false;
   const f=await createOfflineSqlNetwork({externalFetch:async(url,options)=>{
     assert.equal(url.origin,'https://graph.facebook.com');assert.equal(options.method,'POST');
     graph.push(JSON.parse(options.body));if(uncertain)throw Error('interrupted fixture transport');
     return Response.json({messages:[{id:'wamid.fixture.approved'}]});
   }});
-  try{await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060000_customer_reminder_tone.sql',import.meta.url),'utf8'));await f.db.exec(await readFile(new URL('../supabase/migrations/20261005070000_approved_whatsapp_reminders.sql',import.meta.url),'utf8'));await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060100_invoice_details_templates.sql',import.meta.url),'utf8'));}catch(error){await f.close();throw error;}
+  try{await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060000_customer_reminder_tone.sql',import.meta.url),'utf8'));await f.db.exec(await readFile(new URL('../supabase/migrations/20261005070000_approved_whatsapp_reminders.sql',import.meta.url),'utf8'));await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060100_invoice_details_templates.sql',import.meta.url),'utf8'));
+    await applyNoFooterMigration(f.db,{approve});}catch(error){await f.close();throw error;}
   const ownerId=randomUUID(),foreignOwner=randomUUID();
   await f.db.query('insert into auth.users(id) values($1),($2)',[ownerId,foreignOwner]);
   async function workspace(actor){await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${actor}';set role authenticated`);
@@ -94,13 +96,13 @@ test('single synthetic own-number proof verifies live-shaped metadata, reserves 
       if(options.method==='GET'&&url.origin==='https://graph.facebook.com'){
         if(url.pathname.endsWith('/phone_numbers'))return Response.json({data:[{id:env.WHATSAPP_PHONE_NUMBER_ID,display_phone_number:'+917303338959'}]});
         const name=url.searchParams.get('name'),entry=REMINDER_TEMPLATES.find(t=>t.name===name);
-        return Response.json({data:[{id:'123456789012345',name,language:'en',status:'APPROVED',category:'UTILITY',parameter_format:'POSITIONAL',components:[{type:'BODY',text:entry.body},{type:'FOOTER',text:'Reply STOP to opt out'}]}]});
+        return Response.json({data:[{id:'123456789012345',name,language:'en',status:'APPROVED',category:'UTILITY',parameter_format:'POSITIONAL',components:[{type:'BODY',text:entry.body}]}]});
       }
       return f.fetchImpl(input,options);
     };
     const options={workspaceId:f.scope.workspaceId,ownerId:f.scope.ownerId,env:f.configured,supabase:f.supabase,fetchImpl};
     const preview=await approvedReminderProof(options);assert.equal(preview.synthetic,true);assert.equal(preview.recipient,phone);assert.ok(preview.text.includes('CETLD-TEST-20261005'));
-    assert.equal(preview.footer,'Reply STOP to opt out');
+    assert.equal(preview.footer,null);
     assert.equal(f.graph.length,0);
     const sent=await approvedReminderProof({...options,send:true});assert.equal(sent.status,'accepted');assert.equal(f.graph.length,1);
     const repeat=await approvedReminderProof({...options,send:true});assert.equal(repeat.status,'blocked');assert.equal(f.graph.length,1);
@@ -194,7 +196,7 @@ test('interrupted accepted transport is quarantined and a repeated runtime call 
 
 test('gentle button variant uses approved body and receipt-scoped button tap pauses; repeated tap is harmless',async()=>{
   const f=await setup({tone:'gentle',templateButtons:true});try{
-    await f.runtime.tick(f.scope);assert.equal(f.graph[0]?.template.name,'cetld_invoice_gentle_btn_v1');
+    await f.runtime.tick(f.scope);assert.equal(f.graph[0]?.template.name,'cetld_invoice_gentle_btn_v2');
     const payload={object:'whatsapp_business_account',entry:[{id:waba,changes:[{field:'messages',value:{metadata:{phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID},messages:[{id:'wamid.fixture.button',from:phone.slice(1),type:'button',timestamp:'1791170000',context:{id:'wamid.fixture.approved'},button:{text:'Pause',payload:'pause'}}]}}]}]};
     const [parsed]=parseMetaMessages(payload,env.WHATSAPP_PHONE_NUMBER_ID,waba);assert.equal(parsed.interactionId,'rt1.wamid.fixture.approved');
     const args={p_phone:phone,p_context_message_id:'wamid.fixture.approved',p_message_id:parsed.provider_message_id,p_action:'pause'};
@@ -225,26 +227,24 @@ test('scheduled route reuses CRON_SECRET, defaults disabled, and runs only confi
 
 test('Settings proof preview validates current Meta approval and Utility category before any write or send',async()=>{
   const f=await setup();try{
-    let invalid=null,omitFooter=false;
+    let invalid=null;
     const fetchImpl=async(input,options)=>{
       const url=new URL(String(input));
       if(options.method==='GET'&&url.origin==='https://graph.facebook.com'){
         if(url.pathname.endsWith('/phone_numbers'))return Response.json({data:[{id:env.WHATSAPP_PHONE_NUMBER_ID,display_phone_number:'+917303338959'}]});
         const name=url.searchParams.get('name'),entry=REMINDER_TEMPLATES.find(t=>t.name===name);
-        const target=name==='cetld_invoice_update_v2';
-        const row={id:'123456789012345',name,language:'en',status:target&&invalid==='approval'?'PENDING':'APPROVED',category:target&&invalid==='category'?'MARKETING':'UTILITY',parameter_format:'POSITIONAL',components:[{type:'BODY',text:target&&invalid==='body'?'Changed template body':entry.body},...(!omitFooter?[{type:'FOOTER',text:target&&invalid==='footer'?'Wrong footer':'Reply STOP to opt out'}]:[])]};
+        const target=name==='cetld_invoice_update_v3';
+        const row={id:'123456789012345',name,language:'en',status:target&&invalid==='approval'?'PENDING':'APPROVED',category:target&&invalid==='category'?'MARKETING':'UTILITY',parameter_format:'POSITIONAL',components:[{type:'BODY',text:target&&invalid==='body'?'Changed template body':target&&invalid==='empty-body'?'':entry.body},...(target&&invalid==='footer'?[{type:'FOOTER',text:'Reply STOP to opt out'}]:[])]};
         return Response.json({data:[row]});
       }
       return f.fetchImpl(input,options);
     };
     const options={workspaceId:f.scope.workspaceId,ownerId:f.scope.ownerId,env:f.configured,supabase:f.supabase,fetchImpl};
-    assert.equal((await approvedReminderProof(options)).footer,'Reply STOP to opt out');
-    for(const mismatch of ['approval','category','body','footer']){
+    assert.equal((await approvedReminderProof(options)).footer,null);
+    for(const mismatch of ['approval','category','body','empty-body','footer']){
       invalid=mismatch;await assert.rejects(approvedReminderProof(options),error=>error.code==='APPROVED_TEST_TEMPLATE_MISMATCH');
     }
-    // Current preview permits no footer; the isolated scheduled gate separately
-    // requires it. A visible matching footer therefore adds evidence.
-    invalid=null;omitFooter=true;assert.equal((await approvedReminderProof(options)).footer,null);
+    invalid=null;assert.equal((await approvedReminderProof(options)).footer,null);
     assert.equal(f.graph.length,0);
     assert.equal((await f.db.query('select count(*)::int n from whatsapp_messages')).rows[0].n,0);
     assert.equal((await f.db.query('select count(*)::int n from cetld_core_automation_events')).rows[0].n,0);
@@ -280,7 +280,7 @@ test('offline SQL amount formatter agrees with JavaScript and debtor column reje
     }
     await assert.rejects(f.db.query("update customers set reminder_tone='aggressive' where id=$1",[f.customerId]),/customers_reminder_tone_check/);
     assert.equal((await f.db.query('select reminder_tone from customers where id=$1',[f.customerId])).rows[0].reminder_tone,null);
-    assert.equal((await f.db.query('select count(*)::int n from app.first_party_reminder_templates')).rows[0].n,7);
+    assert.equal((await f.db.query('select count(*)::int n from app.first_party_reminder_templates')).rows[0].n,11);
   }finally{await f.close();}
 });
 
@@ -298,4 +298,59 @@ test('debtor tone changed after facts pauses approval and the atomic gate denies
     assert.equal((await provider.sendReminder(input)).reason,'atomic_gate_denied');
     assert.equal(f.graph.length,0);assert.equal((await f.store.getInvoice(f.scope)).followup_state,'paused');
   }finally{await f.close();}
+});
+
+
+test('pending no-footer approval blocks the real SQL sender before Graph',async()=>{
+  const f=await setup({templateName:'cetld_invoice_update_v2'},{approve:false});try{
+    await f.runtime.tick(f.scope);assert.equal(f.graph.length,0);
+    assert.equal((await f.db.query('select count(*)::int n from app.first_party_reminder_dispatches')).rows[0].n,0);
+    const invoice=await f.store.getInvoice(f.scope);
+    assert.ok(invoice.metadata.approved_reminder_text.endsWith('\n\nFixture studio'));
+  }finally{await f.close();}
+});
+
+for(const templateName of ['cetld_invoice_update_v2','cetld_invoice_update_btn_v2','cetld_invoice_gentle_v1','cetld_invoice_gentle_btn_v1'])
+test(`stored ${templateName} preference dispatches its no-footer replacement through SQL`,async()=>{
+  const f=await setup({templateName});try{
+    const result=await f.runtime.tick(f.scope);assert.equal(result.results[0]?.status,'sent',JSON.stringify({result,errors:f.errors}));
+    assert.equal(f.graph[0].template.name,selectInvoiceReminderTemplate({templateName}).name);
+    const message=(await f.db.query("select body from whatsapp_messages where kind='reminder'")).rows[0];
+    assert.ok(message.body.trim());assert.doesNotMatch(message.body,/Reply STOP|opt.out/i);
+    assert.deepEqual(f.graph[0].template.components.map(c=>c.type),['body']);
+  }finally{await f.close();}
+});
+
+test('predecessor rows remain authorized during the swap and their button STOP replies still revoke consent',async()=>{
+  for(const [name,tone,buttonVariant] of [
+    ['cetld_invoice_update_v2','professional',false],['cetld_invoice_update_btn_v2','professional',true],
+    ['cetld_invoice_gentle_v1','gentle',false],['cetld_invoice_gentle_btn_v1','gentle',true],
+  ]){
+    const f=await setup({templateName:name});try{
+      const [claim]=await f.store.claimDueFollowups({...f.scope,now:new Date().toISOString(),limit:1});
+      const settings=await f.store.getWorkspacePreferences(f.scope);
+      assert.equal((await f.store.authorizeDelivery({...f.scope,claimId:claim.id,preferencesVersion:settings.updated_at})).authorized,true);
+      const invoice=await f.store.getInvoice(f.scope);
+      const consent=(await f.supabase.from('whatsapp_consents').select('id,created_at').eq('workspace_id',f.scope.workspaceId).single()).data;
+      const entry=selectReminderTemplate({tone,templateButtons:buttonVariant});
+      const parameters=[settings.business_name,invoice.invoice_number,'Fixture customer'];
+      const snapshot={invoiceId:invoice.id,customerId:f.customerId,phone,body:buildReminderTemplate(entry,parameters).body,
+        invoiceVersion:invoice.automation_version,invoiceUpdatedAt:invoice.updated_at,preferencesUpdatedAt:settings.updated_at,
+        consentId:consent.id,consentCreatedAt:consent.created_at,
+        template:{name,language:'en',body:entry.body,revision:'approved-20261005',wabaId:waba,phoneNumberId:env.WHATSAPP_PHONE_NUMBER_ID,parameters}};
+      const result=await f.supabase.rpc('cetld_core_authorize_first_party_reminder',{
+        p_owner_id:f.scope.ownerId,p_workspace_id:f.scope.workspaceId,p_claim_id:claim.id,p_snapshot:snapshot,p_snapshot_hash:reminderFingerprint(snapshot)});
+      assert.equal(result.data?.authorized,true,JSON.stringify(result));
+      if(buttonVariant){
+        await f.supabase.rpc('cetld_core_record_first_party_receipt',{p_callback_token:result.data.callback_token,
+          p_waba_id:waba,p_phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID,p_phone:phone,p_message_id:'wamid.legacy.fixture',p_status:'accepted'});
+        const stopped=await f.supabase.rpc('cetld_core_handle_reminder_button',{
+          p_phone:phone,p_context_message_id:'wamid.legacy.fixture',p_message_id:'wamid.legacy.stop',p_action:'stop'});
+        assert.equal(stopped.data.status,'opt_out');
+        assert.ok((await f.db.query('select revoked_at from whatsapp_consents')).rows[0].revoked_at);
+        assert.equal((await f.db.query('select count(*)::int n from whatsapp_suppressions where phone=$1',[phone])).rows[0].n,1);
+      }
+      assert.equal(f.graph.length,0);
+    }finally{await f.close();}
+  }
 });

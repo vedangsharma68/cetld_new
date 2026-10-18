@@ -115,18 +115,18 @@ function assertNarrowQueries(f){
   }
 }
 
-test('real 04:00 scheduler route and SQL engine target only the fresh invoice; recreating runtime cannot repeat attempt',async()=>{
+test('frozen scheduled-owner-test fails closed after the shared no-footer catalog swap',async()=>{
   const f=await setup();try{
     const before=await f.others();
-    const res=await f.cron();assert.equal(res.code,200);assert.equal(res.payload.results[0]?.results[0]?.status,'sent',JSON.stringify({res,errors:f.errors}));
-    assert.equal(f.graph.length,1);assert.equal(f.graph[0].to,fixed.phone.slice(1));assert.equal(f.graph[0].template.name,'cetld_invoice_update_v2');
-    assert.equal((await f.db.query('select count(*)::int n from cetld_core_automation_events where idempotency_key=$1',[fixed.attemptKey])).rows[0].n,1);
-    assert.equal((await f.runtime().tick(fixed)).alreadyAttempted,true);assert.equal(f.graph.length,1);
+    const res=await f.cron();assert.equal(res.code,200);
+    assert.deepEqual(res.payload.results[0]?.results[0],{invoiceId,status:'skipped',reason:'template_facts_unavailable'});
+    assert.equal(f.graph.length,0);
+    assert.equal((await f.db.query('select count(*)::int n from cetld_core_automation_events where idempotency_key=$1',[fixed.attemptKey])).rows[0].n,0);
+    await f.runtime().tick(fixed);assert.equal(f.graph.length,0);
     assert.deepEqual(await f.others(),before);assertNarrowQueries(f);
     assert.equal((await f.db.query('select count(*)::int n from payments')).rows[0].n,0);
     assert.deepEqual((await f.db.query('select total_amount::float8 total,amount_paid::float8 paid from invoices where id=$1',[invoiceId])).rows[0],{total:1,paid:0});
-    const changedEnv={...base,WHATSAPP_SCHEDULED_OWNER_TEST_INVOICE_ID:f.otherId};
-    assert.equal((await f.runtime(changedEnv).tick(fixed)).alreadyAttempted,true,'changing fixture cannot reset durable identity');
+    assert.ok(!f.requests.some(r=>new URL(r.url).hostname==='graph.facebook.com'),'fails before metadata or dispatch');
   }finally{await f.close();}
 });
 
@@ -159,13 +159,16 @@ for(const condition of ['future','paused','paid','dispute','revoked','suppressed
     }finally{await f.close();}
   });
 
-for(const transport of ['unknown','failed'])test(`durable identity survives ${transport} provider response and recreated scheduler`,async()=>{
-  const f=await setup({transport});try{
-    await f.cron();assert.equal(f.graph.length,1);assert.equal((await f.runtime().tick(fixed)).alreadyAttempted,true);assert.equal(f.graph.length,1);
+test('frozen scheduled template checks reject the new no-footer entry before provider work',async()=>{
+  const f=await setup();try{
+    const gate=createScheduledOwnerTestGate({test:scheduledOwnerTestMode(base),env:base,supabase:f.supabase,store:f.store,fetchImpl:f.fetchImpl});
+    await assert.rejects(gate.verifyFacts({invoice:await f.store.getInvoice({...fixed,invoiceId}),
+      settings:await f.store.getWorkspacePreferences(fixed),entry:REMINDER_TEMPLATES[0]}),/Scheduled test template mismatch/);
+    assert.equal(f.graph.length,0);assert.equal(await gate.consumed(),false);
   }finally{await f.close();}
 });
 
-test('atomic one-use reservation survives concurrent contenders, lost acknowledgement, and later final SQL rejection',async()=>{
+test('atomic one-use reservation survives concurrent contenders and lost acknowledgement',async()=>{
   const f=await setup();try{
     const testMode=scheduledOwnerTestMode(base),gate=()=>createScheduledOwnerTestGate({test:testMode,env:base,supabase:f.supabase,store:f.store,fetchImpl:f.fetchImpl});
     const wins=await Promise.all([gate().claimAttempt(),gate().claimAttempt(),gate().claimAttempt()]);
@@ -179,10 +182,7 @@ test('atomic one-use reservation survives concurrent contenders, lost acknowledg
     const gate=createScheduledOwnerTestGate({test:scheduledOwnerTestMode(base),env:base,supabase:client,store:lost.store,fetchImpl});
     await assert.rejects(gate.claimAttempt());assert.equal(await gate.consumed(),true);assert.equal((await lost.runtime().tick(fixed)).alreadyAttempted,true);assert.equal(lost.graph.length,0);
   }finally{await lost.close();}
-  const rejected=await setup();try{
-    rejected.intercept(async url=>{if(url.pathname.endsWith('/rpc/cetld_core_authorize_first_party_reminder'))await rejected.db.query('insert into whatsapp_global_suppressions(phone) values($1) on conflict do nothing',[fixed.phone]);});
-    await rejected.cron();assert.equal(rejected.graph.length,0);assert.equal((await rejected.runtime().tick(fixed)).alreadyAttempted,true);
-  }finally{await rejected.close();}
+
 });
 
 test('worker uses a distinct authenticated test action; API rejects it without test mode and ignores caller invoice/recipient',async()=>{
@@ -196,11 +196,11 @@ test('worker uses a distinct authenticated test action; API rejects it without t
 
 // PGlite serializes SQL statements; these overlapping JS flows prove the real
 // claim/reservation path, not cross-connection PostgreSQL lock contention.
-test('overlapping scheduler flows dispatch at most once and preserve every other invoice',async()=>{
+test('overlapping frozen scheduler flows stay blocked and preserve every other invoice',async()=>{
   const f=await setup();try{
     const before=await f.others();await Promise.all([f.cron(),f.cron(),f.cron()]);
-    assert.equal(f.graph.length,1);assert.deepEqual(await f.others(),before);assertNarrowQueries(f);
-    assert.equal((await f.runtime().tick(fixed)).alreadyAttempted,true);
+    assert.equal(f.graph.length,0);assert.deepEqual(await f.others(),before);assertNarrowQueries(f);
+    await f.runtime().tick(fixed);assert.equal(f.graph.length,0);
   }finally{await f.close();}
 });
 
@@ -224,7 +224,7 @@ test('UTC window is required, start-inclusive, end-exclusive and never wider tha
   assert.equal(scheduledOwnerTestMode({},new Date(end)).mode,'off');
 });
 
-test('real engine starts at window open once; expiry and later invocations do no database work',async()=>{
+test('frozen engine is blocked at window open; expiry and later invocations do no database work',async()=>{
   let at=windowStart-1;const f=await setup({clock:()=>new Date(at)});try{
     const start=Math.floor(Date.now()/1000)*1000,end=start+65*60000;
     const env={...base,WHATSAPP_SCHEDULED_OWNER_TEST_START_AT:utcSecond(start),WHATSAPP_SCHEDULED_OWNER_TEST_END_AT:utcSecond(end)};
@@ -232,31 +232,28 @@ test('real engine starts at window open once; expiry and later invocations do no
     const before=await f.others();at=start-1;
     assert.equal((await f.runtime(env).tick(fixed)).disabled,true);assert.equal(f.requests.length,0);
     at=start;const result=await f.runtime(env).tick(fixed);
-    assert.equal(result.results[0]?.status,'sent',JSON.stringify({result,errors:f.errors}));
-    assert.equal((await f.runtime(env).tick(fixed)).alreadyAttempted,true);assert.equal(f.graph.length,1);
+    assert.equal(result.results[0]?.reason,'template_facts_unavailable',JSON.stringify({result,errors:f.errors}));
+    await f.runtime(env).tick(fixed);assert.equal(f.graph.length,0);
     const requests=f.requests.length;at=end;
     for(let n=0;n<3;n++){assert.equal((await f.runtime(env).tick(fixed)).disabled,true);at+=86400000;}
-    assert.equal(f.requests.length,requests);assert.equal(f.graph.length,1);assert.deepEqual(await f.others(),before);assertNarrowQueries(f);
+    assert.equal(f.requests.length,requests);assert.equal(f.graph.length,0);assert.deepEqual(await f.others(),before);assertNarrowQueries(f);
   }finally{await f.close();}
 });
 
-for(const phase of ['metadata','attempt-reservation','final-sql'])test(`expiry during ${phase} cannot initiate Graph POST or rearm the permanent identity`,async()=>{
+test('expiry during a direct attempt reservation keeps the durable identity consumed',async()=>{
   let at=Date.now();const f=await setup({clock:()=>new Date(at)});try{
-    const before=await f.others();let crossed=false;
+    let crossed=false;
     f.intercept(async(url,options)=>{
-      const metadata=url.hostname==='graph.facebook.com'&&url.searchParams.get('name')==='cetld_invoice_gentle_btn_v1';
-      const reservation=url.pathname.endsWith('/cetld_core_automation_events')&&options.method==='POST'&&JSON.parse(options.body).idempotency_key===fixed.attemptKey;
-      const finalSql=url.pathname.endsWith('/rpc/cetld_core_authorize_first_party_reminder');
-      if(!crossed&&((phase==='metadata'&&metadata)||(phase==='attempt-reservation'&&reservation)||(phase==='final-sql'&&finalSql))){crossed=true;at=windowEnd;}
+      if(url.pathname.endsWith('/cetld_core_automation_events')&&options.method==='POST'){
+        crossed=true;at=windowEnd;
+      }
     });
-    await f.cron();assert.equal(crossed,true);assert.equal(f.graph.length,0);assert.deepEqual(await f.others(),before);assertNarrowQueries(f);
-    const markers=(await f.db.query('select count(*)::int n from cetld_core_automation_events where idempotency_key=$1',[fixed.attemptKey])).rows[0].n;
-    assert.equal(markers,phase==='metadata'?0:1);
+    const gate=createScheduledOwnerTestGate({test:scheduledOwnerTestMode(base),env:base,supabase:f.supabase,store:f.store,fetchImpl:f.fetchImpl,clock:()=>new Date(at)});
+    await assert.rejects(gate.claimAttempt(),/window closed/);assert.equal(crossed,true);assert.equal(f.graph.length,0);
+    assert.equal((await f.db.query('select count(*)::int n from cetld_core_automation_events where idempotency_key=$1',[fixed.attemptKey])).rows[0].n,1);
     const requests=f.requests.length;assert.equal((await f.runtime().tick(fixed)).disabled,true);assert.equal(f.requests.length,requests);
-    if(markers){
-      const changedWindow={...base,WHATSAPP_SCHEDULED_OWNER_TEST_START_AT:utcSecond(windowEnd-1000),WHATSAPP_SCHEDULED_OWNER_TEST_END_AT:utcSecond(windowEnd+64*60000)};
-      assert.equal((await f.runtime(changedWindow).tick(fixed)).alreadyAttempted,true,'changing window must never reset the reservation');
-      assert.equal(f.graph.length,0);
-    }
+    const changedWindow={...base,WHATSAPP_SCHEDULED_OWNER_TEST_START_AT:utcSecond(windowEnd-1000),WHATSAPP_SCHEDULED_OWNER_TEST_END_AT:utcSecond(windowEnd+64*60000)};
+    assert.equal((await f.runtime(changedWindow).tick(fixed)).alreadyAttempted,true);
+    assert.equal(f.graph.length,0);
   }finally{await f.close();}
 });

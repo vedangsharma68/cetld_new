@@ -7,7 +7,7 @@ import {createOwnerTemplateTestUI,zohoDiscoveryView,ownerTemplateCheckView} from
 const workspaceId='9a83b58d-6b02-4b17-8de5-c67136f26434',userId='40ff343c-4334-4aec-b49a-ca772f0cf8ad',invoiceId='f86e28bd-16a8-4c83-a03d-05302f7f3ff6';
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const preview={test:true,audience:'owner',workspaceId,ownerId:userId,invoiceId,recipient:'+919871367051',
-  template:{name:'cetld_invoice_update_v2',language:{code:'en'}},text:'Hi, this is CETLD test. Invoice TEST ONLY - INV-2026-6771 for owner test only has an update.',previewToken:'fixture-preview-secret'};
+  template:{name:'cetld_invoice_update_v3',language:{code:'en'}},text:'Hi, this is CETLD test. Invoice TEST ONLY - INV-2026-6771 for owner test only has an update.',previewToken:'fixture-preview-secret'};
 function setup({reply=preview,request}={}){
   const state={demo:false,user:{id:userId},workspace:{id:workspaceId,owner_id:userId},invoices:[{id:invoiceId,total:140,paid:40,paused:true}]};
   const snapshots=[],errors=[],toasts=[],calls=[];let head={};
@@ -19,15 +19,15 @@ function setup({reply=preview,request}={}){
 }
 
 test('sanitized template-check fields are visible in terminal failure and all text is escaped',async()=>{
-  const check={issue:'footer_text',templateName:'cetld_invoice_update_v2',
+  const check={issue:'footer_text',templateName:'cetld_invoice_update_v3',
     expected:{status:'APPROVED',category:'UTILITY',language:'en',parameterFormat:'POSITIONAL',parameterFormatOptional:true,
-      components:[{type:'BODY',text:'Approved {{1}} {{2}} {{3}}'},{type:'FOOTER',text:'Reply STOP to opt out',optional:true}]},
+      components:[{type:'BODY',text:'Approved {{1}} {{2}} {{3}}'}]},
     observed:{status:'PAUSED',category:'MARKETING',language:'en',parameterFormat:'NAMED',components:[{type:'BODY',text:'Approved {{1}} {{2}} {{3}}'},{type:'FOOTER',text:'Synthetic <footer>'}]}};
   const f=setup({request:async()=>{throw Object.assign(Error('APPROVED_TEST_TEMPLATE_MISMATCH'),{templateCheck:check});}});
   await f.ui.review(f.control(),invoiceId);
   const html=f.snapshots.at(-1).body;
   for(const value of ['Template check','footer_text','Expected','Observed','Approval status','APPROVED','PAUSED','Category','UTILITY','MARKETING',
-    'Language','en','Parameter format','POSITIONAL','NAMED','BODY','FOOTER','Approved {{1}} {{2}} {{3}}','Reply STOP to opt out','(optional)','may be omitted'])assert.ok(html.includes(value),value);
+    'Language','en','Parameter format','POSITIONAL','NAMED','BODY','FOOTER','Approved {{1}} {{2}} {{3}}','may be omitted'])assert.ok(html.includes(value),value);
   assert.match(html,/Synthetic &lt;footer&gt;/);assert.doesNotMatch(html,/Synthetic <footer>|aria-busy="true"/);
   const hostile=structuredClone(check);hostile.issue=hostile.templateName=hostile.expected.status=hostile.observed.status='<img src=x>';
   hostile.expected.components[0]={type:'<BODY>',text:'<script>'};
@@ -141,10 +141,10 @@ test('rejected owner preview replaces loading with a recoverable error and never
   await assert.rejects(f.ui.send(f.control()),/fresh owner test preview/);
 });
 
-test('owner review displays the approved static opt-out footer',async()=>{
-  const f=setup({reply:{...preview,footer:'Reply STOP to opt out'}});
+test('owner review renders the no-footer message',async()=>{
+  const f=setup({reply:{...preview,footer:null}});
   await f.ui.review(f.control(),invoiceId);
-  assert.match(f.snapshots.at(-1).body,/Reply STOP to opt out/);
+  assert.doesNotMatch(f.snapshots.at(-1).body,/Reply STOP|opt.out/i);
   assert.equal(f.errors.length,0);
 });
 

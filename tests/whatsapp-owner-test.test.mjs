@@ -123,9 +123,9 @@ test('receipt read failure fails closed without transport, mutations or raw data
   assert.equal(f.network.length,0);assert.deepEqual(f.writes,[]);assert.deepEqual(f.business,f.before);
 });
 
-test('approved Meta opt-out footer is accepted and appears in the owner preview',async()=>{
+test('old opt-out footer is rejected for the no-footer owner template',async()=>{
   const f=setup({footer:'Reply STOP to opt out'}),r=await f.run();
-  assert.equal(r.code,200);assert.equal(r.body.footer,'Reply STOP to opt out');
+  assert.equal(r.code,409);assert.equal(r.body.templateCheck.issue,'footer_text');
   assert.equal(sends(f).length,0);
 });
 
@@ -187,7 +187,7 @@ for(const graphResult of ['accepted','failed','unknown'])test(`one durable owner
   assert.ok(results.some(r=>r.body.status===graphResult));assert.equal(f.claims.length,1);assert.equal(sends(f).length,1);
   assert.equal(f.messages.length,1);assert.equal(f.messages[0].audience,'owner');
   const sent=sends(f)[0].body;assert.equal(sent.to,scope.phone.slice(1));assert.equal(sent.type,'template');
-  assert.equal(sent.template.name,'cetld_invoice_update_v2');assert.equal(sent.biz_opaque_callback_data.length,64);
+  assert.equal(sent.template.name,'cetld_invoice_update_v3');assert.equal(sent.biz_opaque_callback_data.length,64);
   assert.ok(!ownerTestKey.includes('approved-template-proof'));assert.ok(!f.messages[0].idempotency_key.startsWith('reply:'));
   f.business.invoices[0].updated_at='2026-10-16T00:00:00Z';const revised=await f.run();
   const duplicate=await f.run('POST',input,revised.body.previewToken);
@@ -223,17 +223,17 @@ for(const [issue,templateOverride] of [
   const f=setup({templateOverride}),r=await f.run();
   assert.equal(r.code,409);assert.equal(r.body.error,'APPROVED_TEST_TEMPLATE_MISMATCH');
   assert.equal(r.body.templateCheck.issue,issue);assert.deepEqual(r.body.templateCheck.expected,{status:'APPROVED',category:'UTILITY',language:'en',parameterFormat:'POSITIONAL',parameterFormatOptional:true,
-    components:[{type:'BODY',text:REMINDER_TEMPLATES[0].body},{type:'FOOTER',text:APPROVED_REMINDER_FOOTER,optional:true}]});
-  assert.equal(r.body.templateCheck.templateName,'cetld_invoice_update_v2');
+    components:[{type:'BODY',text:REMINDER_TEMPLATES[0].body}]});
+  assert.equal(r.body.templateCheck.templateName,'cetld_invoice_update_v3');
   if(templateOverride.components)assert.deepEqual(r.body.templateCheck.observed.components,templateOverride.components);
   assert.equal(sends(f).length,0);assert.deepEqual(f.writes,[]);assert.deepEqual(f.claims,[]);assert.deepEqual(f.business,f.before);
   assert.ok(!JSON.stringify(r.body).includes(env.WHATSAPP_ACCESS_TOKEN));
 });
 
-test('owner template diagnostic agrees with the approved BODY and optional FOOTER validator',async()=>{
+test('owner template diagnostic agrees with the approved no-footer BODY validator',async()=>{
   const entry=REMINDER_TEMPLATES[0],body={type:'BODY',text:entry.body},footer={type:'FOOTER',text:APPROVED_REMINDER_FOOTER};
   const actual={found:true,name:entry.name,status:'APPROVED',category:'UTILITY',language:'en',parameter_format:'POSITIONAL'};
-  for(const components of [[body],[body,footer],[footer,body]])for(const parameter_format of [undefined,'POSITIONAL']){
+  for(const components of [[body]])for(const parameter_format of [undefined,'POSITIONAL']){
     const metadata={...actual,components,parameter_format};
     assert.equal(matchesApprovedReminderTemplate(metadata,entry),true);
     assert.equal(ownerTestTemplateCheck(metadata,entry).issue,null);
@@ -245,7 +245,7 @@ test('owner template diagnostic agrees with the approved BODY and optional FOOTE
     [{name:'other'},'template_name'],[{language:'hi'},'language'],[{parameter_format:'NAMED'},'parameter_format'],
     [{components:[]},'component_count'],[{components:[footer]},'component_count'],
     [{components:[body,footer,footer]},'component_count'],[{components:[body,{type:'HEADER',text:'Extra'}]},'component_type'],
-    [{components:[body,{...footer,text:'Changed footer'}]},'footer_text'],[{components:[{...body,text:'Changed body'},footer]},'body_text']
+    [{components:[body,footer]},'footer_text'],[{components:[{...body,text:''}]},'body_text'],[{components:[{...body,text:'   '}]},'body_text'],[{components:[body,{...footer,text:'Changed footer'}]},'footer_text'],[{components:[{...body,text:'Changed body'},footer]},'body_text']
   ]){
     const metadata={...actual,components:[body,footer],...patch};
     assert.equal(matchesApprovedReminderTemplate(metadata,entry),false);

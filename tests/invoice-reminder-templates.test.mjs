@@ -21,16 +21,16 @@ for(const entry of REMINDER_TEMPLATES)test(`exact catalog contract: ${entry.name
   const actual={found:true,name:entry.name,language:'en',status:'APPROVED',category:'UTILITY',parameter_format:'POSITIONAL',components:[{type:'BODY',text:entry.body}]};
   // Legacy button approval cannot be inferred without exact approved button facts.
   assert.equal(matchesApprovedReminderTemplate(actual,entry),!entry.buttonVariant);
-  assert.equal(matchesApprovedReminderTemplate({...actual,components:[...actual.components,{type:'FOOTER',text:'Reply STOP to opt out'}]},entry),!entry.buttonVariant);
+  assert.equal(matchesApprovedReminderTemplate({...actual,components:[...actual.components,{type:'FOOTER',text:'Reply STOP to opt out'}]},entry),false);
   for(const patch of [{found:false},{name:entry.name+'_wrong'},{language:'en_US'},{status:'ACTIVE'},{category:'MARKETING'},{parameter_format:'NAMED'},
-    {components:[]},{components:[{type:'BODY',text:entry.body+' '}]},{components:[...actual.components,...actual.components]},
+    {components:[]},{components:[{type:'BODY',text:''}]},{components:[{type:'BODY',text:'   '}]},{components:[{type:'BODY',text:entry.body+' '}]},{components:[...actual.components,...actual.components]},
     {components:[...actual.components,{type:'HEADER',text:'Header'}]},{components:[...actual.components,{type:'BUTTONS',buttons:[]}]},
     {components:[...actual.components,{type:'FOOTER',text:'Wrong'}]}])assert.equal(matchesApprovedReminderTemplate({...actual,...patch},entry),false);
   const parameters=entry.parameterCount===5?facts:['Fixture studio','INV-001','Priya Sharma'];
   const rendered=buildReminderTemplate(entry,parameters);
   assert.equal(rendered.template.name,entry.name);assert.equal(rendered.template.language.code,'en');
   assert.deepEqual(rendered.template.components,[{type:'body',parameters:parameters.map(text=>({type:'text',text}))}]);
-  assert.doesNotMatch(rendered.body,/\{\{|\}\}/);
+  assert.doesNotMatch(rendered.body,/\{\{|\}\}|Reply STOP|opt.out/i);
   for(const invalid of ['', ' ', 'x'.repeat(257), 'a\nb','a\rb','a\tb','a{b','a}b','a\0b','a\x7fb','a\x85b','a\u2028b','a\u2029b',null,5]){
     for(let index=0;index<parameters.length;index++){
       const bad=[...parameters];bad[index]=invalid;assert.throws(()=>buildReminderTemplate(entry,bad),/Invalid/);
@@ -45,7 +45,7 @@ test('workspace tones and per-debtor override select approved details; null inhe
     assert.equal(selectInvoiceReminderTemplate({tone}).name,name(expected));
     for(const [debtor,mapped] of [['gentle','relaxed'],['relaxed','relaxed'],['firm','firm'],['professional','professional']]){
       assert.equal(selectInvoiceReminderTemplate({tone},debtor).name,name(mapped));
-      assert.equal(selectInvoiceReminderTemplate({tone,templateButtons:true,templateName:'cetld_invoice_update_v2'},debtor).name,name(mapped));
+      assert.equal(selectInvoiceReminderTemplate({tone,templateButtons:true,templateName:'cetld_invoice_update_v3'},debtor).name,name(mapped));
     }
   }
   assert.equal(selectInvoiceReminderTemplate().name,name('professional'));

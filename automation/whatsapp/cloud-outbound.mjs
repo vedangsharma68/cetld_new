@@ -301,7 +301,7 @@ export function createWhatsAppOutbound({
     }[ownerLinkResult] : null;
     let text = linkText ? linkText
       : kind === 'verification'
-      ? 'Please contact the business that issued your invoice to verify your WhatsApp number. Reply STOP to opt out.'
+      ? 'Please contact the business that issued your invoice to verify your WhatsApp number.'
       : kind === 'stop_confirmation'
         ? "You've been opted out of WhatsApp updates. We won't message you again."
         : null;

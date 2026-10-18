@@ -1,4 +1,4 @@
-// Owner-verified Meta Utility catalog. No model-authored text or template selection.
+// Meta Utility catalog. Replacement approvals are checked separately before sending.
 const update='Hi, this is {{1}}. Invoice {{2}} for {{3}} has an update.';
 const gentle='Hi, this is {{1}}. A quick note about invoice {{2}} for {{3}}. Questions? Just reply here.';
 const details=[
@@ -7,14 +7,22 @@ const details=[
   ['professional',"Hi {{1}}, I'm Cetld, {{2}}'s assistant. 🧾 Invoice {{3}} has an outstanding balance of {{4}}, due on {{5}}. Please reply if you have any questions."],
 ];
 export const APPROVED_REMINDER_WABA='1734116767674237';
+// Retained only for the frozen scheduled-owner-test contract. Never appended.
 export const APPROVED_REMINDER_FOOTER='Reply STOP to opt out';
+// One-line version swaps; senders, diagnostics and existing stored selections share this config.
+export const REMINDER_TEMPLATE_REPLACEMENTS=Object.freeze({
+  cetld_invoice_update_v2:'cetld_invoice_update_v3',
+  cetld_invoice_update_btn_v2:'cetld_invoice_update_btn_v3',
+  cetld_invoice_gentle_v1:'cetld_invoice_gentle_v2',
+  cetld_invoice_gentle_btn_v1:'cetld_invoice_gentle_btn_v2',
+});
 export const REMINDER_TEMPLATES=Object.freeze([
-  ['cetld_invoice_update_v2','professional',false,update],
-  ['cetld_invoice_update_btn_v2','professional',true,update],
-  ['cetld_invoice_gentle_v1','gentle',false,gentle],
-  ['cetld_invoice_gentle_btn_v1','gentle',true,gentle],
+  [REMINDER_TEMPLATE_REPLACEMENTS.cetld_invoice_update_v2,'professional',false,update],
+  [REMINDER_TEMPLATE_REPLACEMENTS.cetld_invoice_update_btn_v2,'professional',true,update],
+  [REMINDER_TEMPLATE_REPLACEMENTS.cetld_invoice_gentle_v1,'gentle',false,gentle],
+  [REMINDER_TEMPLATE_REPLACEMENTS.cetld_invoice_gentle_btn_v1,'gentle',true,gentle],
 ].map(([name,tone,buttonVariant,body])=>Object.freeze({name,tone,buttonVariant,body,
-  language:'en',category:'UTILITY',status:'APPROVED',parameterCount:3,revision:'approved-20261005'})).concat(
+  language:'en',category:'UTILITY',status:'APPROVED',parameterCount:3,revision:'approved-20261018-nf'})).concat(
   details.map(([tone,body])=>Object.freeze({name:`cetld_invoice_details_${tone}_v1`,tone,body,buttonVariant:false,
     language:'en',category:'UTILITY',status:'APPROVED',parameterCount:5,revision:'approved-20261018'}))));
 
@@ -26,10 +34,10 @@ export function selectReminderTemplate(preferences={}){
 export const REMINDER_TONES=Object.freeze(['gentle','relaxed','firm','professional']);
 export function selectInvoiceReminderTemplate(preferences={},debtorTone=null){
   if(debtorTone!==null&&!REMINDER_TONES.includes(debtorTone))throw Error('Invalid debtor tone');
-  // Explicit legacy names and the existing button toggle retain the old catalog.
+  // Existing stored names resolve to their no-footer replacements.
   // The isolated scheduled owner test continues to use selectReminderTemplate.
   if(debtorTone===null&&preferences.templateName!==undefined){
-    const entry=REMINDER_TEMPLATES.find(t=>t.parameterCount===3&&t.name===preferences.templateName);
+    const entry=REMINDER_TEMPLATES.find(t=>t.parameterCount===3&&t.name===(REMINDER_TEMPLATE_REPLACEMENTS[preferences.templateName]??preferences.templateName));
     if(!entry)throw Error('Invalid legacy reminder template');
     return entry;
   }
@@ -45,10 +53,8 @@ export function matchesApprovedReminderTemplate(actual,entry){
     ||(actual.parameter_format!==undefined&&actual.parameter_format!=='POSITIONAL')
     ||!Array.isArray(actual.components))return false;
   const bodies=actual.components.filter(c=>c.type==='BODY');
-  const footers=actual.components.filter(c=>c.type==='FOOTER');
-  return !entry.buttonVariant&&bodies.length===1&&bodies[0].text===entry.body
-    &&footers.length<=1&&footers.every(c=>c.text===APPROVED_REMINDER_FOOTER)
-    &&actual.components.every(c=>c.type==='BODY'||c.type==='FOOTER');
+  return !entry.buttonVariant&&bodies.length===1&&typeof bodies[0].text==='string'&&bodies[0].text.trim().length>0&&bodies[0].text===entry.body
+    &&actual.components.every(c=>c.type==='BODY');
 }
 export function buildReminderTemplate(entry,parameters){
   if(!REMINDER_TEMPLATES.includes(entry)||!Array.isArray(parameters)||parameters.length!==entry.parameterCount

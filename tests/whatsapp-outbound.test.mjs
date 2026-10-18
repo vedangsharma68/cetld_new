@@ -189,7 +189,7 @@ test('template send rechecks current invoice and uses only neutral fixed templat
   assert.equal(active.calls.length, 1);
   const payload = JSON.parse(active.calls[0].options.body);
   assert.equal(payload.to, PHONE.slice(1));
-  assert.equal(payload.template.name, 'cetld_invoice_update_v2');
+  assert.equal(payload.template.name, 'cetld_invoice_update_v3');
   assert.deepEqual(payload.template.components[0].parameters.map(item => item.text), ['Acme Studio', 'INV-1','Fixture customer']);
   assert.equal('body' in payload, false);
 });
