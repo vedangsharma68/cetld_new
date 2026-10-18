@@ -23,7 +23,7 @@ export function collectionsPulse(invoices=[],payments=[],{today=localDate(),defa
     if(!byCurrency.has(currency))byCurrency.set(currency,{currency,outstanding:0,overdue:0,dueNext7Days:0,collectedThisMonth:0});
     return byCurrency.get(currency);
   };
-  const activeInvoices=invoices.filter(invoice=>!invoice?.deleted_at);
+  const activeInvoices=invoices.filter(invoice=>!invoice?.deleted_at&&(invoice.invoice_direction??invoice.metadata?.invoice_direction)!=='payable');
   const invoiceById=new Map(activeInvoices.map(invoice=>[invoice.id,invoice]));
   for(const invoice of activeInvoices){
     const balance=remaining(invoice);

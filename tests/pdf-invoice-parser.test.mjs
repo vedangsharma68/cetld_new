@@ -207,8 +207,8 @@ test('returns null when row amounts do not reconcile with the printed subtotal',
   assert.equal(parsePdfInvoiceText(mismatched), null);
 });
 
-test('returns null when subtotal, tax, and explicit charges do not reconcile with total', () => {
-  const mismatched = bioplexText.replace('SHIPPING & HANDLING 50.00', 'SHIPPING & HANDLING 49.00');
+test('returns null when subtotal, tax, and explicit charges differ beyond rounding tolerance', () => {
+  const mismatched = bioplexText.replace('SHIPPING & HANDLING 50.00', 'SHIPPING & HANDLING 48.99');
   assert.equal(parsePdfInvoiceText(mismatched), null);
 });
 

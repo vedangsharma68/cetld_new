@@ -78,10 +78,10 @@ export function validateCustomFields(value) {
   return {...value};
 }
 
-export function ownerCalendar(clock=()=>new Date(),timezone='UTC') {
+export function ownerCalendar(clock=()=>new Date(),timezone='Asia/Kolkata') {
   const parts=new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(clock());
   const get=type=>parts.find(p=>p.type===type).value;
   const currentDate=`${get('year')}-${get('month')}-${get('day')}`;
   const shift=n=>new Date(Date.parse(currentDate+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);
-  return {timezone,currentDate,tomorrow:shift(1),yesterday:shift(-1)};
+  return {timezone,currentDate,tomorrow:shift(1),dayAfterTomorrow:shift(2),yesterday:shift(-1),nextWeek:shift(7)};
 }

@@ -17,9 +17,9 @@ test('plain unpaid list requests are read-only and derive net balances without e
     {...row,invoice_number:'FULL-1',status:'sent',amount_paid:'1234.56'},
     {...row,invoice_number:'OVER-1',status:'sent',amount_paid:'1300'},
     {...row,invoice_number:'BILL-1',status:'draft',metadata:{invoice_direction:'payable'}}]);
-  assert.deepEqual(derived.invoices.map(row=>[row.invoiceNumber,row.outstanding]),[['INV-2048-1','834.56'],['REVERSED-1','1234.56'],['BILL-1','834.56']]);
+  assert.deepEqual(derived.invoices.map(row=>[row.invoiceNumber,row.outstanding]),[['INV-2048-1','834.56'],['REVERSED-1','1234.56']]);
   const reply=invoiceReadAnalysisReply({ok:true,readOnly:true,operation:'read',table:'invoices',invoiceReadAnalysis:derived});
-  assert.match(reply,/including drafts/);assert.match(reply,/BILL-1.*payable/);assert.doesNotMatch(reply,/FULL-1|OVER-1|no payments|never paid/i);
+  assert.match(reply,/including drafts/);assert.doesNotMatch(reply,/BILL-1|FULL-1|OVER-1|no payments|never paid/i);
   assert.equal(deriveInvoiceReadAnalysis(parsed,[{...row,status:'draft'}],{truncated:true}),null);
   assert.equal(deriveInvoiceReadAnalysis(parsed,[{...row,status:'void'}]),null);
   assert.equal(deriveInvoiceReadAnalysis(parsed,[{...row,status:'sent',amount_paid:null}]),null);

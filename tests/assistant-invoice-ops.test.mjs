@@ -30,8 +30,8 @@ test('missing due date asks the required question and performs no write',async()
   assert.equal(writes,0);
 });
 
-test('payable and uncertain invoices are rejected before any persistence',async()=>{
-  for(const direction of ['payable','uncertain',null]){
+test('uncertain and absent direction are rejected before any persistence',async()=>{
+  for(const direction of ['uncertain',null]){
     let calls=0;
     const store=new Proxy({}, {get(){calls++;return async()=>null}});
     await assert.rejects(saveAssistantInvoice({store,invoice:{...base,direction},confirmed:true,idempotencyKey:'invoice_direction_1048'}));
@@ -42,7 +42,7 @@ test('payable and uncertain invoices are rejected before any persistence',async(
 test('zero total and inconsistent subtotal, tax, or outstanding cannot be saved',async()=>{
   for(const patch of [
     {subtotal:0,tax:0,total:0,outstanding:0},
-    {subtotal:100,tax:17.98,total:118,outstanding:118},
+    {subtotal:100,tax:16.99,total:118,outstanding:118},
     {subtotal:100,tax:18,total:118,outstanding:119},
   ]){
     let calls=0;

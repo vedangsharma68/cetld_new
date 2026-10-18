@@ -100,7 +100,7 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, a
       const result = await scoped('invoices').upsert({workspace_id: workspaceId, customer_id: invoiceCustomerId,
         invoice_number: invoice.invoiceNumber, issue_date: invoice.invoiceDate, due_date: invoice.dueDate,
         currency: invoice.currency, total_amount: invoice.total, notes: invoice.notes || null,
-        metadata: {assistant_idempotency_key: invoice.idempotencyKey, invoice_direction: invoice.direction,
+        metadata: {assistant_idempotency_key: invoice.idempotencyKey, invoice_direction: invoice.direction || 'receivable',
           bookkeeping_sync_status: 'pending', followup_state: 'draft', next_follow_up_at: null,
           subtotal: invoice.subtotal, tax: invoice.tax, outstanding_amount: invoice.total,
           client_name: invoice.clientName, printed_invoice_number: reviewNumberAudit?.originalExtractedNumber ?? (invoice.invoiceNumber === 'AUTO' ? null : invoice.invoiceNumber),

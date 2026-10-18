@@ -20,7 +20,7 @@ export function status(invoice, today = localDate()) {
   return 'Open';
 }
 export function totals(invoices) {
-  return invoices.filter(x=>!x?.deleted_at).reduce((t, x) => ({outstanding:t.outstanding+remaining(x), overdue:t.overdue+(status(x)==='Overdue'?remaining(x):0), collected:t.collected+x.paid_minor}), {outstanding:0,overdue:0,collected:0});
+  return invoices.filter(x=>!x?.deleted_at&&(x.invoice_direction??x.metadata?.invoice_direction)!=='payable').reduce((t, x) => ({outstanding:t.outstanding+remaining(x), overdue:t.overdue+(status(x)==='Overdue'?remaining(x):0), collected:t.collected+x.paid_minor}), {outstanding:0,overdue:0,collected:0});
 }
 export function payment(invoice, amount) {
   if(invoice?.deleted_at)throw new Error('Deleted invoices cannot accept payments.');

@@ -63,6 +63,13 @@ function checkedSelect(table, select, includeDeletedAt = false) {
   return fields.join(',');
 }
 
+async function readWorkspaceTimezone(supabase, workspaceId) {
+  const result = await supabase.from('workspace_settings').select('workspace_id,default_timezone').eq('workspace_id', workspaceId).maybeSingle();
+  if (result.error) throw result.error;
+  if (result.data && result.data.workspace_id !== workspaceId) throw new TypeError('workspace scope violation');
+  return result.data?.default_timezone || null;
+}
+
 function applyFilters(query, table, filters) {
   if (!filters || typeof filters !== 'object' || Array.isArray(filters)) throw new TypeError('invalid filters');
   for (const [field, expression] of Object.entries(filters)) {
@@ -111,6 +118,7 @@ export function createCustomerScopedStore({supabase, workspaceId, customerId} = 
   return Object.freeze({
     workspaceId,
     customerId,
+    getWorkspaceTimezone: () => readWorkspaceTimezone(supabase, workspaceId),
     async query(table, {select, filters = {}, order = 'id.asc', limit = 100, offset = 0} = {}) {
       if (!Object.hasOwn(TABLE_FIELDS, table)) throw new TypeError('unsupported table');
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000 || !Number.isSafeInteger(offset) || offset < 0 || offset > 10000) throw new TypeError('invalid pagination');
@@ -159,6 +167,10 @@ export function createOwnerScopedStore({supabase,workspaceId,ownerId,phone,autho
     throw new TypeError('verified owner scope is required');
   const deletedAtCompatibility=createDeletedAtCompatibility();
   return Object.freeze({workspaceId,userId:ownerId,role:'owner',
+    async getWorkspaceTimezone() {
+      if (!await authorize()) throw new TypeError('owner binding changed');
+      return readWorkspaceTimezone(supabase, workspaceId);
+    },
     async query(table,{select,filters={},order='id.asc',limit=100,offset=0}={}) {
       if(!Object.hasOwn(TABLE_FIELDS,table))throw new TypeError('unsupported table');
       if(!Number.isSafeInteger(limit)||limit<1||limit>1000||!Number.isSafeInteger(offset)||offset<0||offset>10000)

@@ -138,7 +138,7 @@ test('Assistant bypasses an incorrect empty-overdue model answer and returns gro
   const result=await answerWorkspaceQuestion({provider,store:workspaceStore(),message:'Which invoices are overdue?',clock:fixedClock});
 
   assert.equal(provider.requests.length,0);
-  assert.match(result.answer,/3 overdue invoices \(as of 28 Sept? 2026 UTC\):/i);
+  assert.match(result.answer,/3 overdue invoices \(as of 28 Sept? 2026 Asia\/Kolkata\):/i);
   for(const [number,currency,amount,dueDate] of [
     ['INV-005','AUD','1564.00','2021-06-27'],
     ['1223113','INR','1725.00','2024-01-15'],
@@ -159,7 +159,7 @@ test('Assistant bypasses an incorrect empty-overdue model answer and returns gro
   assert.deepEqual(result.evidence.records.map(row=>row.label),['INV-005','1223113','GST-3425-26']);
 });
 
-test('overdue summaries distinguish payable and uncertain direction with shared follow-up caveats',async()=>{
+test('overdue summaries exclude payables and retain uncertain-direction follow-up caveats',async()=>{
   const classifiedInvoices=[
     {...invoice('10000000-0000-4000-8000-000000000011',CUSTOMER_GREEN,'PAY-101','2026-09-15','INR','125.00','0.00','sent'),metadata:{invoice_direction:'payable'}},
     {...invoice('10000000-0000-4000-8000-000000000012',CUSTOMER_MINERAL,'UNC-202','2026-09-16','USD','240.00','0.00','sent'),metadata:{invoice_direction:'uncertain'}},
@@ -167,7 +167,7 @@ test('overdue summaries distinguish payable and uncertain direction with shared 
   const store=workspaceStore({invoices:classifiedInvoices,customers,payments:[],invoice_files:[]});
   const result=await answerWorkspaceQuestion({provider:providerWithOverdueToolAndFalseEmptyAnswer(),store,message:'Which invoices are overdue?',clock:fixedClock});
 
-  assert.match(result.answer,/PAY-101.*INR 125\.00.*direction: payable/i);
+  assert.doesNotMatch(result.answer,/PAY-101|INR 125\.00|direction: payable/i);
   assert.match(result.answer,/UNC-202.*USD 240\.00.*direction uncertain/i);
   assert.match(result.answer,/Some invoices need a quick review before follow-up\./i);
   assert.equal((result.answer.match(/quick review/g)||[]).length,1);
@@ -178,7 +178,7 @@ test('dashboard overdue prompts bypass an AI planner that could add an unsupport
   const provider={async generate(){throw Error('The dashboard prompt must not call the AI planner');}};
   for(const message of ['What needs my attention today?','Which invoices are most overdue?']){
     const result=await answerWorkspaceQuestion({provider,store:workspaceStore(),message,clock:fixedClock});
-    assert.match(result.answer,/3 overdue invoices \(as of 28 Sept? 2026 UTC\):/i);
+    assert.match(result.answer,/3 overdue invoices \(as of 28 Sept? 2026 Asia\/Kolkata\):/i);
     assert.match(result.answer,/INV-005.*AUD 1564\.00/i);
     assert.match(result.answer,/1223113.*INR 1725\.00/i);
     assert.match(result.answer,/GST-3425-26.*AUD 4490\.00/i);

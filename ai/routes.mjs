@@ -125,6 +125,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
       }
       return res.status(200).json(result);
     } catch (error) {
+      if (req.query?.action === 'extract' && error?.code === 'INVALID_OUTPUT') return res.status(502).json({error:'INVOICE_EXTRACTION_UNAVAILABLE',message:'The invoice could not be read safely. Please retry or enter its details manually.'});
       if (req.query?.action === 'confirm-accounting-action' && req.body?.confirmed === true) logger.error?.('Assistant accounting confirmation failed', {code:error?.code || 'UNEXPECTED_ERROR', status:error?.status || 503});
       return sendError(res, error);
     }

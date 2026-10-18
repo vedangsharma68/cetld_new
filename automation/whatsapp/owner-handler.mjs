@@ -92,7 +92,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     // Keep the provider text byte-for-byte equivalent to the persisted turn.
     // Lifecycle RPCs validate exact provider message ID and stored content.
     const message=String(scope.message||'');
-    let timezone='UTC';
+    let timezone='Asia/Kolkata';
     onProgress('context');
     let pending,pendingStoreAvailable=true;
     try{pending=pendingActionStoreFactory({supabase});}
@@ -114,7 +114,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
       try{
         const row=dataOrThrow(await timedContextRead(logger,'bot_preferences',()=>supabase.from('workspace_settings')
           .select('owner_bot_preferences,default_timezone').eq('workspace_id',workspaceId).maybeSingle()));
-        try{new Intl.DateTimeFormat('en',{timeZone:row?.default_timezone});timezone=row?.default_timezone||'UTC';}catch{}
+        try{new Intl.DateTimeFormat('en',{timeZone:row?.default_timezone});timezone=row?.default_timezone||'Asia/Kolkata';}catch{}
         return normalizeOwnerBotPreferences(row?.owner_bot_preferences);
       }catch{return normalizeOwnerBotPreferences({confirmationMode:'buttons'});}
     };
@@ -477,7 +477,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
   return handle;
 }
 
-export function createOwnerWorkspacePlanner({provider,message,history=[],timezone='UTC',clock=()=>new Date(),signal,deadlineAt}={}) {
+export function createOwnerWorkspacePlanner({provider,message,history=[],timezone='Asia/Kolkata',clock=()=>new Date(),signal,deadlineAt}={}) {
   return async(request,{catalog,signal:planningSignal=signal,deadlineAt:planningDeadline=deadlineAt,validationFeedback=null}={})=>{
     const needsTarget=validationFeedback?.validationCode==='TARGET_REQUIRED';
     const valuesSchema=Object.keys(catalog?.tables||{}).length===1&&catalog?.tables?.invoices?.correctionValuesSchema

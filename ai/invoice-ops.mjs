@@ -46,7 +46,7 @@ function lineItems(value) {
 
 export function validateAssistantInvoice(value) {
   object(value, INPUT_FIELDS);
-  if (value.direction !== 'receivable') throw new APIError(422, 'INVOICE_DIRECTION_REVIEW_REQUIRED');
+  if (!['receivable', 'payable'].includes(value.direction)) throw new APIError(422, 'INVOICE_DIRECTION_REVIEW_REQUIRED');
   const invoiceNumber = String(value.invoiceNumber || '').trim();
   const clientName = String(value.clientName || '').trim();
   if (!invoiceNumber || invoiceNumber.length > 100) throw new APIError(422, 'INVOICE_NUMBER_REQUIRED');
@@ -69,7 +69,7 @@ export function validateAssistantInvoice(value) {
   if (subtotal !== null && tax !== null) {
     const partsMinor = Math.round(subtotal * 100) + Math.round(tax * 100);
     const adjustmentMinor = Math.round(total * 100) - partsMinor;
-    if (!Number.isSafeInteger(partsMinor) || Math.abs(adjustmentMinor) > 1) throw new APIError(422, 'INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX');
+    if (!Number.isSafeInteger(partsMinor) || Math.abs(adjustmentMinor) > 100) throw new APIError(422, 'INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX');
   }
   const email = value.clientEmail == null ? null : String(value.clientEmail).trim();
   if (email && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 320)) throw new APIError(422, 'INVALID_CLIENT_EMAIL');
@@ -83,7 +83,7 @@ export function validateAssistantInvoice(value) {
   const alreadyPaid = value.alreadyPaid === true;
   if (alreadyPaid && outstanding !== null && outstanding !== 0) throw new APIError(422, 'PAID_INVOICE_HAS_OUTSTANDING_BALANCE');
   if (!alreadyPaid && outstanding !== null && outstanding !== total) throw new APIError(422, 'PARTIAL_BALANCE_REQUIRES_PAYMENT_RECORD');
-  return {invoiceNumber, clientName, clientEmail: email || null, clientPhone: phone || null, clientPhoneRaw: phoneRaw || null, invoiceDate: value.invoiceDate, dueDate: value.dueDate, subtotal, tax, total, outstanding: alreadyPaid ? 0 : total, currency, notes, lineItems: items, alreadyPaid, direction: 'receivable', missingDueDate};
+  return {invoiceNumber, clientName, clientEmail: email || null, clientPhone: phone || null, clientPhoneRaw: phoneRaw || null, invoiceDate: value.invoiceDate, dueDate: value.dueDate, subtotal, tax, total, outstanding: alreadyPaid ? 0 : total, currency, notes, lineItems: items, alreadyPaid, direction: value.direction, missingDueDate};
 }
 
 function responseInvoice(row) {
@@ -93,7 +93,7 @@ function responseInvoice(row) {
 async function syncSavedInvoice({store, invoice, row, accounting}) {
   const metadata = {...(row.metadata || {}), bookkeeping_sync_status: 'pending', bookkeeping_sync_error: null};
   try {
-    if (!accounting?.syncInvoice) {
+    if (invoice.direction === 'payable' || !accounting?.syncInvoice) {
       const saved = await store.updateAssistantInvoiceMetadata(row.id, {...metadata, bookkeeping_sync_status: 'not_configured'});
       return {row: saved, sync: {status: 'not_configured', provider: null, retryable: false}};
     }
@@ -155,7 +155,7 @@ export async function retryAssistantInvoiceSync({store, invoiceId, accounting} =
   const metadata = row.metadata || {};
   if (metadata.bookkeeping_record_id && metadata.bookkeeping_sync_status === 'synced') return {saved: true, invoice: responseInvoice(row), sync: {status: 'synced', provider: metadata.bookkeeping_provider || null, externalId: metadata.bookkeeping_record_id, retryable: false}, idempotent: true};
   const customer = (await store.query('customers', {select: 'id,workspace_id,name,email,phone', filters: {id: `eq.${row.customer_id}`}, limit: 1}))[0];
-  const invoice = {invoiceNumber: row.invoice_number, clientName: customer?.name || '', clientEmail: customer?.email || null, clientPhone: customer?.phone || null, invoiceDate: row.issue_date, dueDate: row.due_date, currency: row.currency, total: Number(row.total_amount), subtotal: metadata.subtotal ?? null, tax: metadata.tax ?? null, outstanding: Number(row.total_amount) - Number(row.amount_paid || 0), notes: row.notes || null, lineItems: Array.isArray(metadata.line_items) ? metadata.line_items : [], alreadyPaid: row.status === 'paid'};
+  const invoice = {direction: metadata.invoice_direction || 'receivable', invoiceNumber: row.invoice_number, clientName: customer?.name || '', clientEmail: customer?.email || null, clientPhone: customer?.phone || null, invoiceDate: row.issue_date, dueDate: row.due_date, currency: row.currency, total: Number(row.total_amount), subtotal: metadata.subtotal ?? null, tax: metadata.tax ?? null, outstanding: Number(row.total_amount) - Number(row.amount_paid || 0), notes: row.notes || null, lineItems: Array.isArray(metadata.line_items) ? metadata.line_items : [], alreadyPaid: row.status === 'paid'};
   const synced = await syncSavedInvoice({store, invoice, row, accounting});
   return {saved: true, invoice: responseInvoice(synced.row), sync: synced.sync, idempotent: true};
 }

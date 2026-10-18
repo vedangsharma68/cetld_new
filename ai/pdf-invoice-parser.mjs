@@ -165,7 +165,7 @@ function partyBlock(lines, pattern) {
     const block = [clean(match[1])].filter(Boolean);
     for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
       const line = lines[cursor];
-      if (/^(?:SHIP\s+TO|COMMENTS?|SPECIAL\s+INSTRUCTIONS|SALESPERSON|P\.?O\.?\s+NUMBER|TERMS|QUANTITY|QTY|INVOICE|SUBTOTAL|TOTAL)\b/i.test(line)) break;
+      if (/^(?:(?:(?:BILL|SOLD|SHIP|INVOICE)\s+TO|BILL\s+FROM|SOLD\s+BY|ISSUED\s+BY|FROM|TO)\b|(?:CUSTOMER|CLIENT|SELLER|SUPPLIER|VENDOR)(?:\s*:|\s*$)|(?:COMMENTS?|SPECIAL\s+INSTRUCTIONS|SALESPERSON|P\.?O\.?\s+NUMBER|TERMS|QUANTITY|QTY|INVOICE|SUBTOTAL|TOTAL)\b)/i.test(line)) break;
       if (line) block.push(line);
     }
     return block;
@@ -243,7 +243,7 @@ function totals(lines) {
     if (rank >= 0 && rank >= totalRank) { total = amount; totalRank = rank; }
     if (/^\s*(?:AMOUNT|BALANCE|REMAINING)\s+DUE\b|^\s*TOTAL\s+DUE\b/i.test(line)) outstanding = amount;
   }
-  if (subtotal === null || total === null) return null;
+  if (total === null) return null;
   return { subtotal, tax, charges, hasCharges, discounts, total, outstanding };
 }
 
@@ -274,8 +274,10 @@ function classifyDirection(lines, businessName, buyerBlock, sellerBlock) {
   const wanted = normalizedName(businessName);
   if (!wanted) return 'uncertain';
   const matches = (block) => block.some((line) => normalizedName(line) === wanted);
-  if (matches(sellerBlock)) return 'receivable';
-  if (matches(buyerBlock)) return 'payable';
+  const seller = matches(sellerBlock), buyer = matches(buyerBlock);
+  if (seller && buyer) return 'uncertain';
+  if (seller) return 'receivable';
+  if (buyer) return 'payable';
   const payableTo = findLine(lines, /^\s*MAKE\s+ALL\s+CHECKS\s+PAYABLE\s+TO\b/i);
   if (payableTo && normalizedName(payableTo.replace(/^.*?\bTO\b/i, '')) === wanted) return 'receivable';
   return 'uncertain';
@@ -291,14 +293,22 @@ export function parsePdfInvoiceText(text, { businessName = '' } = {}) {
   const headerIndex = lines.findIndex((line) => /\b(?:QUANTITY|QTY)\b/i.test(line)
     && /\bDESCRIPTION\b/i.test(line) && /\b(?:UNIT\s+PRICE|PRICE)\b/i.test(line)
     && /\b(?:TOTAL|AMOUNT)\b/i.test(line));
-  if (headerIndex < 0) return null;
-  const lineItems = parseLineItems(lines, headerIndex);
   const parsedTotals = totals(lines);
-  if (!lineItems || !parsedTotals) return null;
+  if (!parsedTotals) return null;
+  // Trial invoices often have no item table. Only accept an explicitly printed
+  // zero invoice total here; a paid invoice's zero balance is not its total.
+  const zeroTrial = parsedTotals.total === 0
+    && (parsedTotals.subtotal === null || parsedTotals.subtotal === 0)
+    && (parsedTotals.tax === null || parsedTotals.tax === 0)
+    && lines.some(line => /^\s*(?:(?:GRAND|INVOICE)\s+)?TOTAL\b/i.test(line) && lastMoneyCents(line) === 0)
+    && lines.some(line => /^\s*INVOICE\s*(?:NUMBER|NO\.?|#)\s*[:#-]?\s*\S+/i.test(line));
+  if (headerIndex < 0 && !zeroTrial) return null;
+  const lineItems = headerIndex < 0 ? [] : parseLineItems(lines, headerIndex);
+  if (!lineItems || parsedTotals.subtotal === null && !zeroTrial) return null;
   const lineSum = lineItems.reduce((sum, item) => sum + Math.round(item.amount * 100), 0);
-  if (lineSum !== parsedTotals.subtotal) return null;
-  const expectedTotal = parsedTotals.subtotal + (parsedTotals.tax ?? 0) + parsedTotals.charges - parsedTotals.discounts;
-  if (expectedTotal !== parsedTotals.total) return null;
+  if (lineSum !== (parsedTotals.subtotal ?? 0)) return null;
+  const expectedTotal = (parsedTotals.subtotal ?? 0) + (parsedTotals.tax ?? 0) + parsedTotals.charges - parsedTotals.discounts;
+  if (Math.abs(expectedTotal - parsedTotals.total) > 100) return null;
 
   const buyerBlock = partyBlock(lines, /^\s*(?:(?:BILL|SOLD|INVOICE)\s+TO|CUSTOMER|CLIENT|TO)\s*:?\s*(.*)$/i);
   const sellerBlock = partyBlock(lines, /^\s*(?:FROM|BILL\s+FROM|SOLD\s+BY|ISSUED\s+BY|SELLER|SUPPLIER|VENDOR)\s*:?\s*(.*)$/i);
@@ -312,13 +322,14 @@ export function parsePdfInvoiceText(text, { businessName = '' } = {}) {
   const extraCharges = lines.filter((line) => /^\s*(?:SHIPPING|HANDLING|FREIGHT|DELIVERY|SERVICE\s+FEE|SURCHARGE|OTHER\s+CHARGES)\b/i.test(line))
     .map((line) => clean(line)).join('; ');
   const note = notesValue(lines);
+  const direction = classifyDirection(lines, businessName, buyerBlock, sellerBlock);
 
   const values = {
     invoiceNumber,
-    customerName: partyName(buyerBlock),
+    customerName: partyName(direction === 'payable' ? sellerBlock : buyerBlock),
     invoiceDate: parseDate(invoiceDateText),
     dueDate: parseDate(dueDateText),
-    subtotal: parsedTotals.subtotal / 100,
+    subtotal: parsedTotals.subtotal === null ? null : parsedTotals.subtotal / 100,
     tax: parsedTotals.tax === null ? null : parsedTotals.tax / 100,
     total: parsedTotals.total / 100,
     outstandingAmount: parsedTotals.outstanding === null ? null : parsedTotals.outstanding / 100,
@@ -327,7 +338,7 @@ export function parsePdfInvoiceText(text, { businessName = '' } = {}) {
     clientPhoneRaw,
     clientEmail,
     notes: [note, extraCharges || null].filter(Boolean).join('; ') || null,
-    direction: classifyDirection(lines, businessName, buyerBlock, sellerBlock),
+    direction,
   };
 
   const payment = parsePrintedInvoicePaymentStatus(text);

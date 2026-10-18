@@ -1,4 +1,5 @@
 import {sanitizeReminderTemplate} from '../preferences.mjs';
+import {taxComponents} from '../../ai/tools.mjs';
 import {isExternallyManagedInvoice,invoiceBalanceFields} from '../../invoice/business-fields.mjs';
 import {applyPaymentReversals,isMissingReversalStorage} from '../../payment-reversals.mjs';
 import {resolveWorkspaceRecord,validateCustomFields,ownerCalendar} from './workspace-records.mjs';
@@ -55,7 +56,7 @@ const TABLES = Object.freeze({
   },
   invoices: {
     label:'Invoices', scope:'workspace',
-    columns:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','outstanding_amount','overpayment_amount','status','notes','custom_fields','created_at','updated_at',...INVOICE_BUSINESS_METADATA_FIELDS],
+    columns:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','outstanding_amount','overpayment_amount','status','notes','custom_fields','created_at','updated_at','tax_components',...INVOICE_BUSINESS_METADATA_FIELDS],
     defaults:['invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','outstanding_amount','overpayment_amount','status','custom_fields'],
     filters:['id','invoice_number','customer_name','issue_date','due_date','currency','total_amount','amount_paid','status'],
     writeColumns:[...INVOICE_CORRECTION_FIELDS,'customer_email','customer_phone','status'],
@@ -572,7 +573,7 @@ function validateAdapterSettingsValues(values) {
 }
 
 export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,getRuntimeConfig,planRequest,authorize,executeBatchOperation,
-  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,executeInvoiceReopening=null,executeReopeningDecision=null,confirmationMode='buttons',timezone='UTC',attachmentAvailable=false,invoiceEditContext=null}={}) {
+  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,executeInvoiceReopening=null,executeReopeningDecision=null,confirmationMode='buttons',timezone='Asia/Kolkata',attachmentAvailable=false,invoiceEditContext=null}={}) {
   if(!supabase?.from||typeof scope?.workspaceId!=='string')throw new TypeError('Supabase and verified workspace scope required');
   let replyRequirement=null;
   let writeAttempted=false;
@@ -592,10 +593,10 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
   const readScoped=async ({table,columns,filters,limit,offset,order},internalColumns=[],ctx,{customerName=false,customerFilter=null}={})=>{
     const spec=TABLES[table];
     const selected=columns||spec.defaults;
-    const actual=selected.filter(column=>column!=='customer_name'&&!(table==='invoices'&&[...INVOICE_BUSINESS_METADATA_FIELDS,'outstanding_amount','overpayment_amount'].includes(column))
+    const actual=selected.filter(column=>column!=='customer_name'&&!(table==='invoices'&&[...INVOICE_BUSINESS_METADATA_FIELDS,'tax_components','outstanding_amount','overpayment_amount'].includes(column))
       &&!(table==='payments'&&['reversed_amount','net_amount','reversed_at'].includes(column))
       &&!(['payments','invoice_files'].includes(table)&&column==='invoice_number'));
-    const selectedWithInternals=[...new Set([...actual,...internalColumns,...(table==='invoices'&&selected.some(column=>INVOICE_BUSINESS_METADATA_FIELDS.includes(column))?['metadata']:[])])];
+    const selectedWithInternals=[...new Set([...actual,...internalColumns,...(table==='invoices'&&selected.some(column=>column==='tax_components'||INVOICE_BUSINESS_METADATA_FIELDS.includes(column))?['metadata']:[])])];
     if(!selectedWithInternals.length)throw new TypeError('empty selected fields');
     await ctx?.assertAuthorized?.();
     const joinCustomer=table==='invoices'&&(customerName||customerFilter);
@@ -629,7 +630,9 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     return Array.isArray(result?.data)?result.data:[];
   };
   const read=async (params,ctx,{verifiedHistory=false}={})=>{
-    const table=params.table,spec=TABLES[table],requested=params.columns||spec.defaults;
+    const table=params.table,spec=TABLES[table];
+    const breakdown=table==='invoices'&&/\b(?:breakdown|break down|tax|igst|cgst|sgst)\b/i.test(message);
+    const requested=[...new Set([...(params.columns||spec.defaults),...(breakdown?['subtotal','tax','tax_components']:[])])];
     const relationFilters=params.filters.filter(filter=>
       (table==='invoices'&&filter.column==='customer_name')
       ||(['payments','invoice_files'].includes(table)&&filter.column==='invoice_number'));
@@ -675,16 +678,18 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     if(table==='payments')internal.push('id','workspace_id','amount');
     if(['payments','invoice_files'].includes(table)&&relationFilters.length)internal.push('invoice_id');
     if(table==='customers'&&params.operation!=='read')internal.push('id','updated_at');
-    rows=await readScoped({...params,filters},internal,ctx,{customerName:requested.includes('customer_name'),
+    rows=await readScoped({...params,columns:requested,filters},internal,ctx,{customerName:requested.includes('customer_name'),
       customerFilter:relationFilters[0]&&table==='invoices'?relationFilters[0]:null});
     if(!rows.length&&['customers','invoices','business_records'].includes(table)&&params.filters.length
       &&params.filters.every(f=>f.operator==='eq')&&params.filters.some(f=>['name','company_name','customer_name'].includes(f.column))){
       const found=await resolveWorkspaceRecord({supabase,scope,table,filters:params.filters,operation:'read',
         select:table==='invoices'?'id,invoice_number':'id,name',assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
       if(found.code==='AMBIGUOUS')return safeError(found);
-      if(found.ok)rows=await readScoped({...params,filters:[{column:'id',operator:'in',value:found.rows.map(row=>row.id)}]},internal,ctx,{customerName:requested.includes('customer_name')});
+      if(found.ok)rows=await readScoped({...params,columns:requested,filters:[{column:'id',operator:'in',value:found.rows.map(row=>row.id)}]},internal,ctx,{customerName:requested.includes('customer_name')});
     }
     const rawPageCount=rows.length;
+    const collectionAnalysis=table==='invoices'?ownerInvoiceReadAnalysis(message):null;
+    if(['unpaidInvoices','currencyBalances'].includes(collectionAnalysis?.kind))rows=rows.filter(row=>row.metadata?.invoice_direction!=='payable');
     let labels=new Map();
     if(['payments','invoice_files'].includes(table)&&internal.includes('invoice_id')) {
       const ids=[...new Set(rows.map(row=>row.invoice_id).filter(value=>UUID.test(value||'')))];
@@ -703,7 +708,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     const finalColumns=requested.filter(column=>column!=='customer_name'
       &&!(['payments','invoice_files'].includes(table)&&column==='invoice_number'));
     const output=rows.map(row=>{
-      if(table==='invoices')row={...row,...invoiceBusinessFields(row),...invoiceBalanceFields(row)};
+      if(table==='invoices')row={...row,...invoiceBusinessFields(row),...invoiceBalanceFields(row),tax_components:taxComponents(row.metadata)};
       const safe=Object.fromEntries(finalColumns.filter(column=>Object.hasOwn(row,column)&&!INTERNAL_KEY.test(column)).map(column=>[column,
         column==='follow_up_preferences'?safeFollowupPreferences(row[column]):row[column]]));
       if(requested.includes('customer_name'))safe.customer_name=row.customer?.name||row.customer?.[0]?.name||null;
