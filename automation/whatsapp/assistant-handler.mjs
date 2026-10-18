@@ -3,7 +3,7 @@ import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL,
 import {createWhatsAppAssistantChannel} from '../../ai/whatsapp-channel.mjs';
 import {getSendEligibility, normalizeWhatsAppPhone} from './consent.mjs';
 import {readConversationHistory, writeConversationTurn} from './conversation-memory.mjs';
-import {extractInvoice} from '../../ai/extraction.mjs';
+import {extractInvoice, INVOICE_IMAGE_REPLIES} from '../../ai/extraction.mjs';
 import {createWhatsAppPendingActionStore} from './pending-actions.mjs';
 import {createWhatsAppInvoiceStore} from './invoice-store.mjs';
 import {validateAssistantInvoice} from '../../ai/invoice-ops.mjs';
@@ -19,6 +19,7 @@ const fieldLabels = {invoiceNumber: 'invoice number', customerName: 'customer na
   direction: 'confirmation that your business issued the invoice'};
 
 export function invoiceReviewClarification(action) {
+  if (Object.hasOwn(INVOICE_IMAGE_REPLIES, action.failureCode || '')) return INVOICE_IMAGE_REPLIES[action.failureCode];
   if (action.failureCode === 'EXTRACTION_UNAVAILABLE') {
     return action.failureReason === 'TIMEOUT'
       ? 'Invoice extraction timed out. Nothing was saved. Please resend the attachment later to retry.'
@@ -450,7 +451,8 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           return `The invoice was NOT saved because ${saveError?.code === 'UNSUPPORTED_CURRENCY' ? 'its currency is not supported' : 'cetld could not save it right now'}. Please send the photo again to retry.`;
         }
       } catch (error) {
-        const failureCode = extracted ? 'INVOICE_REVIEW_UNAVAILABLE' : 'EXTRACTION_UNAVAILABLE';
+        const failureCode = Object.hasOwn(INVOICE_IMAGE_REPLIES, error?.code || '') ? error.code
+          : extracted ? 'INVOICE_REVIEW_UNAVAILABLE' : 'EXTRACTION_UNAVAILABLE';
         const failureReason = error?.code === 'TIMEOUT' || error?.name === 'AbortError' ? 'TIMEOUT' : 'UNAVAILABLE';
         const failureStatus = failureReason === 'TIMEOUT' ? 504
           : Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : null;

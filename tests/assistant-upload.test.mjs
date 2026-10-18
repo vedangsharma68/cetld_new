@@ -13,7 +13,7 @@ const extracted={
   lineItems:{value:[],confidence:0},
 };
 
-async function inspectUpload(bytes,mimeType,fileName){let request;const provider={async generateStructured(options){request=options;return{data:options.validate(invoiceWire(extracted)),model:'test-model',usedFallback:false}}};const result=await extractInvoice({provider,bytes,mimeType,fileName});return{request,result}}
+async function inspectUpload(bytes,mimeType,fileName){let request;const provider={async generateStructured(options){request=options;return{data:options.validate({...invoiceWire(extracted),...(options.schema.properties.imageContent?{imageContent:'single_invoice'}:{})}),model:'test-model',usedFallback:false}}};const result=await extractInvoice({provider,bytes,mimeType,fileName});return{request,result}}
 
 test('Assistant image upload reaches one structured multimodal extraction pass',async()=>{
   const png=Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0]);

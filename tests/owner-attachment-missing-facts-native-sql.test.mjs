@@ -36,7 +36,7 @@ test('native missing-field follow-ups read matching reviews and never invent fac
     let chatCalls=0,extractionCalls=0;const logs=[];
     const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test'},logger:{info(label,data){logs.push({label,data});},warn(){},error(){}},
       providerFactory:options=>options.requestPurpose==='extraction'?{async generateStructured(call){
-        extractionCalls++;return {data:call.validate(structuredClone(wire)),model:'fixture-extraction'};
+        extractionCalls++;return {data:call.validate({...structuredClone(wire),imageContent:'single_invoice'}),model:'fixture-extraction'};
       }}:{async generate({messages}){
         chatCalls++;const tool=messages.findLast(turn=>turn.role==='tool');
         if(!tool)return {model:'fixture-chat',toolCalls:[{id:'bad-create',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'create',table:'invoices',values:{status:'unpaid',total_amount:1}})}}]};

@@ -51,7 +51,7 @@ async function fixture(){
       if(body.generationConfig?.responseMimeType==='application/json'){
         calls.extractions.push({host,body,message:currentMessage});
         if(failExtraction)return Response.json({error:{message:'fixture extraction unavailable'}},{status:503});
-        return Response.json({candidates:[{content:{parts:[{text:JSON.stringify({...extractedWire(),...(extractionOverride||{})})}]},finishReason:'STOP'}]});
+        return Response.json({candidates:[{content:{parts:[{text:JSON.stringify({...extractedWire(),...(body.generationConfig.responseJsonSchema?.properties.imageContent?{imageContent:'single_invoice'}:{}),...(extractionOverride||{})})}]},finishReason:'STOP'}]});
       }
       calls.planner.push({host,body,message:currentMessage});
       if(host==='api.cloudflare.com'){

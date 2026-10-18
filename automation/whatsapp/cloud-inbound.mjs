@@ -20,6 +20,8 @@ const MIN_EVENT_BUDGET_MS = 5_000;
 const SAFE_FALLBACK_REPLY = "Something broke on my side while handling that message, so I did not process it. Please send it again. If it keeps failing, tell Vedang.";
 const MEDIA_FETCH_FAILED_REPLY = "I couldn't fetch that photo. Please resend it and I'll try again.";
 const EMPTY_CONTENT_REPLY = "I couldn't read that message. Please resend it as plain text, a photo, or a PDF. No business changes were made.";
+const STICKER_REPLY = 'WhatsApp sent that as a sticker. To read an invoice, I need a photo or PDF: use the attachment button and choose Photos/Gallery or Document. No business changes were made.';
+const unreadableContentReply = event => event.message_type === 'sticker' ? STICKER_REPLY : EMPTY_CONTENT_REPLY;
 function hasEmptyIncomingContent(event) {
   const interactionId = event.interaction_id ?? event.interactionId;
   return !String(event.message_text || '').trim()
@@ -232,7 +234,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       return {verifiedOwner:false,bindingUnavailable:true};
     }
     if(!binding)return {verifiedOwner:false};
-    if(hasEmptyIncomingContent(event))return {verifiedOwner:true,binding,reply:EMPTY_CONTENT_REPLY};
+    if(hasEmptyIncomingContent(event))return {verifiedOwner:true,binding,reply:unreadableContentReply(event)};
     if(!ownerHandler)ownerHandler=createOwnerMessageHandler({supabase,env,fetchImpl});
     if(typeof ownerHandler.createSafeFailureReply!=='function')return {verifiedOwner:true,binding,reply:null};
     const reply=await ownerHandler.createSafeFailureReply({workspaceId:binding.workspaceId,
@@ -408,7 +410,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     if(hasEmptyIncomingContent(event)){
       const sender=await getOutbound();
       const sent=await sender.sendServiceReply({workspaceId:binding.workspaceId,to:event.sender_phone,
-        body:EMPTY_CONTENT_REPLY,lastInboundAt:event.provider_timestamp||event.received_at,
+        body:unreadableContentReply(event),lastInboundAt:event.provider_timestamp||event.received_at,
         kind:'normal',audience:owner?'owner':'customer',messageId:event.provider_message_id,
         businessName:await businessName(binding.workspaceId)});
       if(owner&&sent?.status!=='accepted')throw Object.assign(new Error('Owner reply was not accepted for delivery.'),{code:'OWNER_REPLY_NOT_ACCEPTED'});

@@ -82,7 +82,7 @@ for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF'
     const native=parts=>Response.json({candidates:[{content:{role:'model',parts},finishReason:'STOP'}]});
     if(body.generationConfig?.responseMimeType==='application/json'){
      extractions++;assert.equal(body.contents.flatMap(item=>item.parts||[]).find(part=>part.inlineData)?.inlineData.data,bytes.toString('base64'));
-     return native([{text:JSON.stringify(wire)}]);
+     return native([{text:JSON.stringify({...wire,imageContent:'single_invoice'})}]);
     }
     const tool=body.contents.flatMap(item=>item.parts||[]).findLast(part=>part.functionResponse)?.functionResponse;
     if(!tool){contracts.push(body.tools);return native([{functionCall:{name:'workspaceData',args:confirming?{operation:'confirm'}:

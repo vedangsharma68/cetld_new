@@ -159,8 +159,8 @@ test('Gemini Lite image capability errors fail over to Gemini Flash with the exa
         const payload=JSON.parse(init.body);
         requests.push({url:String(url),payload});
         if(String(url).includes(DEFAULT_EXTRACTION_MODEL)) return jsonResponse({error:{message:'private image capability detail'}},status);
-        if(String(url).includes('generativelanguage.googleapis.com')) return jsonResponse({candidates:[{content:{parts:[{text:JSON.stringify(invoiceWire(SAMPLE_INVOICE))}]},finishReason:'STOP'}]});
-        return jsonResponse({choices:[{message:{content:JSON.stringify(invoiceWire(SAMPLE_INVOICE))},finish_reason:'stop'}]});
+        if(String(url).includes('generativelanguage.googleapis.com')) return jsonResponse({candidates:[{content:{parts:[{text:JSON.stringify({...invoiceWire(SAMPLE_INVOICE),imageContent:'single_invoice'})}]},finishReason:'STOP'}]});
+        return jsonResponse({choices:[{message:{content:JSON.stringify({...invoiceWire(SAMPLE_INVOICE),imageContent:'single_invoice'})},finish_reason:'stop'}]});
       },
     });
     const result=await extractInvoice({provider,bytes,mimeType:'image/png',fileName:'invoice.png'});

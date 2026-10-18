@@ -58,6 +58,20 @@ export const invoiceExtractionResponseSchema = {
   },
 };
 
+// Images must establish that exactly one legible invoice is present before any
+// extracted facts can enter the invoice workflow. Keep the PDF contract intact.
+const invoiceImageResponseSchema = {
+  ...invoiceExtractionResponseSchema,
+  required: [...invoiceExtractionResponseSchema.required, 'imageContent'],
+  properties: {...invoiceExtractionResponseSchema.properties,
+    imageContent: {type: 'string', enum: ['single_invoice', 'multiple_invoices', 'not_invoice', 'unreadable']}},
+};
+export const INVOICE_IMAGE_REPLIES = Object.freeze({
+  IMAGE_MULTIPLE_INVOICES: 'I can see more than one invoice. Please send one invoice per photo. Nothing was saved.',
+  IMAGE_NOT_INVOICE: 'This does not look like an invoice. Please send a clear photo of one invoice or a PDF. Nothing was saved.',
+  IMAGE_UNREADABLE: 'I could not read one invoice clearly. Please resend a sharper, upright photo showing the whole invoice, or a PDF. Nothing was saved.',
+});
+
 function fail(message) {
   throw new TypeError(`Invoice extraction: ${message}`);
 }
@@ -178,7 +192,7 @@ function makeMessages({ bytes, mimeType, fileName, businessName, pdfText }) {
   }
   return {
     messages: [{ role: 'user', content: [
-      { type: 'text', text: instruction },
+      { type: 'text', text: instruction + ' First classify the whole image in imageContent: single_invoice only for exactly one legible invoice, multiple_invoices when more than one invoice is visible, not_invoice for other content, or unreadable when blur, cropping, rotation or uncertainty prevents reliable reading. Read rotated text when legible. Never select one invoice from a multi-invoice image or combine their fields. For any classification other than single_invoice, return null with confidence 0 for scalar facts, uncertain for direction, and empty lineItems.' },
       { type: 'image_url', image_url: { url: `data:${detected};base64,${data.toString('base64')}` } },
     ] }],
   };
@@ -377,9 +391,21 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
   }
   active();
   const payload = makeMessages({ bytes, mimeType, fileName, businessName, pdfText });
+  const isImage = source.detected.startsWith('image/');
   let sanitized;
   const printedPayment = pdfText ? parsePrintedInvoicePaymentStatus(pdfText) : null;
   const validate = (data) => {
+    if (isImage) {
+      const {imageContent, ...facts} = data || {};
+      if (imageContent !== 'single_invoice') {
+        const code = imageContent === 'multiple_invoices' ? 'IMAGE_MULTIPLE_INVOICES'
+          : imageContent === 'not_invoice' ? 'IMAGE_NOT_INVOICE' : 'IMAGE_UNREADABLE';
+        // A classified rejection is valid model output, not a provider failure.
+        // Return it through structured validation so failover cannot override it.
+        return (sanitized = {imageRejection: code});
+      }
+      data = facts;
+    }
     const normalized = adaptInvoiceExtractionWireResponse(data);
     // Validate the provider contract before combining independent printed
     // evidence. A model omission cannot erase a selectable PDF's PAID stamp.
@@ -395,7 +421,7 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
   try {
     response = await provider.generateStructured({
       messages: payload.messages,
-      schema: invoiceExtractionResponseSchema,
+      schema: isImage ? invoiceImageResponseSchema : invoiceExtractionResponseSchema,
       name: 'invoice_extraction',
       validate,
       maxTokens: INVOICE_EXTRACTION_MAX_TOKENS,
@@ -410,6 +436,7 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
   // AIProvider already returns the validator's sanitized shape (with warnings).
   // Injected adapters that did not invoke validate still undergo local validation.
   const result = {...(sanitized ?? validate(response.data)), model: response.model, usedFallback: response.usedFallback};
+  if (result.imageRejection) throw Object.assign(new Error(INVOICE_IMAGE_REPLIES[result.imageRejection]), {code: result.imageRejection});
   const missingFields = [...result.uncertainFields];
   logger?.info?.('Invoice extraction completed', {source: source.detected, model: result.model,
     missingFields, missingFieldCount: missingFields.length});

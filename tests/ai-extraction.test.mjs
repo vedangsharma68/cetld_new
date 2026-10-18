@@ -48,7 +48,9 @@ function fakeProvider(data, inspect = () => {}) {
     async generateStructured(options) {
       inspect(options);
       // Emulate a provider that runs the supplied validator.
-      const sanitized = options.validate(wireResponse(data));
+      const wire = wireResponse(data);
+      if (options.schema.properties.imageContent) wire.imageContent = 'single_invoice';
+      const sanitized = options.validate(wire);
       return { data: sanitized, model: 'test/model', usedFallback: false };
     },
   };

@@ -114,7 +114,11 @@ export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[
       else if(method==='POST'){
         const rows=Array.isArray(JSON.parse(body))?JSON.parse(body):[JSON.parse(body)],saved=[];
         for(const row of rows){
-          const keys=Object.keys(row),values=keys.map(key=>bind(row[key]));
+          // PostgREST accepts hex bytea on the wire; PGlite's JS parameter
+          // decoder needs an explicit SQL decode for the media inbox fixture.
+          const keys=Object.keys(row),values=keys.map(key=>path==='whatsapp_inbound_media'&&key==='bytes'
+            &&typeof row[key]==='string'&&/^\\x[\da-f]+$/i.test(row[key])
+            ?`decode(${bind(row[key].slice(2))},'hex')`:bind(row[key]));
           const conflict=params.get('on_conflict');
           const upsert=conflict?` on conflict (${conflict.split(',').map(name).join(',')}) ${headers.get('prefer')?.includes('ignore-duplicates')?'do nothing':`do update set ${keys.map(key=>`${name(key)}=excluded.${name(key)}`).join(',')}`}`:'';
           saved.push(...(await db.query(`insert into public.${table} (${keys.map(name).join(',')}) values (${values.join(',')})${upsert} returning to_jsonb(${table}) as fixture_row`,args)).rows.map(row=>row.fixture_row));
