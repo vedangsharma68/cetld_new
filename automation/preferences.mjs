@@ -1,5 +1,5 @@
 const clockPattern = /^([01]\d|2[0-3]):[0-5]\d$/;
-const tones = new Set(['gentle', 'professional', 'firm']);
+const tones = new Set(['gentle', 'relaxed', 'professional', 'firm']);
 const REMINDER_TEMPLATE_PLACEHOLDERS = new Set(['business_name', 'customer_name', 'invoice_number', 'balance', 'due_date']);
 const REMINDER_TEMPLATE_MAX_LENGTH = 1000;
 

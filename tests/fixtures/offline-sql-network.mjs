@@ -25,8 +25,8 @@ export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[
     alter table storage.objects enable row level security;`);
   // Legacy adapter tests intentionally model deployed 9836c4c and separately
   // install its disabled proposal. approved-reminders.test applies the new
-  // forward migration explicitly and exercises the production runtime end to end.
-  for(const file of (await readdir(new URL('../../supabase/migrations/',import.meta.url))).filter(file=>file.endsWith('.sql') && file!=='20261005070000_approved_whatsapp_reminders.sql' && !excludeMigrations.includes(file)).sort())
+  // forward migrations explicitly and exercises the production runtime end to end.
+  for(const file of (await readdir(new URL('../../supabase/migrations/',import.meta.url))).filter(file=>file.endsWith('.sql') && !['20261005070000_approved_whatsapp_reminders.sql','20261018060000_customer_reminder_tone.sql','20261018060100_invoice_details_templates.sql'].includes(file) && !excludeMigrations.includes(file)).sort())
     await db.exec((await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8')).replace('create extension if not exists pgcrypto;',''));
   await db.exec('grant all on all tables in schema public to service_role;grant all on all sequences in schema public to service_role');
 

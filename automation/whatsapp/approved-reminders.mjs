@@ -1,6 +1,7 @@
 import {getSendEligibility} from './consent.mjs';
 import {reminderFingerprint} from './reminder-fingerprint.mjs';
-import {APPROVED_REMINDER_WABA,selectReminderTemplate,buildReminderTemplate} from './reminder-templates.mjs';
+import {APPROVED_REMINDER_WABA,selectReminderTemplate,selectInvoiceReminderTemplate,buildReminderTemplate} from './reminder-templates.mjs';
+import {buildInvoiceReminderParameters} from './reminder-parameters.mjs';
 import {readBounded} from '../../ai/http.mjs';
 import {hasUnresolvedFollowUpException} from '../preferences.mjs';
 import {scheduledOwnerTestMode,scheduledOwnerTestScopeMatches,createScheduledOwnerTestGate} from '../scheduled-owner-test.mjs';
@@ -30,8 +31,10 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
       ||invoice.customerPhone!==input.to||invoice.status!=='sent'||invoice.metadata?.invoice_direction!=='receivable'
       ||!invoice.due_date||Number(invoice.total_amount)<=Number(invoice.amount_paid)
       ||!['approved','active','scheduled'].includes(invoice.followup_state))throw Error('Reminder facts unavailable');
-    const entry=selectReminderTemplate(settings.follow_up_preferences);
-    const parameters=[settings.business_name,invoice.invoice_number,eligibility.customer.name];
+    const entry=testGate?selectReminderTemplate(settings.follow_up_preferences)
+      :selectInvoiceReminderTemplate(settings.follow_up_preferences,eligibility.customer.reminder_tone??null);
+    const parameters=entry.parameterCount===3?[settings.business_name,invoice.invoice_number,eligibility.customer.name]
+      :buildInvoiceReminderParameters({invoice,settings,customer:eligibility.customer});
     const rendered=buildReminderTemplate(entry,parameters);
     if(testGate)await testGate.verifyFacts({invoice,settings,entry});
     return {invoice,settings,eligibility,entry,parameters,...rendered};
