@@ -1,12 +1,92 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
+import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createInboundRuntime, SupabaseInboundInbox, isResubscribe, isOptOut} from '../automation/whatsapp/cloud-inbound.mjs';
 import {getSendEligibility} from '../automation/whatsapp/consent.mjs';
 
 const phone = '+919871367051';
 const logger = {log(){}, warn(){}, error(){}};
+
+test('verified owner STOP → START/UNSTOP preserves proof and resumes normal owner turns', async () => {
+  const deliveries=[];
+  const f=await createOfflineSqlNetwork({externalFetch:async(url,options)=>{
+    assert.equal(url.origin,'https://graph.facebook.com');
+    const payload=JSON.parse(options.body);
+    if(payload.to)assert.equal(payload.to,phone.slice(1));
+    deliveries.push(payload);
+    return Response.json({messages:[{id:`wamid.owner.reply.${deliveries.length}`}]});
+  }});
+  try {
+    const {db,supabase}=f,ownerId=randomUUID();
+    await db.query('insert into auth.users(id) values($1)',[ownerId]);
+    await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
+    const workspaceId=(await db.query("select (create_workspace('Disposable consent QA','consent-qa')).id")).rows[0].id;
+    const verification=(await db.query('select * from owner_start_whatsapp_verification($1,$2)',[workspaceId,phone])).rows[0];
+    await db.exec("reset role;set request.jwt.claim.role='service_role';set request.jwt.claim.sub=''");
+    assert.equal((await db.query('select whatsapp_verify_owner_code($1,$2) value',[phone,verification.code])).rows[0].value.ok,true);
+    const resolve=async()=>(await db.query('select * from whatsapp_resolve_verified_owner($1)',[phone])).rows;
+    const binding=await resolve();
+    assert.equal(binding.length,1);assert.equal(binding[0].workspace_id,workspaceId);
+    const customers=(await db.query('select * from customers order by id')).rows;
+    const proofs=(await db.query('select * from whatsapp_owner_verifications order by id')).rows;
+    await db.query("update whatsapp_consents set source='inbound_message' where workspace_id=$1",[workspaceId]);
+    const consentBefore=(await db.query('select * from whatsapp_consents')).rows[0];
+    assert.equal(consentBefore.consented_by,ownerId);
+    assert.equal(consentBefore.consent_text_version,'owner_binding_v1');
+    assert.equal(consentBefore.source,'inbound_message');
+    // It is function-only and idempotent even with an existing verified owner.
+    const migration=await readFile(new URL('../supabase/migrations/20261018215058_whatsapp_start_preserve_owner_binding.sql',import.meta.url),'utf8');
+    await db.exec(migration);await db.exec(migration);
+    assert.deepEqual((await db.query('select * from whatsapp_consents')).rows,[consentBefore]);
+    let ownerCalls=0,modelCalls=0;
+    const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test'},logger,
+      providerFactory:()=>({async generate(){modelCalls++;return {model:CF_PRIMARY_MODEL,content:'Your owner connection is active.'};}})});
+    const inbox=new SupabaseInboundInbox(supabase);
+    const runtime=createInboundRuntime({supabase,inbox,fetchImpl:f.fetchImpl,logger,
+      env:{WHATSAPP_OUTBOUND_ENABLED:'true',WHATSAPP_TEST_ALLOWLIST:phone,WHATSAPP_ACCESS_TOKEN:'offline-fixture',
+        WHATSAPP_PHONE_NUMBER_ID:'1234567890',WHATSAPP_GRAPH_API_VERSION:'v24.0'},
+      onOwnerMessage:async args=>{ownerCalls++;assert.equal(args.workspaceId,workspaceId);assert.equal(args.ownerId,ownerId);return handler(args);},
+      onBoundMessage:()=>{throw Error('Verified owner must not enter the customer handler');}});
+    let sequence=0;
+    const event=async text=>(await inbox.enqueue([{provider_message_id:`wamid.owner.consent.${++sequence}`,
+      phone_number_id:'1234567890',sender_phone:phone,message_type:'text',message_text:text,
+      provider_timestamp:new Date().toISOString()}]))[0];
+    for(const keyword of ['START','UNSTOP']) {
+      const callsBefore=ownerCalls;
+      await runtime.revokeOptOut(await event('STOP'));
+      assert.equal((await runtime.processPending()).completed,1);
+      assert.deepEqual(await resolve(),[]);
+      const revoked=(await db.query('select * from whatsapp_consents')).rows[0];
+      assert.ok(revoked.revoked_at);assert.equal(revoked.revoked_via,'stop');
+      assert.equal(revoked.consented_by,ownerId);
+      await event('Are you there?');
+      assert.equal((await runtime.processPending()).completed,1);
+      assert.equal(ownerCalls,callsBefore);
+      await event(keyword);
+      assert.equal((await runtime.processPending()).completed,1);
+      assert.deepEqual(await resolve(),binding);
+      const restored=(await db.query('select * from whatsapp_consents')).rows[0];
+      assert.equal(restored.consented_by,ownerId);assert.equal(restored.revoked_at,null);
+      assert.equal(restored.revoked_via,null);assert.ok(restored.consented_at>=consentBefore.consented_at);
+      assert.deepEqual(restored.categories,consentBefore.categories);
+      const text=await event('Is my owner connection active?');
+      assert.equal((await runtime.processPending()).completed,1);
+      assert.equal(ownerCalls,callsBefore+1);
+      const saved=(await db.query('select * from whatsapp_inbound_events where id=$1',[text.id])).rows[0];
+      assert.equal(saved.status,'done');assert.equal(saved.error_code,null);
+      assert.ok(deliveries.some(payload=>payload.text?.body==='Your owner connection is active.'));
+      assert.equal((await db.query("select count(*)::int n from whatsapp_messages where audience='owner' and direction='outbound' and body='Your owner connection is active.' and status='accepted'")).rows[0].n,ownerCalls);
+    }
+    assert.ok(modelCalls>=2);
+    assert.deepEqual((await db.query('select * from customers order by id')).rows,customers);
+    assert.deepEqual((await db.query('select * from whatsapp_owner_verifications order by id')).rows,proofs);
+    assert.equal(f.errors.length,0,JSON.stringify(f.errors));
+  } finally {await f.close();}
+});
 
 test('resubscribe accepts only standalone START/UNSTOP, leaving STOP recognition intact', () => {
   for (const text of ['START', 'unstop', '  StArT\n']) assert.equal(isResubscribe(text), true);
@@ -78,6 +158,7 @@ test('offline PostgreSQL and real inbound/outbound stores cover STOP → START/U
       assert.equal((await getSendEligibility({supabase:f.supabase,workspaceId:workspaces[2],phone})).allowed, false);
       const consent = (await f.db.query('select * from whatsapp_consents where workspace_id=$1', [workspaces[0]])).rows[0];
       assert.equal(consent.revoked_via,null); assert.equal(consent.source,'inbound_message');
+      assert.equal(consent.consented_by,null); // START cannot fabricate an owner binding.
       assert.deepEqual(consent.categories,['invoice_updates']);
       await inbox.enqueue([{provider_message_id:start.provider_message_id,phone_number_id:start.phone_number_id,
         sender_phone:phone,message_type:'text',message_text:start.message_text}]);
