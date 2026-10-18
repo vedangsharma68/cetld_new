@@ -374,7 +374,7 @@ function filterStructure(value,table,depth=0,decodeString=true){
   }
   return out;
 }
-function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
+function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null,textInvoiceValues=null) {
   if(!ownObject(raw))throw new TypeError('invalid arguments');
   if(containsForbiddenIdentity(raw,scope))throw new TypeError('scope identity supplied');
   if(Object.keys(raw).some(key=>!ALLOWED_ARGS.has(key)))throw new TypeError('unknown arguments');
@@ -396,14 +396,14 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
       });
   }
   return Promise.resolve(normalizeStructured(raw));
-  function normalizeStructured(args) {
+  function normalizeStructured(args,allowTextInvoice=true) {
     if(!ownObject(args)||containsForbiddenIdentity(args,scope)||Object.keys(args).some(key=>!ALLOWED_ARGS.has(key)))throw new TypeError('invalid planned operation');
     if(args.operations!==undefined){
       if(Object.keys(args).some(key=>!['operations','operation','table'].includes(key))||args.operation!==undefined&&args.operation!=='batch'||args.table!==undefined&&!Object.hasOwn(TABLES,args.table)||!Array.isArray(args.operations)||args.operations.length<2||args.operations.length>10)throw new TypeError('invalid batch');
       const operations=args.operations.map(rawItem=>{
         const item=ownObject(rawItem)?{...(args.table?{table:args.table}:{}),...rawItem}:rawItem;
         if(!ownObject(item)||item.operations!==undefined||!['create','update'].includes(item.operation)||!WRITE_SCHEMA[item.table]?.[item.operation]||item.table==='payments'||Object.hasOwn(item.values||{},'status'))throw new TypeError('invalid batch');
-        return normalizeStructured(item);
+        return normalizeStructured(item,false);
       });
       return {operation:'batch',operations};
     }
@@ -458,6 +458,11 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
       ||columns.some(column=>typeof column!=='string'||!TABLES[table]?.columns.includes(column))))throw new TypeError('invalid columns');
     if(!ownObject(values))throw new TypeError('invalid values');
     if(table==='business_records'&&['delete','restore'].includes(operation)&&Object.keys(values).length)throw new TypeError('invalid write fields');
+    // Only a complete persisted owner instruction can replace model fields.
+    // Validate the envelope, identity and field allowlist first; amount is a
+    // tolerated model alias here, never a new general invoice write field.
+    if(allowTextInvoice&&textInvoiceValues&&table==='invoices'&&operation==='create'
+      &&exactKeys(values,[...WRITE_SCHEMA.invoices.create,'amount']))values={...textInvoiceValues};
     if(table==='invoices'&&['create','update','reviewAttachment'].includes(operation)
       &&(!exactKeys(values,WRITE_SCHEMA.invoices[operation])||!Object.keys(values).length||values.status!==undefined&&!['paid','unpaid'].includes(values.status)))throw new TypeError('invalid invoice fields');
     const limit=args.limit===undefined?20:Number(args.limit);
@@ -995,13 +1000,12 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
       // This narrow text grammar supplies fields the structured write contract
       // requires (including the workspace issue date) without another AI pass.
-      // Keep all argument/scope validation before replacing the write values.
+      // Normalization checks argument/scope guards before using parsed values.
       const textInvoice=!attachmentAvailable?parseTextInvoice(message,{clock,timezone}):null;
       const textRequest=textInvoice&&typeof raw?.request==='string'&&raw.request.trim()&&raw.request.length<=1200&&!containsForbiddenIdentity(raw,scope)
         &&Object.keys(raw).every(key=>['request','operation','table'].includes(key))
         &&(raw.operation===undefined||raw.operation==='create')&&(raw.table===undefined||raw.table==='invoices');
-      const params=await normalizeRequest(textRequest?textInvoice:raw,scope,planRequest,ctx,validationFeedback);
-      if(textInvoice&&params.operation==='create'&&params.table==='invoices')params.values=textInvoice.values;
+      const params=await normalizeRequest(textRequest?textInvoice:raw,scope,planRequest,ctx,validationFeedback,textInvoice?.values);
       ctx.phase='dispatch';
       // This private execution option comes from the server's scoped preread,
       // never from model-visible arguments. Preserve its version through SQL.
