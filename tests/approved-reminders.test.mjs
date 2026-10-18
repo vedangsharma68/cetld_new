@@ -6,7 +6,7 @@ import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {CoreAutomationStore} from '../automation/core-store.mjs';
 import {createAutomationRuntime} from '../automation/runtime.mjs';
 import {createApprovedReminderProvider} from '../automation/whatsapp/approved-reminders.mjs';
-import {REMINDER_TEMPLATES,selectReminderTemplate,buildReminderTemplate} from '../automation/whatsapp/reminder-templates.mjs';
+import {REMINDER_TEMPLATES,selectReminderTemplate,selectInvoiceReminderTemplate,buildReminderTemplate} from '../automation/whatsapp/reminder-templates.mjs';
 import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 import {parseMetaMessages,createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
 import {reminderFingerprint} from '../automation/whatsapp/reminder-fingerprint.mjs';
@@ -23,8 +23,8 @@ const env={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE
 const logger={log(){},warn(){},error(){}};
 
 test('four approved templates use en, three facts and Settings tone/button variant, with neutral text',()=>{
-  assert.equal(REMINDER_TEMPLATES.length,4);
-  for(const entry of REMINDER_TEMPLATES){
+  assert.equal(REMINDER_TEMPLATES.length,7);
+  for(const entry of REMINDER_TEMPLATES.filter(t=>t.parameterCount===3)){
     assert.equal(selectReminderTemplate({tone:entry.tone,templateButtons:entry.buttonVariant}),entry);
     const result=buildReminderTemplate(entry,['Fixture studio','INV-001','Fixture customer']);
     assert.equal(result.template.language.code,'en');assert.equal(result.template.components[0].parameters.length,3);
@@ -43,7 +43,7 @@ async function setup(preferences={}){
     graph.push(JSON.parse(options.body));if(uncertain)throw Error('interrupted fixture transport');
     return Response.json({messages:[{id:'wamid.fixture.approved'}]});
   }});
-  try{await f.db.exec(await readFile(new URL('../supabase/migrations/20261005070000_approved_whatsapp_reminders.sql',import.meta.url),'utf8'));}catch(error){await f.close();throw error;}
+  try{await f.db.exec(await readFile(new URL('../supabase/migrations/20261005070000_approved_whatsapp_reminders.sql',import.meta.url),'utf8'));await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060100_invoice_details_templates.sql',import.meta.url),'utf8'));}catch(error){await f.close();throw error;}
   const ownerId=randomUUID(),foreignOwner=randomUUID();
   await f.db.query('insert into auth.users(id) values($1),($2)',[ownerId,foreignOwner]);
   async function workspace(actor){await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${actor}';set role authenticated`);
@@ -67,13 +67,13 @@ async function setup(preferences={}){
   return {...f,scope,foreignOwner,foreignWs,customerId,configured,store,runtime,graph,callback,uncertain(){uncertain=true}};
 }
 
-test('real runtime + new forward SQL + signed webhook persist one three-parameter send and delivered receipt',async()=>{
+test('real runtime + new forward SQL + signed webhook persist one five-parameter send and delivered receipt',async()=>{
   const f=await setup();try{
     assert.equal((await f.supabase.rpc('cetld_core_check_local_reminder_payment',{p_owner_id:f.foreignOwner,p_workspace_id:f.scope.workspaceId,p_invoice_id:f.scope.invoiceId})).data.ok,false);
     assert.equal((await f.supabase.rpc('cetld_core_authorize_first_party_reminder',{p_owner_id:f.foreignOwner,p_workspace_id:f.scope.workspaceId,p_claim_id:randomUUID(),p_snapshot:{},p_snapshot_hash:'a'.repeat(64)})).data.authorized,false);
     const result=await f.runtime.tick(f.scope);assert.equal(result.results[0]?.status,'sent',JSON.stringify({result,errors:f.errors}));
-    assert.equal(f.graph.length,1);assert.equal(f.graph[0].template.name,'cetld_invoice_update_v2');
-    assert.equal(f.graph[0].template.language.code,'en');assert.deepEqual(f.graph[0].template.components[0].parameters.map(p=>p.text),['Fixture studio',(await f.store.getInvoice(f.scope)).invoice_number,'Fixture customer']);
+    assert.equal(f.graph.length,1);assert.equal(f.graph[0].template.name,'cetld_invoice_details_professional_v1');
+    assert.equal(f.graph[0].template.language.code,'en');assert.deepEqual(f.graph[0].template.components[0].parameters.map(p=>p.text),['Fixture','Fixture studio',(await f.store.getInvoice(f.scope)).invoice_number,'USD 125.00',new Intl.DateTimeFormat('en-GB',{timeZone:'UTC',day:'2-digit',month:'short',year:'numeric'}).format(new Date((await f.store.getInvoice(f.scope)).due_date))]);
     assert.equal((await f.callback({validSignature:false})).code,403);
     assert.equal((await f.callback()).code,200);assert.equal((await f.callback()).code,200);
     assert.equal((await f.db.query('select state from app.first_party_reminder_dispatches')).rows[0].state,'delivered');
@@ -177,11 +177,11 @@ test('actual payment completion and an explicit owner pause each prevent schedul
 });
 
 test('professional button and gentle plain variants also dispatch through the actual forward SQL gate',async()=>{
-  for(const preferences of [{tone:'professional',templateButtons:true},{tone:'gentle',templateButtons:false}]){
+  for(const preferences of [{tone:'professional',templateButtons:true},{tone:'gentle',templateButtons:false},...REMINDER_TEMPLATES.filter(t=>t.parameterCount===3).map(t=>({templateName:t.name}))]){
     const f=await setup(preferences);try{
       const result=await f.runtime.tick(f.scope);assert.equal(result.results[0]?.status,'sent');
-      assert.equal(f.graph.length,1);assert.equal(f.graph[0].template.name,selectReminderTemplate(preferences).name);
-      assert.equal(f.graph[0].template.language.code,'en');assert.equal(f.graph[0].template.components[0].parameters.length,3);
+      assert.equal(f.graph.length,1);assert.equal(f.graph[0].template.name,selectInvoiceReminderTemplate(preferences).name);
+      assert.equal(f.graph[0].template.language.code,'en');assert.equal(f.graph[0].template.components[0].parameters.length,selectInvoiceReminderTemplate(preferences).parameterCount);
     }finally{await f.close();}
   }
 });
@@ -249,5 +249,53 @@ test('Settings proof preview validates current Meta approval and Utility categor
     assert.equal((await f.db.query('select count(*)::int n from whatsapp_messages')).rows[0].n,0);
     assert.equal((await f.db.query('select count(*)::int n from cetld_core_automation_events')).rows[0].n,0);
     assert.equal((await f.db.query('select count(*)::int n from payments')).rows[0].n,0);
+  }finally{await f.close();}
+});
+
+for(const [workspaceTone,debtorTone,expected] of [
+  ['firm',null,'firm'],['relaxed',null,'relaxed'],['gentle',null,'relaxed'],['gentle','firm','firm'],['firm','professional','professional'],['professional','relaxed','relaxed'],
+])test(`offline SQL runtime selects ${expected} for workspace ${workspaceTone}, debtor ${debtorTone}`,async()=>{
+  const f=await setup({tone:workspaceTone});try{
+    if(debtorTone!==null){
+      await f.db.query('update customers set reminder_tone=$2,name=$3 where id=$1',[f.customerId,debtorTone,'  Priya   Sharma  ']);
+      assert.equal((await f.store.getInvoice(f.scope)).followup_state,'paused');
+      await f.db.query("update invoices set metadata=metadata||jsonb_build_object('followup_state','approved','approved_reminder_text',E'Fresh offline review\\n\\nFixture studio','approved_preferences_updated_at',(select updated_at from workspace_settings where workspace_id=$2)),next_follow_up_at=now()-interval '1 minute' where id=$1",[f.scope.invoiceId,f.scope.workspaceId]);
+    }
+    const result=await f.runtime.tick(f.scope);
+    assert.equal(result.results[0]?.status,'sent',JSON.stringify({result,errors:f.errors}));
+    assert.equal(f.graph.length,1);assert.equal(f.graph[0].template.name,`cetld_invoice_details_${expected}_v1`);
+    assert.equal(f.graph[0].template.components[0].parameters[0].text,debtorTone?'Priya':'Fixture');
+    const dispatch=(await f.db.query('select snapshot from app.first_party_reminder_dispatches')).rows[0];
+    assert.deepEqual(dispatch.snapshot.template.parameters,f.graph[0].template.components[0].parameters.map(p=>p.text));
+    await f.runtime.tick(f.scope);assert.equal(f.graph.length,1);
+  }finally{await f.close();}
+});
+
+test('offline SQL amount formatter agrees with JavaScript and debtor column rejects unknown values',async()=>{
+  const {formatReminderAmount}=await import('../automation/whatsapp/reminder-parameters.mjs');
+  const f=await setup();try{
+    for(const currency of ['INR','USD','EUR','JPY'])for(const amount of ['0.01','12500','1234567.89','999999999999.99','9999999999999999.99']){
+      const actual=(await f.db.query('select app.reminder_outstanding_text($1::numeric,$2) value',[amount,currency])).rows[0].value;
+      assert.equal(actual,formatReminderAmount({currency,total_amount:amount,amount_paid:0}));
+    }
+    await assert.rejects(f.db.query("update customers set reminder_tone='aggressive' where id=$1",[f.customerId]),/customers_reminder_tone_check/);
+    assert.equal((await f.db.query('select reminder_tone from customers where id=$1',[f.customerId])).rows[0].reminder_tone,null);
+    assert.equal((await f.db.query('select count(*)::int n from app.first_party_reminder_templates')).rows[0].n,7);
+  }finally{await f.close();}
+});
+
+test('debtor tone changed after facts pauses approval and the atomic gate denies dispatch',async()=>{
+  const f=await setup();try{
+    const [claim]=await f.store.claimDueFollowups({...f.scope,now:new Date().toISOString(),limit:1});
+    const settings=await f.store.getWorkspacePreferences(f.scope);
+    assert.equal((await f.store.authorizeDelivery({...f.scope,claimId:claim.id,preferencesVersion:settings.updated_at})).authorized,true);
+    const provider=createApprovedReminderProvider({env:f.configured,supabase:f.supabase,store:f.store,...f.scope,fetchImpl:f.fetchImpl});
+    const input={...f.scope,customerId:f.customerId,to:phone,idempotencyKey:`reminder:${f.scope.workspaceId}:${claim.id}`};
+    input.body=(await provider.prepareReminder(input)).body;
+    f.intercept(async url=>{
+      if(url.pathname.endsWith('/rpc/cetld_core_authorize_first_party_reminder'))await f.db.query("update customers set reminder_tone='firm' where id=$1",[f.customerId]);
+    });
+    assert.equal((await provider.sendReminder(input)).reason,'atomic_gate_denied');
+    assert.equal(f.graph.length,0);assert.equal((await f.store.getInvoice(f.scope)).followup_state,'paused');
   }finally{await f.close();}
 });

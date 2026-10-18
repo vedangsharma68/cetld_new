@@ -1,5 +1,8 @@
 {
   "framework": null,
+  "git": {
+    "deploymentEnabled": {"feat/whatsapp-reminder-tones": false}
+  },
   "regions": ["bom1"],
   "outputDirectory": ".",
   "installCommand": "npm ci --include=dev",

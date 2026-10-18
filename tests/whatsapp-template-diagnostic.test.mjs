@@ -5,7 +5,7 @@ import {createWhatsAppInvoiceTestHandler} from '../automation/whatsapp/test-send
 const workspaceId = '11111111-1111-4111-8111-111111111111';
 const userId = '33333333-3333-4333-8333-333333333333';
 const recipient = '+919871367051';
-const names = ['cetld_invoice_update_v2', 'cetld_invoice_update_btn_v2', 'cetld_invoice_gentle_v1', 'cetld_invoice_gentle_btn_v1'];
+const names = ['cetld_invoice_update_v2', 'cetld_invoice_update_btn_v2', 'cetld_invoice_gentle_v1', 'cetld_invoice_gentle_btn_v1', 'cetld_invoice_details_relaxed_v1', 'cetld_invoice_details_firm_v1', 'cetld_invoice_details_professional_v1'];
 const env = {WHATSAPP_TEST_OPERATOR_USER_ID: userId, WHATSAPP_OUTBOUND_ENABLED: 'true', WHATSAPP_TEST_ALLOWLIST: recipient,
   WHATSAPP_ACCESS_TOKEN: 'private-server-token', WHATSAPP_PHONE_NUMBER_ID: '1234567890', WHATSAPP_WABA_ID: '9876543210',
   WHATSAPP_GRAPH_API_VERSION: 'v24.0', SUPABASE_SERVICE_ROLE_KEY: 'private-service-key'};
@@ -35,13 +35,13 @@ function setup({environment = {}, authorize, graph} = {}) {
   return {run, calls, authorizations};
 }
 
-test('fixed read reuses owner/operator authorization and emits only four sanitized English templates', async () => {
+test('fixed read reuses owner/operator authorization and emits all seven sanitized English templates', async () => {
   const {run, calls, authorizations} = setup(); const res = await run();
   assert.equal(res.code, 200); assert.equal(res.headers['Cache-Control'], 'no-store');
   assert.equal(authorizations.length, 1); assert.equal(authorizations[0][1], workspaceId);
   assert.equal(authorizations[0][0].headers.authorization, 'Bearer caller-jwt-unchanged');
   assert.deepEqual(res.body.templates.map(row => row.name), names);
-  assert.equal(res.body.recipient, recipient); assert.equal(res.body.readOnly, true); assert.equal(calls.length, 5);
+  assert.equal(res.body.recipient, recipient); assert.equal(res.body.readOnly, true); assert.equal(calls.length, 8);
   for (const {url, options} of calls) {
     assert.equal(options.method, 'GET'); assert.equal(options.redirect, 'error'); assert.equal(options.body, undefined);
     assert.equal(options.headers.Authorization, `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`);
@@ -78,7 +78,7 @@ test('pagination reconstructs the same account endpoint and never follows arbitr
     ? url.searchParams.has('after') ? {data: [{id: env.WHATSAPP_PHONE_NUMBER_ID, display_phone_number: '+917303338959'}]}
       : {data: [], paging: {next: `https://evil.example/?access_token=${env.WHATSAPP_ACCESS_TOKEN}`, cursors: {after: 'cursorA'}}}
     : {data: []}});
-  assert.equal((await s.run()).code, 200); assert.equal(s.calls.length, 6);
+  assert.equal((await s.run()).code, 200); assert.equal(s.calls.length, 9);
   assert.equal(new URL(s.calls[1].url).searchParams.get('after'), 'cursorA');
   assert.ok(s.calls.every(call => new URL(call.url).hostname === 'graph.facebook.com'));
 });
@@ -106,7 +106,7 @@ test('unapproved status/category are returned as evidence, never accepted for se
   const s = setup({graph: url => url.pathname.endsWith('/phone_numbers') ? {data: [{id: env.WHATSAPP_PHONE_NUMBER_ID, display_phone_number: '+917303338959'}]}
     : {data: [{...template(url.searchParams.get('name')), status: 'REJECTED', category: 'MARKETING'}]}});
   const res = await s.run(); assert.equal(res.code, 200); assert.equal(res.body.templates[0].status, 'REJECTED');
-  assert.equal(res.body.templates[0].category, 'MARKETING'); assert.equal(s.calls.length, 5);
+  assert.equal(res.body.templates[0].category, 'MARKETING'); assert.equal(s.calls.length, 8);
 });
 
 test('real workspace authorizer requires a valid session and exact owner membership before Graph', async () => {
@@ -130,7 +130,7 @@ test('real workspace authorizer requires a valid session and exact owner members
     assert.equal(signedOut.code, 401); assert.equal(calls.length, 0);
     const signedIn = response(); await handler({method: 'GET', query, headers: {authorization: 'Bearer session-jwt-for-owner'}}, signedIn);
     assert.equal(signedIn.code, role === 'owner' ? 200 : 403);
-    assert.equal(calls.filter(call => call.url.hostname === 'graph.facebook.com').length, role === 'owner' ? 5 : 0);
+    assert.equal(calls.filter(call => call.url.hostname === 'graph.facebook.com').length, role === 'owner' ? 8 : 0);
     for (const call of calls.filter(call => call.url.hostname === 'db.example')) {
       assert.equal(call.options.headers.Authorization, 'Bearer session-jwt-for-owner'); assert.equal(call.options.method, undefined);
     }

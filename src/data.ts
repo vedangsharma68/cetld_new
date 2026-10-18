@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export type CustomerInput = {
   workspace_id: string; name: string; company_name?: string | null;
   email?: string | null; phone?: string | null; metadata?: Record<string, unknown>;
+  reminder_tone?: 'gentle' | 'relaxed' | 'firm' | 'professional' | null;
 };
 
 export type InvoiceInput = {
