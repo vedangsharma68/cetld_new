@@ -54,6 +54,12 @@ export async function handleAccountingRequest(request, response, dependencies = 
     }
     if (request.method !== 'POST') throw new HttpError(405, 'GET or POST required');
     const identity = await authorizeWorkspace(request, input.workspaceId, env, dependencies.fetchImpl);
+    // Ask the owner before any Zoho authorization/organization change. This also
+    // covers reconnecting after disconnect, when no connection row remains.
+    if (provider === 'zoho_books' && ['start', 'select-organization'].includes(input.action)
+      && input.keepExistingInvoices !== true) {
+      throw new HttpError(409, 'Confirm that existing Zoho invoices will remain in the ledger, including invoices from a previous organization. Nothing is automatically archived or deleted.');
+    }
     const integration = await getIntegration();
     if (input.action === 'status') return response.status(200).json(await integration.connectionStatus({ ...identity, provider }));
     if (input.action === 'select-organization') {
