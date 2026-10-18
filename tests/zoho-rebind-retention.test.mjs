@@ -61,3 +61,16 @@ test('both UI mutation requests acknowledge retention only after confirmation',(
   assert.match(connections,/zoho-ledger-retention-note/);
   assert.match(connections,/Invoices from the previous organization are not automatically archived or deleted/);
 });
+
+test('merged Connections preserves pending-authorization help, local logo and retention note together',()=>{
+  const connections=app.split('\n').find(line=>line.startsWith('function connections()'));
+  const brandLogo=app.split('\n').find(line=>line.startsWith('function brandLogo('));
+  const render=new Function('state','button','tag','intro','icon','escape','zohoDiscoveryView',
+    `${brandLogo};return (${connections})();`);
+  const html=render({accountingStatus:{status:'connecting',organizations:[]},quickbooksStatus:{status:'not_connected'}},
+    ()=>'',()=>'',()=>'',()=>'',value=>String(value),()=>'');
+  assert.match(html,/Waiting for your permission in Zoho/);
+  assert.match(html,/Complete authorization in the Zoho window, then select Check connection/);
+  assert.match(html,/src="\/zoho-logo.svg"/);
+  assert.match(html,/Invoices from the previous organization are not automatically archived or deleted/);
+});

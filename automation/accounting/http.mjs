@@ -1,11 +1,17 @@
 import { AccountingProviderError } from './errors.mjs';
 
 export async function providerFetch(fetchImpl, provider, url, options = {}) {
+  // Retry only safe Zoho reads; writes and OAuth exchanges may already have succeeded.
+  const retries = provider === 'zoho_books' && ['GET', 'HEAD'].includes(String(options.method || 'GET').toUpperCase()) ? 2 : 0;
   let response;
-  try {
-    response = await fetchImpl(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(15000) });
-  } catch {
-    throw new AccountingProviderError(provider, 502, 'network_error');
+  for (let attempt = 0; ; attempt++) {
+    try {
+      response = await fetchImpl(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(15000) });
+      break;
+    } catch {
+      if (attempt >= retries) throw new AccountingProviderError(provider, 502, 'network_error');
+      await new Promise(resolve => setTimeout(resolve, 250 * 2 ** attempt));
+    }
   }
   if (response.ok) return response;
 
