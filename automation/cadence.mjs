@@ -27,7 +27,7 @@ const WEEKDAY_NAMES = Object.freeze([
 
 const pad = (value) => String(value).padStart(2, "0");
 
-export function parseClock(value, fallback = { hour: 9, minute: 0 }) {
+export function parseClock(value, fallback = { hour: 8, minute: 0 }) {
   const match = String(value ?? "").trim().match(/^(\d{1,2})(?::(\d{2}))?$/);
   if (!match) return { ...fallback };
   const hour = Number(match[1]);
@@ -129,15 +129,15 @@ function dateOnlyParts(value) {
 }
 
 function allowedWeekdays(settings) {
-  const configured = Array.isArray(settings?.weekdays) ? settings.weekdays : [];
+  const configured = settings?.allowedWeekdays ?? settings?.weekdays ?? [];
   const days = configured.map((day) => typeof day === "number" ? day : WEEKDAYS[String(day).toLowerCase()]).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6);
-  return new Set(days.length ? days : [1, 2, 3, 4, 5]);
+  return new Set(days.length ? days : [0, 1, 2, 3, 4, 5, 6]);
 }
 
 export function isWithinContactHours(value, settings = {}, timeZone = "UTC") {
   const local = timezoneParts(value, timeZone);
-  const start = parseClock(settings.hoursStart ?? settings.contactHoursStart, { hour: 9, minute: 0 });
-  const end = parseClock(settings.hoursEnd ?? settings.contactHoursEnd, { hour: 18, minute: 0 });
+  const start = parseClock(settings.contactStart ?? settings.hoursStart ?? settings.start_local ?? settings.contactHoursStart, { hour: 8, minute: 0 });
+  const end = parseClock(settings.contactEnd ?? settings.hoursEnd ?? settings.end_local ?? settings.contactHoursEnd, { hour: 21, minute: 0 });
   const current = local.hour * 60 + local.minute;
   const from = start.hour * 60 + start.minute;
   const until = end.hour * 60 + end.minute;
@@ -160,7 +160,7 @@ function contactStartInstants(local,timeZone){
 export function nextContactTime(value, settings = {}, timeZone = "UTC") {
   const date = value instanceof Date ? new Date(value) : new Date(value);
   if (!Number.isFinite(date.getTime())) throw new TypeError("Invalid date");
-  const start = parseClock(settings.hoursStart ?? settings.contactHoursStart, { hour: 9, minute: 0 });
+  const start = parseClock(settings.contactStart ?? settings.hoursStart ?? settings.start_local ?? settings.contactHoursStart, { hour: 8, minute: 0 });
   const weekdays = allowedWeekdays(settings);
   let local = timezoneParts(date, timeZone);
   let first = true;
@@ -182,17 +182,17 @@ export function nextContactTime(value, settings = {}, timeZone = "UTC") {
 }
 
 export function scheduleInitialFollowUp(invoice, settings = {}, now = new Date()) {
-  const timeZone = invoice?.debtor_timezone || settings.timezone || "UTC";
+  const timeZone = settings.timezone || invoice?.debtor_timezone || "UTC";
   const due = dateOnlyParts(invoice?.due_date) || timezoneParts(now, timeZone);
   const days = parseFirstReminder(settings.firstReminderDays ?? settings.firstReminder ?? settings.first_reminder_days, 3);
-  const local = addLocalDays({ ...due, hour: parseClock(settings.hoursStart ?? settings.contactHoursStart).hour, minute: parseClock(settings.hoursStart ?? settings.contactHoursStart).minute, second: 0 }, days);
+  const local = addLocalDays({ ...due, hour: parseClock(settings.contactStart ?? settings.hoursStart ?? settings.start_local ?? settings.contactHoursStart).hour, minute: parseClock(settings.contactStart ?? settings.hoursStart ?? settings.start_local ?? settings.contactHoursStart).minute, second: 0 }, days);
   return nextContactTime(localDateTimeToDate(local, timeZone), settings, timeZone);
 }
 
 export function scheduleNextFollowUp(from, settings = {}, timeZone = "UTC") {
   const local = timezoneParts(from, timeZone);
   const cadenceDays = parseCadence(settings.cadence ?? settings.cadenceDays, 3);
-  const start = parseClock(settings.hoursStart ?? settings.contactHoursStart, { hour: 9, minute: 0 });
+  const start = parseClock(settings.contactStart ?? settings.hoursStart ?? settings.start_local ?? settings.contactHoursStart, { hour: 8, minute: 0 });
   const target = addLocalDays({ ...local, hour: start.hour, minute: start.minute, second: 0 }, cadenceDays);
   return nextContactTime(localDateTimeToDate(target, timeZone), settings, timeZone);
 }

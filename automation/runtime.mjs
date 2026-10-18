@@ -44,7 +44,7 @@ export function createAutomationRuntime({env=process.env,fetchImpl=fetch,store,p
     const owner=typeof store.getWorkspacePreferences==='function'?await store.getWorkspacePreferences(scope):null;
     const settings=owner?normalizeFollowUpPreferences(owner.follow_up_preferences,owner.default_timezone):(row.followUpSettings || row.follow_up_settings || {});
     const at=scheduleInitialFollowUp(row,settings,clock());
-    const next=nextContactTime(at>clock()?at:clock(),settings,row.debtor_timezone || settings.timezone || 'UTC');
+    const next=nextContactTime(at>clock()?at:clock(),settings,settings.timezone || row.debtor_timezone || 'UTC');
     const changed=await store.updateInvoice({...scope,expectedVersion:Number(row.automationVersion ?? row.automation_version),followupState:'approved',nextFollowUpAt:next.toISOString()});
     if (!changed) throw new HttpError(409,'Invoice changed; refresh and retry');
     return {status:'scheduled',nextFollowUpAt:next.toISOString()};
@@ -52,7 +52,7 @@ export function createAutomationRuntime({env=process.env,fetchImpl=fetch,store,p
   async function configure(scope,configuration) {
     const row=await read(scope);
     if(!configuration || typeof configuration!=='object')throw new HttpError(400,'Configuration required');
-    const {businessName=(row.followUpSettings || row.follow_up_settings)?.businessName,customerPhone,timezone='UTC',hoursStart='09:00',hoursEnd='18:00',cadenceDays=3,first_reminder_days=3,escalationAfter=3,weekdays=[1,2,3,4,5]}=configuration;
+    const {businessName=(row.followUpSettings || row.follow_up_settings)?.businessName,customerPhone,timezone='Asia/Kolkata',hoursStart='08:00',hoursEnd='21:00',cadenceDays=3,first_reminder_days=3,escalationAfter=3,weekdays=[0,1,2,3,4,5,6]}=configuration;
     if(!/^\+[1-9]\d{7,14}$/.test(customerPhone || ''))throw new HttpError(400,'E.164 customer phone required');
     try{new Intl.DateTimeFormat('en',{timeZone:timezone}).format();}catch{throw new HttpError(400,'Invalid timezone');}
     if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(hoursStart)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(hoursEnd)||hoursStart>=hoursEnd)throw new HttpError(400,'Contact hours must form a daytime window');

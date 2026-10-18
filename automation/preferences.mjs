@@ -42,10 +42,10 @@ function integer(value, fallback, min, max) {
 
 export function normalizeFollowUpPreferences(raw = {}, timezone = 'Asia/Kolkata') {
   const input = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  const start = input.contactStart ?? input.hoursStart ?? '09:00';
-  const end = input.contactEnd ?? input.hoursEnd ?? '18:00';
+  const start = input.contactStart ?? input.hoursStart ?? input.start_local ?? '08:00';
+  const end = input.contactEnd ?? input.hoursEnd ?? input.end_local ?? '21:00';
   if (!clockPattern.test(start) || !clockPattern.test(end) || start >= end) throw new RangeError('Invalid contact window');
-  const weekdays = input.allowedWeekdays ?? input.weekdays ?? [1, 2, 3, 4, 5];
+  const weekdays = input.allowedWeekdays ?? input.weekdays ?? [0, 1, 2, 3, 4, 5, 6];
   if (!Array.isArray(weekdays) || !weekdays.length || weekdays.some(day => !Number.isInteger(day) || day < 0 || day > 6)) throw new RangeError('Invalid allowed weekdays');
   const tz = input.timezone || timezone;
   try { new Intl.DateTimeFormat('en', {timeZone: tz}).format(); } catch { throw new RangeError('Invalid timezone'); }

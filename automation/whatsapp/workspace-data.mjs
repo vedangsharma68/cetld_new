@@ -182,7 +182,7 @@ function safeFollowupPreferences(value) {
   if(['gentle','professional','firm'].includes(tone))out.tone=tone;
   const ranges={firstReminderDays:[0,90],cadenceDays:[1,90],maxReminders:[1,20]};
   for(const [key,[min,max]] of Object.entries(ranges))if(Number.isInteger(value[key])&&value[key]>=min&&value[key]<=max)out[key]=value[key];
-  const start=value.contactStart??value.hoursStart,end=value.contactEnd??value.hoursEnd;
+  const start=value.contactStart??value.hoursStart??value.start_local,end=value.contactEnd??value.hoursEnd??value.end_local;
   const time=/^([01]\d|2[0-3]):[0-5]\d$/;
   if(typeof start==='string'&&time.test(start))out.contactStart=start;
   if(typeof end==='string'&&time.test(end))out.contactEnd=end;
