@@ -1,6 +1,6 @@
 (() => {
   // EDIT THIS LIST to change the rotating words.
-  const ROTATING_WORDS = ['confidence', 'calm', 'clarity', 'control'];
+  const ROTATING_WORDS = ['confidence', 'calm', 'control', 'clarity', 'proof', 'ease'];
 
   const rotatingWord = document.querySelector('.rotating-word');
   const currentWord = document.querySelector('.rotating-word-current');
@@ -20,7 +20,8 @@
   const measureWord = (word) => {
     // Measure the complete unbreakable unit, including its trailing period.
     probe.textContent = `${word}.`;
-    return probe.getBoundingClientRect().width;
+    // Round outward so WebKit cannot truncate the period at fractional widths.
+    return Math.ceil(probe.getBoundingClientRect().width);
   };
 
   const stop = () => {

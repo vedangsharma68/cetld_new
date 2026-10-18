@@ -393,6 +393,10 @@ input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-to
 input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-toggle input):disabled{background:var(--soft);border-color:var(--line);color:var(--muted);cursor:not-allowed}
 input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-toggle input):checked:disabled{background:var(--cedar);border-color:var(--cedar);color:#fff}
 #follow-up-preferences-form>.two-cols,#follow-up-preferences-form>.setting-row,#follow-up-preferences-form>[data-error],#follow-up-preferences-form>[type="submit"]{grid-column:1/-1}
+/* Nested fields must shrink below native time-input intrinsic widths on mobile. */
+#follow-up-preferences-form>.two-cols{min-width:0}
+#follow-up-preferences-form>.two-cols>.field{min-width:0;grid-template-columns:minmax(0,1fr)}
+#follow-up-preferences-form input[type="time"]{width:100%;max-width:100%;min-width:0}
 #follow-up-preferences-form>.follow-up-template-field{grid-column:1/-1}
 #follow-up-preferences-form>.setting-row{padding-block:15px}
 #follow-up-preferences-form>.setting-row+.setting-row{border-top:1px solid var(--line)}

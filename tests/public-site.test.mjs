@@ -68,3 +68,12 @@ test('landing hero rotation reserves descender room and animates a measured widt
   assert.match(siteCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*animation: none !important;[\s\S]*transition: none !important;/);
   assert.match(heroRotation, /matchMedia\('\(prefers-reduced-motion: reduce\)'\)/);
 });
+
+
+test('hero uses the final editable word set and rounds measured widths outward', () => {
+  const words = heroRotation.match(/const ROTATING_WORDS = (\[[^;]+\]);/)?.[1];
+  assert.deepEqual(JSON.parse(words.replaceAll("'", '"')), ['confidence', 'calm', 'control', 'clarity', 'proof', 'ease']);
+  assert.match(heroRotation, /Math\.ceil\(probe\.getBoundingClientRect\(\)\.width\)/);
+  assert.match(siteCss, /\.rotating-word-text\s*\{[^}]*flex: 1 1 auto;[^}]*white-space: nowrap;/);
+  assert.match(siteCss, /\.rotating-word-period\s*\{[^}]*flex: none;[^}]*white-space: nowrap;/);
+});
