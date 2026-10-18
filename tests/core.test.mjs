@@ -32,3 +32,15 @@ test('deleted invoices are omitted from totals and cannot accept payment or appr
 test('due dates use date-only comparison',()=>{assert.equal(status(invoice,'2026-09-01'),'Due today');assert.equal(status(invoice,'2026-09-02'),'Overdue');assert.equal(status(invoice,'2026-08-31'),'Open');});
 test('CSV export quotes values and neutralizes spreadsheet formulas',()=>{assert.equal(csvCell('=IMPORTXML("x")'),'"\'=IMPORTXML(""x"")"');assert.equal(csvCell('A, B'),'"A, B"');});
 
+
+test('negative amounts explain positivity while malformed precision retains its error',()=>{
+  for(const amount of ['-1','-0.01','-12.345'])assert.throws(()=>cents(amount),/positive amount/);
+  assert.throws(()=>cents('1.234'),/two decimal places/);
+});
+test('dashboard greeting uses the configured timezone across UTC boundaries',()=>{
+  const now=new Date('2026-10-18T07:00:00Z');
+  assert.equal(core.dashboardGreeting('Asia/Kolkata',now),'Good afternoon');
+  assert.equal(core.dashboardGreeting('UTC',now),'Good morning');
+  assert.equal(core.dashboardGreeting('bad/timezone',now),'Good afternoon');
+  assert.equal(core.dashboardGreeting('Asia/Kolkata',new Date('2026-10-18T12:00:00Z')),'Good evening');
+});
