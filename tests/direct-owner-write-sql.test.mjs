@@ -1243,26 +1243,6 @@ test('expired owner proposals clear metadata on verified new turns without chang
   }finally{await db.close();}
 });
 
-test('QA-14 unrelated customer uniqueness must not report a nonexistent invoice code',async()=>{
- const {db,workspaceId}=await boot();try{
-  // Reapplying the forward patch is safe and preserves the service-only RPC.
-  await db.exec(await readFile(new URL('../supabase/migrations/20261018161819_owner_text_invoice_duplicate_evidence.sql',import.meta.url),'utf8'));
-  const access=(await db.query("select p.prosecdef,has_function_privilege('anon',p.oid,'execute') anon,has_function_privilege('authenticated',p.oid,'execute') authenticated,has_function_privilege('service_role',p.oid,'execute') service from pg_proc p where p.oid='public.whatsapp_apply_direct_owner_write(uuid,uuid,text,text,text,text,text,uuid,timestamptz,text,text,text,bigint,bigint,jsonb)'::regprocedure")).rows[0];
-  assert.deepEqual(access,{prosecdef:true,anon:false,authenticated:false,service:true});
-  await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
-  await db.exec(`reset role;
-   create function public.qa_customer_unique_failure() returns trigger language plpgsql as $$
-   begin raise unique_violation using message='synthetic customer conflict';end;$$;
-   create trigger qa_customer_unique_failure before insert on public.customers for each row execute function public.qa_customer_unique_failure();`);
-  const failed=await createDirectInvoice(db,workspaceId,{messageId:'qa-unrelated-unique',invoiceNumber:'QA-EDGE-002',customerName:'Disposable QA'});
-  assert.equal(failed.code,'DATABASE_UNAVAILABLE',JSON.stringify(failed));
-  await db.exec('reset role');
-  assert.equal((await db.query("select count(*)::int n from invoices where invoice_number='QA-EDGE-002' or metadata->>'source_invoice_number'='QA-EDGE-002'")).rows[0].n,0);
-  assert.equal((await db.query("select count(*)::int n from customers where name='Disposable QA'")).rows[0].n,0);
-  assert.equal((await db.query("select count(*)::int n from whatsapp_direct_write_receipts where provider_message_id='qa-unrelated-unique'")).rows[0].n,0);
- }finally{await db.close();}
-});
-
 test('QA-12/QA-14 parsed text persists exact money and dates; scoped genuine source duplicates stay blocked',async()=>{
  const {parseTextInvoice}=await import('../automation/whatsapp/text-invoice.mjs');
  const {db,workspaceId}=await boot();try{

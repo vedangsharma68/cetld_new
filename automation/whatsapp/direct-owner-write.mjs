@@ -30,6 +30,32 @@ function failure(code){return {ok:false,completed:false,...(code==='INVALID_TOTA
 function valueOf(result){return Array.isArray(result?.data)?result.data[0]:result?.data;}
 function validUuid(value){return typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);}
 function validPhone(value){return typeof value==='string'&&/^\+[1-9][0-9]{7,14}$/.test(value);}
+async function persistedCreationConflict({supabase,workspaceId,payload}){
+  const number=typeof payload.invoice_number==='string'?payload.invoice_number.trim():'';
+  if(!number||number==='AUTO')return false;
+  const rows=async query=>{
+    const result=await query.limit(2);
+    if(result?.error||!Array.isArray(result?.data))throw new Error('Invoice conflict lookup unavailable');
+    return result.data.filter(row=>row.workspace_id===workspaceId);
+  };
+  // Canonical numbers remain reserved even for soft-deleted invoices.
+  const canonical=await rows(supabase.from('invoices').select('id,workspace_id')
+    .eq('workspace_id',workspaceId).eq('invoice_number',number));
+  if(canonical.length)return true;
+  if(typeof payload.customer_name!=='string'||!payload.customer_name.trim())return false;
+  const literalLike=value=>value.replace(/[\\%_]/g,'\\$&');
+  let query=supabase.from('customers').select('id,workspace_id').eq('workspace_id',workspaceId)
+    .ilike('name',literalLike(payload.customer_name.trim()));
+  if(payload.customer_email)query=query.ilike('email',literalLike(payload.customer_email.trim()));
+  const customers=await rows(query);
+  if(customers.length!==1)return false;
+  // Source identity is customer-scoped and only active rows trigger the SQL
+  // source guard. All reads are exact; customer wildcards are escaped.
+  const matches=await Promise.all(['printed_invoice_number','source_invoice_number'].map(field=>rows(
+    supabase.from('invoices').select('id,workspace_id').eq('workspace_id',workspaceId)
+      .eq('customer_id',customers[0].id).eq(`metadata->>${field}`,number).is('deleted_at',null))));
+  return matches.some(found=>found.length>0);
+}
 function minorUnits(value){
   if(typeof value!=='string'&&typeof value!=='number')return null;
   const match=/^([0-9]{1,12})(?:\.([0-9]{1,2}))?$/.exec(String(value));
@@ -229,6 +255,13 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
       }catch{return failure(correction?'WRITE_UNCONFIRMED':'DATABASE_UNAVAILABLE');}
       if(result?.error)return failure(correction?'WRITE_UNCONFIRMED':'DATABASE_UNAVAILABLE');
       const outcome=valueOf(result);
+      if(outcome?.ok!==true&&outcome?.code==='INVOICE_EXISTS'&&operation==='invoice.create'){
+        // The SQL routine's broad uniqueness handler also covers customer
+        // failures. Keep its source pinned for payment capabilities and verify
+        // invoice evidence here before telling the owner a code exists.
+        try{return failure(await persistedCreationConflict({supabase,workspaceId,payload})?'INVOICE_EXISTS':'DATABASE_UNAVAILABLE');}
+        catch{return failure('DATABASE_UNAVAILABLE');}
+      }
       if(outcome?.ok!==true)return failure(outcome?.code);
       const entityType=outcome.entityType;
       const entityId=String(outcome.entityId||'');

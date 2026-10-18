@@ -1,5 +1,6 @@
 import { providerFetch, jsonResponse, formBody } from './http.mjs';
 import { AccountingError, AccountingProviderError } from './errors.mjs';
+import { zohoCustomerPhone } from './zoho-phone.mjs';
 
 const ZOHO_DEFAULT_ACCOUNTS = 'https://accounts.zoho.com';
 const ZOHO_DEFAULT_API = 'https://www.zohoapis.com';
@@ -67,6 +68,7 @@ function normalizeZohoInvoice(item) {
     externalId: String(item.invoice_id),
     number: item.invoice_number || null,
     customerName: item.customer_name || item.contact_name || null,
+    customerPhone: zohoCustomerPhone(item),
     amountMinor: totalMinor,
     balanceMinor,
     paidMinor: Math.max(0, totalMinor - balanceMinor),
@@ -240,7 +242,7 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       const body = await jsonResponse(response, 'zoho_books');
       const result = (Array.isArray(body.contacts) ? body.contacts : []).filter(item => item?.contact_id).map(item => ({
         externalId: String(item.contact_id), name: item.contact_name || item.company_name || null,
-        companyName: item.company_name || null, email: item.email || null, phone: item.phone || null,
+        companyName: item.company_name || null, email: item.email || null, phone: zohoCustomerPhone(item),
         contactType: item.contact_type || 'customer', status: item.status || null, currency: item.currency_code || null,
         updatedAt: item.last_modified_time || null, source: 'zoho_books', raw: item,
       }));

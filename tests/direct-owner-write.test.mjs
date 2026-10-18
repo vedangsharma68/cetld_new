@@ -8,6 +8,42 @@ const entityId='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const phone='+919871367051';
 const updatedAt='2026-10-03T10:00:00.000Z';
 
+test('invoice creation checks scoped persisted evidence before reporting a duplicate',async()=>{
+  const customerId='dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const payload={invoice_number:'QA-EDGE-002',customer_name:'QA_100%',customer_email:'QA@example.test'};
+  for(const scenario of ['missing','canonical-deleted','source','foreign','ambiguous','read-error']){
+    const calls=[];
+    const supabase={rpc:async()=>({data:{ok:false,code:'INVOICE_EXISTS'}}),from(table){
+      const filters=[];const query={select(){return query;},eq(key,value){filters.push([key,'eq',value]);return query;},
+        ilike(key,value){filters.push([key,'ilike',value]);return query;},is(key,value){filters.push([key,'is',value]);return query;},
+        async limit(){
+          calls.push({table,filters:[...filters]});
+          if(scenario==='read-error')return {error:{code:'unavailable'}};
+          let data=[];
+          if(table==='customers')data=[{id:customerId,workspace_id:workspaceId}];
+          if(table==='customers'&&scenario==='ambiguous')data.push({id:entityId,workspace_id:workspaceId});
+          if(table==='invoices'&&(scenario==='canonical-deleted'&&filters.some(([key])=>key==='invoice_number')
+            ||scenario==='source'&&filters.some(([key])=>key==='metadata->>source_invoice_number')))
+            data=[{id:entityId,workspace_id:workspaceId}];
+          if(scenario==='foreign')data=[{id:entityId,workspace_id:ownerId}];
+          return {data,error:null};
+        }};return query;
+    }};
+    const result=await createDirectOwnerWriteAdapter({supabase}).apply({workspaceId,ownerId,phone,providerMessageId:'qa-conflict-'+scenario,
+      authorization:{kind:'instruction',quote:'New invoice QA-EDGE-002 for QA_100%'},operation:'invoice.create',payload});
+    assert.equal(result.code,['canonical-deleted','source'].includes(scenario)?'INVOICE_EXISTS':'DATABASE_UNAVAILABLE',scenario);
+    assert.equal(result.completed,false);
+    for(const call of calls)assert.ok(call.filters.some(([key,op,value])=>key==='workspace_id'&&op==='eq'&&value===workspaceId));
+    if(scenario==='source'){
+      assert.ok(calls.find(call=>call.table==='customers').filters.some(([key,op,value])=>key==='name'&&op==='ilike'&&value==='QA\\_100\\%'));
+      for(const call of calls.filter(call=>call.filters.some(([key])=>key.startsWith('metadata->>')))){
+        assert.ok(call.filters.some(([key,,value])=>key==='customer_id'&&value===customerId));
+        assert.ok(call.filters.some(([key,,value])=>key==='deleted_at'&&value===null));
+      }
+    }
+  }
+});
+
 function supabaseFixture({rpcValue,record,readError}={}){
   const calls=[];
   return {

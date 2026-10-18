@@ -44,6 +44,16 @@ test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, wit
     }
     const duplicate=await turn('qa-native-duplicate','New invoice QA-EDGE-002 for QA Emoji Customer, amount Rs 1,200, due 25 October 2026');
     assert.match(duplicate.answer,/already exists/);
+    // Reproduce the broad SQL uniqueness handler without modifying its source:
+    // payment capability fingerprints must stay valid after the invoice fix.
+    await db.exec(`create function public.qa_customer_unique_failure() returns trigger language plpgsql as $$
+      begin raise unique_violation using message='synthetic customer conflict';end;$$;
+      create trigger qa_customer_unique_failure before insert on public.customers for each row execute function public.qa_customer_unique_failure();`);
+    const unavailable=await turn('qa-native-customer-unique','New invoice QA-NONEXISTENT for No Invoice QA, amount Rs 100, due 25 October 2026');
+    assert.match(unavailable.answer,/service was unavailable/);assert.doesNotMatch(unavailable.answer,/already exists/);
+    assert.equal((await db.query("select count(*)::int n from customers where name='No Invoice QA'")).rows[0].n,0);
+    assert.equal((await db.query("select count(*)::int n from whatsapp_direct_write_receipts where provider_message_id='qa-native-customer-unique'")).rows[0].n,0);
+    assert.deepEqual((await db.query('select whatsapp_owner_partial_payment_capability() value')).rows[0].value,{ok:true,version:4,bookkeepingInstructions:1});
     assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,2);
     assert.equal((await db.query('select count(*)::int n from payments')).rows[0].n,0);
     assert.equal((await db.query("select count(*)::int n from whatsapp_messages where audience='customer'")).rows[0].n,0);
