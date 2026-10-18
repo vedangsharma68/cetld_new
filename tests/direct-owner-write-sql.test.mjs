@@ -1242,3 +1242,53 @@ test('expired owner proposals clear metadata on verified new turns without chang
     await asOwner(db);await assert.rejects(db.query('select public.whatsapp_expire_owner_pending($1,$2,$3,$4,$5)',[workspaceId,owner,phone,'expiry-valid','Review my business']));
   }finally{await db.close();}
 });
+
+test('QA-14 unrelated customer uniqueness must not report a nonexistent invoice code',async()=>{
+ const {db,workspaceId}=await boot();try{
+  // Reapplying the forward patch is safe and preserves the service-only RPC.
+  await db.exec(await readFile(new URL('../supabase/migrations/20261018161819_owner_text_invoice_duplicate_evidence.sql',import.meta.url),'utf8'));
+  const access=(await db.query("select p.prosecdef,has_function_privilege('anon',p.oid,'execute') anon,has_function_privilege('authenticated',p.oid,'execute') authenticated,has_function_privilege('service_role',p.oid,'execute') service from pg_proc p where p.oid='public.whatsapp_apply_direct_owner_write(uuid,uuid,text,text,text,text,text,uuid,timestamptz,text,text,text,bigint,bigint,jsonb)'::regprocedure")).rows[0];
+  assert.deepEqual(access,{prosecdef:true,anon:false,authenticated:false,service:true});
+  await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+  await db.exec(`reset role;
+   create function public.qa_customer_unique_failure() returns trigger language plpgsql as $$
+   begin raise unique_violation using message='synthetic customer conflict';end;$$;
+   create trigger qa_customer_unique_failure before insert on public.customers for each row execute function public.qa_customer_unique_failure();`);
+  const failed=await createDirectInvoice(db,workspaceId,{messageId:'qa-unrelated-unique',invoiceNumber:'QA-EDGE-002',customerName:'Disposable QA'});
+  assert.equal(failed.code,'DATABASE_UNAVAILABLE',JSON.stringify(failed));
+  await db.exec('reset role');
+  assert.equal((await db.query("select count(*)::int n from invoices where invoice_number='QA-EDGE-002' or metadata->>'source_invoice_number'='QA-EDGE-002'")).rows[0].n,0);
+  assert.equal((await db.query("select count(*)::int n from customers where name='Disposable QA'")).rows[0].n,0);
+  assert.equal((await db.query("select count(*)::int n from whatsapp_direct_write_receipts where provider_message_id='qa-unrelated-unique'")).rows[0].n,0);
+ }finally{await db.close();}
+});
+
+test('QA-12/QA-14 parsed text persists exact money and dates; scoped genuine source duplicates stay blocked',async()=>{
+ const {parseTextInvoice}=await import('../automation/whatsapp/text-invoice.mjs');
+ const {db,workspaceId}=await boot();try{
+  await bindOwner(db,workspaceId);await setConfirmationMode(db,workspaceId,'direct');
+  const clock=()=>new Date('2026-10-18T12:18:00Z');
+  for(const [index,quote] of [
+   'New invoice for QA Text Customer, amount Rs 2,500, due 25 October 2026',
+   'QA-EDGE-002 नया invoice 🧾🔥 for QA Emoji Customer ₹1,200 due kal, please check',
+   'New invoice QA-HINDI-003 for ग्राहक 😊, amount Rs 100, due कल',
+  ].entries()){
+   const {values}=parseTextInvoice(quote,{clock});
+   await asService(db);await addInbound(db,`qa-text-${index}`,quote);
+   const result=await write(db,{workspaceId,providerMessageId:`qa-text-${index}`,quote,operation:'invoice.create',payload:values});
+   assert.equal(result.ok,true,JSON.stringify(result));assert.equal(Number(result.record.total_amount),values.total_amount);
+   assert.equal(result.record.issue_date,values.issue_date);assert.equal(result.record.due_date,values.due_date);
+   const replay=await write(db,{workspaceId,providerMessageId:`qa-text-${index}`,quote,operation:'invoice.create',payload:values});
+   assert.equal(replay.ok,true);assert.equal(replay.entityId,result.entityId);
+  }
+  const duplicate=await createDirectInvoice(db,workspaceId,{messageId:'qa-actual-duplicate',invoiceNumber:'QA-EDGE-002',customerName:'QA Emoji Customer'});
+  assert.equal(duplicate.code,'INVOICE_EXISTS',JSON.stringify(duplicate));
+  // Same code in a different workspace/customer is not evidence of a collision.
+  await asOwner(db);const other=(await db.query("select (public.create_workspace('Other QA','other-qa')).id")).rows[0].id;
+  const customer=(await db.query("insert into customers(workspace_id,name) values($1,'Foreign QA') returning id",[other])).rows[0].id;
+  await db.query("insert into invoices(workspace_id,customer_id,invoice_number,total_amount,metadata) values($1,$2,'QA-FOREIGN-004',50,'{\"invoice_direction\":\"receivable\",\"source_invoice_number\":\"QA-FOREIGN-004\"}')",[other,customer]);
+  await asService(db);
+  const local=await createDirectInvoice(db,workspaceId,{messageId:'qa-foreign-code',invoiceNumber:'QA-FOREIGN-004',customerName:'Foreign QA'});
+  assert.equal(local.ok,true,JSON.stringify(local));
+ }finally{await db.close();}
+});

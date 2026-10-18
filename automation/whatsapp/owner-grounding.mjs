@@ -124,6 +124,13 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
   results=results.flatMap(result=>result?.ok===true&&result.completed===true&&result.action==='batch.completed'&&Array.isArray(result.results)
     &&result.results.every(child=>child?.ok===true&&child.completed===true)?[result,...result.results]:[result]);
   const text=normalize(reply);
+  // Failed validation/unavailability is not evidence of a duplicate. In
+  // particular, a code copied from the owner's message proves no existence.
+  const duplicateClaim=/\b(?:invoice|code|number)\b[^.!?\n]{0,120}\b(?:already exists|already in use|already present|is a duplicate)\b/i.test(text);
+  if(duplicateClaim&&!results.some(result=>result?.ok===false&&['INVOICE_EXISTS','DUPLICATE_INVOICE'].includes(result.code))
+    &&!results.some(result=>result?.ok===true&&(result.duplicate===true
+      ||result.readOnly===true&&result.table==='invoices'&&result.rows?.some(row=>row.invoice_number&&text.includes(row.invoice_number))
+      ||result.existingInvoice?.invoiceNumber&&text.includes(result.existingInvoice.invoiceNumber))))return 'unverified_invoice_duplicate';
   if(/\b(?:i(?:'m| am) still (?:working|processing)|i(?:'ll| will) (?:message|notify|let you know)|working on (?:it|that|this) now)\b/i.test(text)
     &&!results.some(result=>result?.ok===true&&result.durableJob===true&&result.queued===true))return 'unverified_background_job';
   if(results.some(result=>result.cashRefund===false)&&text.split(/[.!?\n]+/).map(clause=>clause.replace(NO_RESULT,''))
