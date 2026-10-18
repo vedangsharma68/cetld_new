@@ -28,17 +28,22 @@
   align-items: baseline;
   overflow: hidden;
   vertical-align: bottom;
-  line-height: 1.12;
-  padding-block: .04em .3em;
-  margin-block: -.04em -.3em;
+  line-height: 1.2;
+  /* Extra internal space survives fractional line-box rounding in WebKit. */
+  padding-block: .1em .4em;
+  margin-block: -.1em -.4em;
   white-space: nowrap;
-  contain: layout paint;
+  flex-wrap: nowrap;
+  contain: layout;
   transition: width 360ms cubic-bezier(.4, 0, .2, 1);
 }
 
 .rotating-word-text {
   display: inline-grid;
   min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  flex: 1 1 auto;
+  white-space: nowrap;
 }
 
 .rotating-word-current,
@@ -50,6 +55,11 @@
 .rotating-word-next {
   display: inline-block;
   will-change: transform, opacity;
+}
+
+.rotating-word-period {
+  flex: none;
+  white-space: nowrap;
 }
 
 .rotating-word-current.is-exiting {
