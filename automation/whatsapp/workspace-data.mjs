@@ -4,6 +4,7 @@ import {isExternallyManagedInvoice,invoiceBalanceFields} from '../../invoice/bus
 import {applyPaymentReversals,isMissingReversalStorage} from '../../payment-reversals.mjs';
 import {resolveWorkspaceRecord,validateCustomFields,ownerCalendar} from './workspace-records.mjs';
 import {ownerInvoiceReadIntent} from './owner-invoice-read-intent.mjs';
+import {parseTextInvoice,textInvoiceFailure} from './text-invoice.mjs';
 import {ownerInvoiceReadAnalysis,invoiceReadAnalysisArgs,deriveInvoiceReadAnalysis} from './owner-invoice-read-analysis.mjs';
 import {INVOICE_CORRECTION_FIELDS,INVOICE_BUSINESS_METADATA_FIELDS,INVOICE_EXTENDED_CORRECTION_FIELDS,validateInvoiceCorrection,invoiceBusinessFields,requestedInvoiceDateChange,requestedInvoiceMoneyChange} from './invoice-corrections.mjs';
 import {sanitizeOwnerBotPreferences,mergeOwnerBotPreferences,OWNER_BOT_LANGUAGE_OPTIONS} from './bot-preferences.mjs';
@@ -389,6 +390,7 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null) {
         ctx.assertLive();
         if(!ownObject(planned)||containsForbiddenIdentity(planned,scope))throw new TypeError('invalid planned operation');
         for(const[key,value]of Object.entries(hints))if(planned[key]!==undefined&&planned[key]!==value)throw new TypeError('conflicting request hints');
+        ctx.recordPlan?.({...hints,...planned});
         ctx.planning=false;
         return normalizeStructured({...hints,...planned});
       });
@@ -977,6 +979,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     const deadlines=[deadlineAt,executionOptions?.deadlineAt].map(asEpoch).filter(Number.isFinite);
     const effectiveDeadline=deadlines.length?Math.min(...deadlines):null;
     const ctx={signal:combinedSignal,deadlineAt:effectiveDeadline,phase:'authorization',
+      recordPlan(planned){shape=validationShape(planned);},
       recordCorrectionTransport(shape){if(!correctionTransport)correctionTransport=shape;},
       assertLive(){
         if(signals.some(item=>item.aborted))throw Object.assign(new Error(),{code:'OWNER_LOOP_TIMEOUT'});
@@ -990,7 +993,15 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     try {
       try { await ctx.assertAuthorized(); }
       catch(error) { if(error?.code==='OWNER_REQUIRED')return fail('DENIED','This action is not available for the current owner binding.'); throw error; }
-      const params=await normalizeRequest(raw,scope,planRequest,ctx,validationFeedback);
+      // This narrow text grammar supplies fields the structured write contract
+      // requires (including the workspace issue date) without another AI pass.
+      // Keep all argument/scope validation before replacing the write values.
+      const textInvoice=!attachmentAvailable?parseTextInvoice(message,{clock,timezone}):null;
+      const textRequest=textInvoice&&typeof raw?.request==='string'&&raw.request.trim()&&raw.request.length<=1200&&!containsForbiddenIdentity(raw,scope)
+        &&Object.keys(raw).every(key=>['request','operation','table'].includes(key))
+        &&(raw.operation===undefined||raw.operation==='create')&&(raw.table===undefined||raw.table==='invoices');
+      const params=await normalizeRequest(textRequest?textInvoice:raw,scope,planRequest,ctx,validationFeedback);
+      if(textInvoice&&params.operation==='create'&&params.table==='invoices')params.values=textInvoice.values;
       ctx.phase='dispatch';
       // This private execution option comes from the server's scoped preread,
       // never from model-visible arguments. Preserve its version through SQL.
@@ -1241,9 +1252,16 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       replyRequirement=null;nextActionParams=null;nextActionRecords=null;
       result={...safeError(result),writeAttempted:result.writeAttempted??writeAttempted};
     }
+    const creationFailed=!attachmentAvailable&&result?.ok===false&&(attemptedOperation?.operation==='create'&&attemptedOperation?.table==='invoices'
+      ||result.validationShape?.operation==='create'&&result.validationShape?.table==='invoices'
+      ||raw?.operation==='create'&&raw?.table==='invoices');
+    if(creationFailed){
+      const answer=textInvoiceFailure(result);
+      if(answer)result={...result,message:answer,invoiceCreationFailure:true};
+    }
     nextActionResult=result;
     if(correctionTransport)result={...result,correctionTransport};
-    return result?.code==='INVALID'?{...result,...(!result.validationCode&&result.outcome!=='review_incomplete'?{message:'Use request text alone, or the structured fields in this catalog. Do not combine request with filters, values or columns. pending/confirm/cancel take no table or values.'}:{}),catalog:catalog(typeof raw?.table==='string'&&Object.hasOwn(TABLES,raw.table)?raw.table:null)}:result;
+    return result?.code==='INVALID'?{...result,...(!result.invoiceCreationFailure&&!result.validationCode&&result.outcome!=='review_incomplete'?{message:'Use request text alone, or the structured fields in this catalog. Do not combine request with filters, values or columns. pending/confirm/cancel take no table or values.'}:{}),catalog:catalog(typeof raw?.table==='string'&&Object.hasOwn(TABLES,raw.table)?raw.table:null)}:result;
   };
   return Object.freeze({definition:definition(),execute,getReplyRequirement:()=>replyRequirement?{...replyRequirement}:null,
     getNextActionContext:()=>nextActionParams&&nextActionResult?{params:nextActionParams,result:nextActionResult,records:nextActionRecords}:null,

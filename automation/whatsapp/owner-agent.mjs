@@ -1,3 +1,4 @@
+import {textInvoiceFailure} from './text-invoice.mjs';
 import {verifyOwnerPaymentReceipt,ownerPartialPaymentAvailable} from './owner-payment-readback.mjs';
 import {requestedOwnerPayment,ownerPaymentAmountMentioned} from './owner-payment-intent.mjs';
 import {ownerInvoiceReadIntent} from './owner-invoice-read-intent.mjs';
@@ -2102,6 +2103,11 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         const draft=String(result?.content||'').trim();
         const requirement=replyRequirement();
         const evidence=ownerEvidence(transcript,requirement);
+        const creationFailure=evidence.at(-1);
+        if(creationFailure?.invoiceCreationFailure===true&&!evidence.some(completedOwnerResult)){
+          const answer=textInvoiceFailure(creationFailure);
+          if(answer){emitRound(round);activeRound=null;return resultFor(answer,{invoiceCreationFailureReply:true});}
+        }
         if(ownerInvoiceReadIntent(message)?.paymentHistory&&!writeMayHaveBeenAttempted()
           &&evidence.length&&evidence.every(output=>output.readOnly===true)&&!evidence.some(completedOwnerResult)
           &&!evidence.some(output=>output.table==='payments'&&output.operation==='read')){
@@ -2268,6 +2274,11 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         const draft=String(lastResult?.content||'').trim();
         const requirement=replyRequirement();
         const evidence=ownerEvidence(transcript,requirement);
+        const creationFailure=evidence.at(-1);
+        if(creationFailure?.invoiceCreationFailure===true&&!evidence.some(completedOwnerResult)){
+          const answer=textInvoiceFailure(creationFailure);
+          if(answer){emitRound(round);activeRound=null;return resultFor(answer,{invoiceCreationFailureReply:true});}
+        }
         const issue=ownerReplySafetyIssue(draft,requirement)||ownerGroundingIssue(draft,evidence,message,requirement||{});
         if(!issue){
           emitRound(round);activeRound=null;
