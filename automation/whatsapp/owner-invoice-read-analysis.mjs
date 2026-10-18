@@ -16,6 +16,8 @@ function explanationTail(tail){
 export function ownerInvoiceReadAnalysis(message){
   const text=clean(message);
   if(!text||text.length>1200)return null;
+  if(/^how\s+many\s+(?:(?:unpaid|outstanding)\s+invoices|invoices\s+are\s+(?:unpaid|outstanding))[.!?]?$/i.test(text))
+    return {kind:'unpaidInvoices',includeDrafts:true,countOnly:true};
   if(/^(?:now\s+)?(?:please\s+)?(?:show|list)(?:\s+me)?(?:\s+(?:my|our|the))?\s+(?:unpaid|outstanding)\s+invoices[.!?]?$/i.test(text))
     return {kind:'unpaidInvoices',includeDrafts:true};
   const globalUnpaid=/^(?:now\s+)?(?:please\s+)?(?:show|list)(?:\s+me)?\s+all\s+(?:unpaid|outstanding)\s+invoices\b(.*)$/i.exec(text);
@@ -71,11 +73,11 @@ export function deriveInvoiceReadAnalysis(analysis,rows,{truncated=false}={}){
   if(parsed.some(item=>item.total===null||item.paid===null||!/^[A-Z]{3}$/.test(item.row.currency||'')))return null;
   if(analysis.kind==='unpaidInvoices'){
     if(parsed.some(({row})=>!['draft','sent','overdue'].includes(row.status)||typeof row.invoice_number!=='string'||!row.invoice_number))return null;
-    const invoices=parsed.filter(({total,paid})=>paid<total)
+    const invoices=parsed.filter(({row,total,paid})=>row.metadata?.invoice_direction!=='payable'&&paid<total)
       .map(({row,total,paid})=>({invoiceNumber:row.invoice_number,customerName:clean(row.customer?.name||row.customer?.[0]?.name||row.customer_name),
         currency:row.currency,total:amount(total),paid:amount(paid),outstanding:amount(total-paid),status:row.status,
         direction:row.metadata?.invoice_direction==='payable'?'payable':'receivable'}));
-    return {kind:analysis.kind,readOnly:true,complete:true,invoices,includesDrafts:invoices.some(row=>row.status==='draft')};
+    return {kind:analysis.kind,readOnly:true,complete:true,invoices,includesDrafts:invoices.some(row=>row.status==='draft'),...(analysis.countOnly?{countOnly:true}:{})};
   }
   if(analysis.kind==='conditionalPayment'){
     if(parsed.length!==1)return null;
@@ -104,6 +106,12 @@ export function invoiceReadAnalysisReply(result){
   const a=result.invoiceReadAnalysis;
   if(a?.readOnly!==true)return null;
   if(a.kind==='unpaidInvoices'&&a.complete===true){
+    if(a.countOnly){
+      const groups=new Map();
+      for(const row of a.invoices)groups.set(row.currency,(groups.get(row.currency)||0)+money(row.outstanding));
+      const totals=[...groups].sort(([a],[b])=>a.localeCompare(b)).map(([currency,cents])=>`${currency} ${amount(cents)}`).join(', ');
+      return `${a.invoices.length} outstanding invoice${a.invoices.length===1?'':'s'}.${totals?` Total outstanding: ${totals}.`:''}`;
+    }
     if(!a.invoices.length)return 'No unpaid invoices were found. No changes were made.';
     let answer=`Unpaid invoices${a.includesDrafts?', including drafts':''}:`;
     let shown=0;

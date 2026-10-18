@@ -59,7 +59,7 @@ test('the system prompt stays short and describes workspaceData generically',asy
  assert.doesNotMatch(systemPrompt,/invoice|payment|delete|undo|attachment|confirmation/i);
  assert.deepEqual(historyContents.slice(0,8),history.slice(-8).map(turn=>turn.content));
  assert.equal(historyContents.at(-1),'');
- assert.deepEqual(context,{currentDate:'2026-10-02',calendar:{timezone:'UTC',currentDate:'2026-10-02',tomorrow:'2026-10-03',yesterday:'2026-10-01'},attachment:{available:true,mimeType:'image/jpeg'},historyAvailable:false,settingsAvailable:false,toolsAvailable:true});
+ assert.deepEqual(context,{currentDate:'2026-10-02',calendar:{timezone:'Asia/Kolkata',currentDate:'2026-10-02',tomorrow:'2026-10-03',dayAfterTomorrow:'2026-10-04',yesterday:'2026-10-01',nextWeek:'2026-10-09'},attachment:{available:true,mimeType:'image/jpeg'},historyAvailable:false,settingsAvailable:false,toolsAvailable:true});
  const unavailable=await runOwnerAgent({provider:{async generate(request){
   const missingContext=JSON.parse(request.messages.filter(item=>item.role==='system')[1].content);
   assert.deepEqual(missingContext.attachment,{available:false,errorCode:'ATTACHMENT_UNAVAILABLE'});

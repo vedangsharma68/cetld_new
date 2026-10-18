@@ -129,7 +129,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     'Direction is uncertain; confirm whether your business issued this invoice.',
   ];
   if (currency === null) warnings.push('Currency code was not explicitly printed; confirm the currency.');
-  if (subtotal !== null && tax !== null && total !== null && Math.abs(subtotal + tax - total) > 0.005) {
+  if (subtotal !== null && tax !== null && total !== null && Math.abs(Math.round(subtotal * 100) + Math.round(tax * 100) - Math.round(total * 100)) > 100) {
     warnings.push(rounding !== null && Number.isFinite(rounding) && Math.abs(subtotal + tax + rounding - total) < 0.005
       ? 'Printed rounding reconciles the subtotal, tax, and total; verify it against the image.'
       : 'Subtotal plus tax does not match total; check any printed rounding.');

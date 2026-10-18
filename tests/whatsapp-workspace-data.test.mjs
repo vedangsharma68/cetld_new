@@ -72,7 +72,7 @@ import {customFieldsView,businessRecordsView} from '../custom-fields.mjs';
 
 test('owner local tomorrow follows calendar days across midnight and daylight saving',()=>{
   assert.deepEqual(ownerCalendar(()=>new Date('2026-10-04T20:00:00Z'),'Asia/Kolkata'),
-    {timezone:'Asia/Kolkata',currentDate:'2026-10-05',tomorrow:'2026-10-06',yesterday:'2026-10-04'});
+    {timezone:'Asia/Kolkata',currentDate:'2026-10-05',tomorrow:'2026-10-06',dayAfterTomorrow:'2026-10-07',yesterday:'2026-10-04',nextWeek:'2026-10-12'});
   assert.equal(ownerCalendar(()=>new Date('2026-03-08T06:30:00Z'),'America/New_York').tomorrow,'2026-03-09');
 });
 

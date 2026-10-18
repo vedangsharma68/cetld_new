@@ -25,10 +25,12 @@ export function sanitizeReminderTemplate(value) {
 }
 
 export function renderReminderTemplate(template, values = {}) {
-  const safeTemplate = sanitizeReminderTemplate(template);
+  let safeTemplate = sanitizeReminderTemplate(template);
   const fields = values && typeof values === 'object' && !Array.isArray(values) ? values : {};
+  const missingDueDate = !fields.due_date || /^(?:not provided|not recorded|no due date set)$/i.test(String(fields.due_date).trim());
+  if (missingDueDate) safeTemplate = safeTemplate.replace(/\bdue\s+(?:on\s+)?\{\{due_date\}\}/gi, 'with no due date set');
   const rendered = safeTemplate.replace(/\{\{([^{}]*)\}\}/g, (_, name) =>
-    String(fields[name] ?? '').replace(/[\u0000-\u001F\u007F]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200));
+    String(name === 'due_date' && missingDueDate ? 'no due date set' : fields[name] ?? '').replace(/[\u0000-\u001F\u007F]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200));
   if (rendered.length > 3500) throw new RangeError('Rendered reminder is too long.');
   return rendered;
 }

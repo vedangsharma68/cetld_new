@@ -1,3 +1,4 @@
+import {calendarDay, workspaceTimezone} from '../invoice/date-context.mjs';
 import {APIError} from './http.mjs';
 import {createAssistantTools} from './tools.mjs';
 import {randomUUID} from 'node:crypto';
@@ -159,9 +160,9 @@ function invoiceListAnswer(rows, {count = rows.length, truncated = false, paidOn
     const currency = redactInternalIds(row.currency || 'currency not recorded');
     const total = redactInternalIds(row.totalAmount ?? 'not recorded');
     const outstanding = redactInternalIds(row.outstandingAmount ?? 'not recorded');
-    const due = redactInternalIds(row.dueDate || 'not recorded');
+    const due = redactInternalIds(row.dueDate || 'no due date set');
     const direction = row.invoiceDirection === 'payable' ? ' • payable' : !row.invoiceDirection || row.invoiceDirection === 'uncertain' ? ' • direction needs review' : '';
-    return `- 🧾 ${number} — ${customer} — ${currency} ${total} total / ${currency} ${outstanding} outstanding — ${invoicePaymentLabel(row)} — due ${due}${direction}`;
+    return `- 🧾 ${number} — ${customer} — ${currency} ${total} total / ${currency} ${outstanding} outstanding — ${invoicePaymentLabel(row)} — ${row.dueDate ? `due ${due}` : due}${direction}`;
   });
   const partial = count > visible.length || truncated || rows.length > visible.length
     ? `\nShowing the first ${visible.length} of ${count}${truncated ? '; more invoices and their amounts were not included' : ''}.`
@@ -177,7 +178,7 @@ function simpleLedgerReadTool(message) {
   const prompt = message.trim().toLowerCase().replace(/[!?.,]+$/g, '').replace(/\s+/g, ' ');
   if (/^(?:which|what) invoices? (?:are|were|is|was) overdue$/.test(prompt)
     || /^(?:list|show(?: me)?)(?: all| the)? overdue invoices?$/.test(prompt)) return 'getOverdueInvoices';
-  if (/^(?:what|how much) is outstanding$/.test(prompt)) return 'getOutstandingSummary';
+  if (/^(?:what|how much) is outstanding$/.test(prompt) || /^how many (?:(?:outstanding|unpaid) invoices(?: (?:do (?:i|we) have|are there))?|invoices are (?:outstanding|unpaid))$/.test(prompt)) return 'getOutstandingSummary';
   if (/^what payments were recorded$/.test(prompt)) return 'getPayments';
   if (/^what happened recently$/.test(prompt)) return 'getActivity';
   return null;
@@ -296,14 +297,16 @@ function invoiceDetailsFallback(invoice, message = '') {
       return `${redactInternalIds(item.description || 'Unlabeled item')}${parts.length ? ` (${parts.join(', ')})` : ''}`;
     });
     const count = Number(invoice.lineItemCount ?? items.length);
+    const taxSummary = [invoice.tax != null ? `tax ${invoice.currency} ${invoice.tax}` : '', ...(invoice.taxComponents || []).map(component => `${redactInternalIds(component.name)} ${invoice.currency} ${component.amount}`)].filter(Boolean).join('; ');
     const opening = count > visible.length ? `Showing the first ${visible.length} of ${count} recorded line items for ${number}: ` : `Recorded line items for ${number}: `;
     const truncation = invoice.lineItemsTruncated || count > visible.length ? ' The remaining line items are not included in this Assistant result.' : '';
-    return `${opening.trim()}\n${visible.map(item => `- ${item}`).join('\n')}${truncation}`;
+    return `${opening.trim()}\n${visible.map(item => `- ${item}`).join('\n')}${taxSummary ? `\nStored tax: ${taxSummary}.` : ''}${truncation}`;
   }
-  if (/\b(?:tax|subtotal)\b/.test(question)) {
+  if (/\b(?:tax|subtotal|breakdown|break down|igst|cgst|sgst)\b/.test(question)) {
     const parts = [];
     if (invoice.subtotal !== undefined && invoice.subtotal !== null) parts.push(`subtotal ${invoice.currency} ${invoice.subtotal}`);
     if (invoice.tax !== undefined && invoice.tax !== null) parts.push(`tax ${invoice.currency} ${invoice.tax}`);
+    for (const component of invoice.taxComponents || []) parts.push(`${redactInternalIds(component.name)} ${invoice.currency} ${component.amount}`);
     return parts.length ? `${number}: ${parts.join('; ')}. Total ${invoice.currency} ${invoice.totalAmount}.` : `Subtotal and tax are not recorded for ${number}; total ${invoice.currency} ${invoice.totalAmount}.`;
   }
   if (/payment terms|payment information|bank details|where (?:should|can) (?:i|we) pay|how (?:do|should|can) (?:i|we) pay/.test(question)) {
@@ -320,7 +323,7 @@ function invoiceDetailsFallback(invoice, message = '') {
   const total = redactInternalIds(invoice.totalAmount ?? 'not recorded');
   const paid = redactInternalIds(invoice.amountPaid ?? 'not recorded');
   const outstanding = redactInternalIds(invoice.outstandingAmount ?? 'not recorded');
-  const dueDate = redactInternalIds(invoice.dueDate || 'not recorded');
+  const dueDate = redactInternalIds(invoice.dueDate || 'no due date set');
   const directionNote = direction === 'receivable' ? ' Direction is marked receivable.' : direction === 'payable' ? ' Direction is marked payable.' : ' Invoice direction needs a quick review.';
   const details = [invoice.subtotal !== undefined && invoice.subtotal !== null ? `subtotal ${invoice.currency} ${invoice.subtotal}` : '', invoice.tax !== undefined && invoice.tax !== null ? `tax ${invoice.currency} ${invoice.tax}` : ''].filter(Boolean);
   const amounts = details.length ? `\n- ${details.join(' • ')}` : '';
@@ -338,6 +341,8 @@ function factualFallback(sources, message = '') {
     const rows = Array.isArray(data.debtors) ? data.debtors : [];
     const format = groups => Object.entries(groups || {}).filter(([, row]) => Number(row?.outstandingAmount) > 0).map(([currency, row]) => `${currency} ${row.outstandingAmount}`).join(', ');
     const ledger = format(data.currencies);
+    const count = Object.values(data.currencies || {}).reduce((sum, row) => sum + (row.invoiceCount || 0), 0);
+    if (/\bhow many\b/i.test(message)) return `${count} outstanding invoice${count === 1 ? '' : 's'}.${ledger ? ` Total outstanding: ${ledger}.` : ''}`;
     if (!ledger) return "There aren't any outstanding balances in this business right now.";
     const parts = [`Unpaid balances total ${ledger.replace(/, ([^,]+)$/, ' and $1')} right now.`];
     const receivables = format(data.confirmedReceivablesByCurrency);
@@ -351,7 +356,7 @@ function factualFallback(sources, message = '') {
   }
   if (source?.tool === 'getOverdueInvoices') {
     const rows = Array.isArray(data.invoices) ? data.invoices : [];
-    if (!rows.length) return `There aren't any overdue invoices in this business as of ${data.asOfUtcDate || 'the current'} UTC date.`;
+    if (!rows.length) return `There aren't any overdue invoices in this business as of ${(data.asOfDate || data.asOfUtcDate) || 'the current'} date in ${data.timezone || 'UTC'}.`;
     const count = data.count ?? rows.length;
     const descriptions = rows.slice(0, 5).map(row => {
       const invoiceStatus = String(row.invoiceStatus || row.status || '').toLowerCase();
@@ -371,8 +376,8 @@ function factualFallback(sources, message = '') {
     const unknownDirectionRows = rows.filter(row => !['receivable', 'payable'].includes(row.invoiceDirection));
     const payableRows = rows.filter(row => row.invoiceDirection === 'payable');
     const needsReview = draftRows.length || unknownDirectionRows.length || payableRows.length;
-    const asOf = data.asOfUtcDate
-      ? ` (as of ${new Date(`${data.asOfUtcDate}T00:00:00.000Z`).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric',timeZone:'UTC'})} UTC)`
+    const asOf = (data.asOfDate || data.asOfUtcDate)
+      ? ` (as of ${new Date(`${(data.asOfDate || data.asOfUtcDate)}T00:00:00.000Z`).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric',timeZone:'UTC'})} ${data.timezone || 'UTC'})`
       : '';
     const partial = count > descriptions.length ? ` Showing ${descriptions.length} of ${count}.` : '';
     const truncation = data.truncated ? ' Results truncated; check the ledger for the rest.' : '';
@@ -675,73 +680,77 @@ export async function answerWorkspaceQuestion({provider, store, message, history
   const offScope = ownerMode ? null : nonFinancialPromptFallback(message);
   if (offScope) return withEvidence({answer: offScope, asOf: clock().toISOString(), timezone: 'UTC', model: null, usedFallback: false, readOnly: true}, {tool:'none',data:{complete:true,truncated:false}});
 
-  const tools = createAssistantTools({store, clock, accounting});
-  const deterministicWrite = deterministicWriteProposal(message, clock);
+  const timezone = await workspaceTimezone(store);
+  const dateClock = () => new Date(`${calendarDay(clock, timezone)}T12:00:00Z`);
+  const tools = createAssistantTools({store, clock, accounting, timezone});
+  const deterministicWrite = deterministicWriteProposal(message, dateClock);
   if (deterministicWrite) {
     const proposal = await prepareProposal({...deterministicWrite,tools,clock});
-    return {answer:redactInternalIds(proposal.answer),pendingAction:proposal.pendingAction,asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true};
+    return {answer:redactInternalIds(proposal.answer),pendingAction:proposal.pendingAction,asOf:clock().toISOString(),timezone,model:null,usedFallback:false,readOnly:true};
   }
   if (asksForZoho(message) && !zohoAvailable(accounting)) {
-    return withEvidence({answer:'Zoho Books is not connected or is currently unavailable, so I can’t retrieve Zoho records. Check the connection and try again.',asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true}, {tool:'getZohoBooksData',data:{complete:false,truncated:false}});
+    return withEvidence({answer:'Zoho Books is not connected or is currently unavailable, so I can’t retrieve Zoho records. Check the connection and try again.',asOf:clock().toISOString(),timezone,model:null,usedFallback:false,readOnly:true}, {tool:'getZohoBooksData',data:{complete:false,truncated:false}});
   }
   const prompt = message.trim().toLowerCase().replace(/[!?.,]+$/g, '');
   if (prompt === 'what needs my attention today' || prompt === 'which invoices are most overdue') {
     const source = {tool:'getOverdueInvoices',label:LABELS.getOverdueInvoices,data:await tools.execute('getOverdueInvoices',{})};
-    return withEvidence({answer:factualFallback([source],message),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
+    return withEvidence({answer:factualFallback([source],message),asOf:clock().toISOString(),timezone,model:null,usedFallback:false,readOnly:true},source);
   }
   if (!asksForZoho(message) && !isWriteIntent(message) && isLargestDebtorQuestion(message)) {
     const source = {tool:'getOutstandingSummary',label:LABELS.getOutstandingSummary,data:await tools.execute('getOutstandingSummary',{})};
-    return withEvidence({answer:largestDebtorFallback(source.data),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
+    return withEvidence({answer:largestDebtorFallback(source.data),asOf:clock().toISOString(),timezone,model:null,usedFallback:false,readOnly:true},source);
   }
   const writeIntent = isWriteIntent(message);
   const target = writeIntent ? null : contextualInvoiceTarget(message, history);
   if (target) {
     const live = await liveZohoInvoice(accounting, target);
-    if (live?.ambiguous) return withEvidence({answer:`I found more than one Zoho Books invoice matching “${target}”. Please specify the invoice number.`, asOf:clock().toISOString(), timezone:'UTC', model:null, usedFallback:false, readOnly:true}, {tool:'getZohoBooksData',data:{invoices:[],complete:true,truncated:false}});
+    if (live?.ambiguous) return withEvidence({answer:`I found more than one Zoho Books invoice matching “${target}”. Please specify the invoice number.`, asOf:clock().toISOString(), timezone, model:null, usedFallback:false, readOnly:true}, {tool:'getZohoBooksData',data:{invoices:[],complete:true,truncated:false}});
     if (live?.invoice) {
       const row = live.invoice;
-      return withEvidence({answer:`${row.invoiceNumber} for ${row.customerName || 'the customer'} is ${row.paidState}. Total: ${row.currency} ${row.total}; paid: ${row.currency} ${row.paid}; outstanding: ${row.currency} ${row.outstanding}. Due date: ${row.dueDate || 'not recorded'}.`, asOf:clock().toISOString(), timezone:'UTC', model:null, usedFallback:false, readOnly:true}, {tool:'getZohoBooksData',data:{invoiceNumber:row.invoiceNumber,complete:true,truncated:false}});
+      return withEvidence({answer:`${row.invoiceNumber} for ${row.customerName || 'the customer'} is ${row.paidState}. Total: ${row.currency} ${row.total}; paid: ${row.currency} ${row.paid}; outstanding: ${row.currency} ${row.outstanding}. Due date: ${row.dueDate || 'no due date set'}.`, asOf:clock().toISOString(), timezone, model:null, usedFallback:false, readOnly:true}, {tool:'getZohoBooksData',data:{invoiceNumber:row.invoiceNumber,complete:true,truncated:false}});
     }
     const match = await tools.lookupInvoice(target);
-    if (match.ambiguousCustomer) return withEvidence({answer: `I found more than one customer named “${target}”. Which customer did you mean?`, asOf: clock().toISOString(), timezone: 'UTC', model: null, usedFallback: false, readOnly: true}, {tool:'getInvoiceDetails',data:{invoices:match.invoices,complete:!match.truncated,truncated:match.truncated}});
-    if (!match.invoices.length) return withEvidence({answer: `I couldn't find a matching invoice for “${target}”.`, asOf: clock().toISOString(), timezone: 'UTC', model: null, usedFallback: false, readOnly: true}, {tool:'getInvoiceDetails',data:{invoices:[],complete:!match.truncated,truncated:match.truncated}});
-    if (match.invoices.length > 1 || match.truncated) return withEvidence({answer: invoiceClarification(match.invoices), asOf: clock().toISOString(), timezone: 'UTC', model: null, usedFallback: false, readOnly: true}, {tool:'getInvoiceDetails',data:{invoices:match.invoices,complete:false,truncated:true}});
+    if (match.ambiguousCustomer) return withEvidence({answer: `I found more than one customer named “${target}”. Which customer did you mean?`, asOf: clock().toISOString(), timezone, model: null, usedFallback: false, readOnly: true}, {tool:'getInvoiceDetails',data:{invoices:match.invoices,complete:!match.truncated,truncated:match.truncated}});
+    if (!match.invoices.length) return withEvidence({answer: `I couldn't find a matching invoice for “${target}”.`, asOf: clock().toISOString(), timezone, model: null, usedFallback: false, readOnly: true}, {tool:'getInvoiceDetails',data:{invoices:[],complete:!match.truncated,truncated:match.truncated}});
+    if (match.invoices.length > 1 || match.truncated) return withEvidence({answer: invoiceClarification(match.invoices), asOf: clock().toISOString(), timezone, model: null, usedFallback: false, readOnly: true}, {tool:'getInvoiceDetails',data:{invoices:match.invoices,complete:false,truncated:true}});
     const invoice = match.invoices[0];
     const sourceTruncated = Boolean(invoice.paymentHistoryTruncated || invoice.lineItemsTruncated);
     const sources = [{tool: 'getInvoiceDetails', label: 'Matching invoice context', data: {...invoice,complete:!sourceTruncated,truncated:sourceTruncated}}];
     const messages = finalMessages(message, history, sources);
-    const response = await provider.generate({messages, maxTokens: 700, temperature: 0.1});
+    const response = /\b(?:tax|subtotal|breakdown|break down|igst|cgst|sgst)\b/i.test(message)
+      ? {content:'',model:null,usedFallback:false}
+      : await provider.generate({messages, maxTokens: 700, temperature: 0.1});
     const answer = String(response.content || '').trim();
     const safeAnswer = !answer || isInternalPayload(answer) || containsInternalId(answer) || containsUnsupportedNumber(answer, sources) || containsFinancialOrStatusAssertion(answer) || wasCutOff(response.finishReason)
       ? invoiceDetailsFallback(invoice, message)
       : answer;
-    return withEvidence({answer: safeAnswer, asOf: clock().toISOString(), timezone: 'UTC', model: response.model, usedFallback: response.usedFallback, readOnly: true}, sources[0]);
+    return withEvidence({answer: safeAnswer, asOf: clock().toISOString(), timezone, model: response.model, usedFallback: response.usedFallback, readOnly: true}, sources[0]);
   }
   if (!asksForZoho(message) && !writeIntent && isPaidInvoiceListQuestion(message)) {
     const source = {tool:'getInvoices', label:'Fully paid invoices', data:await tools.execute('getFullyPaidInvoices',{})};
-    return withEvidence({answer:paidInvoiceListAnswer(source.data),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
+    return withEvidence({answer:paidInvoiceListAnswer(source.data),asOf:clock().toISOString(),timezone,model:null,usedFallback:false,readOnly:true},source);
   }
   if (!asksForZoho(message) && !writeIntent && isGeneralInvoiceListQuestion(message)) {
     const source = {tool:'getInvoices',label:LABELS.getInvoices,data:await tools.execute('getInvoices',{})};
-    return withEvidence({answer:emptyAnswer(source) || factualFallback([source],message),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
+    return withEvidence({answer:/\bhow many\b/i.test(message) ? factualFallback([source],message) : emptyAnswer(source) || factualFallback([source],message),asOf:clock().toISOString(),timezone,model:null,usedFallback:false,readOnly:true},source);
   }
   if (!asksForZoho(message) && !writeIntent && isDueWithinNextWeekQuestion(message)) {
-    const dueDateFrom = utcDayPlus(clock, 0);
-    const dueDateTo = utcDayPlus(clock, 7);
+    const dueDateFrom = utcDayPlus(dateClock, 0);
+    const dueDateTo = utcDayPlus(dateClock, 7);
     const source = {tool:'getDueInvoices',label:LABELS.getDueInvoices,data:await tools.execute('getDueInvoices',{dueDateFrom,dueDateTo})};
-    return withEvidence({answer:emptyAnswer(source) || factualFallback([source],message),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
+    return withEvidence({answer:/\bhow many\b/i.test(message) ? factualFallback([source],message) : emptyAnswer(source) || factualFallback([source],message),asOf:clock().toISOString(),timezone,model:null,usedFallback:false,readOnly:true},source);
   }
   const simpleReadName = !writeIntent && !asksForZoho(message) ? simpleLedgerReadTool(message) : null;
   if (simpleReadName) {
     const name = simpleReadName;
     const source = {tool:name,label:LABELS[name],data:await tools.execute(name,{})};
-    return withEvidence({answer:emptyAnswer(source) || factualFallback([source],message),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},source);
+    return withEvidence({answer:/\bhow many\b/i.test(message) ? factualFallback([source],message) : emptyAnswer(source) || factualFallback([source],message),asOf:clock().toISOString(),timezone,model:null,usedFallback:false,readOnly:true},source);
   }
   const allowedTools = writeIntent ? [...tools.definitions, createProposalTool, updateProposalTool] : tools.definitions;
   let plan;
   try { plan = await provider.generate({
     messages: [
-      {role: 'system', content: `You are cetld's finance query planner and write-action proposal builder. Today is ${clock().toISOString().slice(0,10)} UTC. Use only the supplied tools when workspace facts are needed. Never invent financial data. Choose exactly one minimum-scope tool. ${writeIntent ? 'For an explicit create or edit request, use exactly one createInvoice or updateInvoice tool; tool calls only prepare proposals and never write. Only extract facts the user supplied. An invoice number is optional and Cetld will generate one when absent. Never invent a customer, amount, currency, or due date. For update requests, use the exact invoice target and only the changed fields explicitly requested.' : ''} ${accounting ? 'A question explicitly about connected Zoho Books: getZohoBooksData with the relevant receivables resource. ' : ''}A named cetld invoice or customer: getInvoiceDetails. Largest debtors: getOutstandingSummary. Overdue priorities: getOverdueInvoices. Paid invoice questions: getInvoices with status paid. Collections: getPayments. General activity: getActivity.`},
+      {role: 'system', content: `You are cetld's finance query planner and write-action proposal builder. Today is ${calendarDay(clock, timezone)} in ${timezone}. Resolve every relative invoice date and range using this local calendar date. Use only the supplied tools when workspace facts are needed. Never invent financial data. Choose exactly one minimum-scope tool. ${writeIntent ? 'For an explicit create or edit request, use exactly one createInvoice or updateInvoice tool; tool calls only prepare proposals and never write. Only extract facts the user supplied. An invoice number is optional and Cetld will generate one when absent. Never invent a customer, amount, currency, or due date. For update requests, use the exact invoice target and only the changed fields explicitly requested.' : ''} ${accounting ? 'A question explicitly about connected Zoho Books: getZohoBooksData with the relevant receivables resource. ' : ''}A named cetld invoice or customer: getInvoiceDetails. Largest debtors: getOutstandingSummary. Overdue priorities: getOverdueInvoices. Paid invoice questions: getInvoices with status paid. Collections: getPayments. General activity: getActivity.`},
       ...history.map(item => ({role: item.role, content: redactInternalIds(item.content)})),
       {role: 'user', content: redactInternalIds(message)},
     ],
@@ -769,12 +778,12 @@ export async function answerWorkspaceQuestion({provider, store, message, history
     } catch { return plannerFailureResult(message,clock,writeIntent,provider,plan,'invalid_tool_arguments'); }
     if (name === 'createInvoice' || name === 'updateInvoice') {
       const proposal = await prepareProposal({name,args,tools,clock});
-      return {answer:redactInternalIds(proposal.answer),pendingAction:proposal.pendingAction,asOf:clock().toISOString(),timezone:'UTC',model:plan.model,usedFallback:plan.usedFallback,readOnly:true};
+      return {answer:redactInternalIds(proposal.answer),pendingAction:proposal.pendingAction,asOf:clock().toISOString(),timezone,model:plan.model,usedFallback:plan.usedFallback,readOnly:true};
     }
     sources.push({tool: name, label: LABELS[name], data: await tools.execute(name, args)});
   }
   const noData = emptyAnswer(sources[0]);
-  if (noData) return withEvidence({answer: noData, asOf: clock().toISOString(), timezone: 'UTC', model: plan.model, usedFallback: plan.usedFallback, readOnly: true}, sources[0]);
+  if (noData) return withEvidence({answer: noData, asOf: clock().toISOString(), timezone, model: plan.model, usedFallback: plan.usedFallback, readOnly: true}, sources[0]);
 
   const messages = finalMessages(message, history, sources);
   let final;
@@ -791,5 +800,5 @@ export async function answerWorkspaceQuestion({provider, store, message, history
     messages.push({role: 'user', content: 'Continue from the exact point where you stopped. Do not repeat completed text. Finish the answer and close any Markdown structure you opened.'});
   }
   const safeAnswer = !answer || isInternalPayload(answer) || containsInternalId(answer) || containsUnsupportedNumber(answer, sources) || containsFinancialOrStatusAssertion(answer) || wasCutOff(final?.finishReason) ? factualFallback(sources,message) : redactInternalIds(answer);
-  return withEvidence({answer: safeAnswer, asOf: clock().toISOString(), timezone: 'UTC', model: final.model, usedFallback: plan.usedFallback || final.usedFallback, readOnly: true}, sources[0]);
+  return withEvidence({answer: safeAnswer, asOf: clock().toISOString(), timezone, model: final.model, usedFallback: plan.usedFallback || final.usedFallback, readOnly: true}, sources[0]);
 }

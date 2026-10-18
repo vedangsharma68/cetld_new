@@ -411,8 +411,8 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
   pendingInitialState,settingsStore, config, message, messageId, media, mediaError, ownerHistory=[],signal, deadlineAt, authorize, lifecycle, providerFactory, env, fetchImpl,
   extractAttachment=extractInvoice,attachmentIngestFactory=createWhatsAppBoundMessageHandler,sourceMediaReader,
   configurationAvailable=true,configurationSource='workspace',historyAvailable=true,ownerStoreAvailable=true,lifecycleAvailable=true,pendingStoreAvailable=true,
-  clock = () => new Date(), logger = console} = {}) {
-  const reads = createAssistantTools({store: ownerStore, clock});
+  clock = () => new Date(), timezone = 'Asia/Kolkata', logger = console} = {}) {
+  const reads = createAssistantTools({store: ownerStore, clock, timezone});
   const standardDefinitions = reads.definitions.map(item => structuredClone(item));
   const definitions = [...standardDefinitions, ...ownerOnlyDefinitions()];
   let attachment = null;
@@ -1707,7 +1707,7 @@ function readOnlyInvoiceHistoryFallback(message,evidence=[]){
   return ownerReplySafetyIssue(reply)||ownerGroundingIssue(reply,evidence,message)?null:reply;
 }
 
-export async function runOwnerAgent({provider,config,store,tools,history=[],message,signal,deadlineAt,budgetMs=OWNER_AGENT_MAX_BUDGET_MS,clock=()=>new Date(),timezone='UTC',
+export async function runOwnerAgent({provider,config,store,tools,history=[],message,signal,deadlineAt,budgetMs=OWNER_AGENT_MAX_BUDGET_MS,clock=()=>new Date(),timezone='Asia/Kolkata',
   toolSetupIssue=null,historyIssue=null,settingsIssue=null,attachmentDescriptor={available:false},logger=null,traceId=null,
   checkpoint=null,onCheckpoint=null,allowDeferred=false,botPreferences=null,initialToolResults=[]}={}) {
   if(!provider?.generate||!Array.isArray(tools?.definitions)||typeof tools.execute!=='function')throw new TypeError('Owner model and tools are required');
