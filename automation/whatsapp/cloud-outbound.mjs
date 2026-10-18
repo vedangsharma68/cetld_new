@@ -9,7 +9,7 @@ import {OWNER_ACTION_CHOICES_UNAVAILABLE_REPLY,normalizeOwnerActionRef} from './
 const APPROVED_QA_RECIPIENTS = new Set(['+919871367051', '+919818685252']);
 const E164 = /^\+[1-9]\d{6,14}$/;
 import {buildReminderTemplate,selectReminderTemplate} from './reminder-templates.mjs';
-const SERVICE_KINDS = new Set(['normal', 'verification', 'stop_confirmation']);
+const SERVICE_KINDS = new Set(['normal', 'verification', 'stop_confirmation', 'start_confirmation']);
 const CURRENT_INVOICE_STATUSES = new Set(['sent', 'paid']);
 const SAFE_GUARD_REPLY = "I have your answer, but couldn't phrase it safely for WhatsApp - please check the cetld app for details.";
 const NEUTRAL_CONTENT = /\b(?:overdue|past[ -]?due|debt|debtor|collect(?:ion)?|pay(?:ment)?\s+(?:now|today|immediately)|amount\s+due|outstanding|final\s+notice|late\s+fee)\b/i;
@@ -287,9 +287,9 @@ export function createWhatsAppOutbound({
     if(ownerButtons.length&&Array.from(String(body??'')).length>1024)
       throw new TypeError('interactive owner button body exceeds the WhatsApp limit');
     if (kind === 'normal') nonempty(workspaceId, 'workspaceId');
-    if (kind === 'verification' && workspaceId !== null) return block(logger, 'verification_must_be_unbound', {workspaceId, to, kind});
+    if (['verification', 'start_confirmation'].includes(kind) && workspaceId !== null) return block(logger, 'verification_must_be_unbound', {workspaceId, to, kind});
     const owner = nonempty(businessName, 'businessName', 200);
-    if (kind === 'verification' || (kind === 'stop_confirmation' && workspaceId === null)) {
+    if (['verification', 'start_confirmation'].includes(kind) || (kind === 'stop_confirmation' && workspaceId === null)) {
       if (owner !== 'CETLD') return block(logger, 'invalid_platform_identity', {workspaceId, to, kind});
     } else if (!await verifiedBusinessName(supabase, workspaceId, owner)) {
       return block(logger, 'business_name_mismatch', {workspaceId, to, kind});
@@ -302,6 +302,8 @@ export function createWhatsAppOutbound({
     let text = linkText ? linkText
       : kind === 'verification'
       ? 'Please contact the business that issued your invoice to verify your WhatsApp number.'
+      : kind === 'start_confirmation'
+        ? 'Your re-subscribe request has been recorded. You can receive WhatsApp updates again. Reply STOP to opt out.'
       : kind === 'stop_confirmation'
         ? "You've been opted out of WhatsApp updates. We won't message you again."
         : null;
@@ -338,7 +340,7 @@ export function createWhatsAppOutbound({
     if (authorization?.allowed !== true) return denyPrepared({workspaceId,to,kind,key,reason:authorization?.reason||'inbound_reply_denied'});
     if(workspaceId&&!await verifiedBusinessName(supabase,workspaceId,owner))
       return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed',claimed:true});
-    if (kind === 'verification') {
+    if (['verification', 'start_confirmation'].includes(kind)) {
       const suppression = await unboundSuppression(supabase, to);
       if (suppression) return denyPrepared({workspaceId,to,kind,key,reason:suppression,claimed:true});
     }

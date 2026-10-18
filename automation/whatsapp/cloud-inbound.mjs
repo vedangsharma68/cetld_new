@@ -32,6 +32,10 @@ const E164 = /^\+[1-9]\d{6,14}$/;
 const refusal = /^(?:stop(?: messaging me)?|unsubscribe|opt[ -]?out|cancel(?: whatsapp)?|remove me|no more (?:messages|texts|whatsapp(?: updates)?)|(?:do not|don't) (?:message|text|contact) me|(?:do not|don't) send me (?:messages|texts|whatsapp updates)|please (?:stop(?: messaging me| sending me (?:messages|texts|whatsapp updates))?|remove me|(?:do not|don't) (?:message|text|contact) me)|i (?:do not|don't|no longer) (?:consent|agree|want (?:these |whatsapp )?(?:messages|updates)))\b[.!\s]*$/i;
 const ambiguousOwnerCancel = text => typeof text === 'string' && /^cancel[.!\s]*$/i.test(text.trim());
 
+export function isResubscribe(text) {
+  return typeof text === 'string' && /^(?:start|unstop)$/i.test(text.trim());
+}
+
 export function isOptOut(text) {
   return typeof text === 'string' && refusal.test(text.trim());
 }
@@ -171,7 +175,8 @@ export class SupabaseInboundInbox {
   }
 
   async claimReply({ workspaceId, phone, kind, messageId }) {
-    const data = dataOrThrow(await this.supabase.rpc('whatsapp_claim_inbound_reply', {
+    const rpc = kind === 'start_confirmation' ? 'whatsapp_claim_resubscribe_reply' : 'whatsapp_claim_inbound_reply';
+    const data = dataOrThrow(await this.supabase.rpc(rpc, {
       p_provider_message_id: messageId, p_sender_phone: phone, p_kind: kind, p_workspace_id: workspaceId || null,
     }), 'claim reply');
     return { allowed: data === true };
@@ -339,6 +344,20 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       if (signal?.aborted || (Number.isFinite(deadlineAt) && clock() >= deadlineAt)) throw Object.assign(new Error('Inbound processing deadline expired'), {name: 'AbortError'});
     };
     active();
+    // Explicit recipient consent must run before suppressed sender/owner lookup.
+    if (event.message_type === 'text' && isResubscribe(event.message_text)) {
+      const restored = dataOrThrow(await supabase.rpc('whatsapp_resubscribe_phone', {
+        p_provider_message_id: event.provider_message_id, p_sender_phone: event.sender_phone,
+        p_claim_token: event.claim_token,
+      }), 'resubscribe');
+      if (restored === true) {
+        const sender = await getOutbound();
+        await sender.sendServiceReply({workspaceId: null, to: event.sender_phone,
+          kind: 'start_confirmation', messageId: event.provider_message_id,
+          lastInboundAt: event.provider_timestamp || event.received_at, businessName: 'CETLD'});
+      }
+      return 'resubscribe';
+    }
     const interactionId = event.interaction_id ?? event.interactionId;
     if(event.message_type==='button'){
       // A signed reply must reference an actual reminder to this phone. The
