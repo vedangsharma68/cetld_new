@@ -1,6 +1,6 @@
 import {ownerCalendar} from './workspace-records.mjs';
 
-export const TEXT_INVOICE_FORMAT = 'Accepted format: New invoice for <customer>, amount Rs <amount>, due <DD Month YYYY>. Example: New invoice for QA Text Customer, amount Rs 2,500, due 25 October 2026. Optional code: New invoice <code> for <customer>, amount Rs <amount>, due <DD Month YYYY>. Issue date defaults to today in your workspace timezone. Due dates also accept YYYY-MM-DD, today/aaj, or tomorrow/kal (कल means tomorrow for a new invoice).';
+export const TEXT_INVOICE_FORMAT = 'Accepted format: New invoice for <customer>, amount Rs <amount>, due <DD Month YYYY>. Example: New invoice QA-VERIFY-001 for QA Text Customer, amount Rs 2,500, due 25 October 2026. Optional code: New invoice <code> for <customer>, amount Rs <amount>, due <DD Month YYYY>. Issue date defaults to today in your workspace timezone. Due dates also accept YYYY-MM-DD, today/aaj, or tomorrow/kal (कल means tomorrow for a new invoice).';
 
 const MONTHS = ['january','february','march','april','may','june','july','august','september','october','november','december'];
 const EMOJI = /[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u200D]/gu;

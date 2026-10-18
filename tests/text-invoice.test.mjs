@@ -8,6 +8,8 @@ import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 const clock=()=>new Date('2026-10-18T12:18:00Z');
 const scope={workspaceId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',ownerId:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',phone:'+919871367051'};
 const examples=[
+  ['New invoice QA-VERIFY-001 for QA Text Customer, amount Rs 2,500, due 25 October 2026','QA Text Customer',2500,'2026-10-25','QA-VERIFY-001'],
+  ['New invoice QA-EDGE-002 for QA Text Customer, amount INR 2,500, due 2026-10-25','QA Text Customer',2500,'2026-10-25','QA-EDGE-002'],
   ['New invoice for QA Text Customer, amount Rs 2,500, due 25 October 2026','QA Text Customer',2500,'2026-10-25',undefined],
   ['QA TEXT TEST 1: New invoice for QA Text Customer, amount Rs 2,500, due 25 October 2026','QA Text Customer',2500,'2026-10-25',undefined],
   ['QA-EDGE-002 नया invoice 🧾🔥 for QA Emoji Customer ₹1,200 due kal, please check','QA Emoji Customer',1200,'2026-10-19','QA-EDGE-002'],
@@ -85,4 +87,32 @@ test('invalid natural-language creation plans return format help; authorization 
   assert.equal(denied.code,'DENIED');
   const protectedCall=await make({message:valid}).execute({operation:'create',table:'invoices',values:{workspace_id:scope.workspaceId,customer_name:'QA'}});
   assert.equal(protectedCall.ok,false);assert.equal(writes,0);
+});
+
+test('the printed failure example parses and model amount fields cannot block owner text',async()=>{
+  const failure=textInvoiceFailure({ok:false,code:'INVALID'});
+  const printed=/Example: (.+?)\. Optional code:/.exec(failure)[1];
+  assert.ok(parseTextInvoice(printed,{clock}));
+  for(const message of [examples[0][0],printed])for(const confirmationMode of ['direct','buttons']){
+    let writes=0;
+    const execute=async params=>{writes++;assert.deepEqual(params.values,parseTextInvoice(message,{clock}).values);return {ok:true};};
+    const tool=createWorkspaceDataTool({supabase:{from(){throw Error('No live reads');}},scope,clock,message,authorize:async()=>true,confirmationMode,
+      executeDirectOperation:execute,executeSafetyOperation:execute});
+    const result=await tool.execute({operation:'create',table:'invoices',values:{amount:2500,currency:'INR',due_date:'2026-10-25',issue_date:'2026-10-18',customer_name:'QA Text Customer'}});
+    assert.equal(result.ok,true,JSON.stringify(result));assert.equal(writes,1);
+  }
+});
+
+test('text interception keeps unknown fields, scope and attachment guards',async()=>{
+  let writes=0;
+  const message=examples[0][0];
+  const make=options=>createWorkspaceDataTool({supabase:{from(){throw Error('No live reads');}},scope,clock,message,authorize:async()=>true,
+    executeDirectOperation:async()=>{writes++;return {ok:true};},...options});
+  for(const values of [{amount:2500,workspace_id:scope.workspaceId},{amount:2500,unexpected:'value'},{amount:2500,status:'paid'}]){
+    const result=await make().execute({operation:'create',table:'invoices',values});
+    assert.equal(result.ok,false);
+  }
+  assert.equal((await make({message:'Create an invoice'}).execute({operation:'create',table:'invoices',values:{amount:2500}})).ok,false);
+  assert.equal((await make({attachmentAvailable:true}).execute({operation:'create',table:'invoices',values:parseTextInvoice(message,{clock}).values})).ok,false);
+  assert.equal(writes,0);
 });
