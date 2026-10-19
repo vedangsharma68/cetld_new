@@ -164,6 +164,8 @@ test('owner create and settings confirmation commit with the pending receipt and
 
     const settings=(await db.query('select business_name,updated_at from public.workspace_settings where workspace_id=$1',
       [workspaceId])).rows[0];
+    const renameInvoice=await addInvoice(db,workspaceId,'QA-RENAME-RECEIPT');
+    await db.query("update invoices set metadata=metadata||jsonb_build_object('approved_reminder_text','QA reviewed reminder','approved_preferences_updated_at',$2::text) where id=$1",[renameInvoice.id,settings.updated_at.toISOString()]);
     const settingsAction={type:'owner_settings_update',sourceMessageId:'wa-settings-source',
       expiresAt:new Date(Date.now()+5*60_000).toISOString(),expectedUpdatedAt:settings.updated_at,
       request:{businessName:'Atomic Studio',patch:{tone:'professional',dailySummary:false}}};
@@ -172,6 +174,12 @@ test('owner create and settings confirmation commit with the pending receipt and
     const savedSettings=await atomicOwnerConfirm(db,workspaceId,settingsPending,'wa-atomic-settings-confirm');
     assert.equal(savedSettings.ok,true);
     assert.equal(savedSettings.businessName,'Atomic Studio');
+    assert.equal(savedSettings.pausedReminderCount,1);
+    const renameReview=(await db.query('select followup_state,next_follow_up_at,metadata from invoices where id=$1',[renameInvoice.id])).rows[0];
+    assert.equal(renameReview.followup_state,'draft');assert.equal(renameReview.next_follow_up_at,null);
+    assert.equal(renameReview.metadata.followup_review_reason,'business_name_change');
+    const renameReplay=await atomicOwnerReceiptLookup(db,workspaceId,'wa-atomic-settings-confirm');
+    assert.equal(renameReplay.replayed,true);assert.equal(renameReplay.pausedReminderCount,1);
     assert.deepEqual(savedSettings.changed,['businessName','tone','dailySummary']);
     const storedSettings=(await db.query('select business_name,follow_up_preferences from public.workspace_settings where workspace_id=$1',
       [workspaceId])).rows[0];

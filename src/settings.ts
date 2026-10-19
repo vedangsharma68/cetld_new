@@ -9,6 +9,19 @@ export type SupabaseLike = {
   storage: { from(bucket: string): any };
 };
 
+/** Count from the database, scoped by the authenticated client's existing RLS. */
+export async function getBusinessNameChangeImpact(
+  client: {rpc(name: string, args: Record<string, unknown>): PromiseLike<{data: unknown; error?: unknown}>},
+  workspaceId: string,
+  businessName: string,
+) {
+  const response = await client.rpc('business_name_change_impact', {
+    p_workspace_id: workspaceId, p_business_name: businessName,
+  });
+  throwIfError(response);
+  return response.data as {pausedReminderCount: number; updatedAt: string};
+}
+
 export type Profile = {
   user_id: string;
   full_name?: string | null;

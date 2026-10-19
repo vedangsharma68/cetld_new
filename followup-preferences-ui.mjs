@@ -1,4 +1,18 @@
 import {sanitizeReminderTemplate, normalizeFollowUpPreferences} from './automation/preferences.mjs';
+import {businessNameChangeImpact,businessNameReminderNotice} from './business-name-reminders.mjs';
+
+export async function confirmBusinessNameChange(client,workspaceId,currentName,businessName,confirm) {
+  if (businessName.trim() === currentName) return null;
+  const impact=await businessNameChangeImpact(client,workspaceId,businessName);
+  const notice=businessNameReminderNotice(impact.pausedReminderCount);
+  if (notice && !await confirm(`Save the changed business name?\n\n${notice}`)) return false;
+  return impact;
+}
+
+export function businessNameSavedNotice(count) {
+  const notice=businessNameReminderNotice(count,{saved:true});
+  return notice ? `<div class="notice" role="status" data-business-name-reminder-notice>${notice}</div>` : '';
+}
 
 const DEFAULTS = Object.freeze({
   tone: 'professional', templateButtons: false, firstReminderDays: 3, cadenceDays: 3, maxReminders: 3,

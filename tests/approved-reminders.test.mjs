@@ -69,6 +69,44 @@ async function setup(preferences={},{approve=true}={}){
   return {...f,scope,foreignOwner,foreignWs,customerId,configured,store,runtime,graph,callback,uncertain(){uncertain=true}};
 }
 
+test('rename returns approved reminders to review and stale approval still fails the exact send gate',async()=>{
+  const f=await setup();try{
+    const original=await f.store.getInvoice(f.scope);
+    const oldSettings=await f.store.getWorkspacePreferences(f.scope);
+    const [claim]=await f.store.claimDueFollowups({...f.scope,now:new Date().toISOString(),limit:1});
+    assert.ok(claim);
+    assert.equal((await f.store.authorizeDelivery({...f.scope,claimId:claim.id,preferencesVersion:oldSettings.updated_at})).authorized,true);
+    await f.db.query("update workspace_settings set business_name='QA Renamed Studio' where workspace_id=$1",[f.scope.workspaceId]);
+    const invoice=await f.store.getInvoice(f.scope);
+    assert.equal(invoice.followup_state,'draft');assert.equal(invoice.next_follow_up_at,null);
+    assert.equal(invoice.metadata.approved_reminder_text,null);
+    assert.equal(invoice.metadata.followup_review_reason,'business_name_change');
+    await f.runtime.tick(f.scope);assert.equal(f.graph.length,0);
+    // Even if a stale approved snapshot is restored, the current settings
+    // version and live rendered business name must still match at send time.
+    await f.db.query("update invoices set metadata=$2::jsonb||'{\"followup_state\":\"active\"}',next_follow_up_at=now()-interval '1 minute' where id=$1",[f.scope.invoiceId,JSON.stringify(original.metadata)]);
+    assert.deepEqual(await f.store.claimDueFollowups({...f.scope,now:new Date().toISOString(),limit:1}),[]);
+    const settings=await f.store.getWorkspacePreferences(f.scope);
+    assert.notEqual(settings.updated_at,oldSettings.updated_at);
+    assert.equal((await f.store.authorizeDelivery({...f.scope,claimId:claim.id,preferencesVersion:settings.updated_at})).authorized,false);
+    const provider=createApprovedReminderProvider({env:f.configured,supabase:f.supabase,store:f.store,...f.scope,fetchImpl:f.fetchImpl});
+    const input={workspaceId:f.scope.workspaceId,invoiceId:f.scope.invoiceId,customerId:f.customerId,to:phone,
+      idempotencyKey:`reminder:${f.scope.workspaceId}:${claim.id}`};
+    input.body=(await provider.prepareReminder(input)).body;
+    assert.match(input.body,/QA Renamed Studio/);
+    assert.equal((await provider.sendReminder(input)).reason,'atomic_gate_denied');
+    assert.equal(f.graph.length,0);
+    assert.equal((await f.db.query('select count(*)::int n from app.first_party_reminder_dispatches')).rows[0].n,0);
+    // An explicit fresh branded owner review can recover normally using the
+    // exact current preferences version. No auto-approval.
+    await f.db.query(`update invoices set metadata=metadata||jsonb_build_object('followup_state','approved',
+      'approved_reminder_text',$2::text,'approved_preferences_updated_at',$3::text),
+      next_follow_up_at=now()-interval '1 minute' where id=$1`,[f.scope.invoiceId,'Fresh QA owner review\n\nQA Renamed Studio',settings.updated_at]);
+    assert.equal((await f.runtime.tick(f.scope)).results[0]?.status,'sent');
+    assert.equal(f.graph.length,1);
+  }finally{await f.close();}
+});
+
 test('real runtime + new forward SQL + signed webhook persist one five-parameter send and delivered receipt',async()=>{
   const f=await setup();try{
     assert.equal((await f.supabase.rpc('cetld_core_check_local_reminder_payment',{p_owner_id:f.foreignOwner,p_workspace_id:f.scope.workspaceId,p_invoice_id:f.scope.invoiceId})).data.ok,false);

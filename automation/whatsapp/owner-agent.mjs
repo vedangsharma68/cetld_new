@@ -17,6 +17,7 @@ import {createOwnerScopedStore} from '../../ai/whatsapp-channel.mjs';
 import {createWhatsAppInvoiceStore} from './invoice-store.mjs';
 import {createWhatsAppPendingActionStore} from './pending-actions.mjs';
 import {createOwnerSettingsStore, describeSettingsChange} from './owner-settings.mjs';
+import {businessNameReminderNotice,appendBusinessNameReminderNotice} from '../../business-name-reminders.mjs';
 import {createWhatsAppBoundMessageHandler,reviewDraft,invoiceReviewClarification} from './assistant-handler.mjs';
 import {extractInvoice, INVOICE_IMAGE_REPLIES} from '../../ai/extraction.mjs';
 import {invoiceReviewUnpaidResolution} from './invoice-review-payment-resolution.mjs';
@@ -589,8 +590,12 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         expired:'EXPIRED',stale:'STALE',invoice_exists:'INVOICE_EXISTS',ambiguous_customer:'AMBIGUOUS',invalid:'INVALID'})[value?.reason]||'UNKNOWN';
       return {ok:false,code,message:SAFE_ERRORS[code]};
     }
-    if(value.actionType==='owner_settings_update')return {ok:true,action:'settings_updated',businessName:value.businessName,
-      changed:Array.isArray(value.changed)?value.changed:[],replayed:value.replayed===true};
+    if(value.actionType==='owner_settings_update'){
+      const pausedReminderCount=value.pausedReminderCount??0;
+      replyRequirement={businessNameReminderNotice:businessNameReminderNotice(pausedReminderCount,{saved:true})};
+      return {ok:true,action:'settings_updated',businessName:value.businessName,pausedReminderCount,
+        changed:Array.isArray(value.changed)?value.changed:[],replayed:value.replayed===true};
+    }
     if(value.actionType==='owner_invoice_create')return {ok:true,action:'invoice_created',invoiceNumber:value.invoiceNumber,
       customerName:value.customerName,total:value.total,currency:value.currency,dueDate:value.dueDate,replayed:value.replayed===true};
     return {ok:false,code:'UNKNOWN',message:SAFE_ERRORS.UNKNOWN};
@@ -1032,7 +1037,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
           }
           const completed=await lookupCreateSettingsReceipt();
           if(completed.ok)return {pending:false,completed:true,action:completed.action,
-            ...Object.fromEntries(['invoiceNumber','customerName','total','currency','dueDate','businessName','changed','replayed']
+            ...Object.fromEntries(['invoiceNumber','customerName','total','currency','dueDate','businessName','pausedReminderCount','changed','replayed']
               .filter(key=>completed[key]!==undefined).map(key=>[key,completed[key]]))};
           if(completed.code!=='NO_PENDING_ACTION')return completed;
         }
@@ -1164,8 +1169,13 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         const now=await settingsStore.read(scope.workspaceId);
         if(!now)return {ok:false,code:'UNAVAILABLE',message:SAFE_ERRORS.UNAVAILABLE};
         const request={businessName:businessName?.trim()??null,patch};
-        const action={type:'owner_settings_update',request,expectedUpdatedAt:now.updated_at,requestedAt:clock().toISOString(),expiresAt:expiry(),sourceMessageId:messageId};
-        return {...await stage(action),changes:describeSettingsChange(now,request)};
+        const impact=request.businessName!==null&&request.businessName!==now.business_name
+          ?await settingsStore.impact(scope.workspaceId,request.businessName):{pausedReminderCount:0,updatedAt:now.updated_at};
+        if(impact.updatedAt!==now.updated_at)return {ok:false,code:'STALE',message:SAFE_ERRORS.STALE};
+        const action={type:'owner_settings_update',request,pausedReminderCount:impact.pausedReminderCount,expectedUpdatedAt:now.updated_at,requestedAt:clock().toISOString(),expiresAt:expiry(),sourceMessageId:messageId};
+        const proposed=await stage(action);
+        if(proposed.ok)replyRequirement={...replyRequirement,businessNameReminderNotice:businessNameReminderNotice(impact.pausedReminderCount)};
+        return {...proposed,pausedReminderCount:impact.pausedReminderCount,changes:describeSettingsChange(now,request)};
       }
       case 'confirmPendingOwnerChange': return await confirmPending();
       case 'continueInvoiceReview': return await continueReview(raw);
@@ -1821,7 +1831,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
   };
   const diagnosticSnapshot=()=>({rounds:diagnostics.rounds,toolRounds:diagnostics.toolRounds,cacheHits:diagnostics.cacheHits,safetyRejects:[...diagnostics.safetyRejects]});
   const resultFor=(answer,extra={})=>({
-    answer,media:extra.media||media||tools.getMedia?.()||null,model:extra.model||lastServedModel,
+    answer:appendBusinessNameReminderNotice(answer,replyRequirement()?.businessNameReminderNotice),media:extra.media||media||tools.getMedia?.()||null,model:extra.model||lastServedModel,
     servedProvider:modelProvider(extra.model||lastServedModel),attachmentProcessed:didIngest,
     agentDiagnostics:diagnosticSnapshot(),...extra,
   });

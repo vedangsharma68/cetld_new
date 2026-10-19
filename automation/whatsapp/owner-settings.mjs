@@ -1,4 +1,5 @@
 // Server-side settings storage and validated change summaries.
+import {businessNameChangeImpact} from '../../business-name-reminders.mjs';
 const LABELS={tone:'Tone',maxReminders:'Maximum reminders',cadenceDays:'Days between reminders',firstReminderDays:'First reminder, days after due',contactStart:'Contact start',contactEnd:'Contact end',pauseOnReply:'Pause when the customer replies',dailySummary:'Daily summary'};
 const show=v=>typeof v==='boolean'?(v?'on':'off'):v===undefined||v===null||v===''?'not set':String(v);
 export function describeSettingsChange(current,request){
@@ -9,6 +10,7 @@ export function describeSettingsChange(current,request){
 }
 export function createOwnerSettingsStore(supabase){
  return {
+  impact(workspaceId,businessName){return businessNameChangeImpact(supabase,workspaceId,businessName);},
   async read(workspaceId){
    const r=await supabase.from('workspace_settings').select('business_name,follow_up_preferences,updated_at').eq('workspace_id',workspaceId).maybeSingle();
    if(r.error)throw r.error;return r.data;

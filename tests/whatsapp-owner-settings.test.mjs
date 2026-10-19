@@ -4,11 +4,12 @@ import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mj
 import {createOwnerSafetyTools as createOwnerAgentTools} from '../automation/whatsapp/owner-agent.mjs';
 
 const scope={workspaceId:'w1',ownerId:'o1',customerId:'owner-placeholder',phone:'+919871367051'};
-function setup({failWrite=null,changeBetween=false,plans={},answers={}}={}){
+function setup({failWrite=null,changeBetween=false,plans={},answers={},affectedCount=0}={}){
  let action=null,row={business_name:'CETLD test',follow_up_preferences:{tone:'professional',maxReminders:3},updated_at:'t1'},writes=[],rpcCalls=0,authorized=true,pid=0;
  let modelCalls=0;
  const supabase={
   rpc:async(name,args)=>{
+   if(name==='business_name_change_impact')return {data:{pausedReminderCount:args.p_business_name.trim()===row.business_name?0:affectedCount,updatedAt:row.updated_at}};
    rpcCalls++;
    assert.equal(name,'whatsapp_confirm_owner_create_settings');
    if(failWrite)return {error:{message:failWrite,code:'P0001'}};
@@ -23,7 +24,7 @@ function setup({failWrite=null,changeBetween=false,plans={},answers={}}={}){
    for(const [key,value] of Object.entries(request.patch||{}))if(row.follow_up_preferences[key]!==value)changed.push(key);
    row={...row,business_name:businessName,follow_up_preferences:preferences,updated_at:'t2'};
    const current=action;action=null;
-   return {data:{ok:true,actionType:current.type,businessName:row.business_name,changed}};
+   return {data:{ok:true,actionType:current.type,businessName:row.business_name,changed,pausedReminderCount:changed.includes('businessName')?affectedCount:0}};
   },
   from(table){
    if(table==='workspace_ai_settings')return {select(){return this},eq(){return this},maybeSingle:async()=>({data:null})};
@@ -51,7 +52,7 @@ function setup({failWrite=null,changeBetween=false,plans={},answers={}}={}){
   }}),
   clock:()=>new Date('2026-10-02T08:00:00Z'),logger:null});
  const h=async input=>{const result=await handler(input);return result?.answer??result;};
- return {h,get row(){return row},get writes(){return writes},get rpcCalls(){return rpcCalls},get action(){return action},get modelCalls(){return modelCalls},bump(){row={...row,updated_at:'t9'}},revoke(){authorized=false}};
+ return {h,setCount(n){affectedCount=n},get row(){return row},get writes(){return writes},get rpcCalls(){return rpcCalls},get action(){return action},get modelCalls(){return modelCalls},bump(){row={...row,updated_at:'t9'}},revoke(){authorized=false}};
 }
 test('settings change is a proposal, applies only after yes, and keeps other preferences',async()=>{
  const first='change my workspace name to Vedang T',yes='yes';const t=setup({plans:{
@@ -94,4 +95,32 @@ test('a revoked owner binding cannot confirm a pending settings change',async()=
  await t.h({...scope,message:'set tone to firm',messageId:'m1'});t.revoke();
  assert.equal(await t.h({...scope,message:'yes',messageId:'m2'}),'');
  assert.equal(t.writes.length,0);
+});
+
+for(const count of [0,2])test(`business rename warns before yes and after saving (N=${count}), even if the model omits the warning`,async()=>{
+ const first='change my business name to QA Studio',yes='yes';
+ const t=setup({affectedCount:count,plans:{
+  [first]:{tool:'proposeWorkspaceSettingsChange',args:{businessName:'QA Studio'}},
+  [yes]:{tool:'confirmPendingOwnerChange'}},answers:{
+  [first]:'I can change CETLD test to QA Studio. Reply yes to apply, or cancel.',
+  [yes]:'Done. The business name is now QA Studio.'}});
+ const proposal=await t.h({...scope,message:first,messageId:'qa-proposal'});
+ assert.equal(t.row.business_name,'CETLD test');assert.equal(t.rpcCalls,0);
+ assert.equal(t.action.pausedReminderCount,count);
+ if(count)assert.match(proposal,/2 approved reminders will be paused until re-approved in the Conversations tab/);
+ else assert.doesNotMatch(proposal,/paused|re-approved/);
+ // Confirmation reports the current database count, not the proposal snapshot.
+ t.setCount(count?3:0);
+ const saved=await t.h({...scope,message:yes,messageId:'qa-confirmation'});
+ assert.equal(t.row.business_name,'QA Studio');assert.equal(t.rpcCalls,1);
+ if(count)assert.match(saved,/3 approved reminders are paused until re-approved in the Conversations tab/);
+ else assert.doesNotMatch(saved,/paused|re-approved/);
+});
+
+test('unchanged business name has no rename warning even with existing approvals',async()=>{
+ const first='keep my business name CETLD test';
+ const t=setup({affectedCount:5,plans:{[first]:{tool:'proposeWorkspaceSettingsChange',args:{businessName:'CETLD test'}}},
+  answers:{[first]:'The business name stays CETLD test. Reply yes to apply, or cancel.'}});
+ assert.doesNotMatch(await t.h({...scope,message:first,messageId:'qa-unchanged'}),/paused|re-approved/);
+ assert.equal(t.action.pausedReminderCount,0);
 });
