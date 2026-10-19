@@ -447,3 +447,16 @@ test('actual final gate rejects all authoritative external-ledger markers with t
     });
   }finally{await f.close()}
 });
+
+test('live renamed settings still block a cached stale approved invoice before dispatch',async()=>{
+ const f=await setup();try{
+  const input=await f.prepare(),stale=await f.store.getInvoice(f.scope);
+  assert.equal(stale.followup_state,'approved');
+  await f.db.query("update workspace_settings set business_name='QA Renamed studio' where workspace_id=$1",[f.scope.workspaceId]);
+  const provider=createFirstPartyReminderProvider({env,supabase:f.supabase,ownerId:f.scope.ownerId,workspaceId:f.scope.workspaceId,
+   templateSnapshot:template,fetchImpl:f.fetchImpl,store:{getInvoice:async()=>stale,getWorkspacePreferences:scope=>f.store.getWorkspacePreferences(scope)}});
+  assert.deepEqual(await provider.sendReminder(input),{status:'blocked',reason:'stale_review'});
+  assert.equal(f.graph.length,0);
+  assert.equal((await f.db.query('select count(*)::int n from app.first_party_reminder_dispatches')).rows[0].n,0);
+ }finally{await f.close()}
+});

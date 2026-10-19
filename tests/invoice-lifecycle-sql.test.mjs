@@ -452,3 +452,21 @@ test('invoice lifecycle enforces owner scope, exact confirmation, RLS, restore r
       idempotencyKey:'foreign_prepare_lifecycle_001'})).code,'OWNER_REQUIRED');
   }finally{await db.close();}
 });
+
+test('rename receipt records affected count and replays it without re-approving any invoice',async()=>{
+ const {db,workspaceId}=await boot();try{
+  await bindVerifiedOwner(db,workspaceId);await db.exec('reset role');
+  const invoice=await addInvoice(db,workspaceId,'QA-RENAME');
+  await db.query("update invoices set metadata=metadata||jsonb_build_object('followup_state','approved','approved_reminder_text',E'Reviewed\n\nLifecycle test','approved_preferences_updated_at',(select updated_at from workspace_settings where workspace_id=$2)) where id=$1",[invoice.id,workspaceId]);
+  for(const [index,businessName,expected] of [[1,'Renamed Studio',1],[2,'Renamed Studio',0],[3,'Another Studio',0]]){
+   const settings=(await db.query('select updated_at from workspace_settings where workspace_id=$1',[workspaceId])).rows[0];
+   const pending=await storeOwnerAction(db,workspaceId,{type:'owner_settings_update',sourceMessageId:`qa-rename-source-${index}`,
+    expiresAt:new Date(Date.now()+300000).toISOString(),expectedUpdatedAt:settings.updated_at,request:{businessName,patch:{}}});
+   const messageId=`qa-rename-confirm-${index}`;await addInbound(db,messageId,'yes');
+   const result=await atomicOwnerConfirm(db,workspaceId,pending,messageId);assert.equal(result.ok,true);assert.equal(result.pausedReminderCount,expected);
+   const replay=await atomicOwnerReceiptLookup(db,workspaceId,messageId);assert.equal(replay.replayed,true);assert.equal(replay.pausedReminderCount,expected);
+  }
+  const row=(await db.query('select followup_state,metadata from invoices where id=$1',[invoice.id])).rows[0];
+  assert.equal(row.followup_state,'paused');assert.equal(row.metadata.reminder_review_reason,'business_name_changed');assert.equal(row.metadata.approved_reminder_text,null);
+ }finally{await db.close()}
+});

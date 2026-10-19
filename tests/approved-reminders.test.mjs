@@ -354,3 +354,19 @@ test('predecessor rows remain authorized during the swap and their button STOP r
     }finally{await f.close();}
   }
 });
+
+test('business rename after facts invalidates the stale approved snapshot at the final send gate',async()=>{
+ const f=await setup();try{
+  const [claim]=await f.store.claimDueFollowups({...f.scope,now:new Date().toISOString(),limit:1});
+  const settings=await f.store.getWorkspacePreferences(f.scope);
+  assert.equal((await f.store.authorizeDelivery({...f.scope,claimId:claim.id,preferencesVersion:settings.updated_at})).authorized,true);
+  const provider=createApprovedReminderProvider({env:f.configured,supabase:f.supabase,store:f.store,...f.scope,fetchImpl:f.fetchImpl});
+  const input={...f.scope,customerId:f.customerId,to:phone,idempotencyKey:`reminder:${f.scope.workspaceId}:${claim.id}`};
+  input.body=(await provider.prepareReminder(input)).body;
+  f.intercept(async url=>{if(url.pathname.endsWith('/rpc/cetld_core_authorize_first_party_reminder'))
+   await f.db.query("update workspace_settings set business_name='QA Renamed studio' where workspace_id=$1",[f.scope.workspaceId]);});
+  assert.equal((await provider.sendReminder(input)).reason,'atomic_gate_denied');
+  assert.equal(f.graph.length,0);assert.equal((await f.store.getInvoice(f.scope)).followup_state,'paused');
+  assert.equal((await f.db.query('select count(*)::int n from app.first_party_reminder_dispatches')).rows[0].n,0);
+ }finally{await f.close()}
+});
