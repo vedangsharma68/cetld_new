@@ -16,6 +16,7 @@ import {VERIFIED_MODEL_CATALOG,DEFAULT_EXTRACTION_FALLBACK_MODEL,DEFAULT_EXTRACT
 import {createOwnerScopedStore} from '../../ai/whatsapp-channel.mjs';
 import {createWhatsAppInvoiceStore} from './invoice-store.mjs';
 import {createWhatsAppPendingActionStore} from './pending-actions.mjs';
+import {businessNameReminderNotice} from '../../business-name-reminders.mjs';
 import {createOwnerSettingsStore, describeSettingsChange} from './owner-settings.mjs';
 import {createWhatsAppBoundMessageHandler,reviewDraft,invoiceReviewClarification} from './assistant-handler.mjs';
 import {extractInvoice, INVOICE_IMAGE_REPLIES} from '../../ai/extraction.mjs';
@@ -589,8 +590,12 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         expired:'EXPIRED',stale:'STALE',invoice_exists:'INVOICE_EXISTS',ambiguous_customer:'AMBIGUOUS',invalid:'INVALID'})[value?.reason]||'UNKNOWN';
       return {ok:false,code,message:SAFE_ERRORS[code]};
     }
-    if(value.actionType==='owner_settings_update')return {ok:true,action:'settings_updated',businessName:value.businessName,
-      changed:Array.isArray(value.changed)?value.changed:[],replayed:value.replayed===true};
+    if(value.actionType==='owner_settings_update'){
+      const pausedReminderCount=Number(value.pausedReminderCount)||0;
+      replyRequirement={businessNameReminderNotice:businessNameReminderNotice(pausedReminderCount,{saved:true})};
+      return {ok:true,action:'settings_updated',businessName:value.businessName,pausedReminderCount,
+        notice:replyRequirement.businessNameReminderNotice,changed:Array.isArray(value.changed)?value.changed:[],replayed:value.replayed===true};
+    }
     if(value.actionType==='owner_invoice_create')return {ok:true,action:'invoice_created',invoiceNumber:value.invoiceNumber,
       customerName:value.customerName,total:value.total,currency:value.currency,dueDate:value.dueDate,replayed:value.replayed===true};
     return {ok:false,code:'UNKNOWN',message:SAFE_ERRORS.UNKNOWN};
@@ -1165,7 +1170,11 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         if(!now)return {ok:false,code:'UNAVAILABLE',message:SAFE_ERRORS.UNAVAILABLE};
         const request={businessName:businessName?.trim()??null,patch};
         const action={type:'owner_settings_update',request,expectedUpdatedAt:now.updated_at,requestedAt:clock().toISOString(),expiresAt:expiry(),sourceMessageId:messageId};
-        return {...await stage(action),changes:describeSettingsChange(now,request)};
+        const pausedReminderCount=await settingsStore.pauseCount(scope.workspaceId,now.business_name,request.businessName);
+        const result=await stage(action);
+        const notice=result.ok?businessNameReminderNotice(pausedReminderCount):'';
+        if(notice)replyRequirement={...replyRequirement,businessNameReminderNotice:notice};
+        return {...result,changes:describeSettingsChange(now,request),pausedReminderCount,notice};
       }
       case 'confirmPendingOwnerChange': return await confirmPending();
       case 'continueInvoiceReview': return await continueReview(raw);
@@ -1821,7 +1830,8 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
   };
   const diagnosticSnapshot=()=>({rounds:diagnostics.rounds,toolRounds:diagnostics.toolRounds,cacheHits:diagnostics.cacheHits,safetyRejects:[...diagnostics.safetyRejects]});
   const resultFor=(answer,extra={})=>({
-    answer,media:extra.media||media||tools.getMedia?.()||null,model:extra.model||lastServedModel,
+    answer:replyRequirement()?.businessNameReminderNotice&&!answer.includes(replyRequirement().businessNameReminderNotice)
+      ?`${answer}\n\n${replyRequirement().businessNameReminderNotice}`:answer,media:extra.media||media||tools.getMedia?.()||null,model:extra.model||lastServedModel,
     servedProvider:modelProvider(extra.model||lastServedModel),attachmentProcessed:didIngest,
     agentDiagnostics:diagnosticSnapshot(),...extra,
   });
