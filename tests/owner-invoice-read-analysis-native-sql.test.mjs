@@ -263,7 +263,7 @@ test('an explicit payment request stays on the guarded proposal route',async()=>
     const before=await f.snapshot();
     const message=`Record USD 300 payment against invoice SIM-2048 for ${COMPANY}.`;
     const reply=await f.turn('event269-real-payment-request',message);
-    assert.match(reply.answer,/Proposed a USD 300\.00 payment/);assert.match(reply.answer,/Reply yes to confirm or cancel/);
+    assert.match(reply.answer,/Record USD 300\.00/);assert.match(reply.answer,/Reply yes to confirm or cancel/);
     assert.equal(f.executions.filter(item=>item.args.operation==='read'&&item.args.table==='invoices').length,1);
     assert.ok(f.executions.some(item=>item.args.operation==='create'&&item.args.table==='payments'));
     assert.equal(f.outputs.some(output=>output?.invoiceReadAnalysis),false);

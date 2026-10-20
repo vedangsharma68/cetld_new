@@ -171,7 +171,7 @@ test('captionless JPEG after unrelated text and pending customer reads only the 
 test('sticker reproducer gives attachment instructions without download, OCR, planner or business writes',async()=>{
   const f=await fixture({type:'sticker',caption:''});
   try{
-    assert.match(f.answer,/as a sticker.*attachment button.*Photos\/Gallery or Document/);
+    assert.match(f.answer,/sticker.*Attach the invoice as a photo or PDF/);
     assert.equal(f.graph.length,0);assert.equal(f.ocrCalls,0);assert.equal(f.vision.length,0);assert.equal(f.toolResults.length,0);
     assert.deepEqual(await snapshot(f.db),f.before);
   }finally{await f.close();}
@@ -179,7 +179,7 @@ test('sticker reproducer gives attachment instructions without download, OCR, pl
 
 test('download failure asks for a resend and makes no business changes',async()=>{
   const f=await fixture({downloadFails:true,caption:''});
-  try{assert.match(f.answer,/couldn't fetch|could not be loaded/i);assert.equal(f.vision.length,0);assert.deepEqual(await snapshot(f.db),f.before);}
+  try{assert.match(f.answer,/couldn’t load|could not be loaded/i);assert.equal(f.vision.length,0);assert.deepEqual(await snapshot(f.db),f.before);}
   finally{await f.close();}
 });
 

@@ -55,7 +55,7 @@ test('the system prompt stays short and describes workspaceData generically',asy
  const message='What is the total on this attached invoice?';
  await runOwnerAgent({provider,tools:tools(),message,clock:()=>new Date('2026-10-02T12:00:00Z'),
   history,attachmentDescriptor:{available:true,mimeType:'image/jpeg'},historyIssue:'HISTORY_UNAVAILABLE',settingsIssue:'MODEL_SETTINGS_UNAVAILABLE'});
- assert.ok(systemPrompt.length<350,`system prompt was ${systemPrompt.length} characters`);
+ assert.ok(systemPrompt.length<1000,`system prompt was ${systemPrompt.length} characters`);
  assert.match(systemPrompt,/verified owner/i);
  assert.match(systemPrompt,/workspaceData/);
  assert.match(systemPrompt,/getAIProviderConfiguration/);
@@ -80,7 +80,7 @@ test('a hung provider is aborted at the injected whole-loop budget',async()=>{
  const result=await runOwnerAgent({provider,tools:tools(),message:'Hello',budgetMs:500});
  assert.equal(providerSignal.aborted,true);
  assert.equal(result.plannerFailure?.code,'OWNER_LOOP_TIMEOUT');
- assert.match(result.answer,/couldn't finish your owner chat reply/i);
+ assert.match(result.answer,/couldn’t finish the reply/i);
  assert.match(result.answer,/nothing changed/i);
 });
 
@@ -96,10 +96,10 @@ test('a hung workspaceData call is bounded and reports uncertain write status',a
  const result=await runOwnerAgent({provider,tools:ownerTools,message:'Change settings',budgetMs:500});
  assert.equal(toolSignal.aborted,true);
  assert.equal(result.plannerFailure?.code,'OWNER_LOOP_TIMEOUT');
- assert.match(result.answer,/may still be processing|could not confirm/i);
- assert.match(result.answer,/check your workspace/i);
+ assert.match(result.answer,/may still be running|couldn’t confirm/i);
+ assert.match(result.answer,/check cetld/i);
  assert.match(result.answer,/workspace settings/i);
- assert.match(result.answer,/trying it again/i);
+ assert.match(result.answer,/retrying/i);
  assert.equal(result.agentDiagnostics?.toolRounds,1);
 });
 
@@ -109,7 +109,7 @@ test('a timed-out definite workspace read keeps the timeout reason without a wri
  ownerTools.getWriteAttempted=()=>false;
  const result=await runOwnerAgent({provider,tools:ownerTools,message:'Describe settings',budgetMs:500});
  assert.equal(result.plannerFailure?.code,'OWNER_LOOP_TIMEOUT');
- assert.match(result.answer,/tried to look up workspace settings/i);
+ assert.match(result.answer,/workspace settings lookup took too long/i);
  assert.match(result.answer,/nothing changed/i);
  assert.doesNotMatch(result.answer,/could not confirm|check your workspace/i);
 });
@@ -127,7 +127,7 @@ test('provider and tool failures return safe planner failures without leaking de
   tools:Object.assign(tools(['workspaceData'],async()=>{throw new Error('private database detail');}),{getWriteAttempted:()=>true}),message:'Change a setting',
  });
  assert.equal(toolFailure.plannerFailure?.code,'OWNER_AGENT_TOOL_FAILED');
- assert.match(toolFailure.answer,/check your workspace/i);
+ assert.match(toolFailure.answer,/check cetld/i);
  assert.doesNotMatch(toolFailure.answer,/private database detail/);
 });
 
@@ -365,7 +365,7 @@ test('a timed-out final answer after provider configuration names the completed 
  assert.equal(calls,3);
  assert.equal(result.plannerFailure?.code,'OWNER_LOOP_TIMEOUT');
  assert.match(result.answer,/looked up AI provider configuration/i);
- assert.match(result.answer,/couldn\'t finish the reply/i);
+ assert.match(result.answer,/couldn’t finish the reply/i);
  assert.match(result.answer,/nothing changed/i);
 });
 

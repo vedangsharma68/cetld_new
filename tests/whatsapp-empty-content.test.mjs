@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createInboundRuntime,parseMetaMessages} from '../automation/whatsapp/cloud-inbound.mjs';
 
 const phone='+15551234567';
-const reply="I couldn't read that message. Please resend it as plain text, a photo, or a PDF. No business changes were made.";
+const reply="I couldn’t read that. Send text, a photo, or a PDF. Nothing was changed.";
 const event=(extra={})=>({id:1,attempts:1,claim_token:'claim',provider_message_id:'wamid.empty',
   sender_phone:phone,message_type:'unsupported',message_text:'',received_at:new Date().toISOString(),...extra});
 function fixture(incoming,{audience='owner',rejectedSends=0}={}){
@@ -95,7 +95,7 @@ for(const audience of ['owner','customer'])for(const extra of [
   const f=fixture(event(extra),{audience});
   assert.deepEqual(await f.runtime.processPending(),{claimed:1,completed:1});
   if(extra.media_error&&audience==='customer'){
-    assert.deepEqual(f.handled,[]);assert.match(f.sent[0].body,/fetch that photo/);
+    assert.deepEqual(f.handled,[]);assert.match(f.sent[0].body,/load that photo/);
   }else{
     assert.equal(f.handled.length,1);assert.equal(f.handled[0].message,extra.message_text||'');
     assert.equal(f.handled[0].ownerId,audience==='owner'?'owner':undefined);

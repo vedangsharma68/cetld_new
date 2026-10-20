@@ -11,7 +11,7 @@ const E164 = /^\+[1-9]\d{6,14}$/;
 import {buildReminderTemplate,selectReminderTemplate} from './reminder-templates.mjs';
 const SERVICE_KINDS = new Set(['normal', 'verification', 'stop_confirmation', 'start_confirmation']);
 const CURRENT_INVOICE_STATUSES = new Set(['sent', 'paid']);
-const SAFE_GUARD_REPLY = "I have your answer, but couldn't phrase it safely for WhatsApp - please check the cetld app for details.";
+const SAFE_GUARD_REPLY = "I couldn’t prepare a safe reply. Check cetld for details.";
 const NEUTRAL_CONTENT = /\b(?:overdue|past[ -]?due|debt|debtor|collect(?:ion)?|pay(?:ment)?\s+(?:now|today|immediately)|amount\s+due|outstanding|final\s+notice|late\s+fee)\b/i;
 const SESSION_PRESSURE_CONTENT = /\b(?:final\s+notice|pay\s+(?:now|immediately|today)|late\s+fee|legal\s+action)\b/i;
 
@@ -296,16 +296,16 @@ export function createWhatsAppOutbound({
     }
     // Fixed owner-linking confirmations are the only variants allowed on the unbound verification path.
     const linkText = kind === 'verification' ? {
-      linked: 'Connected. I can access the invoices in your dashboard. Ask me to list your invoices, check a balance, or retrieve a file.',
-      failed: 'We could not link this number. Start again from Settings on the dashboard and send the new code.',
+      linked: 'Connected. Ask me about your invoices, balances, or files.',
+      failed: 'I couldn’t link this number. Get a new code in cetld Settings and send it here.',
     }[ownerLinkResult] : null;
     let text = linkText ? linkText
       : kind === 'verification'
-      ? 'Please contact the business that issued your invoice to verify your WhatsApp number.'
+      ? 'Contact the business that issued your invoice to verify your WhatsApp number.'
       : kind === 'start_confirmation'
-        ? 'Your re-subscribe request has been recorded. You can receive WhatsApp updates again. Reply STOP to opt out.'
+        ? 'You can receive WhatsApp updates again. Reply STOP to opt out.'
       : kind === 'stop_confirmation'
-        ? "You've been opted out of WhatsApp updates. We won't message you again."
+        ? "WhatsApp updates are off. We won’t message you again."
         : null;
     if (kind === 'normal') {
       if(audience==='owner'){

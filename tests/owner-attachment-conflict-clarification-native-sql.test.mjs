@@ -126,7 +126,7 @@ for(const installedLineEndings of ['LF','CRLF'])test(`native Gemini owner clarif
    const safety=createOwnerSafetyTools({supabase,scope:{workspaceId,ownerId,customerId,phone},pending,pendingAtStart:proposal,pendingInitialState:proposal,
     ownerStore:{workspaceId,userId:ownerId,role:'owner',async query(){throw Error('unconfirmed review must not read unrelated records');}},invoiceStoreFactory:()=>{throw Error('unconfirmed review must not construct a ledger writer');},
     authorize:async()=>true,sourceMediaReader:async()=>({bytes,mimeType:'image/jpeg'}),message:text,messageId:id,logger:{error(){}}});
-   const blocked=await safety.execute('ingestInvoiceAttachment',{});assert.equal(blocked.ok,false);assert.equal(blocked.code,'INVALID');assert.match(blocked.message,/explicitly confirm|later message/);
+   const blocked=await safety.execute('ingestInvoiceAttachment',{});assert.equal(blocked.ok,false);assert.equal(blocked.code,'INVALID');assert.match(blocked.message,/Tell me explicitly if you want to save|later message/);
    assert.deepEqual(await review(),proposal);
   }
   const savedReply=await turn('confirm-source','yes');assert.match(savedReply.answer,/Saved invoice INV-2026-0001/);

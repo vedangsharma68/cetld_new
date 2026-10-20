@@ -50,8 +50,8 @@ test('native missing-field follow-ups read matching reviews and never invent fac
     await inbound('orphan-question',question);
     const orphan=await handler({...scope,messageId:'orphan-question',message:question});
     assert.equal(orphan.plannerFailure,undefined,JSON.stringify(orphan));
-    assert.match(orphan.answer,/do not have a verified review.*cannot identify missing fields/i);
-    assert.match(orphan.answer,/resend the image or PDF/i);
+    assert.match(orphan.answer,/can’t verify what’s missing without the invoice review/i);
+    assert.match(orphan.answer,/resend the photo or PDF/i);
     assert.doesNotMatch(orphan.answer,/Old synthetic|missing customer|issue date|due date|currency|line items/i);
     assert.equal(chatCalls,0);assert.equal(extractionCalls,0);
     // The same ordinary caption now uses real extraction/review SQL. Only
@@ -77,7 +77,7 @@ test('native missing-field follow-ups read matching reviews and never invent fac
     await inbound('new-orphan-photo',"Just tell me this photo's total. Do not save it.",true);
     await inbound('new-orphan-question',question);
     const newer=await handler({...scope,messageId:'new-orphan-question',message:question});
-    assert.match(newer.answer,/cannot identify missing fields/i);
+    assert.match(newer.answer,/can’t verify what’s missing/i);
     assert.equal(chatCalls,chatBefore);assert.equal(extractionCalls,1);
     assert.deepEqual((await db.query('select id,version,action,consumed_at from whatsapp_pending_actions where id=$1',[before.id])).rows[0],before);
     for(const table of ['invoices','invoice_files','payments','whatsapp_owner_action_receipts','whatsapp_direct_write_receipts'])
@@ -90,7 +90,7 @@ test('native missing-field follow-ups read matching reviews and never invent fac
       message:question,messageId:'fault-question',ownerHistory:[{role:'user',content:caption,providerMessageId:'fresh-photo'}],
       authorize:input=>authorizeOwnerPhone({supabase,...input}),logger:{error(){}},...extra});
     const unavailable=await nativeTools({pendingStoreAvailable:false}).execute('workspaceData',{operation:'pending'});
-    assert.match(unavailable.message,/cannot read the invoice review/);assert.doesNotMatch(unavailable.message,/business issued/);
+    assert.match(unavailable.message,/can’t read the review/);assert.doesNotMatch(unavailable.message,/business issued/);
     const denied=await nativeTools({scope:{...scope,ownerId:randomUUID()}}).execute('workspaceData',{operation:'pending'});
     assert.equal(denied.ok,false);assert.doesNotMatch(denied.message,/business issued|SYN-JPEG/);
     // Change the actual SQL review after its first read, while the source
@@ -102,7 +102,7 @@ test('native missing-field follow-ups read matching reviews and never invent fac
       return row;
     }};
     const stale=await nativeTools({pending:racingPending}).execute('workspaceData',{operation:'pending'});
-    assert.match(stale.message,/cannot identify missing fields/);assert.doesNotMatch(stale.message,/business issued|SYN-JPEG/);
+    assert.match(stale.message,/can’t verify what’s missing/);assert.doesNotMatch(stale.message,/business issued|SYN-JPEG/);
     assert.equal(reads,2);
     assert.equal((await db.query('select version from whatsapp_pending_actions where id=$1',[before.id])).rows[0].version,before.version+1);
     assert.deepEqual(f.errors,[]);

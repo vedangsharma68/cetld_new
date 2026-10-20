@@ -30,7 +30,7 @@ test('native repeated rejected reads log only filter structure without invoking 
             return Response.json({choices:[{message:{content:`I couldn't find invoice ${invoice.invoice_number}.`},finish_reason:'stop'}]});
           }})});
       const result=await handler({...scope,messageId,message});
-      assert.match(result.answer,/could not prepare a safe reply/);assert.equal(plans,0);assert.equal(calls,5);
+      assert.match(result.answer,/couldn’t prepare a safe reply/);assert.equal(plans,0);assert.equal(calls,5);
       const toolLogs=logs.filter(row=>row.label==='WhatsApp owner tool call');assert.equal(toolLogs.length,1);
       const diagnostic=toolLogs[0].data.filterShapeDiagnostic;
       assert.equal(diagnostic.structure.type,filters===null?'null':typeof filters);

@@ -35,7 +35,7 @@ for(const repairSucceeds of [true,false])test(`serialized provider final repair 
   }});
   assert.equal(writes,1);assert.equal(calls,3);
   if(repairSucceeds){assert.equal(result.answer,valid);assert.equal(result.plannerFailure,undefined);}
-  else {assert.match(result.answer,/preview was saved/i);assert.match(result.answer,/No proposed business change was applied/);assert.doesNotMatch(result.answer,/could not confirm whether/);}
+  else {assert.match(result.answer,/preview was saved/i);assert.match(result.answer,/no business change was applied/);assert.doesNotMatch(result.answer,/could not confirm whether/);}
 });
 
 test('fresh pending reopening reads restore exact preview requirements and cannot complete a reversal',async()=>{

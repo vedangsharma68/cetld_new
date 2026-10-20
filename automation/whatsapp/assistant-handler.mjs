@@ -22,13 +22,13 @@ export function invoiceReviewClarification(action) {
   if (Object.hasOwn(INVOICE_IMAGE_REPLIES, action.failureCode || '')) return INVOICE_IMAGE_REPLIES[action.failureCode];
   if (action.failureCode === 'EXTRACTION_UNAVAILABLE') {
     return action.failureReason === 'TIMEOUT'
-      ? 'Invoice extraction timed out. Nothing was saved. Please resend the attachment later to retry.'
-      : 'The invoice extraction service is unavailable right now. Nothing was saved. Please resend the attachment later to retry.';
+      ? 'Reading the invoice timed out. Nothing was saved. Send it again later.'
+      : 'Invoice reading is unavailable right now. Nothing was saved. Send it again later.';
   }
   if (action.failureCode === 'INVOICE_REVIEW_UNAVAILABLE') {
     return action.failureReason === 'TIMEOUT'
-      ? 'Invoice review timed out. Nothing was saved. Please resend the attachment later to retry.'
-      : 'The invoice review service is unavailable right now. Nothing was saved. Please resend the attachment later to retry.';
+      ? 'Invoice review timed out. Nothing was saved. Send it again later.'
+      : 'Invoice review is unavailable right now. Nothing was saved. Send it again later.';
   }
   const details = (action.missingFields || []).filter(name => name !== 'direction').map(name => fieldLabels[name]);
   const issues = action.validationIssues || [];
@@ -36,17 +36,17 @@ export function invoiceReviewClarification(action) {
   const mismatch = issues.includes('INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX');
   const paymentConflict = issues.includes('PAYMENT_STATUS_CONFLICT');
   const paymentReview = paymentConflict || issues.includes('PAYMENT_RECORD_REQUIRES_REVIEW') || issues.includes('UNCERTAIN_PAYMENT_STATUS');
-  return ['I could only prepare a partial review.',
+  return ['The review is incomplete.',
     paymentConflict ? action.paymentEvidence?.status === 'paid'
-      ? 'A printed PAID marking conflicts with the outstanding balance.'
-      : 'The printed payment status conflicts with the outstanding balance or another status marking.' : null,
-    paymentReview ? 'Please verify the payment status and balance against the original and send a corrected invoice or a clearer photo. No payment was recorded.' : null,
-    mismatch ? 'The subtotal plus tax does not match the total, so the amount breakdown needs review.' : null,
-    mismatch && /\b(?:shipping|handling|freight|delivery|surcharge|discount)\b/i.test(action.invoice?.notes || '') ? 'The printed shipping, charges, or discounts must be reviewed as part of that breakdown.' : null,
-    moneyIssues ? 'Please verify the amounts and send a corrected invoice or a clearer photo showing the subtotal, tax, total, outstanding balance, and any printed adjustments.' : null,
-    details.length ? `Please confirm the ${details.join(', ')}.` : null,
-    action.missingFields?.includes('direction') ? 'Please tell me whether your business issued the invoice.' : null,
-    !moneyIssues && !details.length && !paymentReview && !action.missingFields?.includes('direction') ? 'Please send a clearer photo so I can verify the invoice details.' : null,
+      ? 'The PAID marking doesn’t match the balance owed.'
+      : 'The payment status doesn’t match the balance owed or other markings.' : null,
+    paymentReview ? 'Check the original payment status and balance. Send a corrected invoice or clearer photo. No payment was recorded.' : null,
+    mismatch ? 'Subtotal plus tax doesn’t match the total. Check the breakdown.' : null,
+    mismatch && /\b(?:shipping|handling|freight|delivery|surcharge|discount)\b/i.test(action.invoice?.notes || '') ? 'Check the printed shipping, charges, and discounts too.' : null,
+    moneyIssues ? 'Check amounts against the original. Send a corrected invoice or clearer photo with subtotal, tax, total, balance, and adjustments.' : null,
+    details.length ? `Confirm the ${details.join(', ')}.` : null,
+    action.missingFields?.includes('direction') ? 'Tell me whether your business issued the invoice.' : null,
+    !moneyIssues && !details.length && !paymentReview && !action.missingFields?.includes('direction') ? 'Send a clearer photo so I can check the details.' : null,
     'Nothing was saved.'].filter(Boolean).join(' ');
 }
 
@@ -193,9 +193,9 @@ export function contactAnswer(invoice, {wantPhone, wantEmail}) {
   const rawPhone = firstMeta(invoice.metadata, ['client_phone_raw']);
   const email = firstMeta(invoice.metadata, EMAIL_KEYS);
   const lines = [];
-  if (wantPhone) lines.push(phone ? `📞 ${phone}` : rawPhone
+  if (wantPhone) lines.push(phone ? `Phone: ${phone}` : rawPhone
     ? `I only have a local number ${rawPhone}, no country code.` : `I don't have a contact number for ${label}.`);
-  if (wantEmail) lines.push(email ? `✉️ ${email}` : `I don't have an email address for ${label}.`);
+  if (wantEmail) lines.push(email ? `Email: ${email}` : `I don't have an email address for ${label}.`);
   if (phone || rawPhone || email) lines.unshift(`Contact for ${label}:`);
   return lines.join('\n');
 }
@@ -218,7 +218,7 @@ function approvedInvoice(value) {
 }
 
 function proposalSummary(invoice) {
-  return `🧾 *Invoice ready to save*\n• ${invoice.invoiceNumber} — ${invoice.clientName}\n• ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}\n${invoice.dueDate ? `• Due: ${invoice.dueDate}\n` : ''}\nSave it? Reply yes to confirm.`;
+  return `Invoice ${invoice.invoiceNumber} for ${invoice.clientName}: ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}${invoice.dueDate ? `, due ${invoice.dueDate}` : ''}. Save it? Reply yes.`;
 }
 
 function money(currency, amount) {
@@ -227,13 +227,13 @@ function money(currency, amount) {
 }
 
 function loggedSummary(invoice, {currencySource, dueDateSource, assumptions, fileKept = true}) {
-  return [`Logged invoice ${invoice.invoiceNumber}.`, `Invoice number: ${invoice.invoiceNumber}`,
-    invoice.printedInvoiceNumber ? `Printed invoice number: ${invoice.printedInvoiceNumber}` : null,
-    `Customer: ${invoice.clientName}`, `Total: ${money(invoice.currency, invoice.total)} ${invoice.currency}`,
-    `Invoice date: ${invoice.invoiceDate}`, `Due date: ${invoice.dueDate || 'not shown on the invoice'}`,
-    `Currency source: ${invoice.currency}, ${currencySource}`,
-    assumptions.length ? `Assumptions: ${assumptions.join('; ')}` : null, fileKept ? null : 'The invoice was saved, but the original file was not kept.',
-    "Reply with any corrections, like 'change the due date to 2026-08-19'."].filter(Boolean).join('\n');
+  return [`Saved invoice ${invoice.invoiceNumber} for ${invoice.clientName}: ${money(invoice.currency, invoice.total)} ${invoice.currency}, due ${invoice.dueDate || 'not shown'}.`,
+    invoice.printedInvoiceNumber && invoice.printedInvoiceNumber !== invoice.invoiceNumber ? `Printed number: ${invoice.printedInvoiceNumber}.` : null,
+    `Issued ${invoice.invoiceDate}.`,
+    /assumed/i.test(currencySource) && !assumptions.includes(currencySource) ? `${currencySource}.` : null,
+    assumptions.length ? assumptions.join('; ') + '.' : null,
+    fileKept ? null : 'The original file wasn’t kept.',
+    'Send any corrections.'].filter(Boolean).join(' ');
 }
 
 const PHONE_CANDIDATE = /\+[\d\s().-]{7,24}\d/;
@@ -263,7 +263,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
     };
     active();
     if(!authorizeScope&&(media||mediaError||/\b(?:change|chnge|set|edit|modify|fix|update|mark)\b/i.test(message||''))){
-      return 'Only the business owner can create or change invoices. Please contact the business about this invoice.';
+      return 'Only the business owner can create or change invoices. Contact the business for help.';
     }
     const {data: settings, error} = await supabase.from('workspace_ai_settings')
       .select('primary_model,fallback_model').eq('workspace_id', workspaceId).maybeSingle();
@@ -291,8 +291,8 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       // token prevents an older extraction or currency reply from reviving a
       // review replaced by this photo.
       const token = await pending.beginInvoiceReview({workspaceId, customerId, phone});
-      if (token?.action?.stage === 'saving') return 'That invoice is already being saved. Please wait for it to finish before sending a replacement photo.';
-      if (mediaError) return "I couldn't fetch that photo. The earlier invoice review was discarded; please resend the photo.";
+      if (token?.action?.stage === 'saving') return 'That invoice is being saved. Wait for it to finish before sending a replacement photo.';
+      if (mediaError) return "I couldn’t load that photo. The earlier review was discarded. Send the photo again.";
       let extracted = null;
       let review = null;
       try {
@@ -424,7 +424,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           }
           const completed = await pending.transitionInvoiceReview({...claimed, workspaceId, customerId, phone,
             fromStage: 'saving', action: {...action, stage: 'saved', invoice: savedInvoice}});
-          if (!completed) return 'The invoice was saved, but I could not finish its WhatsApp status update. Please check cetld before retrying.';
+          if (!completed) return 'The invoice was saved, but I couldn’t update its status here. Check cetld before retrying.';
           const summary = loggedSummary(savedInvoice, {currencySource: currencyResult.source, dueDateSource: due.source, assumptions, fileKept});
           if (!validatedInvoice.clientPhone) {
             const contactAction = {type: 'invoice_debtor_phone', stage: 'awaiting_phone', invoiceId: savedInvoice.id,
@@ -448,7 +448,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
               failureCode:saveError?.code==='INVOICE_ALREADY_EXISTS'?'DUPLICATE_INVOICE':'SAVE_FAILED'}}).catch(() => null);
           logger?.error?.('WhatsApp invoice save failed', {workspaceId, code: String(saveError?.code || saveError?.name || 'SAVE_FAILED').slice(0, 80)});
           if(saveError?.code==='INVOICE_ALREADY_EXISTS')return 'This invoice is already logged for this customer. No duplicate was created.';
-          return `The invoice was NOT saved because ${saveError?.code === 'UNSUPPORTED_CURRENCY' ? 'its currency is not supported' : 'cetld could not save it right now'}. Please send the photo again to retry.`;
+          return `The invoice wasn’t saved because ${saveError?.code === 'UNSUPPORTED_CURRENCY' ? 'its currency is not supported' : 'cetld could not save it right now'}. Send the photo again to retry.`;
         }
       } catch (error) {
         const failureCode = Object.hasOwn(INVOICE_IMAGE_REPLIES, error?.code || '') ? error.code
@@ -470,7 +470,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       ? await pending.loadPendingAction({workspaceId, customerId, phone}) : null; }
     catch { /* optional for deployments upgrading the pending-action table */ }
     if (contactPending?.action?.type === 'invoice_debtor_phone') {
-      if(!authorizeScope)return 'Only the business owner can change invoice contacts. Please contact the business about this invoice.';
+      if(!authorizeScope)return 'Only the business owner can change invoice contacts. Contact the business for help.';
       const contact = contactPending.action;
       if (contact.stage === 'awaiting_phone') {
         const text = String(message || '').trim();
@@ -485,7 +485,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         const store = await invoiceStoreFactory({supabase, workspaceId, customerId});
         await store.saveDebtorPhone({invoiceId: contact.invoiceId, phone: normalized, assumedConsentAt: clock().toISOString()});
         await pending.consumePendingAction({...contactPending, workspaceId, customerId, phone});
-        return `Saved ${normalized} as ${contact.clientName}'s number on this invoice. Before sending reminders, confirm their agreement and approve the follow-up in your dashboard.`;
+        return `Saved ${normalized} for ${contact.clientName}. Before reminders, confirm their agreement and approve the follow-up in cetld.`;
       }
     }
     const current = await pending.loadInvoiceReview({workspaceId, customerId, phone});
@@ -525,7 +525,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         return contactAnswer(candidates[0], {wantPhone: CONTACT_PHONE_REQUEST.test(message) || !CONTACT_EMAIL_REQUEST.test(message), wantEmail: CONTACT_EMAIL_REQUEST.test(message)});
       } catch (contactError) {
         logger?.error?.('WhatsApp contact lookup failed', {workspaceId, message: String(contactError?.message || '').slice(0, 200)});
-        return "I couldn't read that invoice's contact details right now. Please try again in a minute.";
+        return "I couldn’t read that invoice’s contact details. Try again in a minute.";
       }
     }
     let correction = parseInvoiceCorrection(effective, clock);
@@ -538,7 +538,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
     };
     const editLike = INTENT_REQUEST.test(effective);
     if (correction?.changes?.status === 'paid' || /\b(?:mark|make|set|change)\b.{0,40}\b(?:paid|paod|piad|payed|pad|settled)\b/i.test(effective)) {
-      return 'Payments are recorded in the cetld dashboard, so I can’t mark this paid from WhatsApp.';
+      return 'Only the business owner can record payments. Ask them to record this in cetld or their linked WhatsApp chat.';
     }
     if (!correction && editLike && !FILE_REQUEST.test(message)) {
       try {
@@ -563,13 +563,13 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       }
       const strongEdit = /\b(?:change|chnge|chng|set|edit|modify|fix|update)\b/i.test(effective);
       if (!correction && (!modelIntent ? strongEdit : (modelIntent.action === 'unknown' || modelIntent.confidence < 0.75) && strongEdit)) {
-        return askNumber('What would you like to change, and what should the new value be? 🙂');
+        return askNumber('What would you like to change, and what should the new value be?');
       }
     }
     const fileRequest = FILE_REQUEST.test(message) || modelIntent?.action === 'send_invoice_file' && modelIntent.confidence >= 0.75;
     const listRequest = modelIntent?.action === 'list_invoices' && modelIntent.confidence >= 0.75;
     if (correction || fileRequest || listRequest) {
-      if(correction&&!authorizeScope)return 'Only the business owner can change invoice details. Please contact the business about this invoice.';
+      if(correction&&!authorizeScope)return 'Only the business owner can change invoice details. Contact the business for help.';
       const store = await invoiceStoreFactory({supabase, workspaceId, customerId});
       const explicitNumber = requestedInvoiceNumber(effective) || modelIntent?.invoiceRef;
       let candidates;
@@ -602,19 +602,19 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           changedAt: clock().toISOString()});
       } catch (error) {
         console.error('WhatsApp invoice correction failed', error?.message || error);
-        return 'I couldn’t safely apply that invoice change. Nothing was changed, please try again.';
+        return 'I couldn’t safely apply that invoice change. Nothing was changed. Try again.';
       }
-      if (result.reason === 'use_dashboard_for_payment') return 'Payments are recorded in the cetld dashboard, so I can’t mark this paid from WhatsApp.';
+      if (result.reason === 'use_dashboard_for_payment') return 'Only the business owner can record payments. Ask them to record this in cetld or their linked WhatsApp chat.';
       if (result.reason === 'settled') return 'I can’t edit this invoice because it is already paid or settled.';
       if (result.reason === 'payments_exceed_total') return 'I can’t lower the total below payments already recorded on this invoice.';
       if (result.reason) return 'I couldn’t safely apply that invoice change.';
       return result.duplicate && !Object.keys(result.changes).length ? 'That change was already applied.' : correctionReply(result.changes);
     }
     if (current?.action?.type === 'invoice_review_draft') {
-      if(!authorizeScope)return 'Only the business owner can create or change invoices. Please contact the business about this invoice.';
+      if(!authorizeScope)return 'Only the business owner can create or change invoices. Contact the business for help.';
       const eligibility = await eligible();
       if (!eligibility.allowed || eligibility.customer?.id !== customerId) {
-        return 'Please verify your number in cetld before continuing this invoice review.';
+        return 'Verify your number in cetld to continue this invoice review.';
       }
       const action = current.action;
       if (CANCEL_REPLY.test(message)) {
@@ -633,17 +633,17 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       }
       if (CONFIRMATION_REPLY.test(message) && ['incomplete', 'extracting', 'failed', 'canceled'].includes(action.stage)) {
         return action.stage === 'canceled'
-          ? 'That invoice review was canceled. Please send a new photo to start again.'
-          : 'I can’t confirm an incomplete invoice review. Please send the requested details or a clearer photo.';
+          ? 'That review was canceled. Send a new photo to start again.'
+          : 'The review is incomplete. Send the missing details or a clearer photo before confirming.';
       }
       if (OWNER_CLAIM.test(message) && ['incomplete', 'extracting', 'failed', 'canceled'].includes(action.stage)) {
-        return 'Saying you are the owner does not grant account access. Verify ownership separately in the cetld dashboard; this invoice review still can’t be confirmed.';
+        return 'Saying you’re the owner doesn’t grant access. Verify ownership in cetld; this review still can’t be confirmed.';
       }
       const candidate = CURRENCY_REPLY.exec(message)?.[1]?.toUpperCase();
       const currency = candidate && isSupportedCurrency(candidate) ? candidate : null;
       if (action.stage === 'incomplete' && !action.validationIssues?.length
         && action.missingFields?.length === 1 && action.missingFields[0] === 'currency') {
-        if (!currency) return 'Please reply with a supported 3-letter currency code, such as USD or INR.';
+        if (!currency) return 'Reply with a supported currency code, like USD or INR.';
         const invoice = approvedInvoice({...action.invoice, currency});
         const next = {...action, stage: 'proposal', invoice, missingFields: [], currencySource: 'user'};
         const stored = await pending.transitionInvoiceReview({...current, workspaceId, customerId, phone,
@@ -651,7 +651,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         if (stored) return proposalSummary(invoice);
         const latest = await pending.loadInvoiceReview({workspaceId, customerId, phone});
         if (latest?.action?.stage === 'proposal') return proposalSummary(latest.action.invoice);
-        return 'That review was replaced by a newer photo. Please continue with the newer review.';
+        return 'A newer photo replaced that review. Continue with the newer one.';
       }
       if (currency && action.stage === 'proposal') return proposalSummary(action.invoice);
     }
@@ -672,7 +672,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
     try { response = await channel.ask(input); }
     catch (error) {
       logger?.error?.('WhatsApp assistant ask failed', {workspaceId, name: error?.name, message: String(error?.message || '').slice(0, 200)});
-      return 'My brain is having a hiccup right now 😅 Please send that again in a minute. Nothing was changed.';
+      return 'I hit a hiccup. Send that again in a minute. Nothing was changed.';
     }
     // Planner failures are safe, read-only fallbacks. Retry only this narrowly
     // identified class, once, to absorb transient free-tier provider failures.

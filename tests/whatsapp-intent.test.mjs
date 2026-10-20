@@ -62,14 +62,14 @@ test('low confidence edit asks, and a normal question still reaches the planner'
 });
 test('paid via WhatsApp is refused and writes nothing',async()=>{
   const h=mkHandler({provider:providerOutput({...base,action:'correct_invoice',confidence:.99,field:'notes',value:'x'}),store:{findInvoices:async()=>[inv],applyCorrection:async i=>{assert.equal(i.changes.status,'paid');return {reason:'use_dashboard_for_payment'}}}});
-  assert.match(await h({...scopeH,message:'mark it paid please',messageId:'x5'}),/dashboard/);
+  assert.match(await h({...scopeH,message:'mark it paid please',messageId:'x5'}),/Only the business owner can record payments/);
 });
 
 test('contact lookup answers from stored metadata and says plainly when it is missing',async()=>{
   const {contactAnswer}=await import('../automation/whatsapp/assistant-handler.mjs');
   assert.equal(contactAnswer({...inv,metadata:{}},{wantPhone:true,wantEmail:false}),"I don't have a contact number for INV-2026-0720 (Global Dynamics Inc.).");
   assert.equal(contactAnswer({...inv,metadata:{}},{wantPhone:false,wantEmail:true}),"I don't have an email address for INV-2026-0720 (Global Dynamics Inc.).");
-  assert.match(contactAnswer({...inv,metadata:{debtor_phone:'+919999999999'}},{wantPhone:true,wantEmail:false}),/📞 \+919999999999/);
+  assert.match(contactAnswer({...inv,metadata:{debtor_phone:'+919999999999'}},{wantPhone:true,wantEmail:false}),/Phone: \+919999999999/);
   assert.match(contactAnswer({...inv,metadata:{client_phone_raw:'(415) 555-0244'}},{wantPhone:true,wantEmail:false}),
     /I only have a local number \(415\) 555-0244, no country code/);
   const noAi={async generateStructured(){throw new Error('503')}};
@@ -79,7 +79,7 @@ test('contact lookup answers from stored metadata and says plainly when it is mi
   assert.match(await h2({...scopeH,message:'what is the email for global dynamics',messageId:'c2'}),/a@b\.co/);
 });
 
-test('mark-paid typos get the dashboard refusal before any lookup',async()=>{
+test('mark-paid typos get the owner payment reply before any lookup',async()=>{
   const h=mkHandler({provider:{async generateStructured(){throw new Error('no ai')}},store:{findInvoices:async()=>{throw new Error('lookup must not run')}}});
-  for (const [n,t] of ['mark it paod','mark INV-2026-0720 piad','mark it paid'].entries()) assert.match(await h({...scopeH,message:t,messageId:'mp'+n}),/dashboard/);
+  for (const [n,t] of ['mark it paod','mark INV-2026-0720 piad','mark it paid'].entries()) assert.match(await h({...scopeH,message:t,messageId:'mp'+n}),/Only the business owner can record payments/);
 });

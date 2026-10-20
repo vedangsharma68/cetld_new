@@ -53,7 +53,7 @@ test('forward bookkeeping migration preserves security and business rows, reappl
  }finally{await f.close();}
 });
 test('issuer clarification asks directly and preserves other missing facts',()=>{
- const answer=invoiceReviewClarification({missingFields:['direction','currency']});assert.match(answer,/Please tell me whether your business issued the invoice\./);assert.match(answer,/explicit currency code/);assert.doesNotMatch(answer,/confirm the confirmation|clearer photo/);assert.match(answer,/Nothing was saved/);assert.equal(ownerGroundingIssue(answer,[{ok:true,pending:true,type:'invoice_review_draft',stage:'incomplete'}],'',{}),null);assert.equal(ownerGroundingIssue(invoiceReviewClarification({missingFields:['direction']}),[], '', {}),null);
+ const answer=invoiceReviewClarification({missingFields:['direction','currency']});assert.match(answer,/Tell me whether your business issued the invoice\./);assert.match(answer,/explicit currency code/);assert.doesNotMatch(answer,/confirm the confirmation|clearer photo/);assert.match(answer,/Nothing was saved/);assert.equal(ownerGroundingIssue(answer,[{ok:true,pending:true,type:'invoice_review_draft',stage:'incomplete'}],'',{}),null);assert.equal(ownerGroundingIssue(invoiceReviewClarification({missingFields:['direction']}),[], '', {}),null);
 });
 test('forward bookkeeping migration accepts uniform CRLF but rejects mixed line endings',async()=>{
  const f=await createOfflineSqlNetwork({excludeMigrations:[migration]});try{

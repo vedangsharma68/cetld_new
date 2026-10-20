@@ -151,7 +151,7 @@ test('offline PostgreSQL and real inbound/outbound stores cover STOP → START/U
       const before = graph.length;
       assert.equal((await runtime.processPending()).completed, 1);
       assert.equal(graph.length, before+1);
-      assert.match(graph.at(-1).text.body, /re-subscribe request.*receive WhatsApp updates again/s);
+      assert.match(graph.at(-1).text.body, /receive WhatsApp updates again.*STOP to opt out/s);
       assert.match(graph.at(-1).text.body, /Reply STOP/);
       assert.equal((await getSendEligibility({supabase:f.supabase,workspaceId:workspaces[0],phone})).allowed, true);
       assert.equal((await getSendEligibility({supabase:f.supabase,workspaceId:workspaces[1],phone})).allowed, true);
@@ -173,7 +173,7 @@ test('offline PostgreSQL and real inbound/outbound stores cover STOP → START/U
       assert.equal((await getSendEligibility({supabase:f.supabase,workspaceId:workspaces[0],phone})).allowed,true);
       await stop();
       assert.equal((await getSendEligibility({supabase:f.supabase,workspaceId:workspaces[0],phone})).allowed,false);
-      assert.match(graph.at(-1).text.body,/opted out/);
+      assert.match(graph.at(-1).text.body,/updates are off/);
     });
 
     await t.test('wrong sender, lease, keyword or media cannot restore consent or claim confirmation', async () => {

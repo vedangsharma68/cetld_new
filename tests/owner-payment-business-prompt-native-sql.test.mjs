@@ -60,13 +60,13 @@ test('exact event252 business prompt uses production tools before Cloudflare and
   assert.deepEqual(run.executions.map(x=>x.args.operation),['read','create']);
   assert.deepEqual(run.executions[0].args.filters,[{column:'invoice_number',operator:'eq',value:'SB-10442'},{column:'customer_name',operator:'eq',value:'Northwind Systems LLC'}]);
   assert.equal(run.outputs[0].rows.length,1);assert.equal(run.outputs[0].lookupInvoiceNumber,'SB-10442');assert.equal(run.outputs.at(-1).proposal,true);
-  assert.match(reply.answer,/Proposed a USD 500\.00 payment/);assert.match(reply.answer,/remaining balance would be USD 451\.52/);assert.doesNotMatch(reply.answer,/Recorded/);
+  assert.match(reply.answer,/Record USD 500\.00/);assert.match(reply.answer,/Balance would be USD 451\.52/);assert.doesNotMatch(reply.answer,/Recorded/);
   assert.deepEqual(await f.snapshot(),before);
   const pending=(await f.db.query('select * from whatsapp_pending_actions where consumed_at is null')).rows;
   assert.equal(pending.length,1);assert.equal(pending[0].action.sourceMessageId,'business-propose');assert.deepEqual(pending[0].action.changes,{amount:500,currency:'USD'});
   assert.equal((await run.handler(scope)).replayed,true);assert.equal(run.calls(),0);
   run.confirm();await f.inbound('business-yes','yes');const confirmScope={...f.scope,messageId:'business-yes',message:'yes'},saved=await run.handler(confirmScope);
-  assert.equal(run.outputs.at(-1).completed,true,JSON.stringify({saved,outputs:run.outputs}));assert.match(saved.answer,/remaining balance is USD 451\.52/);
+  assert.equal(run.outputs.at(-1).completed,true,JSON.stringify({saved,outputs:run.outputs}));assert.match(saved.answer,/Balance: USD 451\.52/);
   const after=await f.snapshot(),invoice=after.invoices.find(x=>x.id===f.ids[0]);
   assert.equal(after.payments.length,1);assert.equal(after.payments[0].amount,500);assert.equal(after.payments[0].settle_remaining,false);
   assert.equal(invoice.amount_paid,500);assert.equal(invoice.total_amount,951.52);assert.equal(invoice.currency,'USD');assert.equal(invoice.status,'draft');
@@ -103,7 +103,7 @@ for(const fault of ['wrong-customer','missing','ambiguous','truncated','wrong-re
   const run=nativeHandler(f,{transform:(result,args)=>args.operation!=='read'?result:fault==='truncated'?{...result,truncated:true}:fault==='wrong-read'?{...result,lookupInvoiceNumber:'OTHER',rows:[{...result.rows?.[0],invoice_number:'OTHER'}]}:result});
   const message=fault==='wrong-customer'?failedPrompt.replace('Northwind Systems LLC','Other Business LLC'):fault==='missing'?failedPrompt.replace('SB-10442','MISSING-42'):fault==='wrong-remainder'?failedPrompt.replace('451.52','450.00'):failedPrompt;
   const before=await f.snapshot();await f.inbound('business-'+fault,message);const reply=await run.handler({...f.scope,messageId:'business-'+fault,message});
-  assert.equal(run.calls(),0,JSON.stringify({reply,outputs:run.outputs}));assert.equal(run.outputs.some(x=>x.proposal||x.completed),false);assert.doesNotMatch(reply.answer,/Proposed|Recorded/);
+  assert.equal(run.calls(),0,JSON.stringify({reply,outputs:run.outputs}));assert.equal(run.outputs.some(x=>x.proposal||x.completed),false);assert.doesNotMatch(reply.answer,/Proposed|Record(?:ed)? [A-Z]{3}/);
   assert.equal(run.executions.filter(x=>x.args.operation==='read').length,1);
   assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions')).rows[0].n,0);assert.deepEqual(await f.snapshot(),before);
   if(fault!=='read-failure')assert.deepEqual(f.errors,[]);
@@ -125,7 +125,7 @@ test('an interrupted proposal checkpoint cannot replay a payment operation or cr
   assert.equal(run.executions.filter(x=>x.args.operation==='create').length,0);assert.equal(run.calls(),0);assert.deepEqual(await f.snapshot(),before);
   const resumed=await run.handler({...scope,checkpoint:persisted});
   assert.equal(resumed.deferred,undefined);assert.equal(run.executions.filter(x=>x.args.operation==='create').length,0);assert.equal(run.calls(),0);
-  assert.doesNotMatch(resumed.answer,/Proposed|Recorded/);assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions')).rows[0].n,0);assert.deepEqual(await f.snapshot(),before);
+  assert.doesNotMatch(resumed.answer,/Proposed|Record(?:ed)? [A-Z]{3}/);assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions')).rows[0].n,0);assert.deepEqual(await f.snapshot(),before);
  }finally{await f.close();}
 });
 
@@ -144,7 +144,7 @@ test('a deferred server-selected invoice read resumes to one proposal with its o
   const resumed=await run.handler({...scope,checkpoint:persisted});
   assert.equal(run.calls(),0);assert.equal(run.executions.filter(x=>x.args.operation==='read').length,1);assert.equal(run.executions.filter(x=>x.args.operation==='create').length,1);
   assert.deepEqual(run.executions[0].args.filters,[{column:'invoice_number',operator:'eq',value:'SB-10442'},{column:'customer_name',operator:'eq',value:'Northwind Systems LLC'}]);
-  assert.equal(run.outputs.at(-1).proposal,true,JSON.stringify({resumed,outputs:run.outputs}));assert.match(resumed.answer,/Proposed a USD 500\.00/);
+  assert.equal(run.outputs.at(-1).proposal,true,JSON.stringify({resumed,outputs:run.outputs}));assert.match(resumed.answer,/Record USD 500\.00/);
   assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions')).rows[0].n,1);assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });
@@ -169,13 +169,13 @@ test('event278 exact bookkeeping request proposes through native SQL; cancel and
   await disposableInvoice(f);const before=await f.snapshot(),run=nativeHandler(f);
   const turn=async(id,message)=>{await f.inbound(id,message);return run.handler({...f.scope,messageId:id,message});};
   const proposed=await turn('event278-propose',bookkeepingPrompt);
-  assert.equal(run.calls(),0,JSON.stringify({proposed,outputs:run.outputs}));assert.match(proposed.answer,/Proposed a USD 40\.00/);assert.match(proposed.answer,/USD 60\.00/);assert.doesNotMatch(proposed.answer,/external|connected ledger|Recorded/i);
+  assert.equal(run.calls(),0,JSON.stringify({proposed,outputs:run.outputs}));assert.match(proposed.answer,/Record USD 40\.00/);assert.match(proposed.answer,/USD 60\.00/);assert.doesNotMatch(proposed.answer,/external|connected accounting app|Recorded/i);
   assert.deepEqual(run.executions[0].args.filters,[{column:'invoice_number',operator:'eq',value:'INV-2026-6771'}]);assert.deepEqual(await f.snapshot(),before);
   const canceled=await turn('event278-cancel','cancel');assert.match(canceled.answer,/cancel/i);assert.deepEqual(await f.snapshot(),before);
   run.confirm();const staleCalls=run.calls(),stale=await turn('event278-stale-yes','yes');
   assert.match(stale.answer,/no pending action to confirm/i);assert.doesNotMatch(stale.answer,/could not confirm|could not prepare|Recorded/i);
   assert.equal(run.calls(),staleCalls,'a verified empty confirmation must not reach the model');assert.deepEqual(await f.snapshot(),before);
-  const fresh=await turn('event278-fresh-propose',bookkeepingPrompt);assert.match(fresh.answer,/Proposed a USD 40\.00/);assert.deepEqual(await f.snapshot(),before);
+  const fresh=await turn('event278-fresh-propose',bookkeepingPrompt);assert.match(fresh.answer,/Record USD 40\.00/);assert.deepEqual(await f.snapshot(),before);
   const saved=await turn('event278-fresh-yes','yes');assert.match(saved.answer,/Recorded USD 40/);assert.match(saved.answer,/USD 60/);
   const after=await f.snapshot(),invoice=after.invoices.find(x=>x.id===f.ids[0]);assert.equal(invoice.total_amount,100);assert.equal(invoice.amount_paid,40);assert.equal(invoice.currency,'USD');assert.equal(invoice.metadata.followup_state,'paused');assert.equal(invoice.metadata.next_follow_up_at,null);
   assert.equal(after.payments.length,1);assert.equal(after.payments[0].amount,40);assert.equal(after.payments[0].settle_remaining,false);assert.deepEqual(after.files,before.files);assert.deepEqual(after.invoices.find(x=>x.id===f.ids[1]),before.invoices.find(x=>x.id===f.ids[1]));assert.equal(after.outbound,0);
@@ -190,7 +190,7 @@ test('event301 exact canceled legacy payment confirmation returns a scoped no-pe
  const f=await fixture();try{
   await disposableInvoice(f);const before=await f.snapshot(),run=nativeHandler(f);
   const turn=async(id,message)=>{await f.inbound(id,message);return run.handler({...f.scope,messageId:id,message});};
-  assert.match((await turn('event299-legacy-proposal','Record a USD 40 payment on test invoice INV-2026-6771.')).answer,/Proposed a USD 40\.00/);
+  assert.match((await turn('event299-legacy-proposal','Record a USD 40 payment on test invoice INV-2026-6771.')).answer,/Record USD 40\.00/);
   assert.match((await turn('event300-legacy-cancel','cancel')).answer,/Canceled the payment proposal/i);
   run.confirm();const calls=run.calls(),executions=run.executions.length;
   const stale=await turn('event301-stale-yes','yes');
@@ -209,8 +209,8 @@ for(const fault of ['missing-feature','external-ledger','wrong-remainder'])test(
   if(fault==='external-ledger')await f.db.query("update invoices set external_provider='zoho_books',external_invoice_id='external-fixture' where id=$1",[f.ids[0]]);
   const message=fault==='wrong-remainder'?bookkeepingPrompt.replace('USD 60','USD 59'):bookkeepingPrompt;
   const before=await f.snapshot(),run=nativeHandler(f);await f.inbound('event278-'+fault,message);const reply=await run.handler({...f.scope,messageId:'event278-'+fault,message});
-  assert.equal(run.calls(),0,JSON.stringify({reply,outputs:run.outputs}));assert.equal(run.outputs.some(x=>x.proposal||x.completed),false);assert.doesNotMatch(reply.answer,/Proposed|Recorded/);
-  if(fault==='external-ledger')assert.match(reply.answer,/connected ledger/);else assert.doesNotMatch(reply.answer,/external|connected ledger/i);
+  assert.equal(run.calls(),0,JSON.stringify({reply,outputs:run.outputs}));assert.equal(run.outputs.some(x=>x.proposal||x.completed),false);assert.doesNotMatch(reply.answer,/Proposed|Record(?:ed)? [A-Z]{3}/);
+  if(fault==='external-ledger')assert.match(reply.answer,/connected accounting app/);else assert.doesNotMatch(reply.answer,/external|connected accounting app/i);
   assert.deepEqual(await f.snapshot(),before);assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions')).rows[0].n,0);assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });
@@ -220,6 +220,6 @@ test('event278 later typed confirmation fails closed when the bookkeeping capabi
   const pending=(await f.db.query('select * from whatsapp_pending_actions where consumed_at is null')).rows[0];assert.equal(pending.action.instructionVersion,5);
   await f.db.exec("create or replace function public.whatsapp_owner_partial_payment_capability() returns jsonb language sql as $$select '{\"ok\":true,\"version\":4}'::jsonb$$");
   const before=await f.snapshot();run.confirm();await f.inbound('capability-yes','yes');const reply=await run.handler({...f.scope,messageId:'capability-yes',message:'yes'});
-  assert.doesNotMatch(reply.answer,/Recorded/);assert.doesNotMatch(reply.answer,/external|connected ledger/i);assert.deepEqual(await f.snapshot(),before);assert.equal(run.outputs.at(-1).code,'UNAVAILABLE');assert.deepEqual(f.errors,[]);
+  assert.doesNotMatch(reply.answer,/Recorded/);assert.doesNotMatch(reply.answer,/external|connected accounting app/i);assert.deepEqual(await f.snapshot(),before);assert.equal(run.outputs.at(-1).code,'UNAVAILABLE');assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });

@@ -44,7 +44,7 @@ test('failed extraction is closed safely and a fresh JPEG retries through the re
     };
 
     const failed=await turn('failed-source');
-    assert.match(failed.reply.answer,/extraction service is unavailable|resend the attachment/i,JSON.stringify(failed.reply));
+    assert.match(failed.reply.answer,/Invoice reading is unavailable|Send it again later/i,JSON.stringify(failed.reply));
     assert.equal(extractionCalls,1);
     assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,0);
     assert.equal((await db.query('select count(*)::int n from invoice_files')).rows[0].n,0);

@@ -55,7 +55,7 @@ export const isOwnerNextButton=id=>typeof id==='string'&&id.startsWith('ons1.');
 export const pendingBlocksOwnerNextActions=record=>Boolean(record&&!record.consumed_at
   &&record.action?.type!=='owner_invoice_request'
   &&!(record.action?.type==='invoice_review_draft'&&['canceled','failed','saved'].includes(record.action.stage)));
-export const NEXT_ACTION_STALE_REPLY='That next action has expired or its details changed. Ask again so I can check the current record.';
+export const NEXT_ACTION_STALE_REPLY='That option expired or its details changed. Ask again so I can check.';
 
 async function currentRecord({supabase,scope,choice,authorize}) {
   if(!await authorize(scope))return null;
@@ -146,7 +146,7 @@ export async function planOwnerNextActions({supabase,scope,context,pending=false
 export async function runOwnerNextAction({supabase,scope,env=process.env,clock=()=>new Date(),authorize,tools,pending=false}={}) {
   if(!isOwnerNextButton(scope.interactionId)||!await authorize(scope))return {answer:NEXT_ACTION_STALE_REPLY};
   const match=scope.interactionId.match(/^ons1\.([0-9a-f-]{36})\.[0-2]\.[A-Za-z0-9_-]{43}$/);
-  if(!match||pending)return {answer:pending?'Please finish or cancel the current approval before starting another action.':NEXT_ACTION_STALE_REPLY};
+  if(!match||pending)return {answer:pending?'Finish or cancel the current approval first.':NEXT_ACTION_STALE_REPLY};
   const row=data(await supabase.from('whatsapp_messages').select('owner_next_action_ref')
     .eq('workspace_id',scope.workspaceId).eq('phone',scope.phone).eq('audience','owner').eq('direction','outbound').eq('kind','normal')
     .eq('owner_next_action_ref->>key',match[1]).maybeSingle());
@@ -192,7 +192,7 @@ export async function runOwnerNextAction({supabase,scope,env=process.env,clock=(
     {operation:'read',table:'invoices',limit:10,...(choice.action==='unpaid_invoices'?{filters:[{column:'status',operator:'in',value:['draft','sent','overdue']},{column:'total_amount',operator:'gt',value:0}]}:{order:{column:'created_at',direction:'desc'}})};
   const result=await tools.execute('workspaceData',params);
   if(!await authorize(scope))return {answer:NEXT_ACTION_STALE_REPLY};
-  if(!result?.ok)return {answer:'I could not read those details. Please ask again.'};
+  if(!result?.ok)return {answer:'I couldn’t read those details. Ask again.'};
   if(choice.action==='view_file'){
     const media=tools.getMedia?.();
     return result.available&&media?.bytes?.length&&UUID.test(media.id||'')?{

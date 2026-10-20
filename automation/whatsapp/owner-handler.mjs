@@ -29,9 +29,9 @@ function totalCorrectionReply(message,result){
 // the model, and authorization/replay happen before this shortcut is considered.
 export function standaloneOwnerGreeting(message){
   const text=String(message||'').trim().toLowerCase().replace(/[?!.]+$/,'').trim();
-  if(['hi','hello','hey'].includes(text))return 'Hi! How can I help with your business today?';
-  if(text==='how are you')return "I'm ready to help. How can I help with your business today?";
-  if(['what do you do','what can you do'].includes(text))return 'I help you look up and manage your business records, customers and invoices. Tell me what you need.';
+  if(['hi','hello','hey'].includes(text))return 'Hi! What do you need help with?';
+  if(text==='how are you')return "I’m here. What do you need help with?";
+  if(['what do you do','what can you do'].includes(text))return 'I can look up and manage your customers, invoices, and payments. What do you need?';
   return null;
 }
 
@@ -217,7 +217,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
       catch{return {answer:'I could not verify the selected invoice. Ask again before changing its details.'};}
       if(!menuEditTarget)return {answer:'Which invoice should I change? Select its Edit details and Other fields options, then send the field and new value. No change was made.'};
       if(menuEditTarget&&(pendingBlocksOwnerNextActions(pendingAtStart)||Boolean(lifecyclePending?.pending)||!pendingStoreAvailable||!lifecycleAvailable))
-        return {answer:'Please finish or cancel the current approval before changing invoice details.'};
+        return {answer:'Finish or cancel the current approval before changing invoice details.'};
     }
     const hasSavedPrimary=typeof settings.primary_model==='string'&&settings.primary_model.trim().length>0;
     const configurationSource=!settingsAvailable?'defaults_after_settings_error':hasSavedPrimary?'workspace':'defaults';
@@ -244,7 +244,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
       toolSetupIssue='OWNER_TOOLS_UNAVAILABLE';
       logger?.error?.('WhatsApp owner tool setup failed',{workspaceId,code:toolSetupIssue});
       tools={definitions:[{type:'function',function:{name:'workspaceData',description:'Read the safe availability state of this owner turn.',parameters:{type:'object',properties:{},additionalProperties:false}}}],
-        async execute(){return {ok:false,code:'UNAVAILABLE',message:'Workspace tools are temporarily unavailable.'};},setServedModel(){},getMedia(){return null;}};
+        async execute(){return {ok:false,code:'UNAVAILABLE',message:'I can’t access your records right now. Try again shortly.'};},setServedModel(){},getMedia(){return null;}};
     }
     onToolsReady(tools);
     if(isOwnerNextButton(scope.interactionId)){
@@ -287,7 +287,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
       if(answer)return {answer};
       if(result?.ok===false)return {...(result.code==='NOT_FOUND'&&menuEditValues.customer_name?{ownerNextActionRef:menuEditTarget.reference}:{}),answer:result.code==='STALE'?NEXT_ACTION_STALE_REPLY:
         result.code==='NOT_FOUND'?'I could not find that customer in this workspace. Send an existing customer name to reassign this invoice. No change was made.':
-        result.message||'I could not verify the invoice change. Please check the invoice before trying again.'};
+        result.message||'I couldn’t verify the change. Check the invoice before trying again.'};
       initialToolResults=[{name:'workspaceData',args:{operation:'update',table:'invoices'},result}];
     }
     const totalChange=requestedOwnerInvoiceTotalChange(message);

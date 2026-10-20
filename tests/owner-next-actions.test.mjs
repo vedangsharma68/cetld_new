@@ -74,7 +74,7 @@ test('edit/payment taps start information gathering and cannot approve or post a
  const ref=reference([{action:'record_payment',title:'Record payment',table:'invoices',id:invoice.id,updatedAt:invoice.updated_at}]),db=database({whatsapp_messages:[stored(ref)]});let calls=0;
  const input={...options(db),scope:{...scope,interactionId:mint(ref)[0].id},tools:{execute(){calls++;throw Error('No mutation tool allowed')}}};
  assert.match((await runOwnerNextAction(input)).answer,/Nothing has been recorded/);assert.equal(calls,0);assert.equal(db.tables.invoices[0].amount_paid,0);
- assert.match((await runOwnerNextAction({...input,pending:true})).answer,/finish or cancel/);
+ assert.match((await runOwnerNextAction({...input,pending:true})).answer,/Finish or cancel/);
  db.tables.invoices[0].updated_at='2026-10-04T10:01:00Z';assert.equal((await runOwnerNextAction(input)).answer,NEXT_ACTION_STALE_REPLY);
 });
 test('Edit details preserves history while amount and due-date shortcuts gather information without writes',async()=>{

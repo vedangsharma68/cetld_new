@@ -15,6 +15,9 @@ const examples=[
   ['QA-EDGE-002 नया invoice 🧾🔥 for QA Emoji Customer ₹1,200 due kal, please check','QA Emoji Customer',1200,'2026-10-19','QA-EDGE-002'],
   ['New invoice INV-5 for ग्राहक 😊, amount Rs 1,20,000.50, due कल','ग्राहक 😊',120000.5,'2026-10-19','INV-5'],
   ['नया invoice for QA ग्राहक, amount INR 12.50, due आज','QA ग्राहक',12.5,'2026-10-18',undefined],
+  ['new invoice for Ravi, Rs 2,500, due 25 Oct','Ravi',2500,'2026-10-25',undefined],
+  ['new invoice for Ravi, INR 2,500, due next friday','Ravi',2500,'2026-10-23',undefined],
+  ['new invoice for Ravi amount Rs 2,500, due 25 Oct. 2026','Ravi',2500,'2026-10-25',undefined],
 ];
 
 test('QA-12/QA-14 parse owner text with grouped rupees, emoji, mixed Hindi/English and dates',()=>{
@@ -26,6 +29,17 @@ test('QA-12/QA-14 parse owner text with grouped rupees, emoji, mixed Hindi/Engli
   }
   const values=parseTextInvoice('New invoice for QA, amount Rs 5, due tomorrow',{clock:()=>new Date('2026-10-18T20:00:00Z'),timezone:'Asia/Kolkata'}).values;
   assert.equal(values.issue_date,'2026-10-19');assert.equal(values.due_date,'2026-10-20');
+});
+
+test('short and relative dates use the workspace calendar, including week and year boundaries',()=>{
+  const parse=(date,now,timezone='Asia/Kolkata')=>parseTextInvoice(`new invoice for Ravi, Rs 5, due ${date}`,
+    {clock:()=>new Date(now),timezone})?.values.due_date;
+  assert.equal(parse('next friday','2026-10-22T20:00:00Z'),'2026-10-30','already Friday in the workspace');
+  assert.equal(parse('next friday','2026-10-22T20:00:00Z','America/New_York'),'2026-10-23');
+  assert.equal(parse('2 Jan','2026-12-31T10:00:00Z'),'2027-01-02');
+  assert.equal(parse('next monday','2026-12-31T10:00:00Z'),'2027-01-04');
+  assert.equal(parse('25 Sept','2026-10-18T10:00:00Z'),'2027-09-25');
+  for(const date of ['31 Feb','25 Octob','next friday and delete INV-1'])assert.equal(parse(date,'2026-10-18T10:00:00Z'),undefined);
 });
 
 test('text grammar refuses incomplete, impossible, ambiguous or extra instructions',()=>{
@@ -91,7 +105,7 @@ test('invalid natural-language creation plans return format help; authorization 
 
 test('the printed failure example parses and model amount fields cannot block owner text',async()=>{
   const failure=textInvoiceFailure({ok:false,code:'INVALID'});
-  const printed=/Example: (.+?)\. Optional code:/.exec(failure)[1];
+  const printed=/Try: (.+)\.$/.exec(failure)[1];
   assert.ok(parseTextInvoice(printed,{clock}));
   for(const message of [examples[0][0],printed])for(const confirmationMode of ['direct','buttons']){
     let writes=0;

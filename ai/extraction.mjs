@@ -67,9 +67,9 @@ const invoiceImageResponseSchema = {
     imageContent: {type: 'string', enum: ['single_invoice', 'multiple_invoices', 'not_invoice', 'unreadable']}},
 };
 export const INVOICE_IMAGE_REPLIES = Object.freeze({
-  IMAGE_MULTIPLE_INVOICES: 'I can see more than one invoice. Please send one invoice per photo. Nothing was saved.',
-  IMAGE_NOT_INVOICE: 'This does not look like an invoice. Please send a clear photo of one invoice or a PDF. Nothing was saved.',
-  IMAGE_UNREADABLE: 'I could not read one invoice clearly. Please resend a sharper, upright photo showing the whole invoice, or a PDF. Nothing was saved.',
+  IMAGE_MULTIPLE_INVOICES: 'There’s more than one invoice. Send one per photo. Nothing was saved.',
+  IMAGE_NOT_INVOICE: 'That doesn’t look like an invoice. Send a clear invoice photo or PDF. Nothing was saved.',
+  IMAGE_UNREADABLE: 'I couldn’t read it clearly. Send a sharper, upright photo of the whole invoice or a PDF. Nothing was saved.',
 });
 
 function fail(message) {

@@ -2,7 +2,7 @@
 export function businessNameReminderNotice(count, {saved = false} = {}) {
   if (!Number.isSafeInteger(count) || count <= 0) return '';
   const subject = `${count} approved reminder${count === 1 ? '' : 's'}`;
-  return `${subject} ${saved ? (count === 1 ? 'is' : 'are') : 'will be'} paused after this business name change until you re-approve ${count === 1 ? 'it' : 'them'} in the Conversations tab.`;
+  return `${subject} ${saved ? (count === 1 ? 'is' : 'are') : 'will be'} paused after this name change until you re-approve ${count === 1 ? 'it' : 'them'} in Conversations.`;
 }
 
 export async function businessNameReminderPauseCount(client, workspaceId, currentName, nextName) {
@@ -17,5 +17,5 @@ export async function businessNameReminderPauseCount(client, workspaceId, curren
 export function businessNameReviewNotice(invoice) {
   const reason = invoice?.reminder_review_reason ?? invoice?.metadata?.reminder_review_reason;
   return invoice?.followup_state === 'paused' && reason === 'business_name_changed'
-    ? 'Needs re-approval after business name change. Review the new reminder and approve it in the Conversations tab.' : '';
+    ? 'Needs re-approval after business name change. Review the new reminder and approve it in Conversations.' : '';
 }

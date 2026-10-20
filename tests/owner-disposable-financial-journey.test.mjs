@@ -53,8 +53,8 @@ test('disposable native owner journey preserves one receipt through excess, edit
   const auditCount=async()=>(await db.query('select count(*)::int n from invoice_correction_audits where invoice_id=$1',[invoice.id])).rows[0].n;
   const project=async(total,paid,excess)=>{const row=await read(invoice.id);assert.equal(row.total_amount,total);assert.equal(row.amount_paid,paid);assert.equal(row.metadata.outstanding_amount,Math.max(total-paid,0));assert.equal(row.metadata.overpayment_amount,excess);assert.equal(row.currency,'USD');assert.deepEqual(row.metadata.source_document,{name:'synthetic-original.pdf'});return row;};
   const proposal=await turn('journey-payment-proposal',`Record a USD 40 partial payment for invoice ${invoice.invoice_number} for Synthetic Workshop. Keep customer messages and reminders off.`);
-  assert.match(proposal.answer,/Proposed a USD 40/);assert.deepEqual(await history(),[]);assert.equal(nativeRequests.length,0,'bounded payment selection runs before model planning');
-  const confirmation=await turn('journey-payment-confirm','yes');assert.match(confirmation.answer,/remaining balance is USD 60/);
+  assert.match(proposal.answer,/Record USD 40/);assert.deepEqual(await history(),[]);assert.equal(nativeRequests.length,0,'bounded payment selection runs before model planning');
+  const confirmation=await turn('journey-payment-confirm','yes');assert.match(confirmation.answer,/Balance: USD 60/);
   const original=await history();assert.equal(original.length,1);assert.equal(original[0].amount,40);
   const callsBeforeReplay=f.requests.length;const replay=await handler({...scope,messageId:'journey-payment-confirm',message:'yes'});assert.equal(replay.replayed,true);assert.deepEqual(await history(),original);
   assert.equal(f.requests.slice(callsBeforeReplay).some(request=>request.url.endsWith('/rpc/whatsapp_confirm_owner_invoice')),false);

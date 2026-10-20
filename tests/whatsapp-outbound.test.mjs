@@ -372,7 +372,7 @@ test('session replies send factual invoice terms and replace pressure phrases wi
     assert.equal((await attempt.outbound.sendServiceReply({workspaceId: 'workspace-a', to: PHONE, body: `This is a ${phrase}.`,
       businessName: 'Acme Studio', kind: 'normal', messageId: `pressure-${phrase}`, lastInboundAt: NOW})).status, 'accepted');
     assert.equal(JSON.parse(attempt.calls[0].options.body).text.body,
-      "I have your answer, but couldn't phrase it safely for WhatsApp - please check the cetld app for details.\n\n- Acme Studio");
+      "I couldn’t prepare a safe reply. Check cetld for details.\n\n- Acme Studio");
   }
 });
 
@@ -384,7 +384,7 @@ test('STOP confirmation is the only suppression exception and still needs one-ti
   assert.equal((await outbound.sendServiceReply(args)).status, 'accepted');
   assert.equal((await outbound.sendServiceReply(args)).status, 'blocked');
   assert.equal(calls.length, 1);
-  assert.match(JSON.parse(calls[0].options.body).text.body, /opted out/);
+  assert.match(JSON.parse(calls[0].options.body).text.body, /updates are off/);
 });
 
 test('unknown STOP gets one platform-branded confirmation after verified claim', async () => {
@@ -395,7 +395,7 @@ test('unknown STOP gets one platform-branded confirmation after verified claim',
   assert.equal((await outbound.sendServiceReply(args)).status, 'accepted');
   assert.equal((await outbound.sendServiceReply(args)).status, 'blocked');
   assert.equal(calls.length, 1);
-  assert.equal(JSON.parse(calls[0].options.body).text.body, "You've been opted out of WhatsApp updates. We won't message you again.\n\n- CETLD");
+  assert.equal(JSON.parse(calls[0].options.body).text.body, "WhatsApp updates are off. We won’t message you again.\n\n- CETLD");
 });
 
 test('unknown sender gets only fixed verification text after inbound authorization', async () => {
@@ -433,7 +433,7 @@ test('WhatsApp assistant requires current binding and a customer-scoped store', 
   assert.equal(channel.confirmFromWhatsApp().executed, false);
 });
 
-test('WhatsApp final replies use dashboard guidance, are answer-only, and omit standalone progress labels', async () => {
+test('WhatsApp final replies use texting guidance, are answer-only, and omit standalone progress labels', async () => {
   const requests = [];
   const provider = {async generate(request) {
     requests.push(request);
@@ -458,10 +458,10 @@ test('WhatsApp final replies use dashboard guidance, are answer-only, and omit s
 
   assert.deepEqual(requests[0], planningRequest, 'tool planning remains untouched');
   assert.match(requests[1].messages[0].content, /WhatsApp reply guidance/i);
-  assert.match(requests[1].messages[0].content, /Lead with the answer in one line/i);
-  assert.match(requests[1].messages[0].content, /mini dashboard/i);
-  assert.match(requests[1].messages[0].content, /under about 120 words/i);
-  assert.match(requests[1].messages[0].content, /retry or narrower question/i);
+  assert.match(requests[1].messages[0].content, /Answer first in 1-2 short sentences/i);
+  assert.match(requests[1].messages[0].content, /plain text/i);
+  assert.match(requests[1].messages[0].content, /under about 40 words/i);
+  assert.match(requests[1].messages[0].content, /No emojis unless the user used one first/i);
   assert.match(requests[1].messages[0].content, /progress|status/i);
   assert.equal(requests[1].messages[1].content, finalRequest.messages[1].content);
   assert.equal(result.answer, 'INV-42 has USD 500 due on 1 October.');
@@ -476,7 +476,7 @@ test('WhatsApp replaces a progress-only model result with a short retry message'
   });
 
   const result = await channel.ask({workspaceId: 'workspace-a', customerId: 'customer-a', phone: PHONE, message: 'What is due?'});
-  assert.equal(result.answer, 'I couldn’t prepare a reply just now. Please try again.');
+  assert.equal(result.answer, 'I couldn’t reply just now. Try again.');
   assert.doesNotMatch(result.answer, /thinking/i);
 });
 
@@ -514,7 +514,7 @@ test('without a durable pending-action store WhatsApp sends user to signed-in ap
   });
   const result = await channel.ask({workspaceId: 'workspace-a', customerId: 'customer-a', phone: PHONE, message: 'Please create an invoice'});
   assert.equal(result.pendingAction, null);
-  assert.match(result.answer, /open cetld while signed in/);
+  assert.match(result.answer, /Sign in to cetld/);
 });
 
 test('customer-scoped store applies workspace and customer predicates to invoice queries', async () => {
@@ -576,7 +576,7 @@ test('re-subscribe confirmation is fixed platform text and requires an inbound c
     messageId:'wamid.fixture.start',lastInboundAt:NOW,body:'An arbitrary body must never be sent'};
   assert.equal((await f.outbound.sendServiceReply(input)).status,'accepted');
   const body = JSON.parse(f.calls[0].options.body).text.body;
-  assert.match(body,/re-subscribe request/);
+  assert.match(body,/receive WhatsApp updates again.*STOP to opt out/);
   assert.match(body,/Reply STOP to opt out/);
   assert.doesNotMatch(body,/arbitrary/);
   assert.equal((await f.outbound.sendServiceReply(input)).status,'blocked');
