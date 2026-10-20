@@ -1,3 +1,4 @@
+import {ownerReminderRequest} from './owner-reminders.mjs';
 import {normalizeOwnerBotPreferences,normalizeOwnerServiceReplyText} from './bot-preferences.mjs';
 import {ownerCalendar} from './workspace-records.mjs';
 import {isOwnerNextButton,runOwnerNextAction,planOwnerNextActions,createOwnerNextButtons,pendingBlocksOwnerNextActions,ownerMenuInvoiceEdit,loadOwnerMenuEditTarget,NEXT_ACTION_STALE_REPLY} from './owner-next-actions.mjs';
@@ -350,8 +351,19 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         initialToolResults=[{name:'workspaceData',args:{operation:choice.decision},result}];
       }
     }
+    const reminderRequest=ownerReminderRequest(message);
+    let reminderResult=null;
+    if(!recovered?.completed&&!scope.interactionId&&!media&&!mediaError&&reminderRequest){
+      reminderResult=await tools.execute('workspaceData',reminderRequest,{signal});
+      if(!await authorizeTurn(scope))return '';
+    }else if(!recovered?.completed&&!scope.interactionId&&pendingAtStart?.action?.type==='owner_reminder_approval'
+      &&(ownerIsConfirmation(message)||/^\s*(?:no|cancel|never mind|nevermind|discard)\s*[.!]?\s*$/i.test(message))){
+      reminderResult=await tools.execute('workspaceData',{operation:ownerIsConfirmation(message)?'confirm':'cancel'},{signal});
+      if(!await authorizeTurn(scope))return '';
+    }
     onProgress('agent');
-    const response=await agentFactory({provider,config,store:ownerStore,tools,history,message,signal,deadlineAt,clock,timezone,logger,traceId:messageId,botPreferences,initialToolResults,
+    const response=tools.getReminderReply?.()?{answer:tools.getReminderReply()}:reminderResult?.ok===false
+      ?{answer:reminderResult.message||'The reminder request could not be prepared. Nothing was sent.'}:await agentFactory({provider,config,store:ownerStore,tools,history,message,signal,deadlineAt,clock,timezone,logger,traceId:messageId,botPreferences,initialToolResults,
       checkpoint:scope.checkpoint||null,onCheckpoint:scope.onCheckpoint,allowDeferred:scope.allowDeferred===true,budgetMs:scope.budgetMs,
       attachmentDescriptor:media?{available:true,mimeType:String(media.mimeType||media.mime_type||'application/octet-stream').slice(0,80)}
         :mediaError?{available:false,errorCode:'ATTACHMENT_UNAVAILABLE'}:{available:false},
@@ -370,7 +382,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     }
     if(!response?.plannerFailure&&tools.getReplyRequirement?.()?.buttonsAvailable&&!buttons.length)
       return {answer:'The change is waiting for approval, but I could not create its button. Nothing was changed.',plannerFailure:{code:'OWNER_CHOICES_UNAVAILABLE'}};
-    let answer=normalizeOwnerServiceReplyText(response?.answer||'');
+    let answer=tools.getReminderReply?.()||normalizeOwnerServiceReplyText(response?.answer||'');
     const signature=normalizeOwnerServiceReplyText(botPreferences.serviceReplySignature);
     if(answer&&signature&&!answer.endsWith(signature))answer+='\n\n'+signature;
     if(ownerButtonClaimIssue(answer,{buttonsAvailable:buttons.length>0}))return {

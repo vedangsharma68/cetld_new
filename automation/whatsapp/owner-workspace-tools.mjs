@@ -1,3 +1,4 @@
+import {createOwnerReminderRuntime} from './owner-reminders.mjs';
 import {sanitizeWorkspaceToolResult} from './workspace-data.mjs';
 import {createOwnerDirectRuntime} from './owner-direct-runtime.mjs';
 import {createOwnerSafetyTools} from './owner-agent.mjs';
@@ -25,6 +26,7 @@ export function createOwnerWorkspaceTools(options = {}) {
   };
   const direct=createOwnerDirectRuntime({...options,adapter:options.directWriteAdapter});
   const reopening=createInvoiceReopeningRuntime(options);
+  const reminders=createOwnerReminderRuntime(options);
   const safety = createOwnerSafetyTools({...options,signal:controller.signal});
   const invoke = (name, args = {}) => safety.execute(name, args);
   const target = params => {
@@ -39,11 +41,12 @@ export function createOwnerWorkspaceTools(options = {}) {
     executeBatchOperation:(params,ctx)=>direct.executeBatch(params,ctx),
     executeInvoiceReopening:(params,ctx)=>reopening.prepare(params,ctx),
     executeReopeningDecision:(params,ctx)=>reopening.decide(params,ctx),
+    executeReminderOperation:(params,ctx)=>reminders.execute(params,ctx),
     getRuntimeConfig: () => invoke('getAIProviderConfiguration'),
     async executeSafetyOperation(params) {
       if(params.signal?.aborted || (Number.isFinite(params.deadlineAt) && Date.now()>=params.deadlineAt)) throw Object.assign(new Error(),{code:'OWNER_LOOP_TIMEOUT'});
       const {operation, table, values = {}} = params;
-      if(['create','update','delete','restore','confirm','cancel','saveAttachment','reviewAttachment'].includes(operation))writeAttempted=true;
+      if(['create','update','delete','restore','confirm','cancel','saveAttachment','reviewAttachment','previewReminder','sendReminderNow'].includes(operation))writeAttempted=true;
       if (operation === 'pending') return invoke('getPendingOwnerAction');
       if (operation === 'confirm') return invoke('confirmPendingOwnerChange');
       if (operation === 'cancel') return invoke('cancelPendingOwnerChange');
@@ -106,14 +109,14 @@ export function createOwnerWorkspaceTools(options = {}) {
         // current proposal. A model statement is never evidence of a button.
         buttonAction=null;
         if(!accountingBlocked&&options.interactiveAvailable
-          &&(pendingWasRead||tool.getReplyRequirement?.()?.confirmationText||safety.getReplyRequirement()?.confirmationText)){
+          &&(pendingWasRead||tool.getReplyRequirement?.()?.confirmationText||safety.getReplyRequirement()?.confirmationText||reminders.requiresConfirmation())){
           try{
             const action=await options.pending?.loadPendingAction?.({...options.scope});
-            // Reopening has its own guarded decision RPC, which accepts signed
-            // decisions in direct mode. Other writes require persisted buttons mode.
+            // Reopening and reminder approvals accept signed decisions even
+            // in direct mode; reminders always require a later confirmation.
             const buttonsAllowed=options.botPreferences?.confirmationMode==='buttons'
-              ||action?.action?.type==='owner_invoice_reopen';
-            if(buttonsAllowed&&createOwnerActionButtons({scope:options.scope,action,env:options.env,clock:options.clock}).length)buttonAction=action;
+              ||['owner_invoice_reopen','owner_reminder_approval'].includes(action?.action?.type);
+            if(buttonsAllowed&&(!reminders.requiresConfirmation()||Array.from(reminders.getReply()||'').length<=1024)&&createOwnerActionButtons({scope:options.scope,action,env:options.env,clock:options.clock}).length)buttonAction=action;
           }catch{}
         }
         return result;
@@ -134,14 +137,15 @@ export function createOwnerWorkspaceTools(options = {}) {
     getAttemptedOperation: () => lastTool==='getAIProviderConfiguration'?lastTool:tool.getAttemptedOperation?.(),
     getReplyRequirement() {
       if(accountingBlocked)return null;
-      const requirement=tool.getReplyRequirement?.()||safety.getReplyRequirement();
+      const requirement=reminders.requiresConfirmation()?{confirmationText:'yes',requiresCancel:true,requiresReplyCue:true}:tool.getReplyRequirement?.()||safety.getReplyRequirement();
       const operation=tool.getAttemptedOperation?.()?.operation;
       const attachmentReview=['saveAttachment','reviewAttachment'].includes(operation)
         ||(['pending','confirm'].includes(operation)&&options.pendingAtStart?.action?.type==='invoice_review_draft');
       return buttonAction&&!attachmentReview?{...requirement,maxLength:Math.min(requirement?.maxLength||900,900),confirmationText:null,requiresCancel:false,requiresReplyCue:false,buttonsAvailable:true}:requirement;
     },
-    decideButton:async input=>sanitizeWorkspaceToolResult(trackAccountingBlock(await (input?.pending?.action?.type==='owner_invoice_reopen'?reopening.decide(input):direct.decideButton(input))),options.scope),
-    lookupCompleted:async()=>sanitizeWorkspaceToolResult(await direct.lookupCompleted(),options.scope),
+    getReminderReply:()=>reminders.getReply(),
+    decideButton:async input=>sanitizeWorkspaceToolResult(trackAccountingBlock(await (input?.pending?.action?.type==='owner_reminder_approval'?reminders.decide(input):input?.pending?.action?.type==='owner_invoice_reopen'?reopening.decide(input):direct.decideButton(input))),options.scope),
+    lookupCompleted:async()=>sanitizeWorkspaceToolResult(await reminders.lookupCompleted()||await direct.lookupCompleted(),options.scope),
     async getPendingActionForButtons(){if(accountingBlocked)return null;return options.pending?.loadPendingAction?.({...options.scope});},
   };
 }
