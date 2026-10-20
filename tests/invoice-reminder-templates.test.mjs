@@ -8,7 +8,7 @@ import {debtorReminderToneForm,readDebtorReminderTone} from '../reminder-tone-ui
 const invoice={invoice_number:'INV-001',total_amount:'13000.50',amount_paid:'500.50',due_date:'2026-10-18'};
 const settings={business_name:'Fixture studio',default_timezone:'Asia/Kolkata'};
 const customer={name:'  Priya   Sharma  '};
-const facts=['Priya','Fixture studio','INV-001','₹12,500','18 Oct 2026'];
+const facts=['Priya   Sharma','Fixture studio','INV-001','₹12,500','18 Oct 2026'];
 const name=tone=>`cetld_invoice_details_${tone}_v1`;
 const approvedDetails={
   relaxed:"Hi {{1}} 👋 I'm Cetld, {{2}}'s assistant. A quick heads-up: invoice {{3}} has {{4}} outstanding, due on {{5}}. Questions? Just reply here 😊",
@@ -60,10 +60,11 @@ test('workspace tones and per-debtor override select approved details; null inhe
   assert.throws(()=>selectInvoiceReminderTemplate({templateName:'model_authored_name'}),/Invalid/);
 });
 
-test('five parameters use first token, invoice balance, INR default, and workspace calendar date',()=>{
+test('five parameters use full trimmed name, invoice balance, INR default, and workspace calendar date',()=>{
   assert.deepEqual(buildInvoiceReminderParameters({invoice,settings,customer}),facts);
+  assert.equal(buildInvoiceReminderParameters({invoice,settings,customer:{name:'  Green1 Materials LLC  '}})[0],'Green1 Materials LLC');
   for(const name of ['', '   ',null])assert.equal(buildInvoiceReminderParameters({invoice,settings,customer:{name}})[0],'there');
-  assert.equal(buildInvoiceReminderParameters({invoice,settings,customer:{name:'\u00a0Priya\u00a0Sharma\u00a0'}})[0],'Priya');
+  assert.equal(buildInvoiceReminderParameters({invoice,settings,customer:{name:'\u00a0Priya\u00a0Sharma\u00a0'}})[0],'Priya\u00a0Sharma');
   assert.equal(formatReminderAmount({...invoice,total_amount:'1235067.89',amount_paid:'500'}),'₹12,34,567.89');
   assert.equal(formatReminderAmount({...invoice,currency:'USD',total_amount:'1234567.89',amount_paid:0}),'USD 1,234,567.89');
   assert.equal(formatReminderAmount({...invoice,currency:'EUR',total_amount:0.3,amount_paid:0.1}),'EUR 0.20');

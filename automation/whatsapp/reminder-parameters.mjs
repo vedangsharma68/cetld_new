@@ -30,7 +30,7 @@ export function formatReminderDueDate(value,timeZone='Asia/Kolkata'){
 export function buildInvoiceReminderParameters({invoice,settings,customer}){
   const name=customer.name??'';
   if(typeof name!=='string'||forbidden.test(name))throw Error('Invalid customer name');
-  const parameters=[name.trim().split(/\s+/u)[0]||'there',settings.business_name,invoice.invoice_number,
+  const parameters=[name.trim()||'there',settings.business_name,invoice.invoice_number,
     formatReminderAmount(invoice),formatReminderDueDate(invoice.due_date,settings.default_timezone||'Asia/Kolkata')];
   if(parameters.some(v=>typeof v!=='string'||!v.trim()||v.length>256||forbidden.test(v)))throw Error('Invalid approved template facts');
   return parameters;
