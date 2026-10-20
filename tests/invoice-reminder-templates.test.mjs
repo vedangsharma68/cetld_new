@@ -104,3 +104,30 @@ test('forward migrations constrain nullable debtor tone and extend rather than r
   assert.match(catalog,/Reminder gate patch point missing/);
   assert.doesNotMatch(catalog,/drop (?:table|function)|delete from|disable (?:trigger|row level security)/i);
 });
+
+test('full-name migration matches ECMAScript trimming byte-for-byte and aborts without its exact patch point',async()=>{
+  const {PGlite}=await import('@electric-sql/pglite');
+  const db=new PGlite();
+  try{
+    const catalog=await readFile(new URL('../supabase/migrations/20261018060100_invoice_details_templates.sql',import.meta.url),'utf8');
+    const greeting=catalog.split('\n').find(line=>line.includes('coalesce(nullif(split_part(btrim(translate(x.name,')).trim().replace(/,$/u,'');
+    const migration=await readFile(new URL('../supabase/migrations/20261020105604_invoice_reminder_full_customer_name.sql',import.meta.url),'utf8');
+    // Exercise the deployed greeting expression with the gate's exact signature.
+    await db.exec(`create function public.cetld_core_authorize_first_party_reminder(uuid,uuid,uuid,jsonb,text)
+      returns jsonb language sql as $fn$select jsonb_build_array(${greeting}) from (select $4->>'name' as name) x$fn$;`);
+    await db.exec(migration);
+    const whitespace='\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff';
+    const names=[null,'','   ','  Green1 Materials LLC  ','  Priya   Sharma  ','Owner (WhatsApp)',whitespace,
+      ...[...whitespace].flatMap(space=>[space,space+'Priya'+space,'Priya'+space+'Sharma']),
+      '\u180ePriya\u180e','\u200bPriya\u200b','\u0085Priya\u0085'];
+    for(const name of names){
+      const sql=(await db.query('select public.cetld_core_authorize_first_party_reminder(null,null,null,$1,null) as facts',[JSON.stringify({name})])).rows[0].facts[0];
+      assert.deepEqual(Buffer.from(sql),Buffer.from(name?.trim()||'there'),JSON.stringify(name));
+      // Controls/line separators remain invalid names on both sides of the real gate.
+      if(!/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(name??''))
+        assert.equal(sql,buildInvoiceReminderParameters({invoice,settings,customer:{name}})[0]);
+    }
+    await assert.rejects(db.exec(migration),/Reminder full customer name patch point missing/);
+    await db.exec('rollback');
+  }finally{await db.close();}
+});

@@ -45,7 +45,8 @@ async function setup(preferences={},{approve=true}={}){
     return Response.json({messages:[{id:'wamid.fixture.approved'}]});
   }});
   try{await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060000_customer_reminder_tone.sql',import.meta.url),'utf8'));await f.db.exec(await readFile(new URL('../supabase/migrations/20261005070000_approved_whatsapp_reminders.sql',import.meta.url),'utf8'));await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060100_invoice_details_templates.sql',import.meta.url),'utf8'));
-    await applyNoFooterMigration(f.db,{approve});}catch(error){await f.close();throw error;}
+    await applyNoFooterMigration(f.db,{approve});
+    await f.db.exec(await readFile(new URL('../supabase/migrations/20261020105604_invoice_reminder_full_customer_name.sql',import.meta.url),'utf8'));}catch(error){await f.close();throw error;}
   const ownerId=randomUUID(),foreignOwner=randomUUID();
   await f.db.query('insert into auth.users(id) values($1),($2)',[ownerId,foreignOwner]);
   async function workspace(actor){await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${actor}';set role authenticated`);
@@ -75,7 +76,7 @@ test('real runtime + new forward SQL + signed webhook persist one five-parameter
     assert.equal((await f.supabase.rpc('cetld_core_authorize_first_party_reminder',{p_owner_id:f.foreignOwner,p_workspace_id:f.scope.workspaceId,p_claim_id:randomUUID(),p_snapshot:{},p_snapshot_hash:'a'.repeat(64)})).data.authorized,false);
     const result=await f.runtime.tick(f.scope);assert.equal(result.results[0]?.status,'sent',JSON.stringify({result,errors:f.errors}));
     assert.equal(f.graph.length,1);assert.equal(f.graph[0].template.name,'cetld_invoice_details_professional_v1');
-    assert.equal(f.graph[0].template.language.code,'en');assert.deepEqual(f.graph[0].template.components[0].parameters.map(p=>p.text),['Fixture','Fixture studio',(await f.store.getInvoice(f.scope)).invoice_number,'USD 125.00',new Intl.DateTimeFormat('en-GB',{timeZone:'UTC',day:'2-digit',month:'short',year:'numeric'}).format(new Date((await f.store.getInvoice(f.scope)).due_date))]);
+    assert.equal(f.graph[0].template.language.code,'en');assert.deepEqual(f.graph[0].template.components[0].parameters.map(p=>p.text),['Fixture customer','Fixture studio',(await f.store.getInvoice(f.scope)).invoice_number,'USD 125.00',new Intl.DateTimeFormat('en-GB',{timeZone:'UTC',day:'2-digit',month:'short',year:'numeric'}).format(new Date((await f.store.getInvoice(f.scope)).due_date))]);
     assert.equal((await f.callback({validSignature:false})).code,403);
     assert.equal((await f.callback()).code,200);assert.equal((await f.callback()).code,200);
     assert.equal((await f.db.query('select state from app.first_party_reminder_dispatches')).rows[0].state,'delivered');
@@ -256,15 +257,16 @@ for(const [workspaceTone,debtorTone,expected] of [
   ['firm',null,'firm'],['relaxed',null,'relaxed'],['gentle',null,'relaxed'],['gentle','firm','firm'],['firm','professional','professional'],['professional','relaxed','relaxed'],
 ])test(`offline SQL runtime selects ${expected} for workspace ${workspaceTone}, debtor ${debtorTone}`,async()=>{
   const f=await setup({tone:workspaceTone});try{
+    const customerName=debtorTone==='firm'?'  Green1 Materials LLC  ':debtorTone==='relaxed'?'\u00a0Priya\u00a0Sharma\u00a0':'  Priya   Sharma  ';
     if(debtorTone!==null){
-      await f.db.query('update customers set reminder_tone=$2,name=$3 where id=$1',[f.customerId,debtorTone,'  Priya   Sharma  ']);
+      await f.db.query('update customers set reminder_tone=$2,name=$3 where id=$1',[f.customerId,debtorTone,customerName]);
       assert.equal((await f.store.getInvoice(f.scope)).followup_state,'paused');
       await f.db.query("update invoices set metadata=metadata||jsonb_build_object('followup_state','approved','approved_reminder_text',E'Fresh offline review\\n\\nFixture studio','approved_preferences_updated_at',(select updated_at from workspace_settings where workspace_id=$2)),next_follow_up_at=now()-interval '1 minute' where id=$1",[f.scope.invoiceId,f.scope.workspaceId]);
     }
     const result=await f.runtime.tick(f.scope);
     assert.equal(result.results[0]?.status,'sent',JSON.stringify({result,errors:f.errors}));
     assert.equal(f.graph.length,1);assert.equal(f.graph[0].template.name,`cetld_invoice_details_${expected}_v1`);
-    assert.equal(f.graph[0].template.components[0].parameters[0].text,debtorTone?'Priya':'Fixture');
+    assert.equal(f.graph[0].template.components[0].parameters[0].text,debtorTone?customerName.trim():'Fixture customer');
     const dispatch=(await f.db.query('select snapshot from app.first_party_reminder_dispatches')).rows[0];
     assert.deepEqual(dispatch.snapshot.template.parameters,f.graph[0].template.components[0].parameters.map(p=>p.text));
     await f.runtime.tick(f.scope);assert.equal(f.graph.length,1);
