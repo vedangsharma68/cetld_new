@@ -53,6 +53,7 @@ export async function writeReleaseManifest({outputPath='owner-chat-build.json'}=
   paths.push('verification-ui.mjs','automation/scheduled-owner-test.mjs');
   paths.push('business-name-reminders.mjs','automation/whatsapp/owner-settings.mjs',
     'supabase/migrations/20261019090000_business_name_reminder_reapproval.sql');
+  paths.push('automation/whatsapp/owner-reminders.mjs','supabase/migrations/20261020130000_owner_chat_reminder_approval.sql');
   const files={};for(const path of paths)files[path]=createHash('sha256').update(await readFile(path)).digest('hex');
   let commit=process.env.VERCEL_GIT_COMMIT_SHA||process.env.GITHUB_SHA;
   if(!commit)try{commit=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();}catch{commit=null;}

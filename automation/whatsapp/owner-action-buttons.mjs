@@ -8,7 +8,7 @@ const PHONE = /^\+[1-9]\d{6,14}$/;
 const BUTTON_ACTION_TYPES = new Set([
   'owner_invoice_delete_proposal', 'owner_workspace_data_change', 'owner_invoice_create',
   'owner_settings_update', 'owner_invoice_update', 'owner_invoice_payment',
-  'owner_invoice_reopen',
+  'owner_invoice_reopen','owner_reminder_approval',
 ]);
 const TRANSIENT_ACTION_FIELDS = new Set(['createdAt', 'requestedAt', 'sourceMessageId', 'requestMessageId']);
 

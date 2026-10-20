@@ -18,7 +18,7 @@ const DATA_ACTION = 'owner_workspace_data_change';
 const MAX_LIMIT = 50;
 const OPERATIONS = Object.freeze([
   'read','create','update','batch','delete','restore','pending','confirm','cancel','describe',
-  'analyzeAttachment','checkAttachment','saveAttachment','reviewAttachment','sendFile',
+  'analyzeAttachment','checkAttachment','saveAttachment','reviewAttachment','sendFile','previewReminder','sendReminderNow',
 ]);
 const FILTER_OPERATORS = Object.freeze(['eq','neq','gt','gte','lt','lte','ilike','in','is']);
 const INVOICE_STATUSES = Object.freeze(['draft','sent','overdue','paid','void','cancelled']);
@@ -106,7 +106,7 @@ function definition() {
   // model request; describe exposes it when the model needs unfamiliar fields.
   const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA).filter(table=>table!=='payments')},filters:{type:'array',items:{type:'object'}},values:{type:'object'}},required:['operation','table','values']};
   return {type:'function',function:{name:'workspaceData',
-    description:'Invoice update: total_amount/subtotal/line_items; status separate. Payment create: amount/currency, invoice_number eq; confirm later. File ops: saveAttachment/analyzeAttachment/checkAttachment.',
+    description:'Invoice update: total_amount/subtotal/line_items; status separate. Payment: amount/currency; confirm. Reminder previewReminder/sendReminderNow: confirm later.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic batch.'},
@@ -166,7 +166,7 @@ function catalog(table=null) {
       }}}:{}),
       ...(name==='workspace_ai_settings'?{writeValueConstraints:{update:{primary_model:VERIFIED_MODEL_CATALOG.filter(entry=>entry.roles.includes('primary')).map(entry=>entry.id),fallback_model:[null,...VERIFIED_MODEL_CATALOG.filter(entry=>entry.roles.includes('fallback')).map(entry=>entry.id)]}}}:{}),
       ...(name==='payments'?{writeValueConstraints:{create:{amount:'Positive, at most 2 decimals; never exceeds remaining invoice balance.',currency:'Required ISO currency matching the invoice.',confirmation:'Always prepares a proposal for later confirmation; no money transfer or customer messages.'}}}:{}),
-      operations:name==='payments'?['read','create']:name==='invoices'?['read','create','update','delete','restore','reviewAttachment']
+      operations:name==='payments'?['read','create']:name==='invoices'?['read','create','update','delete','restore','reviewAttachment','previewReminder','sendReminderNow']
         :name==='business_records'?['read','create','update','delete','restore']:name==='customers'?['read','create','update','delete']
           :name==='workspace_settings'||name==='workspace_ai_settings'?['read','update']
             :['read'],
@@ -420,7 +420,7 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null,text
     if(table!==null&&!Object.hasOwn(TABLES,table))throw new TypeError('unknown table');
     const noTableOps=['pending','confirm','cancel','describe','analyzeAttachment','checkAttachment','saveAttachment'];
     if(!table&&!noTableOps.includes(operation))throw new TypeError('table required');
-    if(table&&!['read','create','update','delete','restore','reviewAttachment','sendFile','describe'].includes(operation))throw new TypeError('invalid table operation');
+    if(table&&!['read','create','update','delete','restore','reviewAttachment','sendFile','previewReminder','sendReminderNow','describe'].includes(operation))throw new TypeError('invalid table operation');
     if(['pending','confirm','cancel','describe','checkAttachment'].includes(operation)&&Object.keys(args).some(key=>!['operation',...(operation==='describe'?['table']:[])].includes(key)))throw new TypeError('unexpected operation fields');
     let values=args.values===undefined?{}:args.values;
     let correctionTransport=null;
@@ -477,6 +477,7 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null,text
         throw new TypeError('related fields cannot control pagination order');
       order={column:args.order.column,direction:args.order.direction};
     }
+    if(['previewReminder','sendReminderNow'].includes(operation)&&(table!=='invoices'||Object.keys(values).length||normalizedFilters.length!==1||!['invoice_number','id','customer_name'].includes(normalizedFilters[0].column)||normalizedFilters[0].operator!=='eq'))throw new TypeError('invalid reminder target');
     if(table==='invoices'&&['update','delete','restore','sendFile'].includes(operation)) {
       const key=operation==='restore'?['invoice_number']:operation==='update'?['invoice_number','id','customer_name']:['invoice_number','id'];
       if(normalizedFilters.length!==1||!key.includes(normalizedFilters[0].column)
@@ -580,7 +581,7 @@ function validateAdapterSettingsValues(values) {
 }
 
 export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,getRuntimeConfig,planRequest,authorize,executeBatchOperation,
-  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,executeInvoiceReopening=null,executeReopeningDecision=null,confirmationMode='buttons',timezone='Asia/Kolkata',attachmentAvailable=false,invoiceEditContext=null}={}) {
+  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,executeInvoiceReopening=null,executeReopeningDecision=null,executeReminderOperation=null,confirmationMode='buttons',timezone='Asia/Kolkata',attachmentAvailable=false,invoiceEditContext=null}={}) {
   if(!supabase?.from||typeof scope?.workspaceId!=='string')throw new TypeError('Supabase and verified workspace scope required');
   let replyRequirement=null;
   let writeAttempted=false;
@@ -912,6 +913,12 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
   };
   const handlePending=async (operation,ctx)=>{
     const action=pendingAtStart?.action;
+    if(action?.type==='owner_reminder_approval'){
+      if(operation!=='pending')writeAttempted=true;
+      if(typeof executeReminderOperation!=='function')return fail('UNAVAILABLE','Reminder approval is unavailable.');
+      const result=await executeReminderOperation({operation,pending:pendingAtStart},ctx);
+      return sanitise(result,scope);
+    }
     if(action?.type==='owner_invoice_reopen'){
       if(operation==='pending'){
         if(Number.isFinite(Date.parse(action.expiresAt))&&Date.parse(action.expiresAt)<=clock().getTime()){
@@ -1183,6 +1190,12 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         return {...sanitise(visible,scope),operation:params.operation,table:params.table,writeAttempted:true};
       }
       if(params.operation==='create'||params.operation==='update'||params.operation==='delete')return await propose(params,ctx);
+      if(['previewReminder','sendReminderNow'].includes(params.operation)){
+        if(typeof executeReminderOperation!=='function')return fail('UNAVAILABLE','Reminder approval is unavailable.');
+        writeAttempted=true;
+        const result=await executeReminderOperation(params,ctx);
+        await ctx.assertAuthorized();ctx.assertLive();return sanitise(result,scope);
+      }
       if(['restore','analyzeAttachment','checkAttachment','saveAttachment','reviewAttachment','sendFile'].includes(params.operation)) {
         if(typeof executeSafetyOperation!=='function')return fail();
         return delegate(params,ctx);
