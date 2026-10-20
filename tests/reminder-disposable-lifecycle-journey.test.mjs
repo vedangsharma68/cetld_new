@@ -31,6 +31,7 @@ async function setup(){
     await f.db.exec(await readFile(new URL('../supabase/migrations/20261005070000_approved_whatsapp_reminders.sql',import.meta.url),'utf8'));
     await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060100_invoice_details_templates.sql',import.meta.url),'utf8'));
     await applyNoFooterMigration(f.db,{approve:true});
+    await f.db.exec(await readFile(new URL('../supabase/migrations/20261020105604_invoice_reminder_full_customer_name.sql',import.meta.url),'utf8'));
   }
   catch(error){await f.close();throw error;}
   const ownerId=randomUUID(),foreignOwner=randomUUID();
@@ -77,7 +78,7 @@ test('synthetic approved-reminder lifecycle composes tenant gate, owner pause/re
     assert.equal(f.graph.length,1);
     const sent=f.graph[0].template;
     assert.equal(sent.name,'cetld_invoice_details_professional_v1');assert.equal(sent.language.code,'en');
-    assert.deepEqual(sent.components[0].parameters.map(parameter=>parameter.text),['Fixture','Fixture studio',(await f.store.getInvoice(f.scope)).invoice_number,'USD 125.00',new Intl.DateTimeFormat('en-GB',{timeZone:'UTC',day:'2-digit',month:'short',year:'numeric'}).format(new Date((await f.store.getInvoice(f.scope)).due_date))]);
+    assert.deepEqual(sent.components[0].parameters.map(parameter=>parameter.text),['Fixture customer','Fixture studio',(await f.store.getInvoice(f.scope)).invoice_number,'USD 125.00',new Intl.DateTimeFormat('en-GB',{timeZone:'UTC',day:'2-digit',month:'short',year:'numeric'}).format(new Date((await f.store.getInvoice(f.scope)).due_date))]);
     assert.equal((await f.runtime.tick(f.scope)).processed,0);assert.equal(f.graph.length,1);
 
     const uncertainId=await f.invoice('INV-UNCERTAIN');

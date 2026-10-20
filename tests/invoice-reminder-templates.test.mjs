@@ -8,7 +8,7 @@ import {debtorReminderToneForm,readDebtorReminderTone} from '../reminder-tone-ui
 const invoice={invoice_number:'INV-001',total_amount:'13000.50',amount_paid:'500.50',due_date:'2026-10-18'};
 const settings={business_name:'Fixture studio',default_timezone:'Asia/Kolkata'};
 const customer={name:'  Priya   Sharma  '};
-const facts=['Priya','Fixture studio','INV-001','₹12,500','18 Oct 2026'];
+const facts=['Priya   Sharma','Fixture studio','INV-001','₹12,500','18 Oct 2026'];
 const name=tone=>`cetld_invoice_details_${tone}_v1`;
 const approvedDetails={
   relaxed:"Hi {{1}} 👋 I'm Cetld, {{2}}'s assistant. A quick heads-up: invoice {{3}} has {{4}} outstanding, due on {{5}}. Questions? Just reply here 😊",
@@ -60,10 +60,11 @@ test('workspace tones and per-debtor override select approved details; null inhe
   assert.throws(()=>selectInvoiceReminderTemplate({templateName:'model_authored_name'}),/Invalid/);
 });
 
-test('five parameters use first token, invoice balance, INR default, and workspace calendar date',()=>{
+test('five parameters use full trimmed name, invoice balance, INR default, and workspace calendar date',()=>{
   assert.deepEqual(buildInvoiceReminderParameters({invoice,settings,customer}),facts);
+  assert.equal(buildInvoiceReminderParameters({invoice,settings,customer:{name:'  Green1 Materials LLC  '}})[0],'Green1 Materials LLC');
   for(const name of ['', '   ',null])assert.equal(buildInvoiceReminderParameters({invoice,settings,customer:{name}})[0],'there');
-  assert.equal(buildInvoiceReminderParameters({invoice,settings,customer:{name:'\u00a0Priya\u00a0Sharma\u00a0'}})[0],'Priya');
+  assert.equal(buildInvoiceReminderParameters({invoice,settings,customer:{name:'\u00a0Priya\u00a0Sharma\u00a0'}})[0],'Priya\u00a0Sharma');
   assert.equal(formatReminderAmount({...invoice,total_amount:'1235067.89',amount_paid:'500'}),'₹12,34,567.89');
   assert.equal(formatReminderAmount({...invoice,currency:'USD',total_amount:'1234567.89',amount_paid:0}),'USD 1,234,567.89');
   assert.equal(formatReminderAmount({...invoice,currency:'EUR',total_amount:0.3,amount_paid:0.1}),'EUR 0.20');
@@ -102,4 +103,31 @@ test('forward migrations constrain nullable debtor tone and extend rather than r
   assert.match(catalog,/coalesce\(x\.reminder_tone,s\.follow_up_preferences->>'tone','professional'\)/);
   assert.match(catalog,/Reminder gate patch point missing/);
   assert.doesNotMatch(catalog,/drop (?:table|function)|delete from|disable (?:trigger|row level security)/i);
+});
+
+test('full-name migration matches ECMAScript trimming byte-for-byte and aborts without its exact patch point',async()=>{
+  const {PGlite}=await import('@electric-sql/pglite');
+  const db=new PGlite();
+  try{
+    const catalog=await readFile(new URL('../supabase/migrations/20261018060100_invoice_details_templates.sql',import.meta.url),'utf8');
+    const greeting=catalog.split('\n').find(line=>line.includes('coalesce(nullif(split_part(btrim(translate(x.name,')).trim().replace(/,$/u,'');
+    const migration=await readFile(new URL('../supabase/migrations/20261020105604_invoice_reminder_full_customer_name.sql',import.meta.url),'utf8');
+    // Exercise the deployed greeting expression with the gate's exact signature.
+    await db.exec(`create function public.cetld_core_authorize_first_party_reminder(uuid,uuid,uuid,jsonb,text)
+      returns jsonb language sql as $fn$select jsonb_build_array(${greeting}) from (select $4->>'name' as name) x$fn$;`);
+    await db.exec(migration);
+    const whitespace='\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff';
+    const names=[null,'','   ','  Green1 Materials LLC  ','  Priya   Sharma  ','Owner (WhatsApp)',whitespace,
+      ...[...whitespace].flatMap(space=>[space,space+'Priya'+space,'Priya'+space+'Sharma']),
+      '\u180ePriya\u180e','\u200bPriya\u200b','\u0085Priya\u0085'];
+    for(const name of names){
+      const sql=(await db.query('select public.cetld_core_authorize_first_party_reminder(null,null,null,$1,null) as facts',[JSON.stringify({name})])).rows[0].facts[0];
+      assert.deepEqual(Buffer.from(sql),Buffer.from(name?.trim()||'there'),JSON.stringify(name));
+      // Controls/line separators remain invalid names on both sides of the real gate.
+      if(!/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(name??''))
+        assert.equal(sql,buildInvoiceReminderParameters({invoice,settings,customer:{name}})[0]);
+    }
+    await assert.rejects(db.exec(migration),/Reminder full customer name patch point missing/);
+    await db.exec('rollback');
+  }finally{await db.close();}
 });
