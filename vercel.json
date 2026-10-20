@@ -8,9 +8,36 @@
   "installCommand": "npm ci --include=dev",
   "buildCommand": "npm run check:release",
   "functions": {
-    "api/ai.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 60},
-    "api/whatsapp.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 300},
-    "api/whatsapp-process.js": {"includeFiles": "**/*.{traineddata,wasm}", "maxDuration": 300}
+    "api/ai.js": {
+      "includeFiles": [
+        "vendor/tessdata/eng.traineddata",
+        "node_modules/tesseract.js-core/*.wasm",
+        "node_modules/pdfjs-dist/wasm/*.wasm",
+        "node_modules/@img/sharp-wasm32/lib/*.wasm"
+      ],
+      "excludeFiles": "node_modules/{@napi-rs/canvas-linux-x64-musl,@img/sharp-linuxmusl-x64,@img/sharp-libvips-linuxmusl-x64}/**",
+      "maxDuration": 60
+    },
+    "api/whatsapp.js": {
+      "includeFiles": [
+        "vendor/tessdata/eng.traineddata",
+        "node_modules/tesseract.js-core/*.wasm",
+        "node_modules/pdfjs-dist/wasm/*.wasm",
+        "node_modules/@img/sharp-wasm32/lib/*.wasm"
+      ],
+      "excludeFiles": "node_modules/{@napi-rs/canvas-linux-x64-musl,@img/sharp-linuxmusl-x64,@img/sharp-libvips-linuxmusl-x64}/**",
+      "maxDuration": 300
+    },
+    "api/whatsapp-process.js": {
+      "includeFiles": [
+        "vendor/tessdata/eng.traineddata",
+        "node_modules/tesseract.js-core/*.wasm",
+        "node_modules/pdfjs-dist/wasm/*.wasm",
+        "node_modules/@img/sharp-wasm32/lib/*.wasm"
+      ],
+      "excludeFiles": "node_modules/{@napi-rs/canvas-linux-x64-musl,@img/sharp-linuxmusl-x64,@img/sharp-libvips-linuxmusl-x64}/**",
+      "maxDuration": 300
+    }
   },
   "crons": [
     {"path": "/api/whatsapp-process", "schedule": "0 0 * * *"},
