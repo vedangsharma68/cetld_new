@@ -9,7 +9,7 @@ for(const count of [0,1,6])test(`shared rename notice before and after saving, N
  for(const saved of [false,true]){
   const text=businessNameReminderNotice(count,{saved});
   if(!count)assert.equal(text,'');
-  else {assert.match(text,new RegExp(`^${count} approved reminder`));assert.match(text,/paused.*re-approve.*Conversations tab/);}
+  else {assert.match(text,new RegExp(`^${count} approved reminder`));assert.match(text,/paused.*re-approve.*Conversations/);}
  }
 });
 test('impact count is workspace scoped, skipped for unchanged names, and fails closed',async()=>{
@@ -42,7 +42,7 @@ test(`dashboard save ${nextName}, N=${count}, confirm=${confirm}`,async()=>{
  const submit={disabled:false};await context.saveSettings({preventDefault(){},currentTarget:{querySelector:()=>submit}});
  assert.deepEqual(errors,[]);assert.equal(writes.length,expectedWrites);assert.equal(submit.disabled,false);
  if(nextName==='Old'){assert.equal(calls.length,0);assert.ok(notices.every(n=>!n.includes('paused')))}
- else if(count){assert.match(notices[0],/3 approved reminders.*will be paused/);if(confirm)assert.match(state.businessNameReminderNotice,/3 approved reminders are paused.*Conversations tab/)}
+ else if(count){assert.match(notices[0],/3 approved reminders.*will be paused/);if(confirm)assert.match(state.businessNameReminderNotice,/3 approved reminders are paused.*Conversations/)}
  else assert.ok(notices.every(n=>!n.includes('paused')));
 });
 

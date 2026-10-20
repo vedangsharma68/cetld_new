@@ -130,7 +130,7 @@ test('real WhatsApp channel and invoice save path claim concurrent YES once and 
   const [first, second] = await Promise.all([channel.ask({...scope, message: 'YES'}), channel.ask({...scope, message: 'yes'})]);
   assert.equal(saves, 1);
   assert.equal(db.rows.length, 1);
-  assert.ok([first, second].some(result => /Invoice saved/.test(result.answer)));
+  assert.ok([first, second].some(result => /Saved invoice/.test(result.answer)));
   assert.match((await channel.ask({...scope, message: 'yes'})).answer, /already saved/i);
   assert.equal(saves, 1);
 });
@@ -142,7 +142,7 @@ test('incomplete confirmation and revoked binding never plan or save', async () 
   const incomplete = createWhatsAppAssistantChannel({authorizeChannel: async input => ({...input, allowed: true}),
     createCustomerScopedStore: async () => ({query: async () => []}), answer: async () => { planner++; }, ...state,
     createInvoiceStore: () => ({}), saveInvoice: async () => { saves++; }});
-  assert.match((await incomplete.ask({...scope, message: 'yes'})).answer, /incomplete/i);
+  assert.match((await incomplete.ask({...scope, message: 'yes'})).answer, /missing invoice details/i);
   const revoked = createWhatsAppAssistantChannel({authorizeChannel: async input => ({...input, allowed: false}),
     createCustomerScopedStore: async () => ({query: async () => []}), answer: async () => { planner++; }, ...state});
   assert.equal((await revoked.ask({...scope, message: 'yes'})).denied, true);
@@ -188,8 +188,8 @@ test('currency-missing photo uses a default and auto-saves without confirmation'
     channelFactory: () => ({async ask() { planner++; return {answer: 'planner'}; }}),
     extract: async () => ({...fields, lineItems: {value: [], confidence: .99}})});
   const reply = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/png'}});
-  assert.match(reply, /^Logged invoice INV-50/);
-  assert.match(reply, /INR, currency not shown; assumed workspace default INR/);
+  assert.match(reply, /^Saved invoice INV-50/);
+  assert.match(reply, /currency not shown; assumed workspace default INR/);
   assert.doesNotMatch(reply, /reply yes/i);
   assert.equal(row.action.stage, 'saved');
   assert.equal(planner, 0); assert.equal(saves, 1);
@@ -203,7 +203,7 @@ test('default handler, real invoice store auto-saves a photo exactly once', asyn
   const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase: db, providerFactory: () => ({}),
     extract: async () => ({...fields, lineItems: {value: [], confidence: .99}})});
   const logged = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/png'}});
-  assert.match(logged, /^Logged invoice INV-50/);
+  assert.match(logged, /^Saved invoice INV-50/);
   assert.doesNotMatch(logged, /reply yes/i);
   assert.equal(db.review.action.invoice.invoiceNumber, 'INV-50');
   assert.equal(db.review.action.invoice.currency, 'INR');
@@ -219,7 +219,7 @@ test('default handler, real invoice store auto-saves a photo exactly once', asyn
   complete.currency = {value: 'USD', confidence: .99};
   const completeHandler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase: completeDb, providerFactory: () => ({}),
     extract: async () => ({...complete, lineItems: {value: [], confidence: .99}})});
-  assert.match(await completeHandler({...scope, message: '', media: {bytes: Buffer.from([2]), mimeType: 'image/png'}}), /^Logged invoice INV-51/);
+  assert.match(await completeHandler({...scope, message: '', media: {bytes: Buffer.from([2]), mimeType: 'image/png'}}), /^Saved invoice INV-51/);
   assert.equal(completeDb.invoices.length, 1);
   assert.equal(Object.hasOwn(completeDb.review.action.invoice, 'missingDueDate'), false);
 });

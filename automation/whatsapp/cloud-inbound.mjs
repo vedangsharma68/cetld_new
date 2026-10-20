@@ -12,15 +12,15 @@ function staleInboundEvent(event, now) {
   const receivedAt = Date.parse(event.received_at || event.created_at || event.provider_timestamp || '');
   return Number.isFinite(receivedAt) && now - receivedAt > MAX_INBOUND_RETRY_AGE_MS;
 }
-const TIMEOUT_REPLY = 'That took longer than I can handle, so I stopped. Your message was received. Please send it again in a minute.';
+const TIMEOUT_REPLY = 'That took too long, so I stopped. I received your message; try again in a minute.';
 const DEFAULT_PROCESS_BUDGET_MS = 240_000;
 // Leave enough runway for a database lookup and a deterministic reply. Slow
 // planner work may use the first slot, but is never started near the deadline.
 const MIN_EVENT_BUDGET_MS = 5_000;
-const SAFE_FALLBACK_REPLY = "Something broke on my side while handling that message, so I did not process it. Please send it again. If it keeps failing, tell Vedang.";
-const MEDIA_FETCH_FAILED_REPLY = "I couldn't fetch that photo. Please resend it and I'll try again.";
-const EMPTY_CONTENT_REPLY = "I couldn't read that message. Please resend it as plain text, a photo, or a PDF. No business changes were made.";
-const STICKER_REPLY = 'WhatsApp sent that as a sticker. To read an invoice, I need a photo or PDF: use the attachment button and choose Photos/Gallery or Document. No business changes were made.';
+const SAFE_FALLBACK_REPLY = "I couldn’t process that message. Send it again in a minute.";
+const MEDIA_FETCH_FAILED_REPLY = "I couldn’t load that photo. Send it again.";
+const EMPTY_CONTENT_REPLY = "I couldn’t read that. Send text, a photo, or a PDF. Nothing was changed.";
+const STICKER_REPLY = 'That’s a sticker. Attach the invoice as a photo or PDF instead. Nothing was changed.';
 const unreadableContentReply = event => event.message_type === 'sticker' ? STICKER_REPLY : EMPTY_CONTENT_REPLY;
 function hasEmptyIncomingContent(event) {
   const interactionId = event.interaction_id ?? event.interactionId;
@@ -219,7 +219,7 @@ export class SupabaseInboundInbox {
   }
 }
 
-const stopReply = 'Your request has been recorded. You will no longer receive WhatsApp invoice updates from this business.';
+const stopReply = 'You won’t receive any more WhatsApp invoice updates from this business.';
 
 /** Route only through service-role consent/customer binding; never use a claimed name. */
 export function createInboundRuntime({ env = process.env, fetchImpl = globalThis.fetch, supabase, inbox = new SupabaseInboundInbox(supabase), outbound,

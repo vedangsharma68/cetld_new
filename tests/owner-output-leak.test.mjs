@@ -79,7 +79,7 @@ test('persistently leaking output without a grounded fallback fails closed',asyn
   const result=await runOwnerAgent({message:'Help with an invoice.',tools:{definitions:[],async execute(){throw Error('No tool should run');}},
     provider:{async generate(){requests++;return {content:leakedRequirements+'\nI cannot verify this invoice.'};}}});
   assert.equal(requests,3);
-  assert.equal(result.answer,'I could not prepare a safe reply just now. Please try again shortly.');
+  assert.equal(result.answer,'I couldn’t prepare a safe reply. Try again shortly.');
   assert.equal(result.plannerFailure.code,'OWNER_REPLY_REPAIR_FAILED');
   assert.doesNotMatch(result.answer,/replyRequirements|draft|analysis/i);
 });

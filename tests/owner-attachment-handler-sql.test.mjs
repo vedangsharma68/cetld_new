@@ -101,7 +101,7 @@ test('actual extraction wire and default owner toolset retain contradictory amou
   const f=await fixture({nativeWire:true,extractionWire});try{
     const {reply}=await f.turn('inconsistent-attachment');
     assert.equal(reply.plannerFailure,undefined,JSON.stringify(reply));
-    assert.match(reply.answer,/subtotal plus tax does not match the total/);
+    assert.match(reply.answer,/Subtotal plus tax doesn’t match the total/);
     assert.match(reply.answer,/Nothing was saved/);
     assert.doesNotMatch(reply.answer,/unavailable|processing failed/i);
     const pending=createWhatsAppPendingActionStore({supabase:f.supabase}),review=await pending.loadInvoiceReview(f.scope);
@@ -113,7 +113,7 @@ test('actual extraction wire and default owner toolset retain contradictory amou
       invoiceStoreFactory:()=>{throw Error('An inconsistent review must not construct a write store');},
       authorize:async()=>true,message:'The total is 115; save it',messageId:'inconsistent-follow-up',logger:{error(){}}});
     const continued=await tools.execute('workspaceData',{operation:'reviewAttachment',table:'invoices',values:{total_amount:115}});
-    assert.equal(continued.ok,false);assert.equal(continued.code,'INVALID');assert.match(continued.message,/amount breakdown/);
+    assert.equal(continued.ok,false);assert.equal(continued.code,'INVALID');assert.match(continued.message,/Check the breakdown/);
     assert.equal((await tools.execute('workspaceData',{operation:'saveAttachment'})).ok,false);
     for(const table of ['invoices','invoice_files','business_records','payments'])assert.equal((await f.db.query(`select count(*)::int n from ${table}`)).rows[0].n,0);
     assert.equal(f.extractions,1);assert.deepEqual(f.errors,[]);

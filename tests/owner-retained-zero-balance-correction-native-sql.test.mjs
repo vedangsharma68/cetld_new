@@ -185,7 +185,7 @@ for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF'
     ownerStore:{workspaceId,userId:ownerId,role:'owner',async query(){throw Error('unconfirmed review must not read unrelated records');}},
     invoiceStoreFactory:()=>{throw Error('unconfirmed review must not construct a ledger writer');},authorize:async()=>true,
     sourceMediaReader:async()=>({bytes,mimeType:'image/jpeg'}),message:text,messageId:id,logger:{error(){}}});
-   const rejected=await safety.execute('ingestInvoiceAttachment',{});assert.equal(rejected.ok,false);assert.equal(rejected.code,'INVALID');assert.match(rejected.message,/explicitly confirm|later message/);assert.deepEqual(await review(),proposal);
+   const rejected=await safety.execute('ingestInvoiceAttachment',{});assert.equal(rejected.ok,false);assert.equal(rejected.code,'INVALID');assert.match(rejected.message,/Tell me explicitly if you want to save|later message/);assert.deepEqual(await review(),proposal);
   }
   const savedReply=await turn('confirm-source','yes');assert.match(savedReply.answer,/Saved invoice INV-2026-0001/);
   const saved=(await db.query('select * from invoices where workspace_id=$1',[workspaceId])).rows;assert.equal(saved.length,1);

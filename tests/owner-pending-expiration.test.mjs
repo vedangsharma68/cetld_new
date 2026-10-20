@@ -52,5 +52,5 @@ test('pending rejection supports truthful existing-action guidance but cannot in
   let calls=0;
   const response=await runOwnerAgent({message:'Mark invoice unpaid',tools:{definitions:[{type:'function',function:{name:'workspaceData',parameters:{type:'object'}}}],
     async execute(){return failure;},getWriteAttempted:()=>true},provider:{async generate(){calls++;return calls===1?{toolCalls:[{id:'request',type:'function',function:{name:'workspaceData',arguments:'{"operation":"update","table":"invoices","values":{"status":"unpaid"}}'}}]}:{content:'I prepared a new proposal. Please confirm the pending action.'};}}});
-  assert.match(response.answer,/requested business change was not applied/);assert.doesNotMatch(response.answer,/could not confirm whether/);
+  assert.match(response.answer,/requested change was not applied/);assert.doesNotMatch(response.answer,/could not confirm whether/);
 });

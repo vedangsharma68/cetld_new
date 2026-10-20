@@ -106,13 +106,13 @@ for(const count of [0,1,4])test(`rename warning survives model omission before a
  const done=await t.h({...scope,message:yes,messageId:'rename-yes'});
  assert.equal(t.row.business_name,'New Studio');assert.equal(t.rpcCalls,1);
  for(const answer of [proposal,done]){
-  if(count){assert.match(answer,new RegExp(`${count} approved reminder`));assert.match(answer,/paused.*re-approve.*Conversations tab/s);}
-  else assert.doesNotMatch(answer,/paused|re-approve|Conversations tab/);
+  if(count){assert.match(answer,new RegExp(`${count} approved reminder`));assert.match(answer,/paused.*re-approve.*Conversations/s);}
+  else assert.doesNotMatch(answer,/paused|re-approve|Conversations/);
  }
 });
 test('unchanged business name never warns, even with approved reminders',async()=>{
  const first='set my business name to CETLD test',yes='yes';
  const t=setup({pauseCount:9,plans:{[first]:{tool:'proposeWorkspaceSettingsChange',args:{businessName:'CETLD test'}},[yes]:{tool:'confirmPendingOwnerChange'}},
   answers:{[first]:'Business name: CETLD test. Reply yes to apply, or cancel.',[yes]:'Done. The business name is CETLD test.'}});
- for(const [message,messageId] of [[first,'unchanged-ask'],[yes,'unchanged-yes']])assert.doesNotMatch(await t.h({...scope,message,messageId}),/paused|re-approve|Conversations tab/);
+ for(const [message,messageId] of [[first,'unchanged-ask'],[yes,'unchanged-yes']])assert.doesNotMatch(await t.h({...scope,message,messageId}),/paused|re-approve|Conversations/);
 });

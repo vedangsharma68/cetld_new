@@ -7,8 +7,8 @@ const E164 = /^\+[1-9]\d{6,14}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CONFIRMATION = /^(?:yes|y|ok|okay|confirm|confirmed|do it|go ahead|proceed|approve|send it|create it|update it)[.!\s]*$/i;
 const PROGRESS_LABEL = /^(?:thinking|looking up|searching|checking|reviewing|retrieving|processing|one moment)(?:\s*[.…!]+)?$/i;
-const EMPTY_REPLY = 'I couldn’t prepare a reply just now. Please try again.';
-const WHATSAPP_REPLY_GUIDANCE = 'WhatsApp reply guidance: Lead with the answer in one line, then give details as short, scannable bullets. Use a friendly, crisp, energetic tone—never boring or robotic. A few relevant emojis such as 💰, 🧾, and ✅ are good, but do not overdo them. For invoice, payment, or balance answers, format a mini dashboard: a bold summary line with count and total, then one bullet per item with identifier, customer, amount, status, and due date when known. Use no slug prefixes, internal tool names, or technical jargon. Keep replies under about 120 words unless the user asks for detail. For unknowns, say plainly what could not be checked and suggest a retry or narrower question. Include only requested facts and necessary caveats; preserve exact values, currencies, dates, and uncertainty from supplied records. Do not dump records, add broad context, or include transient progress/status text such as “Thinking…” or “Looking up…”. Return only the final user-facing answer.';
+const EMPTY_REPLY = 'I couldn’t reply just now. Try again.';
+export const WHATSAPP_REPLY_GUIDANCE = 'WhatsApp reply guidance: Reply like a person texting. Answer first in 1-2 short sentences, using plain text. No bold or bullets unless listing 3+ items. No emojis unless the user used one first. Stay under about 40 words unless the user asked for detail. Use no internal tool names or jargon. Include only requested facts and necessary caveats; preserve exact values, currencies, dates, and uncertainty from supplied records. Say plainly what could not be checked. Do not dump records or include progress text such as Thinking or Looking up. Return only the final user-facing answer.';
 const TABLE_FIELDS = {
   invoices: new Set(['id','workspace_id','customer_id','invoice_number','issue_date','due_date','currency','total_amount','amount_paid','status','notes','metadata','created_at','updated_at']),
   customers: new Set(['id','workspace_id','name','company_name','email','phone','created_at','updated_at']),
@@ -230,7 +230,7 @@ export function createWhatsAppAssistantChannel({
     const authorized = await authorizeChannel(scope);
     if (authorized?.allowed !== true || authorized.workspaceId !== scope.workspaceId
       || authorized.customerId !== scope.customerId || authorized.phone !== scope.phone) {
-      return {answer: 'Please verify your number in cetld before discussing account details.', pendingAction: null, denied: true};
+      return {answer: 'Verify your number in cetld to discuss account details.', pendingAction: null, denied: true};
     }
     if(!allowInvoiceWrites&&CONFIRMATION.test(text))return {answer:'Invoice changes must be confirmed by the business owner.',pendingAction:null};
     if (CONFIRMATION.test(text) && typeof loadInvoiceReview === 'function'
@@ -238,23 +238,23 @@ export function createWhatsAppAssistantChannel({
       const review = await loadInvoiceReview(scope);
       if (review?.action?.type === 'invoice_review_draft') {
         if (review.action.stage === 'incomplete' || review.action.stage === 'extracting') {
-          return {answer: 'I can’t confirm an incomplete invoice review. Please provide the requested details or send a clearer photo.', pendingAction: null};
+          return {answer: 'I need the missing invoice details or a clearer photo before you can confirm.', pendingAction: null};
         }
         if (review.action.stage === 'saved') {
-          return {answer: `✅ *Invoice already saved*\n• ${review.action.invoice.invoiceNumber} — ${review.action.invoice.clientName}\n• ${review.action.invoice.currency} ${review.action.invoice.total.toLocaleString('en-IN')}`,
+          return {answer: `Invoice ${review.action.invoice.invoiceNumber} was already saved for ${review.action.invoice.clientName}: ${review.action.invoice.currency} ${review.action.invoice.total.toLocaleString('en-IN')}.`,
             pendingAction: null, saved: true, idempotent: true};
         }
         if (review.action.stage === 'saving') {
-          return {answer: 'That exact invoice proposal is already being saved. Please wait a moment.', pendingAction: null};
+          return {answer: 'That invoice is being saved. Give it a moment.', pendingAction: null};
         }
         if (review.action.stage !== 'proposal') {
-          return {answer: 'There is no complete invoice proposal to confirm. Please resend the photo.', pendingAction: null};
+          return {answer: 'There’s no complete invoice to confirm. Send the photo again.', pendingAction: null};
         }
         const claimed = await transitionInvoiceReview({...review, ...scope, fromStage: 'proposal',
           action: {...review.action, stage: 'saving'}});
         if (!claimed) {
           const latest = await loadInvoiceReview(scope);
-          if (latest?.action?.stage === 'saved') return {answer: '✅ That invoice was already saved.', pendingAction: null, saved: true, idempotent: true};
+          if (latest?.action?.stage === 'saved') return {answer: 'That invoice was already saved.', pendingAction: null, saved: true, idempotent: true};
           return {answer: 'That proposal was replaced or is already being saved. Nothing else was saved.', pendingAction: null};
         }
         const key = `wa_invoice_${createHash('sha256').update(`${scope.workspaceId}:${scope.customerId}:${scope.phone}:${review.id}`).digest('hex').slice(0, 32)}`;
@@ -265,7 +265,7 @@ export function createWhatsAppAssistantChannel({
           const invoice = {...saved.invoice, clientName: saved.invoice?.clientName || review.action.invoice.clientName};
           await transitionInvoiceReview({...claimed, ...scope, fromStage: 'saving',
             action: {...review.action, stage: 'saved'}});
-          return {answer: `✅ *Invoice saved*\n• ${invoice.invoiceNumber} — ${invoice.clientName || 'Customer'}\n• ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}\n• Due: ${invoice.dueDate || 'not set'}`,
+          return {answer: `Saved invoice ${invoice.invoiceNumber} for ${invoice.clientName || 'Customer'}: ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}, due ${invoice.dueDate || 'not set'}.`,
             pendingAction: null, saved: true, idempotent: saved.idempotent === true};
         } catch (error) {
           await transitionInvoiceReview({...claimed, ...scope, fromStage: 'saving', action: review.action});
@@ -279,11 +279,11 @@ export function createWhatsAppAssistantChannel({
         const age = clock().getTime() - new Date(pending.created_at).getTime();
         if (!Number.isFinite(age) || age < 0 || age > 60 * 60 * 1000) {
           if (typeof consumePendingAction === 'function') await consumePendingAction({...scope, id: pending.id});
-          return {answer: 'That invoice proposal expired. Please resend the photo and I’ll read it again.', pendingAction: null, expired: true};
+          return {answer: 'That invoice draft expired. Send the photo again.', pendingAction: null, expired: true};
         }
         if (pending.action?.type !== 'create_invoice' || typeof createInvoiceStore !== 'function') {
           if (typeof consumePendingAction === 'function') await consumePendingAction({...scope, id: pending.id});
-          return {answer: 'Nothing is waiting for a yes right now 🙂 Tell me what you want to change, for example “change the Acme invoice amount to 500 USD”.', pendingAction: null};
+          return {answer: 'Nothing is waiting for a yes. What would you like to change?', pendingAction: null};
         }
         const key = `wa_invoice_${createHash('sha256').update(`${scope.workspaceId}:${scope.customerId}:${scope.phone}:${pending.id}`).digest('hex').slice(0, 32)}`;
         const saved = await saveInvoice({store: await createInvoiceStore(scope), invoice: pending.action.payload?.invoice,
@@ -291,7 +291,7 @@ export function createWhatsAppAssistantChannel({
         if (saved?.needsInput) return {answer: saved.question, pendingAction: null};
         if (typeof consumePendingAction === 'function') await consumePendingAction({...scope, id: pending.id});
         const invoice = {...saved.invoice, clientName: saved.invoice?.clientName || pending.action.payload?.invoice?.clientName};
-        return {answer: `✅ *Invoice saved*\n• ${invoice.invoiceNumber} — ${invoice.clientName || 'Customer'}\n• ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}\n• Due: ${invoice.dueDate || 'not set'}`,
+        return {answer: `Saved invoice ${invoice.invoiceNumber} for ${invoice.clientName || 'Customer'}: ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}, due ${invoice.dueDate || 'not set'}.`,
           pendingAction: null, saved: true};
       }
     }
@@ -306,16 +306,16 @@ export function createWhatsAppAssistantChannel({
     // separately stored proposal and a fresh confirmation from this scope.
     const response = await answer({provider: replyProvider, store: scopedStore, message: text, history, accounting: null, clock});
     if (!response?.pendingAction) return {...formatWhatsAppReply(response), pendingAction: null};
-    if(!allowInvoiceWrites)return {answer:'Only the business owner can create or change invoices. Please contact the business about this invoice.',pendingAction:null};
+    if(!allowInvoiceWrites)return {answer:'Only the business owner can create or change invoices. Contact the business for help.',pendingAction:null};
     if (typeof storePendingAction !== 'function') return {
-      answer: 'Please open cetld while signed in to prepare and confirm this change.',
+      answer: 'Sign in to cetld to review and confirm this change.',
       pendingAction: null,
       requiresInAppConfirmation: true,
     };
     const stored = await storePendingAction({workspaceId: scope.workspaceId, customerId: scope.customerId,
       phone: scope.phone, action: response.pendingAction, source: 'whatsapp', expectedState});
     if (!stored) return {
-      answer: 'That request became stale because a newer invoice review or request arrived. Nothing was replaced; please review the newer request.',
+      answer: 'A newer request arrived. Nothing was replaced. Review the newer request.',
       pendingAction: null,
       stale: true,
     };

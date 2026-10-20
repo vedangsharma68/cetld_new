@@ -72,11 +72,11 @@ test('production tools select the scoped read and USD500 proposal before native 
   if(process.env.CETLD_PAYMENT_BASELINE){assert.equal(run.calls(),3);assert.equal(run.requests[2].tools,undefined);assert.equal(run.outputs.some(out=>out.proposal),false);assert.deepEqual(await f.snapshot(),before);return;}
   assert.equal(run.calls(),0,JSON.stringify({result,outputs:run.outputs}));assert.equal(run.outputs.at(-1).proposal,true,JSON.stringify(run.outputs));
   assert.equal(run.outputs.at(-1).details.paymentAmount,500);assert.equal(run.outputs.at(-1).details.outstandingAmount,451.52);
-  assert.deepEqual(await f.snapshot(),before);assert.match(result.answer,/Proposed a USD 500/);
+  assert.deepEqual(await f.snapshot(),before);assert.match(result.answer,/Record USD 500/);
   const pending=(await f.db.query("select * from whatsapp_pending_actions where workspace_id=$1 and consumed_at is null",[f.scope.workspaceId])).rows[0];
   assert.deepEqual(pending.action.changes,{amount:500,currency:'USD'});
   const confirm=handlerFor(f,{confirmation:true});await f.inbound('payment-confirm','yes');const saved=await confirm.handler({...f.scope,messageId:'payment-confirm',message:'yes'});
-  assert.equal(confirm.outputs.at(-1).completed,true,JSON.stringify({saved,outputs:confirm.outputs,errors:f.errors}));assert.match(saved.answer,/remaining balance is USD 451.52/);
+  assert.equal(confirm.outputs.at(-1).completed,true,JSON.stringify({saved,outputs:confirm.outputs,errors:f.errors}));assert.match(saved.answer,/Balance: USD 451.52/);
   const after=await f.snapshot(),invoice=after.invoices.find(row=>row.id===f.ids[0]);
   assert.equal(invoice.amount_paid,500);assert.equal(invoice.total_amount,951.52);assert.equal(invoice.status,'draft');assert.equal(invoice.currency,'USD');assert.equal(invoice.metadata.next_follow_up_at,null);assert.deepEqual(invoice.metadata.source_document,{name:'original-source'});
   assert.equal(after.payments.length,1);assert.equal(after.payments[0].amount,500);assert.equal(after.payments[0].settle_remaining,false);assert.equal(after.outbound,0);assert.deepEqual(after.files,before.files);
@@ -94,7 +94,7 @@ test('one exact native read queues the canonical payment before an invalid model
   assert.equal(run.calls(),0,JSON.stringify({reply,outputs:run.outputs}));assert.equal(run.planningRequests.length,0);
   assert.equal(run.outputs[0].rows.length,1);assert.equal(run.outputs.at(-1).proposal,true);
   assert.equal(run.outputs.at(-1).details.paymentAmount,500);assert.equal(run.outputs.at(-1).details.outstandingAmount,451.52);
-  assert.equal(reply.answer,'Proposed a USD 500.00 payment for invoice INV-2026-6769. The remaining balance would be USD 451.52. Reply yes to confirm or cancel.');
+  assert.equal(reply.answer,'Record USD 500.00 on INV-2026-6769? Balance would be USD 451.52. Reply yes to confirm or cancel.');
   const pending=(await f.db.query('select * from whatsapp_pending_actions where consumed_at is null')).rows;
   assert.equal(pending.length,1);assert.deepEqual(pending[0].action.changes,{amount:500,currency:'USD'});
   assert.equal(pending[0].action.requestedInvoiceNumber,'INV-2026-6769');assert.equal(pending[0].action.sourceMessageId,'bounded-leading');
@@ -109,7 +109,7 @@ test('exact live wording proposes locally despite endless native reads and a fin
   assert.equal(run.calls(),0,JSON.stringify({reply,outputs:run.outputs}));
   assert.equal(run.requests.every(request=>Boolean(request.tools)),true,'proposal must not require a final model call');
   assert.equal(run.outputs[0].rows.length,1);assert.equal(run.outputs.at(-1).proposal,true,JSON.stringify(run.outputs));
-  assert.equal(reply.answer,'Proposed a USD 500.00 payment for invoice SB-10442. The remaining balance would be USD 451.52. Reply yes to confirm or cancel.');
+  assert.equal(reply.answer,'Record USD 500.00 on SB-10442? Balance would be USD 451.52. Reply yes to confirm or cancel.');
   const pending=(await f.db.query("select * from whatsapp_pending_actions where consumed_at is null and action->>'type'='owner_invoice_payment'")).rows;
   assert.equal(pending.length,1);assert.deepEqual(pending[0].action.changes,{amount:500,currency:'USD'});
   assert.equal(pending[0].action.requestedInvoiceNumber,'SB-10442');assert.equal(pending[0].action.sourceMessageId,'endless-native-propose');
@@ -136,7 +136,7 @@ test('a wrong-target or truncated native invoice read cannot authorize the canon
    const run=handlerFor(f,{keepReading:true,readOnce:true,...options});
    const reply=await run.handler({...f.scope,messageId:id,message:livePrompt});
    assert.equal(run.outputs[0].rows.length,1);assert.equal(run.outputs.some(output=>output.proposal),false,JSON.stringify({reply,outputs:run.outputs}));
-   assert.equal(run.outputs.some(output=>output.operation==='create'),false);assert.doesNotMatch(reply.answer,/Proposed|Recorded/);
+   assert.equal(run.outputs.some(output=>output.operation==='create'),false);assert.doesNotMatch(reply.answer,/Proposed|Record(?:ed)? [A-Z]{3}/);
    assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions where consumed_at is null')).rows[0].n,0);
    assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
   }finally{await f.close();}
@@ -229,7 +229,7 @@ test('failed post-write readback never claims completion or executes a second pa
   await f.inbound('uncertain-propose',prompt);await handlerFor(f).handler({...f.scope,messageId:'uncertain-propose',message:prompt});
   f.intercept((url,options)=>{if(url.pathname==='/rest/v1/payments'&&options.method==='GET')throw new Error('isolated lost readback');});
   await f.inbound('uncertain-confirm','yes');const run=handlerFor(f,{confirmation:true});const reply=await run.handler({...f.scope,messageId:'uncertain-confirm',message:'yes'});
-  assert.equal(run.outputs.some(out=>out.completed===true),false);assert.doesNotMatch(reply.answer,/Recorded USD 500|remaining balance is USD 451/);
+  assert.equal(run.outputs.some(out=>out.completed===true),false);assert.doesNotMatch(reply.answer,/Recorded USD 500|Balance: USD 451/);
   const after=await f.snapshot();assert.equal(after.payments.length,1);assert.equal(after.payments[0].amount,500);assert.equal(after.invoices.find(i=>i.id===f.ids[0]).amount_paid,500);assert.equal(after.outbound,0);
   assert.equal(f.requests.filter(r=>r.url.includes('/rpc/whatsapp_confirm_owner_invoice_action')).length,1);
  }finally{await f.close();}
@@ -259,7 +259,7 @@ test('new runtime on old production SQL fails closed without any partial proposa
   const before=await f.snapshot();
   for(const [id,message,operation]of [['old-schema-propose',prompt,proposal],['old-schema-leading',leadingPrompt,{...proposal,filters:[{column:'invoice_number',operator:'eq',value:'INV-2026-6769'}]}]]){
    await f.inbound(id,message);const run=handlerFor(f,{readTwice:true,readTarget:operation.filters,operation});const reply=await run.handler({...f.scope,messageId:id,message});
-   assert.equal(run.outputs.at(-1).ok,false);assert.equal(run.outputs.some(out=>out.proposal),false);assert.doesNotMatch(reply.answer,/Proposed|Recorded/);
+   assert.equal(run.outputs.at(-1).ok,false);assert.equal(run.outputs.some(out=>out.proposal),false);assert.doesNotMatch(reply.answer,/Proposed|Record(?:ed)? [A-Z]{3}/);
   }
   await f.db.exec("create function public.whatsapp_owner_partial_payment_capability() returns jsonb language sql as $$select '{\"ok\":true,\"version\":1}'::jsonb$$");
   await f.inbound('old-capability-propose',leadingPrompt);const oldCapability=handlerFor(f,{operation:{...proposal,filters:[{column:'invoice_number',operator:'eq',value:'INV-2026-6769'}]}});await oldCapability.handler({...f.scope,messageId:'old-capability-propose',message:leadingPrompt});assert.equal(oldCapability.outputs.at(-1).ok,false);assert.equal(oldCapability.outputs.some(out=>out.proposal),false);
@@ -376,7 +376,7 @@ for(const [label,expiresAt,stage,retired]of [
   assert.ok(f.requests.filter(request=>new URL(request.url).pathname.endsWith('/rpc/whatsapp_load_pending_action_state')).length>=2,'refresh CAS state after review RPC');
   assert.deepEqual((await f.db.query('select to_jsonb(p) value from whatsapp_pending_actions p where id in (30,31,32) order by id')).rows.map(row=>row.value),otherReviews);
   if(retired){
-   assert.match(result.answer,/Proposed a USD 500/);assert.doesNotMatch(result.answer,/Recorded/);
+   assert.match(result.answer,/Record USD 500/);assert.doesNotMatch(result.answer,/Recorded/);
    const pending=(await f.db.query("select * from whatsapp_pending_actions where workspace_id=$1 and customer_id=$2 and phone=$3 and consumed_at is null",[f.scope.workspaceId,f.scope.customerId,f.scope.phone])).rows[0];
    assert.equal(pending.generation,30);assert.deepEqual(pending.action.changes,{amount:500,currency:'USD'});
    const store=f.requests.find(request=>new URL(request.url).pathname.endsWith('/rpc/whatsapp_store_pending_action'));
@@ -388,7 +388,7 @@ for(const [label,expiresAt,stage,retired]of [
    assert.equal(invoice.amount_paid,500);assert.equal(invoice.total_amount,951.52);assert.equal(after.payments.length,1);assert.equal(after.payments[0].amount,500);assert.equal(after.payments[0].settle_remaining,false);assert.equal(after.outbound,0);
    assert.deepEqual(after.files,before.files);assert.deepEqual(after.invoices.filter(row=>row.id!==f.ids[0]),before.invoices.filter(row=>row.id!==f.ids[0]));
   }else{
-   assert.ok(run.outputs.some(out=>out.code==='PENDING'),JSON.stringify(run.outputs));assert.doesNotMatch(result.answer,/Proposed|Recorded/);
+   assert.ok(run.outputs.some(out=>out.code==='PENDING'),JSON.stringify(run.outputs));assert.doesNotMatch(result.answer,/Proposed|Record(?:ed)? [A-Z]{3}/);
    assert.equal(f.requests.some(request=>new URL(request.url).pathname.endsWith('/rpc/whatsapp_expire_owner_pending')),false,'saving is never passed to generic expiration');
   }
   assert.deepEqual(f.errors,[]);
@@ -410,7 +410,7 @@ for(const fault of ['review-rpc','state-reload','action-reload','proposal-cas'])
    }
   });
   await f.inbound('review249-fault',livePrompt);const run=handlerFor(f,{readOnce:true}),reply=await run.handler({...f.scope,messageId:'review249-fault',message:livePrompt});
-  assert.equal(failed,true);assert.equal(run.outputs.some(out=>out.proposal),false,JSON.stringify({reply,outputs:run.outputs}));assert.doesNotMatch(reply.answer,/Proposed|Recorded/);
+  assert.equal(failed,true);assert.equal(run.outputs.some(out=>out.proposal),false,JSON.stringify({reply,outputs:run.outputs}));assert.doesNotMatch(reply.answer,/Proposed|Record(?:ed)? [A-Z]{3}/);
   assert.equal((await f.db.query("select count(*)::int n from whatsapp_pending_actions where action->>'type'='owner_invoice_payment'")).rows[0].n,0);
   assert.deepEqual(await f.snapshot(),before);
  }finally{await f.close();}

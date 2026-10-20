@@ -55,7 +55,7 @@ test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, wit
       begin raise unique_violation using message='synthetic customer conflict';end;$$;
       create trigger qa_customer_unique_failure before insert on public.customers for each row execute function public.qa_customer_unique_failure();`);
     const unavailable=await turn('qa-native-customer-unique','New invoice QA-NONEXISTENT for No Invoice QA, amount Rs 100, due 25 October 2026');
-    assert.match(unavailable.answer,/service was unavailable/);assert.doesNotMatch(unavailable.answer,/already exists/);
+    assert.match(unavailable.answer,/couldn’t check if the invoice was created/);assert.doesNotMatch(unavailable.answer,/already exists/);
     assert.equal((await db.query("select count(*)::int n from customers where name='No Invoice QA'")).rows[0].n,0);
     assert.equal((await db.query("select count(*)::int n from whatsapp_direct_write_receipts where provider_message_id='qa-native-customer-unique'")).rows[0].n,0);
     assert.deepEqual((await db.query('select whatsapp_owner_partial_payment_capability() value')).rows[0].value,{ok:true,version:4,bookkeepingInstructions:1});

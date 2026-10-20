@@ -67,7 +67,7 @@ test('successful real extraction with contradictory high-confidence money remain
   {code:'INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX'});
   const f = await fixture(wire);
   try {
-    assert.match(await f.turn('inconsistent-source'), /subtotal plus tax does not match the total.*Nothing was saved/);
+    assert.match(await f.turn('inconsistent-source'), /Subtotal plus tax doesn’t match the total.*Nothing was saved/);
     const review = await f.pending.loadInvoiceReview(f.scope);
     assert.equal(review.action.stage, 'incomplete');
     assert.equal(review.action.sourceMessageId, 'inconsistent-source');
@@ -79,7 +79,7 @@ test('successful real extraction with contradictory high-confidence money remain
     assert.equal(review.action.invoice.total, 118);
     assert.ok(review.action.missingFields.includes('total'));
     assert.ok(review.action.validationIssues.includes('INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX'));
-    assert.match(await f.handler({...f.scope,message:'yes',messageId:'confirm-inconsistent'}), /can’t confirm an incomplete/);
+    assert.match(await f.handler({...f.scope,message:'yes',messageId:'confirm-inconsistent'}), /review is incomplete/);
     await f.assertNoInvoiceWrites();
     assert.equal(f.extractionCalls, 1);
   } finally { await f.close(); }
@@ -99,7 +99,7 @@ test('uncertain real extraction money is retained without promoting a proposal o
   ]) await t.test(issue + JSON.stringify(patch), async () => {
     const f = await fixture(invoiceWire(patch));
     try {
-      assert.match(await f.turn(), /partial review.*clearer photo.*Nothing was saved/);
+      assert.match(await f.turn(), /review is incomplete.*clearer photo.*Nothing was saved/);
       const review = await f.pending.loadInvoiceReview(f.scope);
       assert.equal(review.action.stage, 'incomplete');
       assert.equal(review.action.sourceMessageId, 'wire-photo');
@@ -117,7 +117,7 @@ test('printed shipping and inconsistent sample0852 items cannot bypass strict in
       unitPrice,amount:[15,18,21,24][index],confidence:.99}))});
   const f = await fixture(wire);
   try {
-    assert.match(await f.turn('sample0852-source'), /subtotal plus tax does not match the total.*corrected invoice.*Nothing was saved/);
+    assert.match(await f.turn('sample0852-source'), /Subtotal plus tax doesn’t match the total.*corrected invoice.*Nothing was saved/);
     const review = (await f.pending.loadInvoiceReview(f.scope)).action;
     assert.equal(review.stage, 'incomplete');
     assert.equal(review.sourceMessageId, 'sample0852-source');
@@ -142,7 +142,7 @@ test('missing optional extraction facts and currency alone preserve inferred cur
   const f = await fixture(wire);
   try {
     const answer = await f.turn('inferred-currency-source');
-    assert.match(answer, /^Logged invoice/);
+    assert.match(answer, /^Saved invoice/);
     assert.match(answer, /assumed workspace default INR/);
     const rows = (await f.db.query('select * from invoices')).rows;
     assert.equal(rows.length, 1);
@@ -158,7 +158,7 @@ test('missing optional extraction facts and currency alone preserve inferred cur
 test('missing customer from actual wire retains known total and requests the correct fact', async () => {
   const f = await fixture(invoiceWire({customerName:null,customerNameConfidence:0}));
   try {
-    assert.match(await f.turn('missing-customer-source'), /confirm the customer name.*Nothing was saved/);
+    assert.match(await f.turn('missing-customer-source'), /Confirm the customer name.*Nothing was saved/);
     const review = await f.pending.loadInvoiceReview(f.scope);
     assert.equal(review.action.stage, 'incomplete');
     assert.equal(review.action.sourceMessageId, 'missing-customer-source');
@@ -171,7 +171,7 @@ test('missing customer from actual wire retains known total and requests the cor
 test('real extraction provider outage is distinguishable and retains the attachment source', async () => {
   const f = await fixture(invoiceWire(), {providerError:Object.assign(Error('isolated unavailable provider'),{code:'PROVIDER_UNAVAILABLE'})});
   try {
-    assert.match(await f.turn('provider-failed-source'), /extraction service is unavailable.*Nothing was saved/);
+    assert.match(await f.turn('provider-failed-source'), /Invoice reading is unavailable.*Nothing was saved/);
     const review = await f.pending.loadInvoiceReview(f.scope);
     assert.equal(review.action.stage, 'canceled');
     assert.equal(review.action.failureCode, 'EXTRACTION_UNAVAILABLE');

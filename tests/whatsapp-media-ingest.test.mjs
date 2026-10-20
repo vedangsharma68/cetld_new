@@ -77,7 +77,7 @@ test('fresh yes saves only its scoped proposal and returns a saved summary', asy
   assert.equal(saveInput.confirmed, true);
   assert.match(saveInput.idempotencyKey, /^wa_invoice_[a-f0-9]{32}$/);
   assert.equal(consumed.id, 9);
-  assert.match(result.answer, /Invoice saved.*INV-7/s);
+  assert.match(result.answer, /Saved invoice.*INV-7/s);
 });
 
 test('bare ok without a proposal reaches the normal assistant', async () => {
@@ -114,7 +114,7 @@ test('bound media extracts and immediately saves with a logged reply', async () 
     saveInvoice: async ({invoice}) => ({saved: true, invoice}), invoiceStoreFactory: () => ({}),
     extract: async () => ({...values, lineItems: {value: [], confidence: .99}})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/jpeg', fileName: 'invoice.jpg'}});
-  assert.match(answer, /^Logged invoice INV-7[\s\S]*INR/);
+  assert.match(answer, /^Saved invoice INV-7[\s\S]*INR/);
   assert.doesNotMatch(answer, /reply yes/i);
   assert.deepEqual(saved.map(item => item.action.stage), ['proposal', 'saving', 'saved']);
   assert.equal(providerOptions[0].primaryModel, CF_QWEN_MODEL, 'chat keeps the configured conversational model');
@@ -142,7 +142,7 @@ test('production extraction advances an incomplete OCR draft to vision and propo
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([137,80,78,71,13,10,26,10,0]), mimeType: 'image/png'}});
   assert.equal(visionCalls, 1);
   assert.equal(stored, 3);
-  assert.match(answer, /^Logged invoice INV-10/);
+  assert.match(answer, /^Saved invoice INV-10/);
 });
 
 test('incomplete media asks for missing facts and retains an incomplete review without a proposal', async () => {
@@ -193,8 +193,8 @@ test('photo save preserves printed identity and links the original file without 
     saveInvoice:async({invoice})=>({saved:true,invoice:{...invoice,id:'saved-invoice',invoiceNumber:'INV-2026-0001'}}),logger:{error(){}}});
   const media={bytes:Buffer.from([1,2,3]),mimeType:'image/jpeg',fileName:'real.jpg'};
   const kept=await make(async input=>files.push(input))({...scope,message:'',messageId:'wamid-photo',media});
-  assert.match(kept,/Printed invoice number: INV-2026-0720/); assert.match(kept,/Customer: Global Dynamics Inc\./);
+  assert.match(kept,/Printed number: INV-2026-0720/); assert.match(kept,/for Global Dynamics Inc\./);
   assert.equal(files[0].invoiceId,'saved-invoice'); assert.deepEqual(files[0].bytes,media.bytes);
   const notKept=await make(async()=>{throw Error('storage unavailable')})({...scope,message:'',messageId:'wamid-photo-2',media});
-  assert.match(notKept,/invoice was saved, but the original file was not kept/i);
+  assert.match(notKept,/original file wasn’t kept/i);
 });

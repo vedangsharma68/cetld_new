@@ -44,8 +44,8 @@ async function fixture({lineItems=[{description:'Synthetic service',quantity:1,u
 test('event306 exact total instruction adjusts one service line, retains USD40 once, reports USD10 excess and recovers a lost reply',async()=>{
  const f=await fixture();try{
   const foreign=await f.read(f.ids[1]);
-  assert.match((await f.turn('total-payment-propose',`Record a USD 40 payment on test invoice ${number}.`)).answer,/Proposed a USD 40/);
-  assert.match((await f.turn('total-payment-confirm','yes')).answer,/remaining balance is USD 60/);
+  assert.match((await f.turn('total-payment-propose',`Record a USD 40 payment on test invoice ${number}.`)).answer,/Record USD 40/);
+  assert.match((await f.turn('total-payment-confirm','yes')).answer,/Balance: USD 60/);
   const original=await f.history();assert.equal(original.length,1);assert.equal(original[0].value.amount,40);
   const calls=f.providerCalls(),offset=f.executions.length,reply=await f.turn('event306-total',request);
   assert.equal(reply.plannerFailure,undefined,JSON.stringify(reply));assert.equal(f.providerCalls(),calls);

@@ -89,7 +89,7 @@ for (const persistentIncorrectReply of [false,true]) test(`native extraction tim
   const f = await fixture(t, {persistentIncorrectReply});
   try {
     const reply = await f.turn();
-    assert.match(reply.answer, /extraction timed out.*Nothing was saved/i);
+    assert.match(reply.answer, /Reading the invoice timed out.*Nothing was saved/i);
     assert.doesNotMatch(reply.answer, /couldn't find|not found|does not exist/);
     assert.doesNotMatch(JSON.stringify(reply), /isolated transport timeout|isolated provider unavailable/);
     // The outer handler exposes the grounded answer rather than internal
@@ -102,7 +102,7 @@ for (const persistentIncorrectReply of [false,true]) test(`native extraction tim
     const result = f.results[0];
     assert.equal(result.code, 'UNAVAILABLE');
     assert.equal(result.outcome, 'not_saved');
-    assert.match(result.message, /extraction timed out.*Nothing was saved/i);
+    assert.match(result.message, /Reading the invoice timed out.*Nothing was saved/i);
     const pending = createWhatsAppPendingActionStore({supabase:f.supabase});
     const review = (await pending.loadInvoiceReview(f.scope)).action;
     assert.equal(review.stage, 'canceled');
@@ -131,7 +131,7 @@ for (const persistentIncorrectReply of [false,true]) test(`native extraction tim
 });
 
 test('contextual invoice absence requires a checked NOT_FOUND result while missing field wording stays valid', () => {
-  const unavailable = {ok:false,code:'UNAVAILABLE',outcome:'not_saved',review:{stage:'canceled'},message:'Invoice extraction timed out. Nothing was saved.'};
+  const unavailable = {ok:false,code:'UNAVAILABLE',outcome:'not_saved',review:{stage:'canceled'},message:'Invoice Reading the invoice timed out. Nothing was saved.'};
   assert.equal(ownerGroundingIssue(incorrect,[unavailable],'log this invoice'), 'fresh_database_read_required');
   assert.equal(ownerGroundingIssue("I couldn't locate it.",[unavailable],'log this invoice'), 'fresh_database_read_required');
   const read = {ok:false,code:'NOT_FOUND',table:'invoices',operation:'read'};

@@ -38,7 +38,7 @@ test('a thrown workspace tool retains safe exception and requested-operation evi
   const result=await runOwnerAgent({tools,message:'change invoice amount',logger:{info(label,data){logs.push({label,data});}},
     provider:{async generate(){return {model:CF_QWEN_MODEL,toolCalls:[{id:'isolated-throw',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'update',table:'invoices',values:{total_amount:6670,currency:'INR'}})}}]};}}});
   assert.equal(writes,1);assert.equal(result.plannerFailure.code,'OWNER_AGENT_TOOL_FAILED');
-  assert.match(result.answer,/check your workspace|check its status/i);
+  assert.match(result.answer,/check cetld|check its status/i);
   const call=logs.find(row=>row.label==='WhatsApp owner tool call').data;
   assert.equal(call.operation,'update');assert.equal(call.table,'invoices');
   assert.deepEqual(call.exception,{errorName:'TypeError',exceptionCode:'UNKNOWN',applicationFrame:'automation/whatsapp/workspace-data.mjs:831:21'});
@@ -954,7 +954,7 @@ test('owner interruption status remains available when the model service is down
   const reply=await handler.createSafeFailureReply({workspaceId,code:'OWNER_LOOP_TIMEOUT',hasAttachment:true});
   assert.equal(calls,0);assert.ok(reply);
   assert.match(reply,/too long/i);
-  assert.match(reply,/check your workspace/i);
+  assert.match(reply,/check cetld/i);
   assert.doesNotMatch(reply,/PRIVATE_DATABASE_SECRET|PGRST/);
 });
 
