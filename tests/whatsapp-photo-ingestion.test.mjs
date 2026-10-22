@@ -129,7 +129,9 @@ async function snapshot(db) {
 }
 
 test('bundled sample JPEG is actually legible to the offline OCR engine',async()=>{
-  const result=await extractInvoiceFromImage({bytes:sample,mimeType:'image/jpeg'});
+  // This checks real OCR accuracy under parallel CI load. image-text.test.mjs
+  // separately verifies strict production deadlines and cancellation.
+  const result=await extractInvoiceFromImage({bytes:sample,mimeType:'image/jpeg',timeoutMs:30_000});
   assert.equal(result.total.value,118);assert.equal(result.subtotal.value,100);assert.equal(result.tax.value,18);
   assert.match(result.ocr.text,/QA Sample Buyer/);
   assert.ok(result.total.confidence<0.75,'offline OCR alone never authorizes a save');

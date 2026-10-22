@@ -1,3 +1,4 @@
+import {PHONE_FORMAT_GUIDANCE} from './owner-phone.mjs';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
 import {getSendEligibility} from './consent.mjs';
 import {brandedReminder} from '../preferences.mjs';
@@ -8,32 +9,33 @@ const TYPE='owner_reminder_approval';
 const MESSAGES={
   AMBIGUOUS:'More than one invoice matches. Which invoice number should I use?',
   NOT_FOUND:'I could not find that invoice in your workspace.',
-  DENIED:'The verified owner binding is unavailable. Nothing was approved or sent.',
+  DENIED:'The verified owner binding is unavailable. Reconnect your owner WhatsApp number in Settings, then request a fresh preview. Nothing was approved or sent.',
   PENDING:'Another owner action is pending. Confirm or cancel it first.',
   STALE:'The invoice, customer or reminder preferences changed after the preview. Request a fresh preview.',
   EXPIRED:'The reminder preview expired. Request a fresh preview.',
+  REPLAY_MISMATCH:'This reminder request changed after it was recorded. Request a fresh preview.',
   INVALID:'A later explicit confirmation or cancellation is required.',
-  NO_PENDING_ACTION:'There is no matching reminder preview to confirm.',
-  missing_contact:'This customer needs a valid WhatsApp phone number.',
-  missing_consent:'This customer has not opted in to invoice reminders.',
-  revoked:'This customer withdrew consent for invoice reminders.',
-  missing_recipient_opt_in:'This customer has not opted in to invoice reminders.',
-  category_not_consented:'This customer has not consented to invoice updates.',
-  unbound:'The current customer phone does not match the reminder consent.',
-  suppressed:'This customer has stopped WhatsApp reminders.',
-  globally_suppressed:'This phone has stopped WhatsApp messages.',
-  ineligible_invoice:'Reminders require a sent, unpaid receivable invoice with a due date.',
+  NO_PENDING_ACTION:'There is no matching reminder preview to confirm. Request a fresh preview.',
+  missing_contact:"This customer's number isn't a usable WhatsApp number yet. "+PHONE_FORMAT_GUIDANCE,
+  missing_consent:"This customer hasn't agreed to WhatsApp reminders. Get their OK, then tell me.",
+  revoked:'This customer withdrew consent for invoice reminders. Get their renewed OK and record their consent before requesting another reminder.',
+  missing_recipient_opt_in:"This customer hasn't agreed to WhatsApp reminders. Get their OK, then tell me.",
+  category_not_consented:'This customer has not consented to invoice updates. Get their OK for invoice reminders, then record it.',
+  unbound:'The current customer phone does not match the reminder consent. Verify the customer and record consent for their current number.',
+  suppressed:'This customer has stopped WhatsApp reminders. Ask them to opt back in before requesting another reminder.',
+  globally_suppressed:'This phone has stopped WhatsApp messages. Ask the recipient to opt back in before requesting another reminder.',
+  ineligible_invoice:'Reminders require a sent, unpaid receivable invoice with a due date. Review the invoice status, balance and due date first.',
   unresolved_exception:'Resolve the invoice follow-up exception before approving a reminder.',
-  business_name_required:'Save your business name before approving a reminder.',
-  reminder_limit:'This invoice has reached the maximum number of reminders.',
+  business_name_required:"Save your business name first - tell me the name and I'll store it.",
+  reminder_limit:'This invoice has reached the maximum number of reminders. Review the reminder limit in Settings before requesting another.',
   contact_hours:'The customer is outside your allowed contact hours. Request the reminder during the contact window.',
   delivery_in_progress:'A reminder delivery is already pending or uncertain. Review its delivery status before requesting another.',
   external_accounting_required:'This invoice requires external accounting verification before reminders can be queued.',
   payment_audit_mismatch:'The recorded payment audit is inconsistent. Review the payment history first.',
   payment_balance_mismatch:'The invoice balance does not match its recorded payments. Review the payment history first.',
-  template_unavailable:'The approved reminder template is unavailable. Nothing was approved or queued.',
+  template_unavailable:'The approved reminder template is unavailable. Check the approved template in WhatsApp Settings, then request a fresh preview. Nothing was approved or queued.',
 };
-const fail=code=>({ok:false,completed:false,code:MESSAGES[code]?code:'UNAVAILABLE',
+export const ownerReminderFailure=code=>({ok:false,completed:false,code:MESSAGES[code]?code:'UNAVAILABLE',
   message:MESSAGES[code]||'Reminder approval is temporarily unavailable. Nothing was approved or queued.'});
 const unwrap=result=>{if(result?.error)throw result.error;return result?.data;};
 
@@ -50,9 +52,11 @@ export function ownerReminderRequest(message){
 }
 
 export function createOwnerReminderRuntime({supabase,scope,message='',messageId,authorize}={}){
-  let reply=null,confirmation=false;
+  let reply=null,confirmation=false,customerName=null,contactWindow=null;
   const check=async ctx=>{ctx?.assertLive?.();if(!await authorize(scope))throw Error('owner required');await ctx?.assertAuthorized?.();ctx?.assertLive?.();};
-  const refuse=code=>{confirmation=false;const result=fail(code);reply=result.message;return result;};
+  const refuse=code=>{confirmation=false;const result=ownerReminderFailure(code);if(customerName)result.message=result.message.replace(/This customer(?:'s)?/g,m=>customerName+(m.endsWith("'s")?"'s":''));
+    if(code==='contact_hours'&&contactWindow)result.message+=' Contact window: '+contactWindow+'.';
+    reply=result.message;return result;};
   const resultReply=result=>{
     if(!result?.ok)return refuse(result?.code||result?.reason);
     confirmation=result.requiresConfirmation===true;
@@ -76,6 +80,13 @@ export function createOwnerReminderRuntime({supabase,scope,message='',messageId,
   };
   const decide=async({pending,decision,interactionId=null},ctx)=>{
     if(pending?.action?.type!==TYPE||!['confirm','cancel','pending'].includes(decision))return refuse('INVALID');
+    customerName=pending?.action?.snapshot?.customer?.name?.trim()||null;
+    try{
+      await check(ctx);
+      const settings=unwrap(await supabase.from('workspace_settings').select('default_timezone,follow_up_preferences').eq('workspace_id',scope.workspaceId).maybeSingle());
+      const prefs=settings?.follow_up_preferences||{};
+      contactWindow=`${prefs.contactStart||'09:00'}-${prefs.contactEnd||'18:00'} (${settings?.default_timezone||'Asia/Kolkata'}), weekdays ${(prefs.allowedWeekdays||[1,2,3,4,5]).map(day=>['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][day]).join(', ')}`;
+    }catch{}
     try{const result=await rpc({p_action:decision,p_pending_id:pending.id,p_pending_version:pending.version,p_interaction_id:interactionId},ctx);if(!result.ok)reply=result.message;return result;}
     catch{const result=refuse('UNAVAILABLE');reply=result.message;return result;}
   };
@@ -106,8 +117,20 @@ export function createOwnerReminderRuntime({supabase,scope,message='',messageId,
         const invoice=found.row;
         const settings=unwrap(await supabase.from('workspace_settings').select('business_name,default_timezone,follow_up_preferences,updated_at').eq('workspace_id',scope.workspaceId).maybeSingle());
         const customer=unwrap(await supabase.from('customers').select('id,name,phone,reminder_tone').eq('workspace_id',scope.workspaceId).eq('id',invoice.customer_id).maybeSingle());
+        customerName=customer?.name?.trim()||null;
+        const prefs=settings?.follow_up_preferences||{};
+        contactWindow=`${prefs.contactStart||'09:00'}-${prefs.contactEnd||'18:00'} (${settings?.default_timezone||'Asia/Kolkata'}), weekdays ${(prefs.allowedWeekdays||[1,2,3,4,5]).map(day=>['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][day]).join(', ')}`;
         await check(ctx);
-        if(!customer||!/^\+[1-9]\d{7,14}$/.test(customer.phone||''))return refuse('missing_contact');
+        if(!customer||!/^\+[1-9]\d{7,14}$/.test(customer.phone||'')){
+          if(customer)try{
+            await check(ctx);
+            await supabase.from('whatsapp_owner_contact_recovery').upsert({workspace_id:scope.workspaceId,owner_id:scope.ownerId,phone:scope.phone,
+              invoice_id:invoice.id,customer_id:customer.id,request_message:String(message),send_now:params.operation==='sendReminderNow',
+              reason:'missing_contact',expires_at:new Date(Date.now()+30*60_000).toISOString()},{onConflict:'workspace_id,owner_id,phone'});
+            await check(ctx);
+          }catch{/* The owner still receives the specific failure if context storage is unavailable. */}
+          return refuse('missing_contact');
+        }
         const eligibility=await getSendEligibility({supabase,workspaceId:scope.workspaceId,phone:customer.phone});
         await check(ctx);
         if(!eligibility.allowed)return refuse(eligibility.reason);

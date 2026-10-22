@@ -22,9 +22,9 @@ const env={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE
   WHATSAPP_GRAPH_API_VERSION:'v23.0',WHATSAPP_APP_SECRET:'isolated-signature-secret'};
 const logger={log(){},warn(){},error(){}};
 
-async function setup(){
+async function setup({excludeMigrations=[]}={}){
   const graph=[];let mode='accepted',sendHook=null;
-  const f=await createOfflineSqlNetwork({externalFetch:async(url,options)=>{
+  const f=await createOfflineSqlNetwork({excludeMigrations,externalFetch:async(url,options)=>{
     assert.equal(url.origin,'https://graph.facebook.com');const payload=JSON.parse(options.body);graph.push(payload);
     if(sendHook)await sendHook(payload);
     if(mode==='unknown')throw Error('isolated dispatch interrupted');
@@ -144,9 +144,15 @@ test('installed SQL source orders phone/settings before invoice and mixed batch 
       assert(def.indexOf('from public.workspace_settings')<def.indexOf('from public.invoices'));
       assert.equal((def.match(/workspace_settings[^;]*for share/g)||[]).length,1);
     }
-    const def=(await f.db.query("select pg_get_functiondef('public.whatsapp_apply_owner_batch(uuid,uuid,text,text,text,jsonb)'::regprocedure) def")).rows[0].def;
-    assert(def.indexOf('hashtextextended(p_phone,0)')<def.indexOf('from public.workspace_settings'));
-    assert(def.indexOf('from public.workspace_settings')<def.indexOf('for v_item in'));
+    const wrapper=(await f.db.query("select pg_get_functiondef('public.whatsapp_apply_owner_batch(uuid,uuid,text,text,text,jsonb)'::regprocedure) def")).rows[0].def;
+    assert.match(wrapper,/result:=app\.owner_contact_batch\(p_workspace_id,p_owner_id,p_phone,p_provider_message_id,p_authorization_quote,p_operations\);/);
+    const def=(await f.db.query("select pg_get_functiondef('app.owner_contact_batch(uuid,uuid,text,text,text,jsonb)'::regprocedure) def")).rows[0].def;
+    const phoneLock=def.indexOf('perform pg_advisory_xact_lock(hashtextextended(p_phone,0));');
+    const settingsLock=def.indexOf('perform 1 from public.workspace_settings where workspace_id=p_workspace_id for update;');
+    const childLoop=def.indexOf('for v_item in select value from jsonb_array_elements(p_operations) loop');
+    const childCall=def.indexOf('app.whatsapp_apply_owner_batch_operation(');
+    assert(phoneLock>=0);assert(settingsLock>=0);assert(childLoop>=0);assert(childCall>=0);
+    assert(phoneLock<settingsLock);assert(settingsLock<childLoop);assert(childLoop<childCall);
     const contacts=(await f.db.query("select pg_get_functiondef(t.tgfoid) def from pg_trigger t where t.tgrelid='public.customers'::regclass and not t.tgisinternal")).rows;
     assert(contacts.length>0);for(const {def} of contacts)assert(!/update\s+(public\.)?invoices/i.test(def));
     const settings=(await f.db.query("select pg_get_functiondef('app.invalidate_core_followup_approvals()'::regprocedure) def")).rows[0].def;
@@ -174,7 +180,9 @@ test('old recovered receipt cannot claim a newer already-counted invoice version
 });
 
 test('forward batch lock migration patches installed coordinator only, preserves ACL/private engine, and fails closed on repeated markers',async()=>{
-  const f=await setup();try{
+  // Exercise this historical forward patch before the contact wrapper moves
+  // the coordinator into its private engine. The latest engine is checked above.
+  const f=await setup({excludeMigrations:['20261022100000_owner_phone_contact_recovery.sql']});try{
     const signature='public.whatsapp_apply_owner_batch(uuid,uuid,text,text,text,jsonb)';
     const snapshot=async()=>(await f.db.query("select pg_get_functiondef($1::regprocedure) def,(select proacl::text from pg_proc where oid=$1::regprocedure) acl,(select md5(pg_get_functiondef(p.oid)) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='app' and p.proname='whatsapp_apply_owner_batch_operation') engine",[signature])).rows[0];
     const installed=await snapshot();

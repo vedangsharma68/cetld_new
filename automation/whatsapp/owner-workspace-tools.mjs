@@ -16,6 +16,7 @@ export function createOwnerWorkspaceTools(options = {}) {
   let writeAttempted = false;
   let lastTool = null;
   let buttonAction=null;
+  let phoneFailureReply=null;
   let pendingWasRead=false;
   let accountingBlocked=false;
   const trackAccountingBlock=result=>{
@@ -104,6 +105,8 @@ export function createOwnerWorkspaceTools(options = {}) {
           return {...result,ok:result?.ok!==false,readOnly:true,operation:'configuration'};
         }
         const result=trackAccountingBlock(await tool.execute(args,context));
+        if(result?.code==='INVALID_PHONE')phoneFailureReply=result.message;
+        else if(result?.ok&&['create','update','batch','confirm'].includes(args?.operation))phoneFailureReply=null;
         if(args?.operation==='pending')pendingWasRead=result?.ok!==false&&result?.pending===true;
         // Advertise choices only after the server can actually sign them for a
         // current proposal. A model statement is never evidence of a button.
@@ -144,6 +147,7 @@ export function createOwnerWorkspaceTools(options = {}) {
       return buttonAction&&!attachmentReview?{...requirement,maxLength:Math.min(requirement?.maxLength||900,900),confirmationText:null,requiresCancel:false,requiresReplyCue:false,buttonsAvailable:true}:requirement;
     },
     getReminderReply:()=>reminders.getReply(),
+    getPhoneFailureReply:()=>phoneFailureReply,
     decideButton:async input=>sanitizeWorkspaceToolResult(trackAccountingBlock(await (input?.pending?.action?.type==='owner_reminder_approval'?reminders.decide(input):input?.pending?.action?.type==='owner_invoice_reopen'?reopening.decide(input):direct.decideButton(input))),options.scope),
     lookupCompleted:async()=>sanitizeWorkspaceToolResult(await reminders.lookupCompleted()||await direct.lookupCompleted(),options.scope),
     async getPendingActionForButtons(){if(accountingBlocked)return null;return options.pending?.loadPendingAction?.({...options.scope});},

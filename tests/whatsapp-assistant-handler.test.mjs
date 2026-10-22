@@ -163,9 +163,9 @@ function contactFlow({consentAnswer = 'yes'} = {}) {
   return {handler, writes, rpcCalls, consentAnswer};
 }
 
-test('pending invoice phone answer requires E.164 and saves contact details without fabricating client consent', async () => {
+test('pending invoice phone answer validates the format and delegates contact saving', async () => {
   const flow = contactFlow();
-  assert.match(await flow.handler({...scope, message: '415 bananas'}), /full WhatsApp number with country code/i);
+  assert.equal(await flow.handler({...scope, message: '415 bananas'}), 'Send it with the country code, like +919818685252.');
   assert.equal(flow.writes.length, 0);
   assert.match(await flow.handler({...scope, message: '+1 (415) 555-0244'}), /Saved \+14155550244.*confirm their agreement/s);
   assert.equal(flow.writes.length, 1);
@@ -195,16 +195,16 @@ test('ordinary customers cannot upload, edit, or confirm a legacy invoice draft'
  assert.match(await upload({...scope,media:{bytes:Buffer.from('photo')}}),/Only the business owner/);
 });
 
-for (const number of ['+1 (415) 555-0244', '415 bananas']) {
+for (const number of ['+1 415 555-0244', '415 bananas', '+1 (415) 555-0244']) {
   test(`contact card answers the pending debtor phone question: ${number}`, async () => {
     const flow = contactFlow();
     const reply = await flow.handler({...scope, message: '', contactCard: {name: 'Different display name', phone: number}});
-    if (number.startsWith('+')) {
+    if (number === '+1 415 555-0244') {
       assert.match(reply, /Saved \+14155550244 for Acme/);
       assert.equal(flow.writes[0].invoiceId, 'invoice-1');
       assert.ok(flow.writes[0].assumedConsentAt);
     } else {
-      assert.match(reply, /Send the full WhatsApp number with country code/);
+      assert.equal(reply, 'Send it with the country code, like +919818685252.');
       assert.equal(flow.writes.length, 0);
     }
     assert.equal(flow.rpcCalls.length, 0);
@@ -217,4 +217,12 @@ test('contact card without a pending question asks for the invoice without writi
   const reply = await flow.handler({...scope, message: '', contactCard: {name: 'Acme', phone: '+14155550244'}});
   assert.equal(reply, 'Which customer or invoice is this number for?');
   assert.equal(flow.writes.length, 1);
+});
+
+test('pending invoice phone answer normalizes a bare Indian mobile through the shared validator',async()=>{
+  const flow=contactFlow();
+  assert.match(await flow.handler({...scope,message:'it is 9818685252'}),/Saved \+919818685252/);
+  assert.equal(flow.writes.length,1);
+  assert.equal(flow.writes[0].phone,'+919818685252');
+  assert.equal(flow.rpcCalls.length,0,'the invoice store owns the atomic consent write');
 });

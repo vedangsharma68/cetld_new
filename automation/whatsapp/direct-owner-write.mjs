@@ -241,7 +241,7 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
           p_workspace_id:workspaceId,p_owner_id:ownerId,p_phone:phone,p_provider_message_id:providerMessageId,
           p_user_message:authorization.quote,p_idempotency_key:idempotencyKey,p_invoice_id:targetId,
           p_expected_updated_at:expectedUpdatedAt,p_values:correctionValues,
-        }):await supabase.rpc('whatsapp_apply_direct_owner_write',{
+        }):await supabase.rpc(Object.hasOwn(payload,'phone')||Object.hasOwn(payload,'customer_phone')?'whatsapp_apply_owner_contact_write':'whatsapp_apply_direct_owner_write',{
           p_workspace_id:workspaceId,p_owner_id:ownerId,p_phone:phone,
           p_provider_message_id:providerMessageId,p_interaction_id:interactionId,
           p_idempotency_key:idempotencyKey,p_operation:operation,p_target_id:targetId,

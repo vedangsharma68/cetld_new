@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {verifyOwnerContactRecovery} from '../tests/fixtures/owner-contact-recovery.mjs';
 import {AIProvider, CF_BACKUP_MODEL, CF_PRIMARY_MODEL, CF_QWEN_MODEL, GEMINI_FALLBACK_MODEL, VERIFIED_MODEL_CATALOG, cloudflareBreakerState, isCloudflareModelId} from '../ai/provider.mjs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -160,6 +161,7 @@ function draftConfirmedProposal(result) {
 const scenario = (name,run,options={}) => Object.freeze({name,run,...options});
 
 const FAST_SCENARIOS = [
+  scenario('owner_phone_and_business_context_recovery_native_sql',verifyOwnerContactRecovery),
   scenario('45_second_background_job_uses_typing_without_progress_message',simulateHeavyOwnerJob),
   scenario('long_job_sends_progress_only_after_one_minute',simulateLongOwnerJob),
   scenario('meta_slang_one_configuration_tool_round_under_10s',async()=>{

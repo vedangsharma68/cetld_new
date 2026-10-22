@@ -1,5 +1,6 @@
 import {spawn} from 'node:child_process';
-import {writeFile,readFile,unlink} from 'node:fs/promises';
+import {writeFile,readFile,unlink,mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
@@ -55,15 +56,23 @@ export async function writeReleaseManifest({outputPath='owner-chat-build.json'}=
     'supabase/migrations/20261019090000_business_name_reminder_reapproval.sql');
   paths.push('automation/whatsapp/owner-reminders.mjs','supabase/migrations/20261020130000_owner_chat_reminder_approval.sql');
   paths.push('automation/invoice-sync.mjs','automation/invoice-sync-store.mjs','automation/invoice-sync-reconciler.mjs','invoice/bookkeeping-client.mjs');
+  paths.push('automation/whatsapp/owner-phone.mjs','supabase/migrations/20261022100000_owner_phone_contact_recovery.sql');
   const files={};for(const path of paths)files[path]=createHash('sha256').update(await readFile(path)).digest('hex');
   let commit=process.env.VERCEL_GIT_COMMIT_SHA||process.env.GITHUB_SHA;
   if(!commit)try{commit=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();}catch{commit=null;}
   await writeFile(outputPath,JSON.stringify({version:1,commit,files,checks:['owner-chat-fast','typecheck','full-suite']})+'\n');
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href) {
+  const fixtureCacheDir=await mkdtemp(path.join(tmpdir(),'cetld-release-sql-'));
+  const previousFixtureCache=process.env.CETLD_SQL_FIXTURE_CACHE_DIR;
+  process.env.CETLD_SQL_FIXTURE_CACHE_DIR=fixtureCacheDir;
   try{
     await unlink('owner-chat-build.json').catch(error=>{if(error.code!=='ENOENT')throw error;});
     await runReleaseGate();await writeReleaseManifest();
     console.log('Owner chat release gate passed.');
   }catch(error){console.error(error.message);process.exitCode=1;}
+  finally{
+    if(previousFixtureCache===undefined)delete process.env.CETLD_SQL_FIXTURE_CACHE_DIR;else process.env.CETLD_SQL_FIXTURE_CACHE_DIR=previousFixtureCache;
+    await rm(fixtureCacheDir,{recursive:true,force:true});
+  }
 }

@@ -1,7 +1,8 @@
+import {normalizeOwnerPhone,PHONE_FORMAT_GUIDANCE} from './owner-phone.mjs';
 import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL,
   sanitizeModelSettings} from '../../ai/provider.mjs';
 import {createWhatsAppAssistantChannel} from '../../ai/whatsapp-channel.mjs';
-import {getSendEligibility, normalizeWhatsAppPhone} from './consent.mjs';
+import {getSendEligibility} from './consent.mjs';
 import {readConversationHistory, writeConversationTurn} from './conversation-memory.mjs';
 import {extractInvoice, INVOICE_IMAGE_REPLIES} from '../../ai/extraction.mjs';
 import {createWhatsAppPendingActionStore} from './pending-actions.mjs';
@@ -257,21 +258,22 @@ export async function answerDebtorPhone({pending, storeFactory, scope, message, 
     catch (error) { if (contactCard) throw error; return null; }
   }
   if (contactCard) {
-    try { normalizeWhatsAppPhone(String(contactCard.phone || '').replace(/[\s().-]/g, '')); }
-    catch { return 'Send the full WhatsApp number with country code, like +919876543210.'; }
+    try { normalizeOwnerPhone(contactCard.phone); }
+    catch { return PHONE_FORMAT_GUIDANCE; }
   }
   const contact = row?.action;
   if (contact?.type !== 'invoice_debtor_phone' || contact.stage !== 'awaiting_phone') {
     return contactCard ? 'Which customer or invoice is this number for?' : null;
   }
   const text = String(message || '').trim();
-  let candidate = contactCard ? String(contactCard.phone || '').replace(/[\s().-]/g, '')
-    : text.match(PHONE_CANDIDATE)?.[0]?.replace(/[\s().-]/g, '') || '';
+  let candidate = contactCard ? String(contactCard.phone || '')
+    : text.match(PHONE_CANDIDATE)?.[0]?.replace(/[\s().-]/g, '')
+      || text.match(/(?:^|\b)[6-9][\d -]{8,18}\d(?:$|[.!])/)?.[0]?.replace(/[.!]/g,'').trim() || '';
   const countryCode = !contactCard && text.match(/^\+(\d{1,3})[.!]?$/)?.[1];
   if (!candidate && countryCode && contact.clientPhoneRaw) candidate = `+${countryCode}${String(contact.clientPhoneRaw).replace(/\D/g, '')}`;
   let normalized;
-  try { normalized = normalizeWhatsAppPhone(candidate); }
-  catch { return 'Send the full WhatsApp number with country code, like +919876543210.'; }
+  try { normalized = normalizeOwnerPhone(candidate); }
+  catch { return PHONE_FORMAT_GUIDANCE; }
   const store = await storeFactory();
   await store.saveDebtorPhone({invoiceId: contact.invoiceId, phone: normalized, assumedConsentAt: clock().toISOString()});
   await pending.consumePendingAction({...row, ...scope});
@@ -373,7 +375,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           currency: currencyResult.currency, notes: extracted?.notes?.value ?? null, alreadyPaid: false,
           direction: 'receivable', lineItems: extracted?.lineItems?.value || []};
         // An unusable printed contact must not block saving the invoice itself.
-        try { invoice.clientPhone = normalizeWhatsAppPhone(invoice.clientPhone); }
+        try { invoice.clientPhone = normalizeOwnerPhone(invoice.clientPhone); }
         catch { invoice.clientPhone = null; }
         const validationIssues = extractionValidationIssues(extracted);
         const missing = ['customerName', 'total'].filter(field => extracted?.[field]?.value == null
@@ -454,14 +456,15 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
             logger?.error?.('WhatsApp invoice file persistence failed', {workspaceId, invoiceId: savedInvoice.id,
               message: String(fileError?.message || '').slice(0, 200)});
           }
+          let debtorPhone = null;
+          try { debtorPhone = normalizeOwnerPhone(validatedInvoice.clientPhone); } catch {}
+          // Reviewed contact evidence is valid while the scoped review saves.
+          if (debtorPhone) await store.saveDebtorPhone({invoiceId: savedInvoice.id, phone: debtorPhone,
+            assumedConsentAt: clock().toISOString()});
           const completed = await pending.transitionInvoiceReview({...claimed, workspaceId, customerId, phone,
             fromStage: 'saving', action: {...action, stage: 'saved', invoice: savedInvoice}});
           if (!completed) return 'The invoice was saved, but I couldn’t update its status here. Check cetld before retrying.';
           const summary = loggedSummary(savedInvoice, {currencySource: currencyResult.source, dueDateSource: due.source, assumptions, fileKept});
-          let debtorPhone = null;
-          try { debtorPhone = normalizeWhatsAppPhone(validatedInvoice.clientPhone); } catch {}
-          if (debtorPhone) await store.saveDebtorPhone({invoiceId: savedInvoice.id, phone: debtorPhone,
-            assumedConsentAt: clock().toISOString()});
           if (!debtorPhone) {
             const contactAction = {type: 'invoice_debtor_phone', stage: 'awaiting_phone', invoiceId: savedInvoice.id,
               clientName: validatedInvoice.clientName, clientPhoneRaw: validatedInvoice.clientPhoneRaw || null};
