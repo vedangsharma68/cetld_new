@@ -1,4 +1,4 @@
-import { AccountingProviderError } from './errors.mjs';
+import { AccountingProviderError, zohoResponseDiagnostics } from './errors.mjs';
 
 export async function providerFetch(fetchImpl, provider, url, options = {}) {
   // Retry only safe Zoho reads; writes and OAuth exchanges may already have succeeded.
@@ -15,14 +15,16 @@ export async function providerFetch(fetchImpl, provider, url, options = {}) {
   }
   if (response.ok) return response;
 
-  let providerCode = `http_${response.status}`;
+  let providerCode = `http_${response.status}`, diagnostics={};
   try {
     const body = await response.clone().json();
-    providerCode = body?.Fault?.Error?.[0]?.code || body?.error || body?.code || body?.errorCode || providerCode;
+    const code=body?.Fault?.Error?.[0]?.code ?? body?.error ?? body?.code ?? body?.errorCode;
+    if (typeof code==='string' || typeof code==='number') providerCode=code;
+    if (provider==='zoho_books') diagnostics=zohoResponseDiagnostics(body,url,options);
   } catch {
     // Do not read or include arbitrary response text: it can contain credentials.
   }
-  throw new AccountingProviderError(provider, response.status, providerCode);
+  throw Object.assign(new AccountingProviderError(provider,response.status,providerCode),diagnostics);
 }
 
 export async function jsonResponse(response, provider) {

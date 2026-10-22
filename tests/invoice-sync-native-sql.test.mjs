@@ -5,6 +5,7 @@ import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createInvoiceReconcileStore,reconcileInvoiceSync} from '../automation/invoice-sync-reconciler.mjs';
 import {retryAssistantInvoiceSync} from '../ai/invoice-ops.mjs';
 import {createWhatsAppInvoiceStore} from '../automation/whatsapp/invoice-store.mjs';
+import {createAccountingIntegration,createZohoBooksProvider,InMemoryAccountingStore,TokenCipher,connectionAad} from '../automation/accounting/index.mjs';
 
 test('real SQL numbering, REST claims and WhatsApp/manual reconciliation remain unique and tenant-scoped',async()=>{
   const f=await createOfflineSqlNetwork(),owner=randomUUID();
@@ -54,5 +55,26 @@ test('real SQL numbering, REST claims and WhatsApp/manual reconciliation remain 
     assert.equal(await scoped.getAssistantInvoice(second.id),null);
     await assert.rejects(retryAssistantInvoiceSync({store:scoped,invoiceId:second.id,accounting}),error=>error.code==='INVOICE_NOT_FOUND');
     assert.equal(calls,1);
+    // Preserve a real adapter's rejection through the integration, retry API and SQL CAS.
+    const rejected=await create(0),connections=new InMemoryAccountingStore(),cipher=new TokenCipher(Buffer.alloc(32,7));
+    const token={accessToken:'fixture-access',refreshToken:'fixture-refresh',expiresAt:Date.now()+3600_000,apiDomain:'https://www.zohoapis.in'};
+    await connections.insertConnection({userId:owner,workspaceId:workspaces[0],provider:'zoho_books',providerAccountId:'fixture-org',apiDomain:token.apiDomain,status:'connected',...cipher.encrypt(token,connectionAad('zoho_books',workspaces[0]))});
+    const requests=[],providerMessage='Synthetic export rejection for SQL persistence.';
+    const zoho=createZohoBooksProvider({fetchImpl:async(url,options={})=>{
+      const path=new URL(url).pathname;requests.push(`${options.method || 'GET'} ${path}`);
+      if(options.method==='POST')return Response.json({code:1001,message:providerMessage},{status:400});
+      return Response.json(path.endsWith('/contacts')?{contacts:[{contact_name:'Client',contact_id:'fixture-contact'}]}:{invoices:[]});
+    }});
+    const integration=createAccountingIntegration({store:connections,cipher,providers:{zoho_books:zoho,quickbooks:{}}});
+    const failure=await retryAssistantInvoiceSync({store:scoped,invoiceId:rejected.id,accounting:integration});
+    assert.equal(failure.sync.status,'failed');
+    assert.deepEqual(requests,['GET /books/v3/invoices','GET /books/v3/contacts','POST /books/v3/invoices']);
+    const persisted=(await f.db.query('select metadata,sync_status from invoices where id=$1 and workspace_id=$2',[rejected.id,workspaces[0]])).rows[0];
+    assert.equal(persisted.sync_status,'failed');
+    assert.equal(persisted.metadata.bookkeeping_sync_http_status,400);
+    assert.equal(persisted.metadata.bookkeeping_sync_provider_code,'1001');
+    assert.equal(persisted.metadata.bookkeeping_sync_provider_message,providerMessage);
+    assert.equal(persisted.metadata.bookkeeping_sync_provider_operation,'POST /books/v3/invoices');
+    assert.equal((await db.scoped({workspace_id:workspaces[1],owner_id:owner}).getAssistantInvoice(foreign.id)).metadata.bookkeeping_sync_provider_message,undefined);
   } finally {await f.close();}
 });
