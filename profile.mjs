@@ -9,7 +9,11 @@ const userMetadata = (user) =>
 export function profileFromUser(user) {
   const metadata = userMetadata(user);
   const email = firstNonEmpty(user?.email);
-  const emailName = email.split('@')[0].trim();
+  const emailName = email.split('@')[0].split('+')[0]
+    .split(/[._\s-]+/)
+    .filter(Boolean)
+    .map((word) => word[0].toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
   const fullName = firstNonEmpty(
     metadata.full_name,
     metadata.fullName,
