@@ -24,6 +24,9 @@
       "maxDuration": 300
     }
   },
+  "rewrites": [
+    {"source": "/api/tally-import", "destination": "/api/invoice-lifecycle?route=tally-import"}
+  ],
   "crons": [
     {"path": "/api/whatsapp-process", "schedule": "0 0 * * *"},
     {"path": "/api/whatsapp-process", "schedule": "0 4 * * *"},
