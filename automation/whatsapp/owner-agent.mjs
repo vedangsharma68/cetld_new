@@ -1650,7 +1650,7 @@ function agentFailureReply(code, {writeAttempted = false, attemptedOperation = n
       : 'I couldn’t prepare a safe reply. Try again shortly.';
   }
   return writeAttempted
-    ? 'I can’t respond right now or confirm if the change completed. Check cetld before retrying.'
+    ? 'The AI reply is unavailable. I can’t confirm if the change completed. Check cetld before retrying.'
     : 'The AI service did not return a usable reply. Try again shortly.';
 }
 
