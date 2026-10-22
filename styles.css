@@ -424,3 +424,14 @@ input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-to
 [data-owner-template-check] pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
 [data-owner-template-check] table{table-layout:fixed;white-space:normal}
 [data-owner-template-check] th,[data-owner-template-check] td{padding:8px;overflow-wrap:anywhere}
+
+/* Compact Tally import with optional guidance. */
+#tally-import-form .dialog-body{gap:16px}
+#tally-import-form .tally-import-hint{margin:0;color:var(--muted);font-size:.875rem;line-height:1.5}
+#tally-import-form .tally-import-help{border-top:1px solid var(--line);font-size:.8125rem}
+#tally-import-form .tally-import-help>summary{min-height:44px;box-sizing:border-box;padding:12px 0;color:var(--muted);cursor:pointer}
+#tally-import-form .tally-import-help>summary:focus-visible{outline:2px solid var(--mint);outline-offset:3px;border-radius:4px}
+#tally-import-form .tally-import-help dl{display:grid;gap:14px;margin:0;padding:2px 0 4px}
+#tally-import-form .tally-import-help dt{margin-bottom:4px;font-weight:600}
+#tally-import-form .tally-import-help dd{margin:0;color:var(--muted);line-height:1.5;overflow-wrap:anywhere}
+#tally-import-form #tally-review:empty,#tally-import-form .form-error:empty{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);clip-path:inset(50%);white-space:nowrap;border:0}

@@ -613,40 +613,53 @@ document.addEventListener('dragleave',event=>{if(!invoiceLedgerDragDepth)return;
 document.addEventListener('drop',event=>{invoiceLedgerDragDepth=0;invoiceLedgerOverlay(false);if(state.page!=='Invoices'||$('#dialog')?.open)return;const file=event.dataTransfer?.files?.[0];if(!file)return;event.preventDefault();invoiceForm();const form=$('#invoice-form');ingestFile(form,file).catch(error=>{setIngestionState(form,error.message,'failed');showError(form,error)})});
 
 // Tally is an explicit import into this workspace, with review before any writes.
+function tallyDisplayCopy(value){return String(value??'').replace(/\bworkspace\b/gi,word=>word[0]==='W'?'Business':'business').replace(/\u2014/g,'.')}
 async function tallyRequest(payload, workspaceId) {
- const token=await accessToken();if(!token)throw Error('Sign in as the workspace owner to import.');
+ const token=await accessToken();if(!token)throw Error('Sign in as the business owner to import.');
  const response=await fetch('/api/tally-import',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({...payload,workspaceId})});
  const result=await response.json();if(!response.ok){const error=Error(result.error||'Tally import failed.');error.status=response.status;throw error}return result;
 }
 function tallyPlanView(plan){
  const summary=['customers','invoices'].map(type=>`<p>${type}: ${plan.counts[type].created} to create / ${plan.counts[type].skipped} to skip / ${plan.counts[type].failed} cannot import</p>`).join('');
  const table=(type,headers,cells)=>`<h3>${type}</h3><div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${plan[type.toLowerCase()].map(row=>`<tr>${cells(row).map(value=>`<td>${escape(String(value??''))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
- return summary+table('Customers',['Action','Name','Tally GUID','Reason'],r=>[r.action,r.name,r.guid,r.reason])+table('Invoices',['Action','Customer','Tally number','Total','Currency','Issued','Due','Reason'],r=>[r.action,r.customer,r.number,r.total,r.currency,r.issueDate,r.dueDate,r.reason]);
+ return summary+table('Customers',['Action','Name','Tally GUID','Reason'],r=>[r.action,r.name,r.guid,tallyDisplayCopy(r.reason)])+table('Invoices',['Action','Customer','Tally number','Total','Currency','Issued','Due','Reason'],r=>[r.action,r.customer,r.number,r.total,r.currency,r.issueDate,r.dueDate,tallyDisplayCopy(r.reason)]);
 }
 document.addEventListener('click',event=>{
  if(!event.target.closest('[data-action="import-tally"]'))return;
- if(state.demo||state.workspace?.owner_id!==state.user?.id){toast('Only the workspace owner can import Tally data.');return}
+ if(state.demo||state.workspace?.owner_id!==state.user?.id){toast('Only the business owner can import Tally data.');return}
  const workspaceId=state.workspace.id,userId=state.user.id;
- openDialog('Import from Tally',`<form id="tally-import-form"><div class="dialog-body"><p>Upload CSV or Tally XML (maximum 2 MB, 2,000 source rows). XLSX is unsupported; export CSV or XML instead.</p><p>CSV ledgers: Name, Email, Phone, GUID. Sales: Voucher Number, Party Ledger Name, Date, Amount, optional Due Date, Currency and GUID. Only Sales vouchers and Sundry Debtors ledgers are imported. Dates: YYYY-MM-DD, YYYYMMDD or DD-Mon-YYYY.</p><p>Amounts are imported as unpaid invoice totals. Use an export of unpaid sales invoices; payment history is not imported. Missing due dates use the invoice date. Currency defaults to the workspace currency; explicit supported currencies are preserved without conversion. Invoices enter the normal draft lifecycle for review and reminder setup.</p><label class="field"><span>Tally export file</span><input type="file" name="file" accept=".csv,.xml" required></label><div id="tally-review" aria-live="polite"></div><p class="form-error" role="alert"></p></div><div class="dialog-foot"><button type="submit" class="btn primary">Preview import</button></div></form>`);
+ openDialog('Import from Tally',`<form id="tally-import-form"><div class="dialog-body">
+  <p id="tally-import-hint" class="tally-import-hint">Import customers and unpaid invoices from Tally.</p>
+  <label class="field"><span>Tally export file</span><input type="file" name="file" accept=".csv,.xml" aria-describedby="tally-import-hint" required></label>
+  <details class="tally-import-help"><summary>File requirements</summary><dl>
+   <div><dt>Formats and limits</dt><dd>CSV or Tally XML. Up to 2 MB and 2,000 rows. Export XLSX as CSV or XML.</dd></div>
+   <div><dt>Customer columns</dt><dd>Name. Email, Phone and GUID are optional.</dd></div>
+   <div><dt>Invoice columns</dt><dd>Voucher Number, Party Ledger Name, Date and Amount. Due Date, Currency and GUID are optional.</dd></div>
+   <div><dt>Dates</dt><dd>Use YYYY-MM-DD, YYYYMMDD or DD-Mon-YYYY. Missing due dates use the invoice date.</dd></div>
+   <div><dt>What to import</dt><dd>Use unpaid sales invoices. Payment history is not imported. Only Sales vouchers and Sundry Debtors ledgers are imported.</dd></div>
+   <div><dt>Currency and reminders</dt><dd>Missing currency uses the business currency. Supported file currencies stay unchanged. No currency conversion. Invoices start as drafts for review and reminder setup.</dd></div>
+  </dl></details>
+  <div id="tally-review" aria-live="polite"></div><p class="form-error" role="alert"></p>
+ </div><div class="dialog-foot"><button type="submit" class="btn primary">Preview import</button></div></form>`);
  const form=$('#tally-import-form'),submit=form.querySelector('[type="submit"]'),review=form.querySelector('#tally-review');let pending=null;
  const current=()=>form.isConnected&&state.workspace?.id===workspaceId&&state.user?.id===userId;
  form.elements.file.addEventListener('change',()=>{pending=null;review.textContent='';submit.textContent='Preview import'});
  form.addEventListener('submit',async e=>{e.preventDefault();submit.disabled=true;form.elements.file.disabled=true;form.querySelector('.form-error').textContent='';
  try{
-  if(!current())throw Error('Workspace changed. Reopen the import.');
+  if(!current())throw Error('Business changed. Reopen the import.');
   if(pending){
    const result=await tallyRequest({...pending,action:'confirm'},workspaceId);pending=null;
    if(!current())return;
-   review.innerHTML=['customers','invoices'].map(type=>`<p>${type}: ${result[type].created} created / ${result[type].skipped} skipped / ${result[type].failed} failed</p>`).join('')+(result.failures||[]).map(f=>`<p>${escape(f.name||f.number)}: ${escape(f.error)}</p>`).join('');
+   review.innerHTML=['customers','invoices'].map(type=>`<p>${type}: ${result[type].created} created / ${result[type].skipped} skipped / ${result[type].failed} failed</p>`).join('')+(result.failures||[]).map(f=>`<p>${escape(f.name||f.number)}: ${escape(tallyDisplayCopy(f.error))}</p>`).join('');
    submit.textContent='Preview another import';await loadData();
   }else{
    const file=form.elements.file.files[0];if(!file)throw Error('Choose a CSV or XML file.');if(!/\.(csv|xml)$/i.test(file.name))throw Error('Unsupported format. Export CSV or XML from TallyPrime (not XLSX).');if(file.size>2*1024*1024)throw Error('Maximum file size is 2 MB.');
    const bytes=new Uint8Array(await file.arrayBuffer());let content;try{const encoding=bytes[0]===255&&bytes[1]===254?'utf-16le':bytes[0]===254&&bytes[1]===255?'utf-16be':'utf-8';content=new TextDecoder(encoding,{fatal:true}).decode(bytes)}catch{throw Error('Unsupported text encoding. Export UTF-8 CSV or Unicode XML from Tally.')}
    const payload={filename:file.name,content},result=await tallyRequest({...payload,action:'preview'},workspaceId);
    if(!current())return;
-   review.innerHTML=tallyPlanView(result.plan)+(result.warnings||[]).map(warning=>`<p>${escape(warning)}</p>`).join('')+result.errors.map(error=>`<p>${escape(error)}</p>`).join('')+'<p>Nothing has been saved. Only rows marked create will be saved; skip and fail rows will remain unchanged.</p>';
+   review.innerHTML=tallyPlanView(result.plan)+(result.warnings||[]).map(warning=>`<p>${escape(tallyDisplayCopy(warning))}</p>`).join('')+result.errors.map(error=>`<p>${escape(tallyDisplayCopy(error))}</p>`).join('')+'<p>Nothing saved yet. Confirm to add rows marked create. Skipped and failed rows stay unchanged.</p>';
    if(!result.errors.length){pending={...payload,previewId:result.previewId,planHash:result.plan.planHash};submit.textContent='Confirm import'}
   }
- }catch(error){if(current()){if(error.status===409){pending=null;submit.textContent='Preview import'}form.querySelector('.form-error').textContent=error.message}}finally{submit.disabled=false;form.elements.file.disabled=false}
+ }catch(error){if(current()){if(error.status===409){pending=null;submit.textContent='Preview import'}form.querySelector('.form-error').textContent=tallyDisplayCopy(error.message)}}finally{submit.disabled=false;form.elements.file.disabled=false}
  });
 });
