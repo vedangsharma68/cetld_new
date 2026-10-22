@@ -69,7 +69,7 @@ test('protocol text in a tools-off final round is repaired, never executed or re
   fetchImpl:async(_url,init)=>{calls++;assert.equal(JSON.parse(init.body).tools,undefined);return ok(calls===1?raw:'I could not verify that phone number.');}});
  const result=await runOwnerAgent({provider,message:"What's John's phone?",tools:{definitions:tools,async execute(){executions++;throw Error('No final execution');}},
   checkpoint:{version:1,phase:'final',transcript:[{role:'user',content:"What's John's phone?"}]}});
- assert.equal(executions,0);assert.equal(calls,2);assert.equal(result.answer,'I could not verify that phone number.');assert.equal(result.plannerFailure,undefined);
+ assert.equal(executions,0);assert.equal(calls,2);assert.equal(result.answer,'I could not verify that phone number. Try again shortly.');assert.equal(result.plannerFailure,undefined);
 });
 
 test('standalone greetings are authorized, saved and replayed without model/context calls; mixed requests use the model',async()=>{

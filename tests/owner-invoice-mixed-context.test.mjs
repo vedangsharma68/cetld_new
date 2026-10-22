@@ -63,9 +63,11 @@ test('mixed proposal history and adversarial serialized Gemini plans remain scop
   async function turn(message,args,answer,{abort=false,turnHistory=history}={}){
    const id='mixed-'+(++sequence),controller=new AbortController();
    await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'123456',$2,'text',$3,'processing')",[id,phone,message]);
-   const tools=createOwnerWorkspaceTools({supabase,scope,message,messageId:id,authorize:async()=>true,clock,timezone:'Asia/Kolkata',signal:controller.signal,
+   let evidence;
+   const baseTools=createOwnerWorkspaceTools({supabase,scope,message,messageId:id,authorize:async()=>true,clock,timezone:'Asia/Kolkata',signal:controller.signal,
     botPreferences:{confirmationMode:'direct'},pending,pendingAtStart,ownerHistory:turnHistory,logger,ownerStore:{async query(){throw Error('Legacy command path must not run');}}});
-   let calls=0,wire,evidence;
+   const tools={...baseTools,async execute(...args){evidence=await baseTools.execute(...args);return evidence;}};
+   let calls=0,wire;
    const provider=new AIProvider({primaryModel:'gemini-3.5-flash-lite',fallbackModel:null,geminiApiKey:'isolated-fixture',maxAttempts:1,logger,
     fetchImpl:async(_url,init)=>{
      calls++;wire=JSON.parse(init.body);
