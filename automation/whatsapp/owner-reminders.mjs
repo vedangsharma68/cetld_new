@@ -1,4 +1,5 @@
 import {PHONE_FORMAT_GUIDANCE} from './owner-phone.mjs';
+import {ownerConsentFailure} from './owner-consent.mjs';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
 import {getSendEligibility} from './consent.mjs';
 import {brandedReminder} from '../preferences.mjs';
@@ -134,7 +135,11 @@ export function createOwnerReminderRuntime({supabase,scope,message='',messageId,
         const eligibility=await getSendEligibility({supabase,workspaceId:scope.workspaceId,phone:customer.phone});
         await check(ctx);
         if(!eligibility.allowed)return refuse(eligibility.reason);
-        if(eligibility.customer.id!==invoice.customer_id)return refuse('unbound');
+        if(eligibility.customer.id!==invoice.customer_id){
+          const result=refuse('unbound');
+          if(customer.phone===scope.phone){result.message=ownerConsentFailure('OWNER_PHONE').message;reply=result.message;}
+          return result;
+        }
         if(!settings?.business_name?.trim())return refuse('business_name_required');
         if(invoice.status!=='sent'||invoice.deleted_at||invoice.metadata?.invoice_direction!=='receivable'||!invoice.due_date||Number(invoice.total_amount)<=Number(invoice.amount_paid))return refuse('ineligible_invoice');
         let entry,rendered;
