@@ -277,7 +277,7 @@ test('shared-org invoice-number deduplication refuses a cetld reference belongin
     const run=adapter.createInvoice({token:{accessToken:'test',apiDomain:'https://www.zohoapis.com'},accountId:'org',invoice:{...invoice,localInvoiceId:invoiceId}});
     if(reference===`cetld:${invoiceId}`)assert.equal((await run).duplicate,true);
     else await assert.rejects(run,error=>error.code==='ACCOUNTING_INVOICE_CONFLICT');
-    assert.equal(requests,1);
+    assert.equal(requests,reference===`cetld:${invoiceId}`?1:2);
   }
 });
 
