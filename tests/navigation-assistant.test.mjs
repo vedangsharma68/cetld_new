@@ -53,7 +53,9 @@ test('connections only surfaces supported accounting integrations and neutral cr
   assert.match(connectionSource,/Zoho Books/);
   assert.match(connectionSource,/QuickBooks/);
   assert.match(connectionSource,/TallyPrime/);
-  assert.match(connectionSource,/Coming soon/);
+  assert.match(connectionSource,/Import from Tally/);
+  assert.match(connectionSource,/import-tally/);
+  assert.doesNotMatch(connectionSource,/Coming soon|Integration support is coming soon/);
   assert.match(connectionSource,/Credentials are stored securely\./);
   for(const hidden of ['Supabase','WhatsApp / WAPI','Resend','Sentry'])assert.doesNotMatch(connectionSource,new RegExp(hidden));
 });
