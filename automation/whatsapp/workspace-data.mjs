@@ -3,7 +3,7 @@ import {sanitizeReminderTemplate} from '../preferences.mjs';
 import {taxComponents} from '../../ai/tools.mjs';
 import {isExternallyManagedInvoice,invoiceBalanceFields} from '../../invoice/business-fields.mjs';
 import {applyPaymentReversals,isMissingReversalStorage} from '../../payment-reversals.mjs';
-import {resolveWorkspaceRecord,validateCustomFields,ownerCalendar} from './workspace-records.mjs';
+import {resolveWorkspaceRecord,validateCustomFields,ownerCalendar,nameConfirmationResult} from './workspace-records.mjs';
 import {ownerInvoiceReadIntent} from './owner-invoice-read-intent.mjs';
 import {parseTextInvoice,textInvoiceFailure} from './text-invoice.mjs';
 import {ownerInvoiceReadAnalysis,invoiceReadAnalysisArgs,deriveInvoiceReadAnalysis} from './owner-invoice-read-analysis.mjs';
@@ -202,6 +202,7 @@ function safeFollowupPreferences(value) {
 
 function fail(code='INVALID',message='That workspace data request is not supported.') { return {ok:false,code,message}; }
 function safeError(error) {
+  if(error?.code==='NAME_CONFIRMATION_REQUIRED'&&Array.isArray(error.suggestions))return nameConfirmationResult(error.suggestions);
   const raw=String(error?.code||'').toUpperCase();
   const code=({PGRST116:'NOT_FOUND','404':'NOT_FOUND',NOT_FOUND:'NOT_FOUND',AMBIGUOUS:'AMBIGUOUS',
     ACTION_STALE:'STALE',STALE:'STALE',ACTION_EXPIRED:'EXPIRED',EXPIRED:'EXPIRED',
@@ -210,14 +211,26 @@ function safeError(error) {
     INVALID_CONFIRMATION:'INVALID',STALE_CONFIRMATION:'INVALID',PENDING:'PENDING',ACTION_PENDING:'PENDING',
     IN_USE:'IN_USE',EXTERNAL_ACCOUNTING:'EXTERNAL_ACCOUNTING',EXTERNAL_LEDGER:'EXTERNAL_ACCOUNTING',EXTERNAL_ACCOUNTING_REQUIRED:'EXTERNAL_ACCOUNTING',NO_ACTION:'NO_PENDING_ACTION',NO_PENDING_ACTION:'NO_PENDING_ACTION',DATABASE_UNAVAILABLE:'UNAVAILABLE',
   })[raw]||'UNAVAILABLE';
-  const messages={NOT_FOUND:'No matching record was found.',AMBIGUOUS:'More than one record matches. Narrow the request to one record.',
+  const messages={NOT_FOUND:'No matching record was found. Check the name or invoice number and send it again.',AMBIGUOUS:'More than one record matches. Narrow the request to one record.',
     STALE:'The record changed after it was reviewed. Please review the current value again.',EXPIRED:'That proposal expired. Start a new request.',
     PENDING:'Another owner change is already waiting for a decision. Confirm or cancel it first.',
-    IN_USE:'This customer still has invoices and cannot be deleted.',
+    IN_USE:'This customer still has invoices and cannot be deleted. Review their invoices in cetld first.',
     EXTERNAL_ACCOUNTING:'This invoice is managed by connected accounting. Apply financial changes in that ledger and sync it here. No local change was made.',
-    DENIED:'This action is not available for the current owner binding.',INVALID:'That workspace data request is not supported.',
-    NO_PENDING_ACTION:'There is no pending workspace data change to apply.',UNAVAILABLE:'The workspace data service is temporarily unavailable.'};
+    DENIED:'Your owner number could not be verified for this action. Verify it in cetld and try again.',INVALID:'Some request details are missing or unsupported. Check them and send the request again.',
+    NO_PENDING_ACTION:'There is no pending workspace data change to apply. Send a new request.',UNAVAILABLE:'The workspace data service is temporarily unavailable. Try again shortly.'};
   return {...fail(code,messages[code]),...(code==='EXTERNAL_ACCOUNTING'?{completed:false,requiresConfirmation:false}:{})};
+}
+function emptyReadResult(params,message) {
+  const labels={invoices:'invoices',customers:'customers',payments:'payments',invoice_files:'invoice files',business_records:'business records',workspace_settings:'business settings',workspace_ai_settings:'AI settings'};
+  const label=labels[params.table];
+  if(params.offset>0)return {message:`No more ${label} match this request. Would you like to see the first page again?`};
+  const overdue=params.table==='invoices'&&params.filters.some(f=>f.column==='status'
+    &&(f.operator==='eq'&&f.value==='overdue'||f.operator==='in'&&f.value?.length===1&&f.value[0]==='overdue')
+    ||f.column==='due_date'&&['lt','lte'].includes(f.operator)&&/\b(?:overdue|past due)\b/i.test(message));
+  const customer=params.table==='invoices'&&params.filters.some(f=>f.column==='customer_name')?' for that customer':'';
+  const alternative=overdue?`see all open invoices${customer}`:params.filters.length?`see all ${label}${customer}`
+    :({invoices:'add an invoice',customers:'add a customer',business_records:'add a business record',payments:'review an invoice balance',invoice_files:'look up an invoice'})[params.table]||'review these settings in cetld';
+  return {message:`No ${overdue?'overdue invoices':label} ${params.filters.length?'match this request':'were found'}. Would you like to ${alternative}?`};
 }
 function sanitise(value,scope,depth=0) {
   if(depth>8)return undefined;
@@ -705,12 +718,17 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     if(table==='customers'&&params.operation!=='read')internal.push('id','updated_at');
     rows=await readScoped({...params,columns:requested,filters},internal,ctx,{customerName:requested.includes('customer_name'),
       customerFilter:relationFilters[0]&&table==='invoices'?relationFilters[0]:null});
-    if(!rows.length&&['customers','invoices','business_records'].includes(table)&&params.filters.length
-      &&params.filters.every(f=>f.operator==='eq')&&params.filters.some(f=>['name','company_name','customer_name'].includes(f.column))){
-      const found=await resolveWorkspaceRecord({supabase,scope,table,filters:params.filters,operation:'read',
-        select:table==='invoices'?'id,invoice_number':'id,name',assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
-      if(found.code==='AMBIGUOUS')return safeError(found);
-      if(found.ok)rows=await readScoped({...params,columns:requested,filters:[{column:'id',operator:'in',value:found.rows.map(row=>row.id)}]},internal,ctx,{customerName:requested.includes('customer_name')});
+    const nameFilters=params.filters.filter(f=>['name','company_name','customer_name'].includes(f.column)&&['eq','ilike'].includes(f.operator));
+    if(!rows.length&&params.offset===0&&['customers','invoices','business_records'].includes(table)&&nameFilters.length){
+      // Resolve the name independently of dates/status, then reapply every
+      // other filter. An empty overdue list must not lose its overdue filter.
+      const customer=table==='invoices';
+      const found=await resolveWorkspaceRecord({supabase,scope,table:customer?'customers':table,
+        filters:nameFilters.map(f=>({...f,column:f.column==='customer_name'?'name':f.column})),operation:'read',
+        select:'id,name',assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
+      if(['AMBIGUOUS','NAME_CONFIRMATION_REQUIRED'].includes(found.code))return safeError(found);
+      if(found.ok)rows=await readScoped({...params,columns:requested,filters:[...filters.filter(f=>!nameFilters.includes(f)),
+        {column:customer?'customer_id':'id',operator:'in',value:found.rows.map(row=>row.id)}]},internal,ctx,{customerName:requested.includes('customer_name')});
     }
     const rawPageCount=rows.length;
     const collectionAnalysis=table==='invoices'?ownerInvoiceReadAnalysis(message):null;
@@ -821,18 +839,18 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     } else if(table==='business_records') {
       const found=await resolveWorkspaceRecord({supabase,scope,table,filters,operation,select:'id,record_type,name,custom_fields,updated_at',
         assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
-      if(!found.ok)throw Object.assign(new Error('business record lookup failed'),{code:found.code});
+      if(!found.ok)throw Object.assign(new Error('business record lookup failed'),found);
       row=found.row;targetId=row.id;expectedUpdatedAt=row.updated_at;summary=`Update ${row.record_type} ${row.name}: ${JSON.stringify(clean)}`;
     } else if(table==='invoices') {
       const found=await resolveWorkspaceRecord({supabase,scope,table,filters,operation,select:'id,invoice_number,custom_fields,updated_at',
         assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
-      if(!found.ok)throw Object.assign(new Error('invoice lookup failed'),{code:found.code});
+      if(!found.ok)throw Object.assign(new Error('invoice lookup failed'),found);
       row=found.row;targetId=row.id;expectedUpdatedAt=row.updated_at;
       summary=`Update invoice ${row.invoice_number}: custom fields ${JSON.stringify(clean.custom_fields)}`;
     } else if(table==='customers') {
       const found=await resolveWorkspaceRecord({supabase,scope,table,filters,operation,select:'id,name,company_name,email,phone,custom_fields,updated_at,metadata',
         assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
-      if(!found.ok)throw Object.assign(new Error('customer lookup failed'),{code:found.code});
+      if(!found.ok)throw Object.assign(new Error('customer lookup failed'),found);
       row=found.row;targetId=row.id;expectedUpdatedAt=row.updated_at;
       if(!UUID.test(targetId||'')||typeof expectedUpdatedAt!=='string')throw Object.assign(new Error('customer changed'),{code:'STALE'});
       if(row.metadata?.whatsapp_owner===true)return fail('DENIED','The linked owner contact cannot be changed as a customer.');
@@ -1146,7 +1164,9 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         const identifying=params.filters.filter(filter=>filter.column==='invoice_number'&&filter.operator==='eq');
         const target=params.table==='invoices'&&identifying.length===1
           &&params.filters.every(filter=>filter.operator==='eq'&&['invoice_number','customer_name'].includes(filter.column))?identifying[0].value:null;
-        return {...readResult(await read(params,ctx)),...(typeof target==='string'?{lookupInvoiceNumber:target}:{})};
+        const result=readResult(await read(params,ctx));
+        return {...result,...(result.ok===true&&result.rows?.length===0&&result.truncated===false?{emptyResult:emptyReadResult(params,message)}:{}),
+          ...(typeof target==='string'?{lookupInvoiceNumber:target}:{})};
       }
       if(params.table==='invoices'&&params.operation==='update'&&params.values.status==='unpaid'){
         if(Object.keys(params.values).length!==1)return fail('INVALID','Check unpaid status separately from other invoice changes.');
@@ -1211,6 +1231,13 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       if(params.operation==='create'||params.operation==='update'||params.operation==='delete')return await propose(params,ctx);
       if(['previewReminder','sendReminderNow'].includes(params.operation)){
         if(typeof executeReminderOperation!=='function')return fail('UNAVAILABLE','Reminder approval is unavailable.');
+        // Clarify a misspelled debtor before entering the existing reminder
+        // runtime. Its approval and send eligibility checks remain unchanged.
+        if(params.filters.some(f=>f.column==='customer_name')){
+          const found=await resolveWorkspaceRecord({supabase,scope,table:'invoices',filters:params.filters,operation:'update',select:'id,invoice_number',
+            assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
+          if(found.code==='NAME_CONFIRMATION_REQUIRED')return safeError(found);
+        }
         writeAttempted=true;
         const result=await executeReminderOperation(params,ctx);
         await ctx.assertAuthorized();ctx.assertLive();return sanitise(result,scope);

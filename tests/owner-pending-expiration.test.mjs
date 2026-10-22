@@ -30,7 +30,7 @@ test('verified turn expires stale pending metadata, reloads both snapshots and r
         return {ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({choices:[{message,finish_reason:'stop'}]})};
       }})});
   const input={...scope,messageId:'new-turn',message:'Review my pending action'};
-  const result=await handler(input);assert.equal(result.plannerFailure,undefined,JSON.stringify(result));assert.equal(result.answer,'There is no pending change now.');
+  const result=await handler(input);assert.equal(result.plannerFailure,undefined,JSON.stringify(result));assert.equal(result.answer,'There is no pending change now. Send a new request.');
   assert.equal(expirations,1);assert.equal(calls,2);assert.equal(result.buttons?.length||0,0);
   assert.equal((await handler(input)).replayed,true);assert.equal(expirations,1);assert.equal(calls,2);
   assert.deepEqual({invoices:db.tables.invoices,payments:db.tables.payments},before);db.assertScopedReads();

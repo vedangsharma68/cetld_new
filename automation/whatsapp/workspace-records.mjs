@@ -1,13 +1,49 @@
 // Shared by reads, proposals and direct writes. Scope comes only from the
 // verified webhook, never from model arguments.
 export const normalName = value => String(value ?? '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+function nameParts(actual) {
+  return String(actual??'').normalize('NFKC').replace(/(\p{Ll})(\p{Lu})/gu,'$1 $2').toLowerCase().match(/[\p{L}\p{N}]+/gu)||[];
+}
 function matchesName(actual,value) {
   const needle=normalName(String(value).replace(/[%_]/g,''));
   if(!needle)return false;
-  const words=String(actual??'').normalize('NFKC').replace(/(\p{Ll})(\p{Lu})/gu,'$1 $2').toLowerCase().match(/[\p{L}\p{N}]+/gu)||[];
+  const words=nameParts(actual);
   // Match whole name tokens, including their concatenation, so JohnSmith finds
   // John Smith but John does not silently target Mary Johnson.
   return words.some((_,start)=>words.slice(start).some((__,end)=>words.slice(start,start+end+1).join('')===needle));
+}
+
+// Adjacent transpositions (Jhon/John) count as one edit. Only whole name
+// tokens are compared; a short substring must not suggest an unrelated name.
+function nameDistance(a,b) {
+  a=Array.from(a);b=Array.from(b);
+  const d=Array.from({length:a.length+1},()=>Array(b.length+1).fill(0));
+  for(let i=0;i<=a.length;i++)d[i][0]=i;
+  for(let j=0;j<=b.length;j++)d[0][j]=j;
+  for(let i=1;i<=a.length;i++)for(let j=1;j<=b.length;j++){
+    d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
+    if(i>1&&j>1&&a[i-1]===b[j-2]&&a[i-2]===b[j-1])d[i][j]=Math.min(d[i][j],d[i-2][j-2]+1);
+  }
+  return d[a.length][b.length];
+}
+function typoDistance(actual,value) {
+  const needle=normalName(String(value).replace(/[%_]/g,'')),length=Array.from(needle).length;
+  if(length<3||length>100)return Infinity;
+  const words=nameParts(actual),max=length<8?1:2;
+  let best=Infinity;
+  for(let start=0;start<words.length;start++)for(let end=start+1;end<=words.length;end++){
+    const candidate=words.slice(start,end).join('');
+    if(Math.abs(Array.from(candidate).length-length)>max)continue;
+    const distance=nameDistance(needle,candidate);
+    if(distance<=max)best=Math.min(best,distance);
+  }
+  return best;
+}
+export function nameConfirmationResult(suggestions) {
+  const names=[...new Set(suggestions.map(item=>item.name))].slice(0,3);
+  return {ok:false,code:'NAME_CONFIRMATION_REQUIRED',requiresNameConfirmation:true,
+    suggestions:names.map(name=>({name})),
+    message:`Did you mean ${names.join(' or ')}? Reply with the full name to confirm.`};
 }
 
 export async function resolveWorkspaceRecord({supabase,scope,table,filters,select,operation,assertAuthorized=async()=>{},assertLive=()=>{}}) {
@@ -28,7 +64,7 @@ export async function resolveWorkspaceRecord({supabase,scope,table,filters,selec
   const queryNumberRows=async(fuzzy,numberColumn)=>{
     await assertAuthorized();assertLive();
     const customer=table==='invoices'&&filters.some(f=>f.column==='customer_name');
-    const fields=[...new Set(['id',...select.split(','),...filters.filter(f=>f.column!=='customer_name').map(f=>f.column)])].join(',');
+    const fields=[...new Set(['id',...select.split(','),...(table==='customers'?['metadata']:[]),...filters.filter(f=>f.column!=='customer_name').map(f=>f.column)])].join(',');
     let q=supabase.from(table).select(fields+(customer?',customer:customers!invoices_workspace_id_customer_id_fkey!inner(name)':''))
       .eq('workspace_id',scope.workspaceId);
     if(table==='invoices'&&operation!=='restore')q=q.is('deleted_at',null);
@@ -56,11 +92,26 @@ export async function resolveWorkspaceRecord({supabase,scope,table,filters,selec
   if(!rows.length&&filters.some(f=>['name','company_name','customer_name'].includes(f.column))){
     rows=await queryRows(true);
     if(rows.length>500)return {ok:false,code:'AMBIGUOUS'};
+    const candidates=rows;
     rows=rows.filter(row=>filters.every(f=>{
       if(!['name','company_name','customer_name'].includes(f.column))return true;
       const actual=f.column==='customer_name'?(row.customer?.name||row.customer?.[0]?.name):row[f.column];
       return matchesName(actual,f.value);
     }));
+    if(!rows.length&&['customers','invoices'].includes(table)){
+      const ranked=candidates.filter(row=>row.metadata?.whatsapp_owner!==true).map(row=>{
+        let distance=0,name=null;
+        for(const f of filters.filter(f=>['name','company_name','customer_name'].includes(f.column))){
+          const actual=f.column==='customer_name'?(row.customer?.name||row.customer?.[0]?.name):row[f.column];
+          if(!matchesName(actual,f.value))distance+=typoDistance(actual,f.value);
+          name=actual;
+        }
+        return {name,distance};
+      }).filter(item=>Number.isFinite(item.distance)&&typeof item.name==='string'&&item.name.trim()
+        &&item.name.length<=255&&!/[\x00-\x1f\x7f]/.test(item.name))
+        .sort((a,b)=>a.distance-b.distance||a.name.localeCompare(b.name));
+      if(ranked.length)return nameConfirmationResult(ranked);
+    }
   }
   if(invoiceNumber&&rows.length>1)return {ok:false,code:'AMBIGUOUS'};
   if(operation==='read'&&rows.length)return {ok:true,rows,row:rows.length===1?rows[0]:null};

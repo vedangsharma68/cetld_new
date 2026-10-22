@@ -7,13 +7,22 @@ const scope={workspaceId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',ownerId:'bbbbbbb
 const target=[{column:'invoice_number',operator:'eq',value:'QA-REPRO-001'}];
 const message='send him a reminder to pay';
 const supabase={from(){throw Error('No database access before dispatch');}};
+const namedTargetSupabase={from(table){
+  assert.equal(table,'invoices');const filters=[];
+  const q={select(){return q;},eq(column,value){filters.push([column,value]);return q;},is(){return q;},limit(){return q;},
+    then(resolve,reject){
+      assert.deepEqual(filters,[['workspace_id',scope.workspaceId],['customer.name','QA Repro Customer']]);
+      return Promise.resolve({data:[{id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',invoice_number:'QA-REPRO-001',customer:{name:'QA Repro Customer'}}]}).then(resolve,reject);
+    }};
+  return q;
+}};
 
 test('reminder transport decodes one nested array without changing its target or invoking a planner',async()=>{
   for(const operation of ['sendReminderNow','previewReminder'])for(const column of ['invoice_number','customer_name','id']){
     const filters=[{column,operator:'eq',value:column==='id'?'cccccccc-cccc-4ccc-8ccc-cccccccccccc':column==='customer_name'?'QA Repro Customer':'QA-REPRO-001'}];
     for(const encoded of [filters,JSON.stringify(filters)]){
       let dispatched=0;
-      const tool=createWorkspaceDataTool({supabase,scope,message,authorize:async()=>true,
+      const tool=createWorkspaceDataTool({supabase:column==='customer_name'?namedTargetSupabase:supabase,scope,message,authorize:async()=>true,
         planRequest:async()=>{throw Error('No model replan');},executeReminderOperation:async params=>{
           dispatched++;assert.deepEqual(params.filters,filters);assert.equal(params.operation,operation);
           return {ok:false,code:'missing_contact',message:'A usable customer phone is required.'};

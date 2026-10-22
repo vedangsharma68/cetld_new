@@ -106,13 +106,13 @@ export function invoiceReadAnalysisReply(result){
   const a=result.invoiceReadAnalysis;
   if(a?.readOnly!==true)return null;
   if(a.kind==='unpaidInvoices'&&a.complete===true){
+    if(!a.invoices.length)return 'No unpaid invoices were found. Would you like to see all invoices? No changes were made.';
     if(a.countOnly){
       const groups=new Map();
       for(const row of a.invoices)groups.set(row.currency,(groups.get(row.currency)||0)+money(row.outstanding));
       const totals=[...groups].sort(([a],[b])=>a.localeCompare(b)).map(([currency,cents])=>`${currency} ${amount(cents)}`).join(', ');
       return `${a.invoices.length} outstanding invoice${a.invoices.length===1?'':'s'}.${totals?` Total outstanding: ${totals}.`:''}`;
     }
-    if(!a.invoices.length)return 'No unpaid invoices were found. No changes were made.';
     let answer=`Unpaid invoices${a.includesDrafts?', including drafts':''}:`;
     let shown=0;
     for(const row of a.invoices){
@@ -126,6 +126,6 @@ export function invoiceReadAnalysisReply(result){
   if(a.kind==='conditionalPayment')return `For invoice ${a.invoiceNumber}, the current outstanding balance is ${a.currency} ${a.currentOutstanding}. If an additional ${a.currency} ${a.hypotheticalPayment} were paid, the overpayment would be ${a.currency} ${a.resultingOverpayment} and the remaining balance would be ${a.currency} ${a.resultingOutstanding}. This is an explanation only. No changes were made.`;
   if(a.kind==='currencyBalances'&&a.complete===true)return a.groups.length
     ?`Outstanding balances for the requested customers${a.includesDrafts?', including draft invoices':''}:\n${a.groups.map(group=>`${group.currency} ${group.outstanding}`).join('\n')}\nCurrencies are kept separate. No changes were made.`
-    :'No outstanding receivable balances were found for the requested customers. No changes were made.';
+    :'No outstanding receivable balances were found for the requested customers. Would you like to see their invoices? No changes were made.';
   return null;
 }

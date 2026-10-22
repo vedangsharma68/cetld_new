@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 
 test('default owner tool returns verified history after cached invoice repeats and rejects false absence',async()=>{
  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),foreignOwner=randomUUID(),phone='+15555550124';
@@ -26,10 +27,12 @@ test('default owner tool returns verified history after cached invoice repeats a
   const foreignBefore=(await db.query('select to_jsonb(i) value from invoices i where id=$1',[foreign.id])).rows[0].value;
   await db.query("update workspace_settings set owner_bot_preferences=owner_bot_preferences||'{\"confirmationMode\":\"direct\"}' where workspace_id=$1",[workspaceId]);
   const results=[];let proposed,providerCalls=0,includeHistory=false;
-  const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},fetchImpl:async(url,init)=>{
+  const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},
+   toolsFactory:options=>{const tools=createOwnerWorkspaceTools(options);return {...tools,async execute(...args){const value=await tools.execute(...args);results.push(value);return value;}};},
+   fetchImpl:async(url,init)=>{
    providerCalls++;assert.equal(new URL(url).hostname,'api.cloudflare.com');const body=JSON.parse(init.body),tool=body.messages.findLast(item=>item.role==='tool');
    if(!tool)return Response.json({choices:[{finish_reason:'tool_calls',message:{content:'',tool_calls:[{id:'normal-operation',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(proposed)}}]}}]});
-   const value=JSON.parse(tool.content);results.push(value);
+   const value=JSON.parse(tool.content);
    if(includeHistory&&body.messages.filter(item=>item.role==='tool').length===1)return Response.json({choices:[{finish_reason:'tool_calls',message:{content:'',tool_calls:[{id:'history-operation',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(proposed)}}]}}]});
    if(includeHistory)return Response.json({choices:[{finish_reason:'stop',message:{content:'Invoice INV-2026-0001 is USD 118 with USD 0 paid. There is no payment history.'}}]});
    return Response.json({choices:[{finish_reason:'stop',message:{content:value.completed?'Updated invoice INV-2026-0001 customer and dates. No payment changed.':!value.ok?'More than one invoice matches. Please narrow the request. No changes were made.':value.rows?.length?'Invoice INV-2026-0001 is USD 118 for Same Customer. No changes were made.':'No matching invoice was found. No changes were made.'}}]});
