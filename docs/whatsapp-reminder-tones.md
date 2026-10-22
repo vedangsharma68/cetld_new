@@ -19,7 +19,7 @@ isolated scheduled owner-test path retains its original selector and parameters.
 The ordinary exact-match diagnostic continues to reject legacy button variants
 without exact approved button evidence, as before.
 
-The new five parameters are first name (trimmed first token, or `there`), business
+The five parameters are the full trimmed customer name (or `there`), business
 name, invoice number, outstanding balance, and due date. INR is the default when
 invoice currency is absent, formatted as `₹12,500` or `₹12,500.50`. Other invoice
 currencies use their ISO code and two decimal places, e.g. `USD 12,500.00`.
@@ -29,6 +29,24 @@ calendar dates and are never shifted through UTC midnight. Parameters containing
 braces, line breaks, control characters, empty text, or more than 256 JavaScript
 string units are refused. Neither template prose nor template names are generated
 by the model at send time.
+
+## Default review draft
+
+With no saved custom template, Conversations prepares:
+
+> Hi QA Journey Customer, this is QA Client Traders. Invoice INV-2026-0001 has an outstanding balance of ₹12,500, due on 18 Oct 2026. Please arrange payment, or reply here if you have any questions.
+
+The business appears once, including after saving and reopening the draft.
+The existing custom tokens remain `{{business_name}}`, `{{customer_name}}`,
+`{{invoice_number}}`, `{{balance}}`, and `{{due_date}}`.
+
+Deploy `20261022221930_default_payment_reminder_draft.sql` with the JS change.
+For five-parameter sends, the snapshot includes `defaultDraft`, built from the
+same validated invoice facts. The deployed gate reconstructs that text and
+rejects missing or changed drafts even when the caller recomputes the snapshot
+hash. The existing Meta catalog still determines the outbound template body;
+the review draft does not change Meta-approved wording or template parameters.
+Legacy three-parameter selections retain their existing gate contract.
 
 ## Human rollout
 

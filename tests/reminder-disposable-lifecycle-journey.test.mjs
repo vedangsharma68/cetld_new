@@ -32,6 +32,7 @@ async function setup(){
     await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060100_invoice_details_templates.sql',import.meta.url),'utf8'));
     await applyNoFooterMigration(f.db,{approve:true});
     await f.db.exec(await readFile(new URL('../supabase/migrations/20261020105604_invoice_reminder_full_customer_name.sql',import.meta.url),'utf8'));
+    await f.db.exec(await readFile(new URL('../supabase/migrations/20261022221930_default_payment_reminder_draft.sql',import.meta.url),'utf8'));
   }
   catch(error){await f.close();throw error;}
   const ownerId=randomUUID(),foreignOwner=randomUUID();

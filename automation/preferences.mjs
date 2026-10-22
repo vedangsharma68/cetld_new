@@ -1,3 +1,5 @@
+import {DEFAULT_REMINDER_TEMPLATE,formatReminderAmount,formatReminderDueDate} from './whatsapp/reminder-parameters.mjs';
+
 const clockPattern = /^([01]\d|2[0-3]):[0-5]\d$/;
 const tones = new Set(['gentle', 'relaxed', 'professional', 'firm']);
 const REMINDER_TEMPLATE_PLACEHOLDERS = new Set(['business_name', 'customer_name', 'invoice_number', 'balance', 'due_date']);
@@ -94,7 +96,13 @@ export function reminderBody(invoice, settings) {
       due_date: settings.dueDate ?? invoice.due_date ?? '',
     }), settings.businessName);
   }
-  const customer=String(settings.customerName ?? invoice.customer_name ?? invoice.client ?? 'Customer').slice(0,200);
-  if (settings.tone === 'gentle') return brandedReminder(`Hi, this is ${settings.businessName}. A quick note about invoice ${number} for ${customer}. Questions? Just reply here.`,settings.businessName);
-  return brandedReminder(`Hi, this is ${settings.businessName}. Invoice ${number} for ${customer} has an update.`,settings.businessName);
+  if(!String(settings.businessName||'').trim())throw new Error('Configure a business name before preparing reminders.');
+  return renderReminderTemplate(DEFAULT_REMINDER_TEMPLATE, {
+    business_name: settings.businessName,
+    customer_name: settings.customerName ?? invoice.customer_name ?? invoice.client ?? 'Customer',
+    invoice_number: number,
+    balance: settings.balance ?? invoice.balance ?? invoice.remaining_balance
+      ?? (invoice.total_amount == null ? 'not recorded' : formatReminderAmount(invoice)),
+    due_date: settings.dueDate ?? (invoice.due_date ? formatReminderDueDate(invoice.due_date,settings.timezone||'Asia/Kolkata') : ''),
+  });
 }

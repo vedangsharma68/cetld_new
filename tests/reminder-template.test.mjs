@@ -3,8 +3,23 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import * as followups from '../automation/preferences.mjs';
 import * as ui from '../followup-preferences-ui.mjs';
+import {DEFAULT_REMINDER_TEMPLATE,buildDefaultInvoiceReminderDraft} from '../automation/whatsapp/reminder-parameters.mjs';
 
 const placeholders = '{{business_name}} · {{customer_name}} · {{invoice_number}} · {{balance}} · {{due_date}}';
+
+test('default payment draft uses the five existing tokens once and real outstanding facts for every tone',()=>{
+  assert.deepEqual([...DEFAULT_REMINDER_TEMPLATE.matchAll(/\{\{([^{}]+)\}\}/g)].map(m=>m[1]).sort(),
+    ['business_name','customer_name','invoice_number','balance','due_date'].sort());
+  for(const tone of ['professional','gentle','relaxed','firm'])for(const [currency,balance] of [['INR','₹12,500'],['USD','USD 12,500.00']]){
+    const invoice={invoice_number:'INV-2026-0001',client:'QA Journey Customer',currency,total_amount:'13000.50',amount_paid:'500.50',due_date:'2026-10-18'};
+    const expected=`Hi QA Journey Customer, this is QA Client Traders. Invoice INV-2026-0001 has an outstanding balance of ${balance}, due on 18 Oct 2026. Please arrange payment, or reply here if you have any questions.`;
+    const settings=followups.normalizeFollowUpPreferences({businessName:'QA Client Traders',tone},'Pacific/Kiritimati');
+    assert.equal(followups.reminderBody(invoice,settings),expected);
+    assert.equal(buildDefaultInvoiceReminderDraft({invoice,settings:{business_name:settings.businessName,default_timezone:settings.timezone},customer:{name:invoice.client}}),expected);
+    assert.equal(expected.split('QA Client Traders').length-1,1);
+  }
+  assert.match(followups.reminderBody({number:'INV-2',client:'Ada',total_amount:10},{businessName:'CETLD'}),/with no due date set/);
+});
 
 test('reminder template sanitizer accepts only bounded safe placeholders',()=>{
   assert.equal(typeof followups.sanitizeReminderTemplate,'function');

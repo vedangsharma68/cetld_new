@@ -53,3 +53,13 @@ test('Conversations re-review prepares the new business identity instead of the 
  const draft=context.reminder({followup_state:'paused',reminder_review_reason:'business_name_changed',number:'QA-1',client:'QA Customer',reminder_text:'Hi, this is QA Old Studio. Invoice QA-1 has an update.\n\nQA Old Studio'});
  assert.match(draft,/QA New Studio/);assert.doesNotMatch(draft,/QA Old Studio/);
 });
+
+test('Conversations keeps one business name after saving and reopening the default draft',()=>{
+ const context={money:()=> '₹100',remaining:()=>100,day:()=> '19 Oct 2026',state:{settings:{business_name:'QA Studio',follow_up_preferences:{}}},businessNameReviewNotice,brandedReminder,reminderBody};
+ vm.createContext(context);
+ vm.runInContext(app.slice(app.indexOf('function reminder(x)'),app.indexOf('\nfunction conversations()')),context);
+ const invoice={number:'QA-1',client:'QA Customer',due_date:'2026-10-19'};
+ const draft=context.reminder(invoice);
+ assert.equal(draft.split('QA Studio').length-1,1);
+ assert.equal(context.reminder({...invoice,reminder_text:draft}),draft);
+});

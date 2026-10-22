@@ -1,7 +1,7 @@
 import {getSendEligibility} from './consent.mjs';
 import {reminderFingerprint} from './reminder-fingerprint.mjs';
 import {APPROVED_REMINDER_WABA,selectReminderTemplate,selectInvoiceReminderTemplate,buildReminderTemplate} from './reminder-templates.mjs';
-import {buildInvoiceReminderParameters} from './reminder-parameters.mjs';
+import {buildInvoiceReminderParameters,buildDefaultInvoiceReminderDraft} from './reminder-parameters.mjs';
 import {readBounded} from '../../ai/http.mjs';
 import {hasUnresolvedFollowUpException} from '../preferences.mjs';
 import {scheduledOwnerTestMode,scheduledOwnerTestScopeMatches,createScheduledOwnerTestGate} from '../scheduled-owner-test.mjs';
@@ -55,6 +55,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
           consentId:f.eligibility.consent.id,consentCreatedAt:f.eligibility.consent.created_at,
           template:{name:f.entry.name,language:f.entry.language,body:f.entry.body,revision:f.entry.revision,
             wabaId:env.WHATSAPP_WABA_ID,phoneNumberId:env.WHATSAPP_PHONE_NUMBER_ID,parameters:f.parameters}};
+        if(f.entry.parameterCount===5)snapshot.defaultDraft=buildDefaultInvoiceReminderDraft({invoice:f.invoice,settings:f.settings,customer:f.eligibility.customer});
         const hash=reminderFingerprint(snapshot);
         payload={messaging_product:'whatsapp',recipient_type:'individual',to:input.to.slice(1),type:'template',template:f.template};
         if(testGate&&!await testGate.claimAttempt())return blocked('scheduled_owner_test_already_attempted');

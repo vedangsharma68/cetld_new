@@ -1,4 +1,12 @@
 // Database facts only. Keep these deterministic formats in sync with the SQL gate.
+export const DEFAULT_REMINDER_TEMPLATE='Hi {{customer_name}}, this is {{business_name}}. Invoice {{invoice_number}} has an outstanding balance of {{balance}}, due on {{due_date}}. Please arrange payment, or reply here if you have any questions.';
+
+export function buildDefaultInvoiceReminderDraft(input){
+  const [customer_name,business_name,invoice_number,balance,due_date]=buildInvoiceReminderParameters(input);
+  const values={customer_name,business_name,invoice_number,balance,due_date};
+  return DEFAULT_REMINDER_TEMPLATE.replace(/\{\{([^{}]+)\}\}/g,(_,name)=>values[name]);
+}
+
 const forbidden=/[{}\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
 export function formatReminderAmount(invoice){
   const currency=invoice.currency??'INR';
@@ -24,7 +32,8 @@ export function formatReminderDueDate(value,timeZone='Asia/Kolkata'){
   if(!Number.isFinite(date.getTime())||dateOnly&&date.toISOString().slice(0,10)!==value)throw Error('Invalid invoice due date');
   new Intl.DateTimeFormat('en-GB',{timeZone}).format(date);
   // SQL DATE values already represent a local calendar day; never shift them.
-  return new Intl.DateTimeFormat('en-GB',{timeZone:dateOnly?'UTC':timeZone,day:'2-digit',month:'short',year:'numeric'}).format(date);
+  // Intl's en-GB September is "Sept"; PostgreSQL's Mon format is "Sep".
+  return new Intl.DateTimeFormat('en-GB',{timeZone:dateOnly?'UTC':timeZone,day:'2-digit',month:'short',year:'numeric'}).format(date).replace(/\bSept\b/,'Sep');
 }
 
 export function buildInvoiceReminderParameters({invoice,settings,customer}){
