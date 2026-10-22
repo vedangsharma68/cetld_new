@@ -1,3 +1,4 @@
+import {providerDiagnostics} from './accounting/errors.mjs';
 import {APIError} from '../ai/http.mjs';
 export function deadlineFetch(fetchImpl, timeoutMs) {
   const deadline = AbortSignal.timeout(timeoutMs);
@@ -44,7 +45,7 @@ export async function syncInvoiceRow({store, row, invoice, accounting, clock = (
     return result(saved,saved.metadata?.bookkeeping_sync_status || 'not_configured');
   }
   const attempts = (manualRetry && attemptCount(row.metadata) >= MAX_SYNC_ATTEMPTS ? 0 : attemptCount(row.metadata)) + 1;
-  const reserved = {...row.metadata,bookkeeping_sync_status:'pending',bookkeeping_sync_exhausted:false,bookkeeping_sync_attempts:attempts,bookkeeping_sync_attempted_at:new Date(now).toISOString(),bookkeeping_sync_next_at:new Date(now + SYNC_LEASE_MS).toISOString(),bookkeeping_sync_error:null,bookkeeping_sync_http_status:null};
+  const reserved = {...row.metadata,bookkeeping_sync_status:'pending',bookkeeping_sync_exhausted:false,bookkeeping_sync_attempts:attempts,bookkeeping_sync_attempted_at:new Date(now).toISOString(),bookkeeping_sync_next_at:new Date(now + SYNC_LEASE_MS).toISOString(),bookkeeping_sync_error:null,bookkeeping_sync_http_status:null,bookkeeping_sync_provider_code:null,bookkeeping_sync_provider_message:null,bookkeeping_sync_provider_operation:null};
   // Compare-and-swap prevents browser, bot and cron retries racing each other.
   const claimed = store.claimInvoiceSync ? await store.claimInvoiceSync(row,reserved) : await store.updateAssistantInvoiceMetadata(row.id,reserved);
   if (!claimed) return result(row,row.metadata?.bookkeeping_sync_status || 'pending',true);
@@ -69,12 +70,13 @@ export async function syncInvoiceRow({store, row, invoice, accounting, clock = (
     const status = disconnected ? 'not_configured' : 'failed';
     const errorCode = String(error?.code || 'SYNC_FAILED').slice(0,80);
     const exhausted = attempts >= MAX_SYNC_ATTEMPTS;
-    const saved = await finish({bookkeeping_sync_status:exhausted?'failed':status,bookkeeping_sync_error:errorCode,bookkeeping_sync_http_status:Number.isInteger(error?.status)?error.status:null,bookkeeping_sync_exhausted:exhausted,bookkeeping_sync_next_at:new Date(now + syncRetryDelay(attempts)).toISOString()}, {sync_status:exhausted || !disconnected?'failed':'local',last_sync_error:errorCode});
+    const diagnostics=providerDiagnostics(error);
+    const saved = await finish({bookkeeping_sync_status:exhausted?'failed':status,bookkeeping_sync_error:errorCode,bookkeeping_sync_http_status:Number.isInteger(error?.status)?error.status:null,bookkeeping_sync_provider_code:diagnostics.providerCode,bookkeeping_sync_provider_message:diagnostics.providerMessage,bookkeeping_sync_provider_operation:diagnostics.providerOperation,bookkeeping_sync_exhausted:exhausted,bookkeeping_sync_next_at:new Date(now + syncRetryDelay(attempts)).toISOString()}, {sync_status:exhausted || !disconnected?'failed':'local',last_sync_error:errorCode});
     return result(saved,exhausted?'failed':status,!exhausted && !disconnected);
   }
   // A persistence failure must not be mistaken for a provider failure. The lease
   // expires and Zoho's existing invoice-number deduplication recovers the link.
   const at = clock().toISOString();
-  const saved = await finish({bookkeeping_provider:response.provider,bookkeeping_record_id:response.externalId,bookkeeping_sync_status:'synced',bookkeeping_sync_error:null,bookkeeping_sync_next_at:null,bookkeeping_synced_at:at}, {external_provider:response.provider,external_invoice_id:response.externalId,last_synced_at:at,sync_status:'synced',last_sync_error:null});
+  const saved = await finish({bookkeeping_provider:response.provider,bookkeeping_record_id:response.externalId,bookkeeping_sync_status:'synced',bookkeeping_sync_error:null,bookkeeping_sync_http_status:null,bookkeeping_sync_provider_code:null,bookkeeping_sync_provider_message:null,bookkeeping_sync_provider_operation:null,bookkeeping_sync_next_at:null,bookkeeping_synced_at:at}, {external_provider:response.provider,external_invoice_id:response.externalId,last_synced_at:at,sync_status:'synced',last_sync_error:null});
   return {row:saved,sync:{status:'synced',provider:response.provider,externalId:response.externalId,retryable:false}};
 }

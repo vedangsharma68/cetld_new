@@ -225,3 +225,11 @@ five attempts, an explicit owner/member retry may start a new five-attempt cycle
 once the waiting period expires; the scheduler never resets the counter itself.
 The drawer checks connection existence on the server for its workspace, so
 members can also retry invoices against the workspace owner's connected org.
+
+Failed Zoho Books API calls also save `bookkeeping_sync_provider_code`,
+`bookkeeping_sync_provider_message`, and `bookkeeping_sync_provider_operation`
+alongside `bookkeeping_sync_http_status`. The message preserves Zoho's response
+text except credential redaction and a 2,000-character storage limit. Operation
+records the HTTP method and API path without query parameters. OAuth bodies and
+unrelated response fields are excluded. Diagnostics clear when a new attempt
+starts and on success; failures predating this capture require a fresh attempt.
