@@ -180,3 +180,45 @@ test('application helper uses its existing auth session internally and exact end
   assert.deepEqual(JSON.parse(calls[1].options.body),{workspaceId,invoiceId,action:'owner-template-test'});
   assert.equal(calls[1].options.headers['X-WhatsApp-Test-Preview'],preview.previewToken);assert.equal(calls.length,2);
 });
+
+for(const change of ['ordinary-owner','foreign-user','foreign-workspace','foreign-owner','different-invoice','demo','eligible'])
+test(`repeated invoice drawer opens gate test-preview requests with button eligibility: ${change}`,async()=>{
+  const source=await readFile(new URL('../app.js',import.meta.url),'utf8'),f=setup();
+  Object.assign(f.state.invoices[0],{client:'Fixture customer',number:'INV-1',invoice_direction:'receivable'});
+  if(change==='ordinary-owner'){
+    f.state.user.id=f.state.workspace.owner_id='ordinary-owner';f.state.workspace.id='ordinary-workspace';
+  }
+  if(change==='foreign-user')f.state.user.id='other';
+  if(change==='foreign-workspace')f.state.workspace.id='other';
+  if(change==='foreign-owner')f.state.workspace.owner_id='other';
+  if(change==='different-invoice')f.state.invoices[0].id='other';
+  if(change==='demo')f.state.demo=true;
+  const calls=[],drawers=[],insertions=[],context={
+    state:f.state,ownerTemplateTestUI:f.ui,URL,location:{origin:'https://fixture.test'},
+    readyReminderPreviewToken:()=>null,accessToken:async()=>'fixture-session',
+    fetch:async(url,options)=>{calls.push({url:String(url),method:options.method});return Response.json(preview);},
+    openDialog:(_title,body)=>drawers.push(body),escape,status:()=> 'Open',remaining:()=>10000,
+    terminalInvoice:()=>false,activeException:()=>null,followupStage:()=>['Draft',''],
+    money:()=>'$100',tag:()=>'',day:()=>'',deliveryState:()=>'',invoiceBusinessDetails:()=>'',
+    customFieldsView:()=>'',icon:()=>'',canRetryInvoiceSync:()=>false,isExternallyManagedInvoice:()=>false,
+    button:(action,label)=>`<button data-action="${action}">${label}</button>`,
+    $:()=>({open:true,querySelector:()=>({insertAdjacentHTML:(_position,html)=>insertions.push(html)})}),
+  };
+  const helper=source.slice(source.indexOf('async function whatsappTestRequest('),source.indexOf('const ownerTemplateTestUI='));
+  const drawer=source.slice(source.indexOf('function detail(id){'),source.indexOf('function customerReminderToneForm('));
+  vm.runInNewContext(helper+drawer+';globalThis.openInvoice=detail;',context);
+  const eligible=f.ui.canReview(f.state.invoices[0]);assert.equal(eligible,change==='eligible');
+  for(let i=0;i<3;i++){
+    context.openInvoice(f.state.invoices[0].id);
+    await new Promise(resolve=>setImmediate(resolve));
+  }
+  assert.equal(drawers.length,3);
+  for(const html of drawers)assert.equal(html.includes('data-action="owner-template-test-review"'),eligible);
+  assert.equal(calls.length,eligible?3:0);
+  assert.equal(insertions.length,eligible?3:0);
+  for(const call of calls){
+    const url=new URL(call.url);assert.equal(url.pathname,'/api/whatsapp-test-send');
+    assert.equal(url.searchParams.get('workspaceId'),workspaceId);assert.equal(url.searchParams.get('invoiceId'),invoiceId);
+    assert.equal(call.method,'GET');
+  }
+});
