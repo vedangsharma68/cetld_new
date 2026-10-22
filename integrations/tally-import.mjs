@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {APIError, requestBody, readJSON, uuid} from '../ai/http.mjs';
 import {authorizeAIWorkspace} from '../ai/store.mjs';
 import {config} from '../config.js';
-import {MAX_BYTES, parseTally} from '../integrations/tally.mjs';
+import {MAX_BYTES, parseTally} from './tally.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export function createTallyHandler({authorize=authorizeAIWorkspace, fetchImpl=fetch, env=process.env}={}) {
@@ -46,4 +46,3 @@ export function createTallyHandler({authorize=authorizeAIWorkspace, fetchImpl=fe
     } catch(error) { return res.status(error instanceof APIError ? error.status : 503).json({error:error instanceof APIError ? error.code : 'Tally import is unavailable. Please retry.'}); }
   };
 }
-export default createTallyHandler();

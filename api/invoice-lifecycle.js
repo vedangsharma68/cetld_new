@@ -30,6 +30,11 @@ function send(res, body, status = body.ok ? 200 : (HTTP_STATUS[body.code] || 503
 }
 
 export default async function handler(req, res) {
+  const url = new URL(req.url || '/api/invoice-lifecycle', 'http://localhost');
+  if (req.query?.route === 'tally-import' || url.searchParams.get('route') === 'tally-import' || url.pathname === '/api/tally-import') {
+    const {createTallyHandler} = await import('../integrations/tally-import.mjs');
+    return createTallyHandler()(req, res);
+  }
   if (req.method !== 'POST') return send(res, {ok: false, code: 'INVALID_REQUEST'}, 405);
   let body;
   try { body = requestBody(req, ACTION_FIELDS, 8192); }

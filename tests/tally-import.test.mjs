@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {parseTally,MAX_BYTES} from '../integrations/tally.mjs';
-import {createTallyHandler} from '../api/tally-import.js';
+import {createTallyHandler} from '../integrations/tally-import.mjs';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 const csv='Voucher Number,Party Ledger Name,Date,Amount,GUID\nS-1,"Acme, Ltd",20261001,123.45,v-1';
 test('CSV quoted fields, XML ledger masters and sales voucher party total',()=>{
