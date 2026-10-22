@@ -24,7 +24,7 @@ function fixture(){
     },
   };
   let persisted=null,omitAudit=false;
-  const store={
+  const store={workspaceId:scope.workspaceId,
     async findAssistantInvoice(){return persisted;},async findCustomer(){return {id:'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'};},
     async createAssistantInvoice({invoice,reviewNumberAudit}){saved++;if(omitAudit)reviewNumberAudit=null;persisted={id:'ffffffff-ffff-4fff-8fff-fffffffffff2',workspace_id:scope.workspaceId,
       invoice_number:invoice.invoiceNumber==='AUTO'?'INV-2026-0042':invoice.invoiceNumber,issue_date:invoice.invoiceDate,due_date:invoice.dueDate,currency:invoice.currency,total_amount:invoice.total,

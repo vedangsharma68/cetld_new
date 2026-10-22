@@ -1,3 +1,4 @@
+import {deadlineFetch} from '../automation/invoice-sync.mjs';
 import {APIError, object, requestBody, sendError, uuid} from './http.mjs';
 import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL, OPENROUTER_FREE_MODEL, VERIFIED_MODELS, isFallbackModelId, isPrimaryModelId, verifyModel} from './provider.mjs';
 import {authorizeAIWorkspace} from './store.mjs';
@@ -8,14 +9,14 @@ import {createAccountingTools} from './accounting-tools.mjs';
 import {createAccountingActionToken, verifyAccountingActionToken} from './accounting-actions.mjs';
 import {createGeminiDiagnostic} from './diagnostic.mjs';
 
-export function createAIHandler({env = process.env, fetchImpl = fetch, authorize = authorizeAIWorkspace, providerFactory = options => new AIProvider(options), verify = verifyModel, clock = () => new Date(), accountingFactory, logger = console, diagnosticRunner = createGeminiDiagnostic({fetchImpl})} = {}) {
+export function createAIHandler({env = process.env, fetchImpl = fetch, authorize = authorizeAIWorkspace, providerFactory = options => new AIProvider(options), verify = verifyModel, clock = () => new Date(), accountingFactory, logger = console, diagnosticRunner = createGeminiDiagnostic({fetchImpl}), invoiceConnectionLookup} = {}) {
   return async function handler(req, res) {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     try {
       const action = req.query?.action;
-      if (!['models', 'settings', 'diagnostic', 'extract', 'assistant', 'save-invoice', 'retry-invoice-sync', 'confirm-accounting-action'].includes(action)) throw new APIError(404, 'NOT_FOUND');
-      const methods = action === 'models' ? ['GET'] : action === 'settings' ? ['GET', 'PUT'] : ['POST'];
+      if (!['models', 'settings', 'diagnostic', 'extract', 'assistant', 'save-invoice', 'retry-invoice-sync', 'invoice-sync-status', 'confirm-accounting-action'].includes(action)) throw new APIError(404, 'NOT_FOUND');
+      const methods = ['models','invoice-sync-status'].includes(action) ? ['GET'] : action === 'settings' ? ['GET', 'PUT'] : ['POST'];
       if (!methods.includes(req.method)) { res.setHeader('Allow', methods.join(', ')); throw new APIError(405, 'METHOD_NOT_ALLOWED'); }
       if (action === 'models') {
         const checks = await Promise.all(VERIFIED_MODELS.map(async id => {
@@ -36,6 +37,13 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
       const body = req.method === 'GET' ? {} : requestBody(req, allowed, action === 'extract' ? 4400000 : 32768);
       const workspaceId = uuid(req.method === 'GET' ? req.query.workspaceId : body.workspaceId);
       const store = await authorize(req, workspaceId, {env, fetchImpl});
+      if (action === 'invoice-sync-status') {
+        if (invoiceConnectionLookup) return res.status(200).json({connected:Boolean(await invoiceConnectionLookup({workspaceId,env,fetchImpl}))});
+        if (!env.SUPABASE_SERVICE_ROLE_KEY) return res.status(200).json({connected:false});
+        const {SupabaseAccountingStore} = await import('../automation/accounting/store.mjs');
+        const connections = new SupabaseAccountingStore({url:env.SUPABASE_URL,serviceRoleKey:env.SUPABASE_SERVICE_ROLE_KEY,fetchImpl});
+        return res.status(200).json({connected:Boolean(await connections.getWorkspaceInvoiceConnection(workspaceId))});
+      }
       if (action === 'diagnostic') {
         if (!['owner','admin'].includes(store.role)) throw new APIError(403, 'DIAGNOSTIC_ADMIN_REQUIRED');
         const result = await diagnosticRunner({userId:store.userId, role:store.role, apiKey:env.GEMINI_API_KEY});
@@ -48,7 +56,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
           if (accountingFactory) accounting = await accountingFactory({env, fetchImpl, store});
           else if (env.SUPABASE_SERVICE_ROLE_KEY && env.ACCOUNTING_TOKEN_ENCRYPTION_KEY) {
             const {createAccountingRuntime} = await import('../automation/runtime.mjs');
-            accounting = createAccountingRuntime({env, fetchImpl});
+            accounting = createAccountingRuntime({env, fetchImpl:deadlineFetch(fetchImpl,40_000)});
           }
         } catch {
           // Saving to cetld must remain available when bookkeeping is unavailable.

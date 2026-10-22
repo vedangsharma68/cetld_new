@@ -298,6 +298,8 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       return this.fetchInvoice({ token, accountId, invoiceId });
     },
     async createInvoice({ token, accountId, invoice }) {
+      if (invoice?.direction==='payable') throw new AccountingError('ACCOUNTING_INVOICE_DIRECTION_UNSUPPORTED', 'Vendor bills cannot be exported as sales invoices');
+      if (!invoice?.clientName?.trim()) throw new AccountingError('INVOICE_CUSTOMER_REQUIRED', 'An invoice customer is required');
       if (!accountId) throw new Error('Zoho Books organization ID is required');
       const headers = { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' };
       const existingUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices`);
@@ -305,6 +307,8 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       const existingBody = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', existingUrl, {headers}), 'zoho_books');
       const existing = (existingBody.invoices || []).map(normalizeZohoInvoice).find(item => item?.number === invoice.invoiceNumber);
       if (existing) {
+        const localReference=String(existing.raw?.reference_number || '');
+        if (invoice.localInvoiceId && localReference.startsWith('cetld:') && localReference!==`cetld:${invoice.localInvoiceId}`) throw new AccountingError('ACCOUNTING_INVOICE_CONFLICT', 'This Zoho Books invoice is linked to another cetld invoice');
         const sameCustomer = String(existing.customerName || '').trim().toLowerCase() === String(invoice.clientName || '').trim().toLowerCase();
         const sameCurrency = existing.currency === String(invoice.currency || '').toUpperCase();
         const sameTotal = existing.amountMinor === amountMinor(invoice.total, invoice.currency);

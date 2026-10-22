@@ -4,10 +4,11 @@ import {readFile,readdir} from 'node:fs/promises';
 import {createWhatsAppProcessHandler} from '../api/whatsapp-process.js';
 import {createReminderCronHandler} from '../automation/reminder-cron.mjs';
 
-test('two daily cron jobs share the existing function without exceeding Hobby function count',async()=>{
+test('daily cron jobs share the existing function without exceeding Hobby function count',async()=>{
   const config=JSON.parse(await readFile(new URL('../vercel.json',import.meta.url),'utf8'));
   assert.deepEqual(config.crons,[{path:'/api/whatsapp-process',schedule:'0 0 * * *'},
-    {path:'/api/whatsapp-process',schedule:'0 4 * * *'}]);
+    {path:'/api/whatsapp-process',schedule:'0 4 * * *'},
+    {path:'/api/whatsapp-process?accounting=1',schedule:'0 1 * * *'}]);
   const routes=(await readdir(new URL('../api/',import.meta.url))).filter(name=>/\.(?:js|ts|mjs)$/.test(name));
   assert.ok(routes.length<=12,`Deployment would contain ${routes.length} API functions`);
   assert.equal(routes.includes('reminders.js'),false);

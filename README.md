@@ -184,3 +184,44 @@ and idempotent delivery. It does not rewrite production code, override customer
 consent, approve Meta templates, or replace expired external credentials. Live
 provider quality and phone delivery require separate checks and are not claimed
 by the offline suite.
+
+### Invoice export recovery
+
+New dashboard invoices request Zoho Books export immediately after the local save
+(and after settlement for invoices marked paid). The assistant uses the same
+server retry policy. SQL-created WhatsApp invoices and interrupted browser saves
+are recovered by the daily `0 1 * * *` UTC accounting cron at
+`/api/whatsapp-process?accounting=1`. This branch authenticates `CRON_SECRET`
+independently and does not invoke WhatsApp processing or reminder sending.
+It uses the existing service role and accounting encryption configuration, adds
+no function or dependency, and runs independently of reminder enablement flags.
+
+Each sweep selects the oldest due local receivable invoices across workspaces
+with a connected `zoho_books` organization. It handles at most 25 invoices and
+stops starting work after 240 seconds; provider requests have a 260-second overall
+deadline within the existing 300-second function limit. Rate limiting or an
+upstream outage stops further exports for that workspace in the same sweep.
+Large backlogs drain over subsequent daily runs. Payables retain their existing
+`not_configured` semantics: the connector exports sales invoices, not bills.
+Deleted, cancelled, void and already-linked invoices are excluded.
+
+Bookkeeping state remains in invoice metadata: `pending` awaits export,
+`not_configured` means export is unavailable, `failed` records an export error,
+and `synced` records the external link. Attempts are reserved before provider
+calls with an optimistic lock and a ten-minute crash recovery lease. Failures
+back off for 5, 10, 20, 40 and 80 minutes; scheduled recovery stops after five
+attempts and marks the invoice failed. These intervals are earliest eligibility
+times; automatic work happens on the daily cron. Existing Zoho invoice-number
+matching protects retries when a provider write succeeds before its local link
+is saved. Concurrent completion merges current invoice metadata to preserve
+owner follow-up changes. Missing or blank customers fail locally without a Zoho request. Workspace and
+customer scope are checked before export, and a deleted row cannot receive late
+sync completion. A Zoho invoice tagged for another cetld invoice is rejected
+even when its number and financial details match.
+
+The invoice drawer displays the saved error and earliest retry time. **Retry
+sync** uses the assistant's authenticated retry API and respects backoff. After
+five attempts, an explicit owner/member retry may start a new five-attempt cycle
+once the waiting period expires; the scheduler never resets the counter itself.
+The drawer checks connection existence on the server for its workspace, so
+members can also retry invoices against the workspace owner's connected org.

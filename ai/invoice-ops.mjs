@@ -1,4 +1,5 @@
 import {APIError, object, uuid} from './http.mjs';
+import {syncInvoiceRow,assertInvoiceSyncScope,syncEligibility} from '../automation/invoice-sync.mjs';
 import {AMOUNT_PRECISION_MESSAGE,CURRENCY_SUPPORT_MESSAGE,isSupportedCurrency} from '../currency-contract.mjs';
 
 const INPUT_FIELDS = ['invoiceNumber', 'clientName', 'clientEmail', 'clientPhone', 'clientPhoneRaw', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total', 'outstanding', 'currency', 'notes', 'alreadyPaid', 'direction', 'lineItems'];
@@ -90,23 +91,8 @@ function responseInvoice(row) {
   return {id: row.id, invoiceNumber: row.invoice_number, clientName: row.customer_name || null, invoiceDate: row.issue_date, dueDate: row.due_date, currency: row.currency, total: Number(row.total_amount), amountPaid: Number(row.amount_paid || 0), status: row.status, metadata: row.metadata || {}};
 }
 
-async function syncSavedInvoice({store, invoice, row, accounting}) {
-  const metadata = {...(row.metadata || {}), bookkeeping_sync_status: 'pending', bookkeeping_sync_error: null};
-  try {
-    if (invoice.direction === 'payable' || !accounting?.syncInvoice) {
-      const saved = await store.updateAssistantInvoiceMetadata(row.id, {...metadata, bookkeeping_sync_status: 'not_configured'});
-      return {row: saved, sync: {status: 'not_configured', provider: null, retryable: false}};
-    }
-    const result = await accounting.syncInvoice({userId: store.userId, workspaceId: store.workspaceId, provider: 'zoho_books', invoice, invoiceId: row.id});
-    const syncedAt = new Date().toISOString();
-    const updated = await store.updateAssistantInvoiceMetadata(row.id, {...metadata, bookkeeping_provider: result.provider, bookkeeping_record_id: result.externalId, bookkeeping_sync_status: 'synced', bookkeeping_synced_at: syncedAt}, {external_provider: result.provider, external_invoice_id: result.externalId, last_synced_at: syncedAt, sync_status: 'synced', last_sync_error: null});
-    return {row: updated, sync: {status: 'synced', provider: result.provider, externalId: result.externalId, retryable: false}};
-  } catch (error) {
-    const status = error?.code === 'ACCOUNTING_NOT_CONNECTED' || error?.code === 'ACCOUNTING_NOT_CONFIGURED' ? 'not_configured' : 'failed';
-    const errorCode = String(error?.code || 'SYNC_FAILED').slice(0, 80);
-    const updated = await store.updateAssistantInvoiceMetadata(row.id, {...metadata, bookkeeping_sync_status: status, bookkeeping_sync_error: errorCode, bookkeeping_sync_attempted_at: new Date().toISOString()}, {sync_status: status === 'failed' ? 'failed' : 'local', last_sync_error: errorCode});
-    return {row: updated, sync: {status, provider: null, retryable: status === 'failed'}};
-  }
+async function syncSavedInvoice(options) {
+  return syncInvoiceRow(options);
 }
 
 export async function saveAssistantInvoice({store, invoice: input, confirmed, idempotencyKey, accounting, allowMissingDueDate = false} = {}) {
@@ -142,21 +128,28 @@ export async function saveAssistantInvoice({store, invoice: input, confirmed, id
       idempotent = true;
     }
   }
+  assertInvoiceSyncScope(store,row);
   if (row.metadata?.bookkeeping_sync_status === 'synced' && row.metadata?.bookkeeping_record_id) return {saved: true, invoice: responseInvoice(row), sync: {status: 'synced', provider: row.metadata.bookkeeping_provider || null, externalId: row.metadata.bookkeeping_record_id, retryable: false}, idempotent};
+  if (idempotent && store.getAssistantInvoice && store.query) return {...await retryAssistantInvoiceSync({store,invoiceId:row.id,accounting,manualRetry:false}),idempotent:true};
   invoice.invoiceNumber = row.invoice_number;
   const synced = await syncSavedInvoice({store, invoice, row, accounting});
   return {saved: true, invoice: responseInvoice(synced.row), sync: synced.sync, idempotent};
 }
 
-export async function retryAssistantInvoiceSync({store, invoiceId, accounting} = {}) {
+export async function retryAssistantInvoiceSync({store, invoiceId, accounting, clock, manualRetry = true} = {}) {
   const id = uuid(invoiceId);
   const row = await store.getAssistantInvoice(id);
   if (!row) throw new APIError(404, 'INVOICE_NOT_FOUND');
+  assertInvoiceSyncScope(store,row);
+  if (row.id!==id) throw new APIError(502,'WORKSPACE_SCOPE_VIOLATION');
   const metadata = row.metadata || {};
   if (metadata.bookkeeping_record_id && metadata.bookkeeping_sync_status === 'synced') return {saved: true, invoice: responseInvoice(row), sync: {status: 'synced', provider: metadata.bookkeeping_provider || null, externalId: metadata.bookkeeping_record_id, retryable: false}, idempotent: true};
-  const customer = (await store.query('customers', {select: 'id,workspace_id,name,email,phone', filters: {id: `eq.${row.customer_id}`}, limit: 1}))[0];
-  const invoice = {direction: metadata.invoice_direction || 'receivable', invoiceNumber: row.invoice_number, clientName: customer?.name || '', clientEmail: customer?.email || null, clientPhone: customer?.phone || null, invoiceDate: row.issue_date, dueDate: row.due_date, currency: row.currency, total: Number(row.total_amount), subtotal: metadata.subtotal ?? null, tax: metadata.tax ?? null, outstanding: Number(row.total_amount) - Number(row.amount_paid || 0), notes: row.notes || null, lineItems: Array.isArray(metadata.line_items) ? metadata.line_items : [], alreadyPaid: row.status === 'paid'};
-  const synced = await syncSavedInvoice({store, invoice, row, accounting});
+  const eligibility=syncEligibility(row,clock?clock().getTime():Date.now());
+  const needsCustomer=eligibility==='ready' || eligibility==='exhausted' && manualRetry;
+  const customer = needsCustomer && row.customer_id ? (await store.query('customers', {select: 'id,workspace_id,name,company_name,email,phone', filters: {id: `eq.${row.customer_id}`}, limit: 1}))[0] : null;
+  if (customer && (customer.workspace_id!==store.workspaceId || customer.id!==row.customer_id)) throw new APIError(502,'WORKSPACE_SCOPE_VIOLATION');
+  const invoice = {direction: metadata.invoice_direction || 'receivable', invoiceNumber: row.invoice_number, clientName: customer?.name?.trim() || customer?.company_name?.trim() || '', clientEmail: customer?.email || null, clientPhone: customer?.phone || null, invoiceDate: row.issue_date, dueDate: row.due_date, currency: row.currency, total: Number(row.total_amount), subtotal: metadata.subtotal ?? null, tax: metadata.tax ?? null, outstanding: Number(row.total_amount) - Number(row.amount_paid || 0), notes: row.notes || null, lineItems: Array.isArray(metadata.line_items) ? metadata.line_items : [], alreadyPaid: row.status === 'paid'};
+  const synced = await syncSavedInvoice({store, invoice, row, accounting, clock, manualRetry});
   return {saved: true, invoice: responseInvoice(synced.row), sync: synced.sync, idempotent: true};
 }
 

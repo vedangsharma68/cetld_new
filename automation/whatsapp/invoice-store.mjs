@@ -1,3 +1,4 @@
+import {invoiceSyncPersistence} from '../invoice-sync-store.mjs';
 import {createDeletedAtCompatibility} from '../../invoice/deleted-at-compat.mjs';
 
 function rows(result) { if (result?.error) throw result.error; return result?.data || []; }
@@ -29,6 +30,14 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, a
     return row;
   }
   const store = {workspaceId, userId: null,
+    ...invoiceSyncPersistence({
+      read: ownedInvoice,
+      patch: async(row,patch)=>(await activeInvoiceRows(includeDeletedAt=>{
+        let query=invoices(scoped('invoices').update(patch).eq('workspace_id',workspaceId).eq('id',row.id).eq('updated_at',row.updated_at));
+        if(includeDeletedAt)query=query.is('deleted_at',null);
+        return query.select('*');
+      }))[0] || null
+    }),
     async findAssistantInvoice({idempotencyKey}) {
       const [row]=await activeInvoiceRows(includeDeletedAt=>{let query=invoices(scoped('invoices').select('*').eq('workspace_id',workspaceId));if(includeDeletedAt)query=query.is('deleted_at',null);return query.eq('metadata->>assistant_idempotency_key',idempotencyKey).limit(1)});
       return row||null;

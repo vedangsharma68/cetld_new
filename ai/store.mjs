@@ -1,3 +1,4 @@
+import {invoiceSyncPersistence} from '../automation/invoice-sync-store.mjs';
 import {APIError, uuid, readJSON, readBounded} from './http.mjs';
 import {DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, sanitizeModelSettings} from './provider.mjs';
 import {createDeletedAtCompatibility} from '../invoice/deleted-at-compat.mjs';
@@ -55,6 +56,16 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
       if (table !== 'invoices') return read(false);
       return deletedAtCompatibility.read({withDeletedAt:()=>read(true),legacy:()=>read(false)});
     },
+    ...invoiceSyncPersistence({
+      read: id => store.getAssistantInvoice(id),
+      patch: async (row, patch) => {
+        const write=async includeDeletedAt=>{
+          const params = new URLSearchParams({workspace_id:`eq.${workspaceId}`,id:`eq.${uuid(row.id)}`,updated_at:`eq.${row.updated_at}`,...(includeDeletedAt?{deleted_at:'is.null'}:{}),select:'*'});
+          return checkRows(await request(`/rest/v1/invoices?${params}`, {method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify(patch)}));
+        };
+        return (await deletedAtCompatibility.read({withDeletedAt:()=>write(true),legacy:()=>write(false)}))[0] || null;
+      }
+    }),
     async findAssistantInvoice({invoiceNumber, idempotencyKey}) {
       const rows = await store.query('invoices', {select: 'id,workspace_id,invoice_number,issue_date,due_date,currency,total_amount,amount_paid,status,notes,metadata,created_at,updated_at', filters: {'metadata->>assistant_idempotency_key': `eq.${idempotencyKey}`}, limit: 1});
       const row = rows[0] || null;
