@@ -53,7 +53,9 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
       if (action === 'save-invoice' || action === 'retry-invoice-sync' || action === 'confirm-accounting-action') {
         let accounting = null;
         try {
-          if (accountingFactory) accounting = await accountingFactory({env, fetchImpl, store});
+          // The caller store carries a user bearer token and must never be used
+          // to resolve accounting connections or encrypted credentials.
+          if (accountingFactory) accounting = await accountingFactory({env, fetchImpl});
           else if (env.SUPABASE_SERVICE_ROLE_KEY && env.ACCOUNTING_TOKEN_ENCRYPTION_KEY) {
             const {createAccountingRuntime} = await import('../automation/runtime.mjs');
             accounting = createAccountingRuntime({env, fetchImpl:deadlineFetch(fetchImpl,40_000)});

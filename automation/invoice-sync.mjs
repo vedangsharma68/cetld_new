@@ -44,34 +44,57 @@ export async function syncInvoiceRow({store, row, invoice, accounting, clock = (
     const saved = await updateState({...row.metadata,bookkeeping_sync_status:'not_configured'});
     return result(saved,saved.metadata?.bookkeeping_sync_status || 'not_configured');
   }
-  const attempts = (manualRetry && attemptCount(row.metadata) >= MAX_SYNC_ATTEMPTS ? 0 : attemptCount(row.metadata)) + 1;
-  const reserved = {...row.metadata,bookkeeping_sync_status:'pending',bookkeeping_sync_exhausted:false,bookkeeping_sync_attempts:attempts,bookkeeping_sync_attempted_at:new Date(now).toISOString(),bookkeeping_sync_next_at:new Date(now + SYNC_LEASE_MS).toISOString(),bookkeeping_sync_error:null,bookkeeping_sync_http_status:null,bookkeeping_sync_provider_code:null,bookkeeping_sync_provider_message:null,bookkeeping_sync_provider_operation:null};
+  const previousAttempts = attemptCount(row.metadata);
+  const attempts = (manualRetry && previousAttempts >= MAX_SYNC_ATTEMPTS ? 0 : previousAttempts) + 1;
+  // Reserve the lease without spending an attempt on validation or credentials.
+  const reserved = {...row.metadata,bookkeeping_sync_status:'pending',bookkeeping_sync_attempts:previousAttempts,bookkeeping_sync_attempted_at:new Date(now).toISOString(),bookkeeping_sync_next_at:new Date(now + SYNC_LEASE_MS).toISOString(),bookkeeping_sync_error:null,bookkeeping_sync_http_status:null,bookkeeping_sync_provider_code:null,bookkeeping_sync_provider_message:null,bookkeeping_sync_provider_operation:null};
   // Compare-and-swap prevents browser, bot and cron retries racing each other.
-  const claimed = store.claimInvoiceSync ? await store.claimInvoiceSync(row,reserved) : await store.updateAssistantInvoiceMetadata(row.id,reserved);
+  let claimed = store.claimInvoiceSync ? await store.claimInvoiceSync(row,reserved) : await store.updateAssistantInvoiceMetadata(row.id,reserved);
   if (!claimed) return result(row,row.metadata?.bookkeeping_sync_status || 'pending',true);
   async function finish(metadata, fields) {
+    if (metadata.bookkeeping_sync_status==='synced' && accounting.finishInvoiceSync) return accounting.finishInvoiceSync(claimed,metadata,fields);
     if (store.finishInvoiceSync) return await store.finishInvoiceSync(claimed,metadata,fields);
-    return store.updateAssistantInvoiceMetadata(row.id,{...reserved,...metadata},fields);
+    return store.updateAssistantInvoiceMetadata(row.id,{...claimed.metadata,...metadata},fields);
   }
   // Recheck the reservation immediately before external work. A vanished row
   // is a deletion, not an accounting failure, and must never be recreated.
-  const current=store.getAssistantInvoice ? await store.getAssistantInvoice(row.id) : claimed;
-  if (!current || current.deleted_at) throw new APIError(404,'INVOICE_NOT_FOUND');
-  assertInvoiceSyncScope(store,current);
-  if (current.id!==row.id || current.metadata?.bookkeeping_sync_attempted_at!==reserved.bookkeeping_sync_attempted_at || current.metadata?.bookkeeping_sync_attempts!==attempts) throw new APIError(409,'INVOICE_SYNC_LEASE_CHANGED');
-  let response;
-  try {
+  async function readReservation() {
+    const current=store.getAssistantInvoice ? await store.getAssistantInvoice(row.id) : claimed;
+    if (!current || current.deleted_at) throw new APIError(404,'INVOICE_NOT_FOUND');
+    assertInvoiceSyncScope(store,current);
+    if (current.id!==row.id || current.metadata?.bookkeeping_sync_attempted_at!==reserved.bookkeeping_sync_attempted_at || current.metadata?.bookkeeping_sync_attempts!==claimed.metadata.bookkeeping_sync_attempts) throw new APIError(409,'INVOICE_SYNC_LEASE_CHANGED');
+    return current;
+  }
+  function validateCurrent(current) {
     if (!invoice.clientName?.trim()) throw new APIError(422,'INVOICE_CUSTOMER_REQUIRED');
     if (['void','cancelled'].includes(current.status) || current.metadata?.invoice_direction==='payable') throw new APIError(409,'INVOICE_NOT_EXPORTABLE');
     if (['customer_id','invoice_number','issue_date','due_date','currency'].some(key=>String(current[key]??'')!==String(claimed[key]??'')) || Number(current.total_amount)!==Number(claimed.total_amount)) throw new APIError(409,'INVOICE_CHANGED_DURING_SYNC');
-    response = await accounting.syncInvoice({userId:store.userId,workspaceId:store.workspaceId,provider:'zoho_books',invoice,invoiceId:row.id});
+  }
+  const current=await readReservation();
+  let dispatched=false;
+  let response;
+  try {
+    validateCurrent(current);
+    const input={userId:store.userId,workspaceId:store.workspaceId,provider:'zoho_books',invoice,invoiceId:row.id};
+    const dispatch=accounting.prepareInvoiceSync ? await accounting.prepareInvoiceSync(input) : () => accounting.syncInvoice(input);
+    // Preparation can wait on connection reads/token refresh. Recheck saved
+    // facts and atomically record the attempt immediately before dispatch.
+    const ready=await readReservation();
+    validateCurrent(ready);
+    const dispatchMetadata={...ready.metadata,bookkeeping_sync_attempts:attempts,bookkeeping_sync_exhausted:false};
+    const started=store.claimInvoiceSync ? await store.claimInvoiceSync(ready,dispatchMetadata) : await store.updateAssistantInvoiceMetadata(row.id,dispatchMetadata);
+    if (!started) throw new APIError(409,'INVOICE_SYNC_LEASE_CHANGED');
+    claimed=started;
+    dispatched=true;
+    response = await dispatch();
   } catch (error) {
+    if (['INVOICE_NOT_FOUND','WORKSPACE_SCOPE_VIOLATION','INVOICE_SYNC_LEASE_CHANGED'].includes(error?.code)) throw error;
     const disconnected = ['ACCOUNTING_NOT_CONNECTED','ACCOUNTING_NOT_CONFIGURED'].includes(error?.code);
     const status = disconnected ? 'not_configured' : 'failed';
     const errorCode = String(error?.code || 'SYNC_FAILED').slice(0,80);
-    const exhausted = attempts >= MAX_SYNC_ATTEMPTS;
+    const exhausted = (dispatched ? attempts : previousAttempts) >= MAX_SYNC_ATTEMPTS;
     const diagnostics=providerDiagnostics(error);
-    const saved = await finish({bookkeeping_sync_status:exhausted?'failed':status,bookkeeping_sync_error:errorCode,bookkeeping_sync_http_status:Number.isInteger(error?.status)?error.status:null,bookkeeping_sync_provider_code:diagnostics.providerCode,bookkeeping_sync_provider_message:diagnostics.providerMessage,bookkeeping_sync_provider_operation:diagnostics.providerOperation,bookkeeping_sync_exhausted:exhausted,bookkeeping_sync_next_at:new Date(now + syncRetryDelay(attempts)).toISOString()}, {sync_status:exhausted || !disconnected?'failed':'local',last_sync_error:errorCode});
+    const saved = await finish({bookkeeping_sync_status:exhausted?'failed':status,bookkeeping_sync_error:errorCode,bookkeeping_sync_http_status:Number.isInteger(error?.status)?error.status:null,bookkeeping_sync_provider_code:diagnostics.providerCode,bookkeeping_sync_provider_message:diagnostics.providerMessage,bookkeeping_sync_provider_operation:diagnostics.providerOperation,bookkeeping_sync_exhausted:exhausted,bookkeeping_sync_next_at:new Date(now + syncRetryDelay(dispatched ? attempts : previousAttempts)).toISOString()}, {sync_status:exhausted || !disconnected?'failed':'local',last_sync_error:errorCode});
     return result(saved,exhausted?'failed':status,!exhausted && !disconnected);
   }
   // A persistence failure must not be mistaken for a provider failure. The lease

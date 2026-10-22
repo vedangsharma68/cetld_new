@@ -6,6 +6,7 @@ import {createInvoiceReconcileStore,reconcileInvoiceSync} from '../automation/in
 import {retryAssistantInvoiceSync} from '../ai/invoice-ops.mjs';
 import {createWhatsAppInvoiceStore} from '../automation/whatsapp/invoice-store.mjs';
 import {createAccountingIntegration,createZohoBooksProvider,InMemoryAccountingStore,TokenCipher,connectionAad} from '../automation/accounting/index.mjs';
+import {createAIHandler} from '../ai/routes.mjs';
 
 test('real SQL numbering, REST claims and WhatsApp/manual reconciliation remain unique and tenant-scoped',async()=>{
   const f=await createOfflineSqlNetwork(),owner=randomUUID();
@@ -94,5 +95,42 @@ test('real SQL numbering, REST claims and WhatsApp/manual reconciliation remain 
     const requestCount=requests.length;
     await retryAssistantInvoiceSync({store:scoped,invoiceId:auto.id,accounting:integration});
     assert.equal(requests.length,requestCount,'a synced fallback is never exported again');
+
+    // Reproduce the production grants with the real manual API and runtime.
+    // Every REST request executes as its bearer role, including the deliberate
+    // denial if a caller ever tries to read the encrypted connection table.
+    const nativeRow=await create(0),envelope=cipher.encrypt(token,connectionAad('zoho_books',workspaces[0]));
+    await f.db.query(`insert into cetld_accounting_connections(owner_id,workspace_id,provider,provider_account_id,api_domain,status,token_ciphertext,token_iv,token_tag,token_expires_at)
+      values($1,$2,'zoho_books','native-org',$3,'connected',$4,$5,$6,$7)`,[owner,workspaces[0],token.apiDomain,envelope.ciphertext,envelope.iv,envelope.tag,new Date(token.expiresAt).toISOString()]);
+    await asOwner();
+    await assert.rejects(f.db.query('select * from cetld_accounting_connections'),error=>error.code==='42501');
+    await asService();
+    let serviceLookups=0,callerLookups=0,providerDispatches=0;
+    const fetchImpl=async(input,options={})=>{
+      const url=new URL(input),headers=new Headers(options.headers);
+      if(url.origin!=='https://fixture.supabase.test') {
+        providerDispatches++;
+        assert.equal(url.searchParams.get('organization_id'),'native-org');
+        if(options.method==='POST')return Response.json({invoice:{invoice_id:'native-remote'}});
+        return Response.json(url.pathname.endsWith('/contacts')?{contacts:[{contact_id:'native-contact',contact_name:'Client'}]}:{invoices:[]});
+      }
+      const service=headers.get('authorization')==='Bearer native-service-role';
+      if(service)await asService();else {assert.equal(headers.get('authorization'),'Bearer native-caller-token');await asOwner();}
+      if(url.pathname==='/auth/v1/user')return Response.json({id:owner});
+      if(url.pathname==='/rest/v1/cetld_accounting_connections')service?serviceLookups++:callerLookups++;
+      // The fixture emits native PostgreSQL JSON; strip only wire text casts
+      // that its small PostgREST parser does not implement.
+      if(url.searchParams.has('select'))url.searchParams.set('select',url.searchParams.get('select').replaceAll('::text',''));
+      return f.fetchImpl(url,options);
+    };
+    const handler=createAIHandler({env:{SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_PUBLISHABLE_KEY:'native-publishable',SUPABASE_SERVICE_ROLE_KEY:'native-service-role',ACCOUNTING_TOKEN_ENCRYPTION_KEY:Buffer.alloc(32,7).toString('base64')},fetchImpl});
+    const res={setHeader(){},status(code){this.code=code;return this},json(body){this.body=body;return this}};
+    await handler({method:'POST',query:{action:'retry-invoice-sync'},headers:{authorization:'Bearer native-caller-token'},body:{workspaceId:workspaces[0],invoiceId:nativeRow.id,idempotencyKey:'native_manual_retry'}},res);
+    assert.equal(res.code,200,JSON.stringify({body:res.body,errors:f.errors}));assert.equal(res.body.sync.status,'synced');
+    assert.ok(serviceLookups>=2);assert.equal(callerLookups,0);assert.ok(providerDispatches>0);
+    const persistedManual=(await f.db.query('select metadata,external_invoice_id from invoices where id=$1',[nativeRow.id])).rows[0];
+    assert.equal(persistedManual.external_invoice_id,'native-remote');assert.equal(persistedManual.metadata.bookkeeping_sync_attempts,1);
+    await asOwner();
+    await assert.rejects(f.db.query('select * from cetld_accounting_connections'),error=>error.code==='42501','authenticated remains denied after manual retry');
   } finally {await f.close();}
 });

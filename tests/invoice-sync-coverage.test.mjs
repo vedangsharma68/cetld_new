@@ -219,7 +219,7 @@ test('workspace member exports use the connected owner identity and never anothe
   await assert.rejects(accounting.syncInvoice({userId:'member',workspaceId:'other-workspace',provider:'zoho_books',invoice,invoiceId}),error=>error.code==='ACCOUNTING_NOT_CONNECTED');
 });
 
-test('missing customer rows and blank customer names fail with bounded local retries and no Zoho call',async()=>{
+test('missing customer rows and blank customer names never spend a provider attempt',async()=>{
   for(const kind of ['missing-id','missing-row','blank-name']) {
     const store=memory(kind==='missing-id'?{...initial,customer_id:null}:initial);
     store.query=async()=>kind==='blank-name'?[{id:initial.customer_id,workspace_id:workspaceId,name:'   '}]:[];
@@ -228,9 +228,13 @@ test('missing customer rows and blank customer names fail with bounded local ret
     for(let n=1;n<=5;n++) {
       const result=await retryAssistantInvoiceSync({store,invoiceId,accounting,manualRetry:false,clock:()=>new Date(now)});
       assert.equal(result.sync.status,'failed');assert.equal(result.invoice.metadata.bookkeeping_sync_error,'INVOICE_CUSTOMER_REQUIRED');
-      assert.equal(result.invoice.metadata.bookkeeping_sync_attempts,n);now+=syncRetryDelay(n)+1;
+      assert.equal(result.invoice.metadata.bookkeeping_sync_attempts,0);now+=syncRetryDelay(1)+1;
     }
-    assert.equal(store.row.metadata.bookkeeping_sync_exhausted,true);
+    assert.equal(store.row.metadata.bookkeeping_sync_exhausted,false);
+    store.edit({customer_id:initial.customer_id});
+    store.query=async()=>[{id:initial.customer_id,workspace_id:workspaceId,name:'Client'}];
+    const recovered=await retryAssistantInvoiceSync({store,invoiceId,accounting:ok,manualRetry:false,clock:()=>new Date(now)});
+    assert.equal(recovered.sync.status,'synced');assert.equal(recovered.invoice.metadata.bookkeeping_sync_attempts,1);
   }
 });
 
@@ -364,6 +368,21 @@ test('preflight accepts numeric wire formatting but rejects invoice facts change
     } else store.getAssistantInvoice=async()=>({...store.row,total_amount:'118.00'});
     const result=await retryAssistantInvoiceSync({store,invoiceId,accounting:{async syncInvoice(){calls++;return ok.syncInvoice()}}});
     assert.equal(calls,changed?0:1);assert.equal(result.sync.status,changed?'failed':'synced');
-    if(changed){assert.equal(result.invoice.total,119);assert.equal(result.invoice.metadata.bookkeeping_sync_error,'INVOICE_CHANGED_DURING_SYNC');}
+    if(changed){assert.equal(result.invoice.total,119);assert.equal(result.invoice.metadata.bookkeeping_sync_error,'INVOICE_CHANGED_DURING_SYNC');assert.equal(result.invoice.metadata.bookkeeping_sync_attempts,0);}
+  }
+});
+
+test('connection preparation holds a lease without an attempt and rechecks edits before dispatch',async()=>{
+  for(const changed of [false,true]) {
+    const store=memory();let prepare,release,calls=0;
+    const entered=new Promise(resolve=>prepare=resolve),gate=new Promise(resolve=>release=resolve);
+    const accounting={...ok,async prepareInvoiceSync(){prepare();await gate;return async()=>{calls++;return ok.syncInvoice()}}};
+    const pending=retryAssistantInvoiceSync({store,invoiceId,accounting});await entered;
+    assert.equal(store.row.metadata.bookkeeping_sync_attempts,0);
+    assert.equal((await retryAssistantInvoiceSync({store,invoiceId,accounting})).sync.status,'pending');
+    if(changed)store.edit({total_amount:119,metadata:{...store.row.metadata,owner_note:'keep'}});
+    release();const result=await pending;
+    assert.equal(calls,changed?0:1);assert.equal(result.invoice.metadata.bookkeeping_sync_attempts,changed?0:1);
+    if(changed){assert.equal(result.invoice.metadata.owner_note,'keep');assert.equal(result.invoice.metadata.bookkeeping_sync_error,'INVOICE_CHANGED_DURING_SYNC');}
   }
 });

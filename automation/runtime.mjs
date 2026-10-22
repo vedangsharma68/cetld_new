@@ -9,15 +9,26 @@ import { scheduleInitialFollowUp, nextContactTime, timezoneParts, addLocalDays }
 import { normalizeFollowUpPreferences,hasUnresolvedFollowUpException } from './preferences.mjs';
 import {createFirstPartyReminderRuntime,firstPartyReminderEnabled} from './first-party-reminder-runtime.mjs';
 import {scheduledOwnerTestMode,scheduledOwnerTestScopeMatches} from './scheduled-owner-test.mjs';
+import {invoiceSyncPersistence} from './invoice-sync-store.mjs';
 
 export function createAccountingRuntime({env=process.env,fetchImpl=fetch}={}) {
-  return createAccountingIntegration({
-    store:new SupabaseAccountingStore({url:env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || appConfig.url,serviceRoleKey:required(env,'SUPABASE_SERVICE_ROLE_KEY'),fetchImpl}),
+  const store=new SupabaseAccountingStore({url:env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || appConfig.url,serviceRoleKey:required(env,'SUPABASE_SERVICE_ROLE_KEY'),fetchImpl});
+  const integration=createAccountingIntegration({
+    store,
     cipher:new TokenCipher(encryptionKeyFromEnv(env.ACCOUNTING_TOKEN_ENCRYPTION_KEY)),
     providers:createAccountingProviders({
       zoho_books:{clientId:env.ZOHO_BOOKS_CLIENT_ID,clientSecret:env.ZOHO_BOOKS_CLIENT_SECRET,redirectUri:env.ZOHO_BOOKS_REDIRECT_URI,region:env.ZOHO_BOOKS_REGION || 'com',fetchImpl},
       quickbooks:{clientId:env.QUICKBOOKS_SANDBOX==='true'?env.QUICKBOOKS_SANDBOX_CLIENT_ID:env.QUICKBOOKS_PRODUCTION_CLIENT_ID,clientSecret:env.QUICKBOOKS_SANDBOX==='true'?env.QUICKBOOKS_SANDBOX_CLIENT_SECRET:env.QUICKBOOKS_PRODUCTION_CLIENT_SECRET,redirectUri:env.QUICKBOOKS_REDIRECT_URI,sandbox:env.QUICKBOOKS_SANDBOX==='true',fetchImpl}
     })
+  });
+  return Object.freeze({...integration,
+    // The database deliberately protects external linkage from authenticated
+    // writes. Complete only the claimed, active invoice through this runtime.
+    async finishInvoiceSync(claimed,metadata,fields) {
+      const read=async id=>(await store.request(`invoices?${new URLSearchParams({workspace_id:`eq.${claimed.workspace_id}`,id:`eq.${id}`,deleted_at:'is.null',select:'*',limit:'1'})}`))?.[0] || null;
+      const patch=async(row,body)=>(await store.request(`invoices?${new URLSearchParams({workspace_id:`eq.${claimed.workspace_id}`,id:`eq.${row.id}`,updated_at:`eq.${row.updated_at}`,deleted_at:'is.null',select:'*'})}`,{method:'PATCH',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(body)}))?.[0] || null;
+      return invoiceSyncPersistence({read,patch}).finishInvoiceSync(claimed,metadata,fields);
+    }
   });
 }
 export function createAutomationRuntime({env=process.env,fetchImpl=fetch,store,provider,accounting,supabase,clock=()=>new Date()}={}) {
