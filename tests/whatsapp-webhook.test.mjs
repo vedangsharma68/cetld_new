@@ -847,3 +847,36 @@ test('fresh failed delivery records its reason so an aged retry can expire befor
   assert.equal(update.status,'pending');assert.equal(update.error_code,'OWNER_REPLY_NOT_ACCEPTED');
   assert.equal(update.error_detail,'Delivery was blocked.');
 });
+
+test('Meta contact card retains display name and phone through durable inbox text', () => {
+  const rows = parseMetaMessages(meta([{...message('wamid.card'), type: 'contacts', contacts: [
+    {name: {formatted_name: 'Acme Buyer'}, phones: [{phone: '+1 (415) 555-0244'}]},
+  ]}]), env.WHATSAPP_PHONE_NUMBER_ID, env.WHATSAPP_WABA_ID);
+  assert.equal(rows[0].message_type, 'contacts');
+  assert.deepEqual(JSON.parse(rows[0].message_text), {name: 'Acme Buyer', phone: '+1 (415) 555-0244'});
+});
+
+test('owner worker forwards a durable contact card',async()=>{
+  const phone = '+919871367051';
+  const event = {id:17,claim_token:'claim',attempts:1,provider_message_id:'wamid.owner-button',sender_phone:phone,
+    message_type:'contacts',message_text:JSON.stringify({name:'Buyer',phone:'+14155550244'}),provider_timestamp:new Date().toISOString()};
+  const tables = {
+    whatsapp_owner_verifications:[{workspace_id:'ws-owner',requested_by:'owner-1',verified_at:'2026-10-01T00:00:00Z',
+      created_at:'2026-10-01T00:00:00Z',phone}],
+    workspaces:[{id:'ws-owner',owner_id:'owner-1'}],
+    workspace_members:[{workspace_id:'ws-owner',user_id:'owner-1',role:'owner'}],
+    workspace_settings:[{workspace_id:'ws-owner',business_name:'Acme Studio',whatsapp_owner_phone:phone}],
+    whatsapp_consents:[{workspace_id:'ws-owner',customer_id:'owner-customer',phone,revoked_at:null,consented_by:'owner-1'}],
+    customers:[{id:'owner-customer',workspace_id:'ws-owner',phone,metadata:{whatsapp_owner:true}}],
+    whatsapp_global_suppressions:[],whatsapp_suppressions:[],
+  };
+  const supabase = installVerifiedOwnerRpc({from(){throw new Error('No database read expected for an empty owner reply');}},()=>tables,{expectedPhone:phone});
+  let received;
+  const runtime = createInboundRuntime({supabase,conversationStore:null,env,
+    inbox:{async claim(){return [event];},async complete(){}},
+    outbound:{async sendTypingIndicator(){return {status:'accepted'};},async sendServiceReply(){throw new Error('No empty owner answer is sent');}},
+    onOwnerMessage:async input=>{received=input;return {answer:''};}});
+  assert.deepEqual(await runtime.processPending(),{claimed:1,completed:1});
+  assert.deepEqual(received.contactCard,{name:'Buyer',phone:'+14155550244'});
+
+});

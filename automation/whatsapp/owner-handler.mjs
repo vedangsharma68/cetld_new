@@ -1,3 +1,4 @@
+import {answerDebtorPhone} from './assistant-handler.mjs';
 import {ownerReminderRequest} from './owner-reminders.mjs';
 import {normalizeOwnerBotPreferences,normalizeOwnerServiceReplyText} from './bot-preferences.mjs';
 import {ownerCalendar} from './workspace-records.mjs';
@@ -208,6 +209,13 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     const {settings,available:settingsAvailable}=settingsState;
     const {pendingAtStart,pendingInitialState,available:pendingStateAvailable}=pendingState;
     pendingStoreAvailable=pendingStateAvailable;
+    if (scope.contactCard || (!scope.media && !scope.mediaError && pendingAtStart?.action?.type === 'invoice_debtor_phone')) {
+      const answer = await answerDebtorPhone({pending, scope: {workspaceId, customerId: scope.customerId, phone},
+        message, contactCard: scope.contactCard, clock, pendingRow: pendingAtStart,
+        storeFactory: () => invoiceStoreFactory({...scope, authorize: () => authorizeTurn(scope)})});
+      if (answer) return {answer};
+    }
+
     const {history,available:historyAvailable}=historyState;
     const {lifecycle,lifecyclePending,available:lifecycleAvailable}=lifecycleState;
     ownerStore=ownerStoreState;

@@ -194,3 +194,27 @@ test('ordinary customers cannot upload, edit, or confirm a legacy invoice draft'
  const upload=createWhatsAppBoundMessageHandler({supabase:{from(){throw Error('No extraction or queries for a customer upload')}}});
  assert.match(await upload({...scope,media:{bytes:Buffer.from('photo')}}),/Only the business owner/);
 });
+
+for (const number of ['+1 (415) 555-0244', '415 bananas']) {
+  test(`contact card answers the pending debtor phone question: ${number}`, async () => {
+    const flow = contactFlow();
+    const reply = await flow.handler({...scope, message: '', contactCard: {name: 'Different display name', phone: number}});
+    if (number.startsWith('+')) {
+      assert.match(reply, /Saved \+14155550244 for Acme/);
+      assert.equal(flow.writes[0].invoiceId, 'invoice-1');
+      assert.ok(flow.writes[0].assumedConsentAt);
+    } else {
+      assert.match(reply, /Send the full WhatsApp number with country code/);
+      assert.equal(flow.writes.length, 0);
+    }
+    assert.equal(flow.rpcCalls.length, 0);
+  });
+}
+
+test('contact card without a pending question asks for the invoice without writing or planning', async () => {
+  const flow = contactFlow();
+  await flow.handler({...scope, message: '+14155550244'});
+  const reply = await flow.handler({...scope, message: '', contactCard: {name: 'Acme', phone: '+14155550244'}});
+  assert.equal(reply, 'Which customer or invoice is this number for?');
+  assert.equal(flow.writes.length, 1);
+});

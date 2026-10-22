@@ -359,3 +359,54 @@ test('pending store generic persistence works when passed as an unbound channel 
   assert.equal((await channel.ask({...scope, message:'create invoice'})).requiresInChatConfirmation, true);
   assert.deepEqual(calls.map(call => call.name), ['whatsapp_load_pending_action_state', 'whatsapp_store_pending_action']);
 });
+
+// Minimal selectable PDFs keep these tests on the real PDF extraction path.
+function phoneInvoicePdf(phoneLine) {
+  const lines = ['INVOICE', 'Invoice Number: PHONE-50', 'FROM: Seller', 'BILL TO: Buyer',
+    phoneLine, 'Invoice Date: 2026-10-01', 'Due Date: 2026-10-31', 'Currency: USD',
+    'QTY DESCRIPTION UNIT PRICE AMOUNT', '1 Service 100.00 100.00', 'Subtotal 100.00', 'Tax 0.00', 'Total 100.00'].filter(Boolean);
+  const stream = 'BT /F1 10 Tf 40 780 Td ' + lines.map((line, i) =>
+    `${i ? '0 -16 Td ' : ''}(${line}) Tj`).join('\n') + ' ET';
+  const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`];
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((obj, i) => { offsets.push(Buffer.byteLength(pdf)); pdf += `${i + 1} 0 obj\n${obj}\nendobj\n`; });
+  const start = Buffer.byteLength(pdf);
+  pdf += `xref\n0 6\n0000000000 65535 f \n${offsets.slice(1).map(n => String(n).padStart(10, '0') + ' 00000 n \n').join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${start}\n%%EOF`;
+  return Buffer.from(pdf);
+}
+
+for (const printed of ['WhatsApp: +14155550244', '', 'Phone: 4155550244']) {
+  test(`PDF ingest saves the printed debtor phone or asks once: ${printed || 'absent'}`, async () => {
+    const {extractInvoice} = await import('../ai/extraction.mjs');
+    const db = combinedSupabase(), writes = [];
+    const store = createWhatsAppInvoiceStore({supabase: db, ...scope});
+    const handler = createWhatsAppBoundMessageHandler({authorizeScope: async () => true, supabase: db,
+      providerFactory: () => ({generateStructured() { throw Error('PDF must use printed text'); }}),
+      extract: extractInvoice, invoiceStoreFactory: () => ({...store,
+        async saveDebtorPhone(input) { writes.push(input); return store.saveDebtorPhone(input); }}),
+      channelFactory: () => ({ask() { throw Error('must not plan'); }})});
+    const reply = await handler({...scope, message: '', messageId: 'pdf-phone',
+      media: {bytes: phoneInvoicePdf(printed), mimeType: 'application/pdf', fileName: 'phone.pdf'}});
+    assert.match(reply, /^Saved invoice PHONE-50/);
+    assert.equal(db.invoices.length, 1);
+    assert.equal(db.review.action.invoice.clientName, 'Buyer');
+    if (printed.includes('+')) {
+      assert.equal(writes.length, 1);
+      assert.equal(writes[0].phone, '+14155550244');
+      assert.ok(writes[0].assumedConsentAt);
+      assert.equal(db.invoices[0].metadata.debtor_phone, '+14155550244');
+      assert.doesNotMatch(reply, /WhatsApp number/);
+    } else {
+      assert.equal(writes.length, 0);
+      assert.equal((reply.match(/\?/g) || []).length, 1);
+      assert.match(reply, /country code/);
+      const pending = await createWhatsAppPendingActionStore({supabase: db}).loadPendingActionState(scope);
+      assert.equal(pending.action.type, 'invoice_debtor_phone');
+      assert.equal(pending.action.stage, 'awaiting_phone');
+    }
+    assert.equal(db.invoices[0].metadata.debtor_consent, undefined);
+  });
+}
