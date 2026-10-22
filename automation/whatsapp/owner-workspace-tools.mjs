@@ -1,4 +1,5 @@
 import {createOwnerReminderRuntime} from './owner-reminders.mjs';
+import {createOwnerConsentRuntime} from './owner-consent.mjs';
 import {sanitizeWorkspaceToolResult} from './workspace-data.mjs';
 import {createOwnerDirectRuntime} from './owner-direct-runtime.mjs';
 import {createOwnerSafetyTools} from './owner-agent.mjs';
@@ -28,6 +29,7 @@ export function createOwnerWorkspaceTools(options = {}) {
   const direct=createOwnerDirectRuntime({...options,adapter:options.directWriteAdapter});
   const reopening=createInvoiceReopeningRuntime(options);
   const reminders=createOwnerReminderRuntime(options);
+  const consent=createOwnerConsentRuntime(options);
   const safety = createOwnerSafetyTools({...options,signal:controller.signal});
   const invoke = (name, args = {}) => safety.execute(name, args);
   const target = params => {
@@ -43,6 +45,7 @@ export function createOwnerWorkspaceTools(options = {}) {
     executeInvoiceReopening:(params,ctx)=>reopening.prepare(params,ctx),
     executeReopeningDecision:(params,ctx)=>reopening.decide(params,ctx),
     executeReminderOperation:(params,ctx)=>reminders.execute(params,ctx),
+    executeConsentOperation:(params,ctx)=>consent.execute(params,ctx),
     getRuntimeConfig: () => invoke('getAIProviderConfiguration'),
     async executeSafetyOperation(params) {
       if(params.signal?.aborted || (Number.isFinite(params.deadlineAt) && Date.now()>=params.deadlineAt)) throw Object.assign(new Error(),{code:'OWNER_LOOP_TIMEOUT'});
@@ -147,6 +150,7 @@ export function createOwnerWorkspaceTools(options = {}) {
       return buttonAction&&!attachmentReview?{...requirement,maxLength:Math.min(requirement?.maxLength||900,900),confirmationText:null,requiresCancel:false,requiresReplyCue:false,buttonsAvailable:true}:requirement;
     },
     getReminderReply:()=>reminders.getReply(),
+    getConsentReply:()=>consent.getReply(),
     getPhoneFailureReply:()=>phoneFailureReply,
     decideButton:async input=>sanitizeWorkspaceToolResult(trackAccountingBlock(await (input?.pending?.action?.type==='owner_reminder_approval'?reminders.decide(input):input?.pending?.action?.type==='owner_invoice_reopen'?reopening.decide(input):direct.decideButton(input))),options.scope),
     lookupCompleted:async()=>sanitizeWorkspaceToolResult(await reminders.lookupCompleted()||await direct.lookupCompleted(),options.scope),

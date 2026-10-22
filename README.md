@@ -219,6 +219,13 @@ customer scope are checked before export, and a deleted row cannot receive late
 sync completion. A Zoho invoice tagged for another cetld invoice is rejected
 even when its number and financial details match.
 
+If Zoho rejects a create with HTTP 400/code 4097 because organization numbering
+is enabled, the connector retries that create once without `invoice_number`.
+The cetld invoice keeps its local number. Zoho receives the same customer,
+financial facts and `cetld:<invoice-id>` reference. Recovery checks that exact
+reference before invoice-number matching, so a Zoho-assigned number can be
+relinked after an interrupted save without creating another invoice.
+
 The invoice drawer displays the saved error and earliest retry time. **Retry
 sync** uses the assistant's authenticated retry API and respects backoff. After
 five attempts, an explicit owner/member retry may start a new five-attempt cycle

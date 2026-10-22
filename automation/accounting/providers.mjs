@@ -302,11 +302,7 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       if (!invoice?.clientName?.trim()) throw new AccountingError('INVOICE_CUSTOMER_REQUIRED', 'An invoice customer is required');
       if (!accountId) throw new Error('Zoho Books organization ID is required');
       const headers = { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' };
-      const existingUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices`);
-      existingUrl.search = new URLSearchParams({organization_id: accountId, invoice_number: invoice.invoiceNumber}).toString();
-      const existingBody = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', existingUrl, {headers}), 'zoho_books');
-      const existing = (existingBody.invoices || []).map(normalizeZohoInvoice).find(item => item?.number === invoice.invoiceNumber);
-      if (existing) {
+      const reuse = existing => {
         const localReference=String(existing.raw?.reference_number || '');
         if (invoice.localInvoiceId && localReference.startsWith('cetld:') && localReference!==`cetld:${invoice.localInvoiceId}`) throw new AccountingError('ACCOUNTING_INVOICE_CONFLICT', 'This Zoho Books invoice is linked to another cetld invoice');
         const sameCustomer = String(existing.customerName || '').trim().toLowerCase() === String(invoice.clientName || '').trim().toLowerCase();
@@ -315,7 +311,25 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
         const sameDates = existing.invoiceDate === invoice.invoiceDate && existing.dueDate === invoice.dueDate;
         if (!sameCustomer || !sameCurrency || !sameTotal || !sameDates) throw new AccountingError('ACCOUNTING_INVOICE_CONFLICT', 'An existing Zoho Books invoice uses this number with different details');
         return {externalId: existing.externalId, duplicate: true};
+      };
+      const existingUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices`);
+      // Zoho may assign a different number. Recover a completed write by the
+      // stable local ID before checking numbers that other workspaces can share.
+      if (invoice.localInvoiceId) {
+        const reference = `cetld:${invoice.localInvoiceId}`;
+        existingUrl.search = new URLSearchParams({organization_id: accountId, reference_number: reference}).toString();
+        const body = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', existingUrl, {headers}), 'zoho_books');
+        const matches = (body.invoices || []).filter(item => item.reference_number === reference);
+        if (matches.length) {
+          const linked = matches.length === 1 && normalizeZohoInvoice(matches[0]);
+          if (!linked) throw new AccountingError('ACCOUNTING_INVOICE_CONFLICT', 'Zoho Books returned ambiguous or invalid invoice references');
+          return reuse(linked);
+        }
       }
+      existingUrl.search = new URLSearchParams({organization_id: accountId, invoice_number: invoice.invoiceNumber}).toString();
+      const existingBody = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', existingUrl, {headers}), 'zoho_books');
+      const existing = (existingBody.invoices || []).map(normalizeZohoInvoice).find(item => item?.number === invoice.invoiceNumber);
+      if (existing) return reuse(existing);
 
       const contactsUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/contacts`);
       contactsUrl.search = new URLSearchParams({organization_id: accountId, contact_name_contains: invoice.clientName}).toString();
@@ -333,7 +347,18 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       const createUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices`);
       createUrl.search = new URLSearchParams({organization_id: accountId}).toString();
       const payload = {customer_id: String(contact.contact_id), invoice_number: invoice.invoiceNumber, reference_number: invoice.localInvoiceId ? `cetld:${invoice.localInvoiceId}` : undefined, date: invoice.invoiceDate, due_date: invoice.dueDate, currency_code: invoice.currency, line_items: [{name: `Invoice ${invoice.invoiceNumber}`, description: invoice.notes || undefined, quantity: 1, rate: invoice.total}], notes: invoice.notes || undefined};
-      const created = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', createUrl, {method: 'POST', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify(payload)}), 'zoho_books');
+      const create = body => providerFetch(fetchImpl, 'zoho_books', createUrl, {method: 'POST', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+      let response;
+      try {
+        response = await create(payload);
+      } catch (error) {
+        // 4097 explicitly rejects the number without creating an invoice. Retry
+        // once using the organization's numbering; uncertain writes never retry here.
+        if (!(error instanceof AccountingProviderError) || error.status !== 400 || error.providerCode !== '4097') throw error;
+        const {invoice_number, ...autoNumbered} = payload;
+        response = await create(autoNumbered);
+      }
+      const created = await jsonResponse(response, 'zoho_books');
       if (!created.invoice?.invoice_id) throw new Error('Zoho Books did not return an invoice ID');
       return {externalId: String(created.invoice.invoice_id), duplicate: false};
     },
