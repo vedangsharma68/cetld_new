@@ -91,7 +91,7 @@ test('bookkeeping failure keeps the cetld invoice and exposes a retryable state'
   const store=memoryStore();
   const saved=await saveAssistantInvoice({store,invoice:base,confirmed:true,idempotencyKey:'invoice_sync_fail',accounting:{async syncInvoice(){throw Object.assign(new Error('provider down'),{code:'ACCOUNTING_SYNC_FAILED'})}}});
   assert.equal(saved.saved,true);assert.equal(saved.invoice.id,invoiceId);assert.deepEqual(saved.sync,{status:'failed',provider:null,retryable:true});
-  const retried=await retryAssistantInvoiceSync({store,invoiceId,accounting:{async syncInvoice(){return{provider:'zoho_books',externalId:'zoho-1048'}}}});
+  const retried=await retryAssistantInvoiceSync({store,invoiceId,clock:()=>new Date(Date.now()+600_000),accounting:{async syncInvoice(){return{provider:'zoho_books',externalId:'zoho-1048'}}}});
   assert.equal(retried.sync.status,'synced');assert.equal(retried.sync.externalId,'zoho-1048');
 });
 

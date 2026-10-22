@@ -814,7 +814,7 @@ test('the model continues a missing-currency review and later saves it with its 
       current={...current,version:current.version+1,action:structuredClone(action)};return structuredClone(current);
     }};
   const rows=new Map();let filesKept=0;
-  const store={async findAssistantInvoice({idempotencyKey}){return rows.get(idempotencyKey)||null;},
+  const store={workspaceId,async findAssistantInvoice({idempotencyKey}){return rows.get(idempotencyKey)||null;},
     async findCustomer(){return {id:'customer-1'};},async createCustomer(){throw new Error('unexpected duplicate customer');},
     async createAssistantInvoice({customerId,invoice}){
       const row={id:'invoice-52',workspace_id:workspaceId,customer_id:customerId,invoice_number:invoice.invoiceNumber,

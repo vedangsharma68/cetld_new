@@ -162,6 +162,11 @@ export class SupabaseAccountingStore {
     try { return await response.json(); } catch { return null; }
   }
 
+  async getWorkspaceInvoiceConnection(workspaceId) {
+    const params = new URLSearchParams({workspace_id:`eq.${workspaceId}`,provider:'eq.zoho_books',status:'eq.connected',provider_account_id:'not.is.null',api_domain:'not.is.null',select:'owner_id',order:'owner_id.asc',limit:'1'});
+    return (await this.request(`${this.table}?${params}`))?.[0] || null;
+  }
+
   async rpc(name, body) {
     return this.request(`rpc/${name}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   }

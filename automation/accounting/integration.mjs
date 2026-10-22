@@ -295,6 +295,12 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
       }
     }
     if (!provider) throw new AccountingError('ACCOUNTING_NOT_CONNECTED', 'Accounting provider is not connected');
+    // Invoice export belongs to the workspace connection, including member-created rows.
+    if (provider === 'zoho_books' && store.getWorkspaceInvoiceConnection) {
+      const workspaceConnection = await store.getWorkspaceInvoiceConnection(workspaceId);
+      if (!workspaceConnection) throw new AccountingError('ACCOUNTING_NOT_CONNECTED', 'Accounting provider is not connected');
+      userId = workspaceConnection.owner_id;
+    }
     const context = identity({userId, workspaceId, provider});
     const connection = await store.getConnection(context);
     if (!connection?.providerAccountId || (provider === 'zoho_books' && !connection.apiDomain) || connection.status !== 'connected') throw new AccountingError('ACCOUNTING_NOT_CONNECTED', 'Accounting provider is not connected');

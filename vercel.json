@@ -26,7 +26,8 @@
   },
   "crons": [
     {"path": "/api/whatsapp-process", "schedule": "0 0 * * *"},
-    {"path": "/api/whatsapp-process", "schedule": "0 4 * * *"}
+    {"path": "/api/whatsapp-process", "schedule": "0 4 * * *"},
+    {"path": "/api/whatsapp-process?accounting=1", "schedule": "0 1 * * *"}
   ],
   "headers": [
     {"source": "/(.*)", "headers": [
