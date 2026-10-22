@@ -19,7 +19,7 @@ const DATA_ACTION = 'owner_workspace_data_change';
 const MAX_LIMIT = 50;
 const OPERATIONS = Object.freeze([
   'read','create','update','batch','delete','restore','pending','confirm','cancel','describe',
-  'analyzeAttachment','checkAttachment','saveAttachment','reviewAttachment','sendFile','previewReminder','sendReminderNow',
+  'analyzeAttachment','checkAttachment','saveAttachment','reviewAttachment','sendFile','previewReminder','sendReminderNow','recordConsent',
 ]);
 const FILTER_OPERATORS = Object.freeze(['eq','neq','gt','gte','lt','lte','ilike','in','is']);
 const INVOICE_STATUSES = Object.freeze(['draft','sent','overdue','paid','void','cancelled']);
@@ -107,7 +107,7 @@ function definition() {
   // model request; describe exposes it when the model needs unfamiliar fields.
   const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA).filter(table=>table!=='payments')},filters:{type:'array',items:{type:'object'}},values:{type:'object'}},required:['operation','table','values']};
   return {type:'function',function:{name:'workspaceData',
-    description:'Invoice update: total_amount/subtotal/line_items; status separate. Payment: amount/currency; confirm. Reminder previewReminder/sendReminderNow: confirm later.',
+    description:'Invoice update: total_amount/subtotal/line_items; status separate. Payment: amount/currency; confirm. Reminder: confirm. recordConsent: agreed.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
         operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic batch.'},
@@ -153,6 +153,7 @@ function catalog(table=null) {
     attachmentOperations:{checkAttachment:'Inspect the current attachment and check its exact source identity against existing invoices without saving or changing a review.',analyzeAttachment:'Read the current attachment and retain its source facts in a durable review without saving an invoice.',
       saveAttachment:'Extract/review/save the current attachment or this owner\'s current retained attachment review. Supply operation only, without table or invoice values. Reuse its known facts; do not recreate it with invoice create or chat fields.',
       reviewAttachment:'Supply missing owner-evidenced facts or acknowledge unchanged known fields. Only invoice_number may be explicitly overridden to workspace numbering: include invoice_number_intent use_workspace_numbering with invoice_number AUTO. Concrete number or pattern replacement is unsupported. The workspace sequence assigns the unique ledger number on save and original extraction is audited. Other extracted fields cannot be overwritten.'},
+    consentOperation:'recordConsent: target one customer or invoice with filters, without values. The current owner message must affirm that the recipient agreed to WhatsApp invoice reminders and identify the customer, invoice or current phone. Never reassign another customer or owner binding, restore revoked consent, clear STOP or send a reminder.',
     tables:Object.fromEntries(Object.entries(TABLES).filter(([name])=>!table||name===table).map(([name,spec])=>[name,{
       label:spec.label,columns:spec.columns,filters:spec.filters,
       ...(name==='invoices'?{readValueConstraints:{status:INVOICE_STATUSES,unpaid:'Unpaid is a positive outstanding balance, not a stored invoice status. Read current total_amount and amount_paid using valid statuses; include partial payments and label drafts.'}}:{}),
@@ -167,8 +168,8 @@ function catalog(table=null) {
       }}}:{}),
       ...(name==='workspace_ai_settings'?{writeValueConstraints:{update:{primary_model:VERIFIED_MODEL_CATALOG.filter(entry=>entry.roles.includes('primary')).map(entry=>entry.id),fallback_model:[null,...VERIFIED_MODEL_CATALOG.filter(entry=>entry.roles.includes('fallback')).map(entry=>entry.id)]}}}:{}),
       ...(name==='payments'?{writeValueConstraints:{create:{amount:'Positive, at most 2 decimals; never exceeds remaining invoice balance.',currency:'Required ISO currency matching the invoice.',confirmation:'Always prepares a proposal for later confirmation; no money transfer or customer messages.'}}}:{}),
-      operations:name==='payments'?['read','create']:name==='invoices'?['read','create','update','delete','restore','reviewAttachment','previewReminder','sendReminderNow']
-        :name==='business_records'?['read','create','update','delete','restore']:name==='customers'?['read','create','update','delete']
+      operations:name==='payments'?['read','create']:name==='invoices'?['read','create','update','delete','restore','reviewAttachment','previewReminder','sendReminderNow','recordConsent']
+        :name==='business_records'?['read','create','update','delete','restore']:name==='customers'?['read','create','update','delete','recordConsent']
           :name==='workspace_settings'||name==='workspace_ai_settings'?['read','update']
             :['read'],
     }])),
@@ -421,7 +422,7 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null,text
     if(table!==null&&!Object.hasOwn(TABLES,table))throw new TypeError('unknown table');
     const noTableOps=['pending','confirm','cancel','describe','analyzeAttachment','checkAttachment','saveAttachment'];
     if(!table&&!noTableOps.includes(operation))throw new TypeError('table required');
-    if(table&&!['read','create','update','delete','restore','reviewAttachment','sendFile','previewReminder','sendReminderNow','describe'].includes(operation))throw new TypeError('invalid table operation');
+    if(table&&!['read','create','update','delete','restore','reviewAttachment','sendFile','previewReminder','sendReminderNow','recordConsent','describe'].includes(operation))throw new TypeError('invalid table operation');
     if(['pending','confirm','cancel','describe','checkAttachment'].includes(operation)&&Object.keys(args).some(key=>!['operation',...(operation==='describe'?['table']:[])].includes(key)))throw new TypeError('unexpected operation fields');
     let values=args.values===undefined?{}:args.values;
     let correctionTransport=null;
@@ -479,6 +480,8 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null,text
       order={column:args.order.column,direction:args.order.direction};
     }
     if(['previewReminder','sendReminderNow'].includes(operation)&&(table!=='invoices'||Object.keys(values).length||normalizedFilters.length!==1||!['invoice_number','id','customer_name'].includes(normalizedFilters[0].column)||normalizedFilters[0].operator!=='eq'))throw new TypeError('invalid reminder target');
+    if(operation==='recordConsent'&&(!['customers','invoices'].includes(table)||Object.keys(values).length||normalizedFilters.length>2
+      ||normalizedFilters.some(f=>f.operator!=='eq'||!(table==='invoices'?['id','invoice_number','customer_name']:['id','name','phone']).includes(f.column))))throw new TypeError('invalid consent target');
     if(table==='invoices'&&['update','delete','restore','sendFile'].includes(operation)) {
       const key=operation==='restore'?['invoice_number']:operation==='update'?['invoice_number','id','customer_name']:['invoice_number','id'];
       if(normalizedFilters.length!==1||!key.includes(normalizedFilters[0].column)
@@ -582,7 +585,7 @@ function validateAdapterSettingsValues(values) {
 }
 
 export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,getRuntimeConfig,planRequest,authorize,executeBatchOperation,
-  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,executeInvoiceReopening=null,executeReopeningDecision=null,executeReminderOperation=null,confirmationMode='buttons',timezone='Asia/Kolkata',attachmentAvailable=false,invoiceEditContext=null}={}) {
+  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,executeInvoiceReopening=null,executeReopeningDecision=null,executeReminderOperation=null,executeConsentOperation=null,confirmationMode='buttons',timezone='Asia/Kolkata',attachmentAvailable=false,invoiceEditContext=null}={}) {
   if(!supabase?.from||typeof scope?.workspaceId!=='string')throw new TypeError('Supabase and verified workspace scope required');
   let replyRequirement=null;
   let writeAttempted=false;
@@ -1193,6 +1196,12 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         return {...sanitise(visible,scope),operation:params.operation,table:params.table,writeAttempted:true};
       }
       if(params.operation==='create'||params.operation==='update'||params.operation==='delete')return await propose(params,ctx);
+      if(params.operation==='recordConsent'){
+        if(typeof executeConsentOperation!=='function')return fail('UNAVAILABLE','Consent recording is unavailable. Try again shortly.');
+        writeAttempted=true;
+        const result=await executeConsentOperation(params,ctx);
+        await ctx.assertAuthorized();ctx.assertLive();return sanitise(result,scope);
+      }
       if(['previewReminder','sendReminderNow'].includes(params.operation)){
         if(typeof executeReminderOperation!=='function')return fail('UNAVAILABLE','Reminder approval is unavailable.');
         writeAttempted=true;
@@ -1213,6 +1222,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       }
       if(error.message===PHONE_FORMAT_GUIDANCE)return fail('INVALID_PHONE',PHONE_FORMAT_GUIDANCE);
       const errors={
+        'invalid consent target':['CONSENT_TARGET_REQUIRED','Tell me one customer name and current number, or one invoice number, and confirm they agreed to WhatsApp invoice reminders.'],
         'invalid invoice status':['INVALID_STATUS','Use the catalog invoice status values: draft, sent, overdue, paid, void or cancelled. Unpaid is a positive outstanding balance, not a stored status; use current total_amount and amount_paid, including partial payments. No database write was attempted.'],
         'invalid batch':['BATCH_SHAPE','Atomic batches support 2–10 create/update items in operations, each with table, filters and values. One unambiguous record per item; all commit or all roll back. Nest custom business fields in values.custom_fields. Payment creates, status changes and deletes are separate operations. No write was attempted.'],
         'invoice action requires exactly one canonical target':['TARGET_REQUIRED','Which invoice do you mean? Send its invoice number or customer name. If that customer has several invoices, I will ask you to choose. No change was made.'],

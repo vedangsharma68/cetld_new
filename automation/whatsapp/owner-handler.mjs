@@ -2,6 +2,7 @@ import {answerDebtorPhone} from './assistant-handler.mjs';
 import {normalizeOwnerPhone,saveOwnerPhone,PHONE_FORMAT_GUIDANCE,recentPhoneSubject} from './owner-phone.mjs';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
 import {ownerReminderRequest} from './owner-reminders.mjs';
+import {ownerConsentRequest} from './owner-consent.mjs';
 import {normalizeOwnerBotPreferences,normalizeOwnerServiceReplyText} from './bot-preferences.mjs';
 import {ownerCalendar} from './workspace-records.mjs';
 import {isOwnerNextButton,runOwnerNextAction,planOwnerNextActions,createOwnerNextButtons,pendingBlocksOwnerNextActions,ownerMenuInvoiceEdit,loadOwnerMenuEditTarget,NEXT_ACTION_STALE_REPLY} from './owner-next-actions.mjs';
@@ -440,8 +441,14 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
       reminderResult=await tools.execute('workspaceData',{operation:ownerIsConfirmation(message)?'confirm':'cancel'},{signal});
       if(!await authorizeTurn(scope))return '';
     }
+    const consentRequest=ownerConsentRequest(message);
+    if(!recovered?.completed&&!scope.interactionId&&!media&&!mediaError&&consentRequest){
+      const result=await tools.execute('workspaceData',consentRequest,{signal});
+      if(!await authorizeTurn(scope))return '';
+      if(!tools.getConsentReply?.())return {answer:result?.message||'I could not reach the consent record. Try recording consent again shortly.'};
+    }
     onProgress('agent');
-    const response=businessNameReply?{answer:businessNameReply}:phoneCorrectionReply?{answer:phoneCorrectionReply}:profileReply?{answer:profileReply}:tools.getReminderReply?.()?{answer:tools.getReminderReply()}:reminderResult?.ok===false
+    const response=tools.getConsentReply?.()?{answer:tools.getConsentReply()}:businessNameReply?{answer:businessNameReply}:phoneCorrectionReply?{answer:phoneCorrectionReply}:profileReply?{answer:profileReply}:tools.getReminderReply?.()?{answer:tools.getReminderReply()}:reminderResult?.ok===false
       ?{answer:reminderResult.message||'The reminder request could not be prepared. Nothing was sent.'}:await agentFactory({provider,config,store:ownerStore,tools,history,message,signal,deadlineAt,clock,timezone,logger,traceId:messageId,botPreferences,businessProfile,initialToolResults,
       checkpoint:scope.checkpoint||null,onCheckpoint:scope.onCheckpoint,allowDeferred:scope.allowDeferred===true,budgetMs:scope.budgetMs,
       attachmentDescriptor:media?{available:true,mimeType:String(media.mimeType||media.mime_type||'application/octet-stream').slice(0,80)}
@@ -461,7 +468,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     }
     if(!response?.plannerFailure&&tools.getReplyRequirement?.()?.buttonsAvailable&&!buttons.length)
       return {answer:'The change is waiting for approval, but I could not create its button. Nothing was changed.',plannerFailure:{code:'OWNER_CHOICES_UNAVAILABLE'}};
-    let answer=phoneCorrectionReply||tools.getPhoneFailureReply?.()||tools.getReminderReply?.()||normalizeOwnerServiceReplyText(response?.answer||'');
+    let answer=tools.getConsentReply?.()||phoneCorrectionReply||tools.getPhoneFailureReply?.()||tools.getReminderReply?.()||normalizeOwnerServiceReplyText(response?.answer||'');
     const signature=normalizeOwnerServiceReplyText(botPreferences.serviceReplySignature);
     if(answer&&signature&&!answer.endsWith(signature))answer+='\n\n'+signature;
     if(ownerButtonClaimIssue(answer,{buttonsAvailable:buttons.length>0}))return {
