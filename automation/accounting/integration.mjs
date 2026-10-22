@@ -218,8 +218,8 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     }
   }
 
-  async function withProviderRetry(context, operation) {
-    let authorization = await accessToken(context);
+  async function withProviderRetry(context, operation, authorization) {
+    authorization ||= await accessToken(context);
     try {
       return {...authorization, result: await operation(authorization)};
     } catch (error) {
@@ -286,7 +286,9 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     return { provider, invoiceId: String(invoiceId), balanceMinor: balance.balanceMinor, currency: balance.currency || null, amountMinor: balance.totalMinor ?? null };
   }
 
-  async function syncInvoice({ userId, workspaceId, provider, invoice, invoiceId } = {}) {
+  // Connection selection and token preparation belong to this server runtime,
+  // never to a caller-scoped invoice store. No invoice attempt is dispatched here.
+  async function prepareInvoiceSync({ userId, workspaceId, provider, invoice, invoiceId } = {}) {
     if (!invoice || typeof invoice !== 'object' || !invoiceId) throw new AccountingError('ACCOUNTING_INVOICE_REQUIRED', 'A saved invoice is required');
     if (!provider) {
       for (const candidate of ACCOUNTING_PROVIDERS) {
@@ -306,14 +308,21 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     if (!connection?.providerAccountId || (provider === 'zoho_books' && !connection.apiDomain) || connection.status !== 'connected') throw new AccountingError('ACCOUNTING_NOT_CONNECTED', 'Accounting provider is not connected');
     const adapter = providers[provider];
     if (typeof adapter.createInvoice !== 'function') throw new AccountingError('ACCOUNTING_NOT_CONFIGURED', 'Accounting invoice creation is unavailable');
-    try {
-      const {result} = await withProviderRetry(context, ({token, connection}) => adapter.createInvoice({token, accountId: connection.providerAccountId, invoice: {...invoice, localInvoiceId: String(invoiceId)}}));
-      if (!result?.externalId) throw new Error('Missing external invoice ID');
-      return {provider, externalId: String(result.externalId), duplicate: Boolean(result.duplicate)};
-    } catch (error) {
-      if (error?.code?.startsWith?.('ACCOUNTING_')) throw error;
-      throw new AccountingError('ACCOUNTING_SYNC_FAILED', 'Invoice could not be synced to accounting', redactedError(error));
-    }
+    const authorization = await accessToken(context);
+    return async () => {
+      try {
+        const {result} = await withProviderRetry(context, ({token, connection}) => adapter.createInvoice({token, accountId: connection.providerAccountId, invoice: {...invoice, localInvoiceId: String(invoiceId)}}), authorization);
+        if (!result?.externalId) throw new Error('Missing external invoice ID');
+        return {provider, externalId: String(result.externalId), duplicate: Boolean(result.duplicate)};
+      } catch (error) {
+        if (error?.code?.startsWith?.('ACCOUNTING_')) throw error;
+        throw new AccountingError('ACCOUNTING_SYNC_FAILED', 'Invoice could not be synced to accounting', redactedError(error));
+      }
+    };
+  }
+
+  async function syncInvoice(input = {}) {
+    return (await prepareInvoiceSync(input))();
   }
 
   async function updateInvoice({ userId, workspaceId, provider = 'zoho_books', invoiceId, invoice } = {}) {
@@ -342,5 +351,5 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     }
   }
 
-  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, connectionStatus, selectOrganization, disconnect, readZohoData, sync, retrySync: sync, syncInvoicesAndPayments: sync, syncInvoice, updateInvoice, latestInvoiceBalance });
+  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, connectionStatus, selectOrganization, disconnect, readZohoData, sync, retrySync: sync, syncInvoicesAndPayments: sync, prepareInvoiceSync, syncInvoice, updateInvoice, latestInvoiceBalance });
 }
