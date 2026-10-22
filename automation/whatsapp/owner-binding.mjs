@@ -5,7 +5,7 @@ const verifiedBindings=new WeakMap();
 function checkedOwnerBinding(row,phone) {
   if(!row||typeof row!=='object'||Array.isArray(row)
       ||typeof row.workspace_id!=='string'||typeof row.owner_id!=='string'||typeof row.customer_id!=='string'
-      ||typeof row.business_name!=='string'||!row.business_name.trim())return null;
+      ||typeof row.business_name!=='string')return null;
   const binding={workspaceId:row.workspace_id,ownerId:row.owner_id,businessName:row.business_name.trim(),
     audience:'owner',customerId:row.customer_id};
   verifiedBindings.set(binding,phone);
@@ -38,8 +38,8 @@ export async function resolveOwnerIdentity({supabase,phone}) {
         supabase.from('workspace_members').select('user_id,role').eq('workspace_id',workspace.id).eq('user_id',workspace.owner_id).maybeSingle(),
         supabase.from('workspace_settings').select('business_name,whatsapp_owner_phone').eq('workspace_id',workspace.id).maybeSingle(),
       ].map(async query=>data(await query)));
-      if(member?.role!=='owner'||setting?.whatsapp_owner_phone!==phone||!setting.business_name?.trim())return null;
-      return {workspaceId:workspace.id,ownerId:workspace.owner_id,businessName:setting.business_name.trim(),audience:'owner'};
+      if(member?.role!=='owner'||setting?.whatsapp_owner_phone!==phone)return null;
+      return {workspaceId:workspace.id,ownerId:workspace.owner_id,businessName:(setting.business_name||'').trim(),audience:'owner'};
     }))).filter(Boolean);
   return identities.length===1?identities[0]:null;
 }

@@ -1,3 +1,4 @@
+import {normalizeOwnerPhoneValues,PHONE_FORMAT_GUIDANCE} from './owner-phone.mjs';
 import {sanitizeReminderTemplate} from '../preferences.mjs';
 import {taxComponents} from '../../ai/tools.mjs';
 import {isExternallyManagedInvoice,invoiceBalanceFields} from '../../invoice/business-fields.mjs';
@@ -1053,6 +1054,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         ||params.operation==='batch'&&params.operations.some(item=>item.operation==='create'&&item.table==='invoices')))
         return {...fail('INVALID','Use saveAttachment to extract and review the current invoice attachment, or analyzeAttachment to inspect it without saving. Do not recreate its fields with invoice create. Nothing was saved.'),validationCode:'ATTACHMENT_REVIEW_REQUIRED',writeAttempted:false};
       if(params.operation==='batch'){
+        for(const item of params.operations)item.values=normalizeOwnerPhoneValues(item.values,item.table);
         attemptedOperation={operation:'batch'};
         if(confirmationMode!=='direct'||typeof executeBatchOperation!=='function')return fail('INVALID','Atomic batches require direct owner instructions.');
         for(const item of params.operations){
@@ -1069,6 +1071,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         await ctx.assertAuthorized();ctx.assertLive();
         return {...sanitise(result,scope),operation:'batch',writeAttempted};
       }
+      params.values=normalizeOwnerPhoneValues(params.values,params.table);
       shape=validationShape(params);
       nextActionParams=structuredClone(params);
       if(params.values?.custom_fields!==undefined)validateCustomFields(params.values.custom_fields);
@@ -1208,6 +1211,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
           ...(Number.isInteger(error?.status)&&error.status>=400&&error.status<=599?{status:error.status}:{})};
         return result;
       }
+      if(error.message===PHONE_FORMAT_GUIDANCE)return fail('INVALID_PHONE',PHONE_FORMAT_GUIDANCE);
       const errors={
         'invalid invoice status':['INVALID_STATUS','Use the catalog invoice status values: draft, sent, overdue, paid, void or cancelled. Unpaid is a positive outstanding balance, not a stored status; use current total_amount and amount_paid, including partial payments. No database write was attempted.'],
         'invalid batch':['BATCH_SHAPE','Atomic batches support 2–10 create/update items in operations, each with table, filters and values. One unambiguous record per item; all commit or all roll back. Nest custom business fields in values.custom_fields. Payment creates, status changes and deletes are separate operations. No write was attempted.'],

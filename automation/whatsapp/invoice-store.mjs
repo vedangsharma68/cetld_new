@@ -1,4 +1,5 @@
 import {invoiceSyncPersistence} from '../invoice-sync-store.mjs';
+import {normalizeOwnerPhone,saveOwnerPhone} from './owner-phone.mjs';
 import {createDeletedAtCompatibility} from '../../invoice/deleted-at-compat.mjs';
 
 function rows(result) { if (result?.error) throw result.error; return result?.data || []; }
@@ -15,7 +16,7 @@ function mappedInvoice(row) {
 }
 
 /** Service-role write adapter used only after a verified WhatsApp confirmation. */
-export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, audience='customer', authorize} = {}) {
+export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, audience='customer', ownerId,ownerPhone,messageId,message,authorize} = {}) {
   if (!supabase?.from || !workspaceId || !customerId) throw new TypeError('verified invoice store scope required');
   if(audience!=='customer'&&audience!=='owner')throw new TypeError('invalid invoice audience');
   const owner=audience==='owner';
@@ -28,6 +29,11 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, a
     const [row]=await activeInvoiceRows(includeDeletedAt=>{let query=invoices(scoped('invoices').select('*').eq('workspace_id',workspaceId).eq('id',id));if(includeDeletedAt)query=query.is('deleted_at',null);return query.limit(1)});
     if(!row)throw new TypeError('invoice scope violation');
     return row;
+  }
+  async function saveReviewedPhone(invoiceCustomerId,phone){
+    const result=await saveOwnerPhone({supabase,scope:{workspaceId,ownerId,phone:ownerPhone},customerId:invoiceCustomerId,phone,messageId,message,authorize});
+    if(!result?.ok)throw new Error('Phone save was not confirmed');
+    return result.phone;
   }
   const store = {workspaceId, userId: null,
     ...invoiceSyncPersistence({
@@ -75,13 +81,18 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, a
     },
     async createCustomer({name,email,phone}={}) {
       if(owner){
-        const result=await scoped('customers').insert({workspace_id:workspaceId,name,email:email||null,phone:phone||null}).select('*').single();
+        const contact=phone==null?null:normalizeOwnerPhone(phone);
+        // A review confirmation may be just "yes". The shared saver verifies
+        // the contact against that conversation's persisted saving review.
+        const result=await scoped('customers').insert({workspace_id:workspaceId,name,email:email||null,phone:null}).select('*').single();
         if(result.error)throw result.error;
+        if(contact)result.data.phone=await saveReviewedPhone(result.data.id,contact);
         return result.data;
       }
       throw new TypeError('verified WhatsApp scope cannot create another customer');
     },
     async createAssistantInvoice({customerId: invoiceCustomerId, invoice, reviewNumberAudit=null}) {
+      if(owner&&invoice.clientPhone!=null)invoice={...invoice,clientPhone:normalizeOwnerPhone(invoice.clientPhone)};
       if(owner){
         if(!rows(await scoped('customers').select('id').eq('workspace_id',workspaceId).eq('id',invoiceCustomerId).limit(1))[0])throw new TypeError('customer scope violation');
       }else if (invoiceCustomerId !== customerId) throw new TypeError('customer scope violation');
@@ -106,6 +117,7 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, a
           if(existing.length)return null;
         }
       }
+      if(owner&&invoice.clientPhone)await saveReviewedPhone(invoiceCustomerId,invoice.clientPhone);
       const result = await scoped('invoices').upsert({workspace_id: workspaceId, customer_id: invoiceCustomerId,
         invoice_number: invoice.invoiceNumber, issue_date: invoice.invoiceDate, due_date: invoice.dueDate,
         currency: invoice.currency, total_amount: invoice.total, notes: invoice.notes || null,
@@ -121,7 +133,13 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, a
       return rows(result)[0] || null;
     },
     async saveDebtorPhone({invoiceId, phone, assumedConsentAt}) {
+      phone=normalizeOwnerPhone(phone);
       const row = await ownedInvoice(invoiceId);
+      if(owner){
+        const result=await saveOwnerPhone({supabase,scope:{workspaceId,ownerId,phone:ownerPhone},customerId:row.customer_id,invoiceId,phone,messageId,message,authorize});
+        if(!result?.ok)throw new Error('Phone save was not confirmed');
+        return mappedInvoice(await ownedInvoice(invoiceId));
+      }
       // Invoice metadata only: customers.phone is the owner's WhatsApp binding key and must never be overwritten.
       const metadata = {...(row.metadata || {}), debtor_phone: phone, client_phone: phone};
       delete metadata.debtor_consent;

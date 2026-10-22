@@ -1,4 +1,6 @@
 import {answerDebtorPhone} from './assistant-handler.mjs';
+import {normalizeOwnerPhone,saveOwnerPhone,PHONE_FORMAT_GUIDANCE,recentPhoneSubject} from './owner-phone.mjs';
+import {resolveWorkspaceRecord} from './workspace-records.mjs';
 import {ownerReminderRequest} from './owner-reminders.mjs';
 import {normalizeOwnerBotPreferences,normalizeOwnerServiceReplyText} from './bot-preferences.mjs';
 import {ownerCalendar} from './workspace-records.mjs';
@@ -112,11 +114,15 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         return {settings:{},available:false};
       }
     };
+    let businessProfile=null;
     const loadBotPreferences=async()=>{
       try{
         const row=dataOrThrow(await timedContextRead(logger,'bot_preferences',()=>supabase.from('workspace_settings')
-          .select('owner_bot_preferences,default_timezone').eq('workspace_id',workspaceId).maybeSingle()));
+          .select('owner_bot_preferences,default_timezone,business_name,default_currency').eq('workspace_id',workspaceId).maybeSingle()));
         try{new Intl.DateTimeFormat('en',{timeZone:row?.default_timezone});timezone=row?.default_timezone||'Asia/Kolkata';}catch{}
+        let email=null;
+        try{const user=await supabase.auth?.admin?.getUserById(ownerId);email=user?.data?.user?.email||null;}catch{}
+        businessProfile={business_name:row?.business_name||null,owner_email:email,currency:row?.default_currency||null,timezone:row?.default_timezone||null};
         return normalizeOwnerBotPreferences(row?.owner_bot_preferences);
       }catch{return normalizeOwnerBotPreferences({confirmationMode:'buttons'});}
     };
@@ -212,7 +218,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     if (scope.contactCard || (!scope.media && !scope.mediaError && pendingAtStart?.action?.type === 'invoice_debtor_phone')) {
       const answer = await answerDebtorPhone({pending, scope: {workspaceId, customerId: scope.customerId, phone},
         message, contactCard: scope.contactCard, clock, pendingRow: pendingAtStart,
-        storeFactory: () => invoiceStoreFactory({...scope, authorize: () => authorizeTurn(scope)})});
+        storeFactory: () => invoiceStoreFactory({...scope,ownerId,ownerPhone:phone,messageId,message,audience:'owner',
+          authorize: () => authorizeTurn(scope)})});
       if (answer) return {answer};
     }
 
@@ -239,7 +246,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     // Store adapters invoke authorize() without arguments. Always authorize the
     // verified turn, never an absent or adapter-supplied replacement scope.
     const reauthorize=async()=>authorizeTurn(scope);
-    const invoiceStore=scopeInput=>invoiceStoreFactory({...scope,...scopeInput,authorize:reauthorize});
+    const invoiceStore=scopeInput=>invoiceStoreFactory({...scope,...scopeInput,ownerId,ownerPhone:phone,messageId,message,audience:'owner',authorize:reauthorize});
     let tools,toolSetupIssue=null;
     onProgress('tools');
     try{tools=toolsFactory({supabase,botPreferences,timezone,interactiveAvailable:Boolean(env.WHATSAPP_APP_SECRET||env.CRON_SECRET),scope:{...scope,workspaceId,ownerId,phone},ownerStore,pending,pendingAtStart,pendingInitialState,
@@ -359,6 +366,70 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         initialToolResults=[{name:'workspaceData',args:{operation:choice.decision},result}];
       }
     }
+    let phoneCorrectionReply=null;
+    if(!recovered?.completed&&!scope.interactionId&&!media&&!mediaError&&!pendingBlocksOwnerNextActions(pendingAtStart)){
+      const text=String(message||'').trim();
+      const candidate=text.match(/^(?:(?:it is|it's|the (?:phone|number) is)\s+)?(\+?[\d\s-]+)[.!]?$/i)?.[1];
+      if(candidate&&candidate.replace(/\D/g,'').length>=5){
+        const subject=recentPhoneSubject(history);
+        if(subject){
+          let recovery=null;
+          try{
+            const row=dataOrThrow(await supabase.from('whatsapp_owner_contact_recovery').select('invoice_id,customer_id,request_message,send_now,reason,expires_at')
+              .eq('workspace_id',workspaceId).eq('owner_id',ownerId).eq('phone',phone).maybeSingle());
+            if(row?.request_message===subject.message&&row.reason==='missing_contact'&&Date.parse(row.expires_at)>Date.now())recovery=row;
+          }catch{/* Older deployments can still recover an explicit, unambiguous topic. */}
+          const prior=recovery?{operation:recovery.send_now?'sendReminderNow':'previewReminder',table:'invoices',filters:[{column:'id',operator:'eq',value:recovery.invoice_id}]}:ownerReminderRequest(subject.message);
+          const invoiceNumbers=[...new Set(String(subject.message).match(/\b[A-Z]+-\d+\b/g)||[])];
+          const invoiceNumber=invoiceNumbers.length===1?invoiceNumbers[0]:null;
+          const multipleSubjects=invoiceNumbers.length>1||/\b(?:both|them|these|those)\b/i.test(subject.message)||/\b[A-Z][a-z]+(?: [A-Z][a-z]+)*\s+and\s+[A-Z][a-z]+\b/.test(subject.message);
+          const name=String(subject.message).match(/(?:phone|number|contact)\s+(?:for|of)\s+(.+?)[?.!]?$/i)?.[1]
+            ||String(subject.message).match(/\b([A-Z][a-z]+(?: [A-Z][a-z]+)+)(?:'s)?(?:\s+(?:phone|number|invoices?|balance|details))?[?.!]?$/)?.[1];
+          const filters=prior?.filters||(invoiceNumber?[{column:'invoice_number',operator:'eq',value:invoiceNumber}]:null);
+          const ctx={supabase,scope,operation:'update',assertAuthorized:async()=>{if(!await authorizeTurn(scope))throw Error('denied');},assertLive:assertActiveTurn};
+          let found=null;
+          try{
+            if(multipleSubjects)phoneCorrectionReply='Which customer or invoice is this number for?';
+            else if(filters)found=await resolveWorkspaceRecord({...ctx,table:'invoices',filters,select:'id,customer_id,invoice_number'});
+            else if(name)found=await resolveWorkspaceRecord({...ctx,table:'customers',filters:[{column:'name',operator:'eq',value:name}],select:'id,name'});
+            if(found?.ok&&recovery&&found.row.customer_id!==recovery.customer_id){
+              phoneCorrectionReply='The invoice customer changed. Tell me which customer this number is for.';
+            }else if(found?.ok){
+              let normalized;
+              try{normalized=normalizeOwnerPhone(candidate);}catch{phoneCorrectionReply=PHONE_FORMAT_GUIDANCE;}
+              if(normalized){
+                const result=await saveOwnerPhone({supabase,scope,customerId:filters?found.row.customer_id:found.row.id,
+                  invoiceId:filters?found.row.id:null,phone:normalized,messageId,message,authorize:()=>authorizeTurn(scope)});
+                phoneCorrectionReply=result?.ok?`Saved ${result.phone} for ${result.customerName}.`: 'I could not save that number. Check the customer and try again.';
+                const contactFailure=Boolean(recovery)||/usable WhatsApp number|valid WhatsApp phone|invalid (?:phone|contact)|missing_contact/i.test(subject.reply||'');
+                if(result?.ok&&prior&&contactFailure){
+                  await tools.execute('workspaceData',{...prior,filters:[{column:'id',operator:'eq',value:found.row.id}]},{signal});
+                  if(tools.getReminderReply?.())phoneCorrectionReply+='\n\n'+tools.getReminderReply();
+                }
+              }
+            }else if(found)phoneCorrectionReply='Which customer or invoice is this number for?';
+          }catch{phoneCorrectionReply='I could not verify and save that contact. Tell me the customer or invoice and the number again.';}
+        }
+      }
+    }
+    const profileQuestion=/^\s*(?:what(?:'s| is| are))\s+(?:my|our)(?:\s+business)?\s+(?:name|email|currency|timezone|time zone)(?:\s*(?:and|\/)\s*(?:email|name))?\s*[?.]?$/i.test(message);
+    const profileReply=profileQuestion&&businessProfile
+      ?(/name/i.test(message)&&/email/i.test(message)?`Your business name is ${businessProfile.business_name||'not saved yet'}. Your owner email is ${businessProfile.owner_email||'not available'}.`:/email/i.test(message)?`Your owner email is ${businessProfile.owner_email||'not available'}.`:
+        /currency/i.test(message)?`Your business currency is ${businessProfile.currency||'not set'}.`:
+        /time\s?zone/i.test(message)?`Your business timezone is ${businessProfile.timezone||'not set'}.`:
+        businessProfile.business_name?`Your business name is ${businessProfile.business_name}.`:"Your business name isn't saved yet. Tell me the name and I can save it.")
+      :null;
+    let businessNameReply=null;
+    const businessNameStatement=String(message||'').match(/^\s*(?:(save|set|store)\s+)?(?:my|our)\s+business\s+name\s+(?:is|as|to)\s+(.+?)\s*[.!]?$/i);
+    if(businessNameStatement&&!businessProfile?.business_name&&!scope.interactionId&&!media&&!mediaError){
+      const name=businessNameStatement[2].trim();
+      const promptedToSave=/Save your business name first/i.test(history.at(-1)?.content||'');
+      if(businessNameStatement[1]||promptedToSave){
+        const result=await tools.execute('workspaceData',{operation:'update',table:'workspace_settings',values:{business_name:name}},{signal});
+        if(result?.ok&&result?.completed)businessNameReply=`Saved your business name as ${name}.`;
+        else initialToolResults.push({name:'workspaceData',args:{operation:'update',table:'workspace_settings',values:{business_name:name}},result});
+      }else if(!businessProfile?.business_name)businessNameReply=`Would you like me to save ${name} as your business name? Say "save my business name as ${name}".`;
+    }
     const reminderRequest=ownerReminderRequest(message);
     let reminderResult=null;
     if(!recovered?.completed&&!scope.interactionId&&!media&&!mediaError&&reminderRequest){
@@ -370,8 +441,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
       if(!await authorizeTurn(scope))return '';
     }
     onProgress('agent');
-    const response=tools.getReminderReply?.()?{answer:tools.getReminderReply()}:reminderResult?.ok===false
-      ?{answer:reminderResult.message||'The reminder request could not be prepared. Nothing was sent.'}:await agentFactory({provider,config,store:ownerStore,tools,history,message,signal,deadlineAt,clock,timezone,logger,traceId:messageId,botPreferences,initialToolResults,
+    const response=businessNameReply?{answer:businessNameReply}:phoneCorrectionReply?{answer:phoneCorrectionReply}:profileReply?{answer:profileReply}:tools.getReminderReply?.()?{answer:tools.getReminderReply()}:reminderResult?.ok===false
+      ?{answer:reminderResult.message||'The reminder request could not be prepared. Nothing was sent.'}:await agentFactory({provider,config,store:ownerStore,tools,history,message,signal,deadlineAt,clock,timezone,logger,traceId:messageId,botPreferences,businessProfile,initialToolResults,
       checkpoint:scope.checkpoint||null,onCheckpoint:scope.onCheckpoint,allowDeferred:scope.allowDeferred===true,budgetMs:scope.budgetMs,
       attachmentDescriptor:media?{available:true,mimeType:String(media.mimeType||media.mime_type||'application/octet-stream').slice(0,80)}
         :mediaError?{available:false,errorCode:'ATTACHMENT_UNAVAILABLE'}:{available:false},
@@ -390,7 +461,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     }
     if(!response?.plannerFailure&&tools.getReplyRequirement?.()?.buttonsAvailable&&!buttons.length)
       return {answer:'The change is waiting for approval, but I could not create its button. Nothing was changed.',plannerFailure:{code:'OWNER_CHOICES_UNAVAILABLE'}};
-    let answer=tools.getReminderReply?.()||normalizeOwnerServiceReplyText(response?.answer||'');
+    let answer=phoneCorrectionReply||tools.getPhoneFailureReply?.()||tools.getReminderReply?.()||normalizeOwnerServiceReplyText(response?.answer||'');
     const signature=normalizeOwnerServiceReplyText(botPreferences.serviceReplySignature);
     if(answer&&signature&&!answer.endsWith(signature))answer+='\n\n'+signature;
     if(ownerButtonClaimIssue(answer,{buttonsAvailable:buttons.length>0}))return {

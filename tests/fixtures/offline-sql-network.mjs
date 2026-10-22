@@ -1,4 +1,6 @@
-import {readFile,readdir} from 'node:fs/promises';
+import {readFile,readdir,writeFile,rename} from 'node:fs/promises';
+import {createHash,randomUUID} from 'node:crypto';
+import {join} from 'node:path';
 import {PGlite} from '@electric-sql/pglite';
 import {createClient} from '@supabase/supabase-js';
 
@@ -7,28 +9,50 @@ import {createClient} from '@supabase/supabase-js';
 // never forwards a request to a network, and rejects unsupported query shapes.
 const name=value=>{if(!/^[a-z_][a-z0-9_]*$/i.test(value))throw Error('unsupported fixture identifier');return `"${value}"`;};
 const parameter=value=>value&&typeof value==='object'?JSON.stringify(value):value;
+async function createFixtureDatabase(excludeMigrations){
+  const files=(await readdir(new URL('../../supabase/migrations/',import.meta.url))).filter(file=>file.endsWith('.sql') && !['20261005070000_approved_whatsapp_reminders.sql','20261018060000_customer_reminder_tone.sql','20261018060100_invoice_details_templates.sql','20261018090021_remove_stop_footer.sql','20261020105604_invoice_reminder_full_customer_name.sql'].includes(file) && !excludeMigrations.includes(file)).sort();
+  const migrations=await Promise.all(files.map(async file=>[file,await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8')]));
+  // Only the release gate enables this private, per-run cache. Snapshots contain
+  // the migrated empty schema, never test data. Each restore is a separate DB.
+  const cacheDir=process.env.CETLD_SQL_FIXTURE_CACHE_DIR;
+  let cachePath=null;
+  if(cacheDir){
+    const hash=createHash('sha256').update(await readFile(new URL(import.meta.url))).update(await readFile(new URL('../../package-lock.json',import.meta.url))).update(JSON.stringify(migrations)).digest('hex');
+    cachePath=join(cacheDir,hash+'.tgz');
+    let archive;
+    try{archive=await readFile(cachePath);}catch(error){if(error.code!=='ENOENT')throw error;}
+    if(archive){const restored=new PGlite({loadDataDir:new Blob([archive])});await restored.waitReady;return restored;}
+  }
+  const db=new PGlite();
+  try{
+  await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;
+    create schema auth;create schema storage;
+    create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}');
+    create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
+    create function auth.role() returns text language sql stable as $$select nullif(current_setting('request.jwt.claim.role',true),'')$$;
+    grant usage on schema auth,storage to authenticated,anon,service_role;
+    grant select on auth.users to service_role;
+    grant execute on function auth.uid(),auth.role() to authenticated,anon,service_role;
+    create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
+    create table storage.objects(id uuid default gen_random_uuid(),bucket_id text,name text);
+    alter table storage.objects enable row level security;`);
+  for(const [,sql] of migrations)await db.exec(sql.replace('create extension if not exists pgcrypto;',''));
+  await db.exec('grant all on all tables in schema public to service_role;grant all on all sequences in schema public to service_role');
+  if(cachePath){
+    const archive=await db.dumpDataDir('gzip'),temporary=cachePath+'.'+randomUUID()+'.tmp';
+    await writeFile(temporary,Buffer.from(await archive.arrayBuffer()),{mode:0o600});
+    await rename(temporary,cachePath);
+  }
+  return db;
+  }catch(error){await db.close();throw error;}
+}
+
 export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[]}={}){
   // The bookkeeping forward migration requires the installed factual parser.
   // Historical migration fixtures intentionally omit that predecessor.
   if(excludeMigrations.includes('20261009015001_owner_payment_factual_instruction.sql'))
     excludeMigrations=[...excludeMigrations,'20261009202000_owner_payment_bookkeeping_instruction.sql'];
-  const db=new PGlite(),requests=[],errors=[],objects=new Map();let interceptor=null;
-  await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;
-    create schema auth;create schema storage;
-    create table auth.users(id uuid primary key,raw_user_meta_data jsonb default '{}');
-    create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
-    create function auth.role() returns text language sql stable as $$select nullif(current_setting('request.jwt.claim.role',true),'')$$;
-    grant usage on schema auth,storage to authenticated,anon,service_role;
-    grant execute on function auth.uid(),auth.role() to authenticated,anon,service_role;
-    create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
-    create table storage.objects(id uuid default gen_random_uuid(),bucket_id text,name text);
-    alter table storage.objects enable row level security;`);
-  // Legacy adapter tests intentionally model deployed 9836c4c and separately
-  // install its disabled proposal. approved-reminders.test applies the new
-  // forward migrations explicitly and exercises the production runtime end to end.
-  for(const file of (await readdir(new URL('../../supabase/migrations/',import.meta.url))).filter(file=>file.endsWith('.sql') && !['20261005070000_approved_whatsapp_reminders.sql','20261018060000_customer_reminder_tone.sql','20261018060100_invoice_details_templates.sql','20261018090021_remove_stop_footer.sql','20261020105604_invoice_reminder_full_customer_name.sql'].includes(file) && !excludeMigrations.includes(file)).sort())
-    await db.exec((await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8')).replace('create extension if not exists pgcrypto;',''));
-  await db.exec('grant all on all tables in schema public to service_role;grant all on all sequences in schema public to service_role');
+  const db=await createFixtureDatabase(excludeMigrations),requests=[],errors=[],objects=new Map();let interceptor=null;
 
   async function fetchImpl(input,options={}){
     const request=input instanceof Request?input:null,url=new URL(request?.url||String(input));
@@ -42,6 +66,11 @@ export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[
       return externalFetch(url,{...options,method,headers,body});
     }
     try{
+      const authUser=url.pathname.match(/^\/auth\/v1\/admin\/users\/([0-9a-f-]{36})$/i);
+      if(method==='GET'&&authUser){
+        const user=(await db.query('select id,email,raw_user_meta_data from auth.users where id=$1',[authUser[1]])).rows[0];
+        return user?Response.json({id:user.id,email:user.email||null,user_metadata:user.raw_user_meta_data||{}}):Response.json({message:'User not found'},{status:404});
+      }
       if(storage){
         const key=decodeURIComponent(url.pathname.slice('/storage/v1/object/'.length));
         if(method==='POST'){

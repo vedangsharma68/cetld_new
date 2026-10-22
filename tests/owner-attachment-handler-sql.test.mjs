@@ -55,10 +55,11 @@ async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseRep
           assert.equal(wire.tool_choice,'required');assert.deepEqual(wire.tools.map(tool=>tool.function.name),['workspaceData']);
           // The production provider tried to log an earlier deletion. Even a
           // well-formed native call must be bound to the current attachment.
-          message={content:'',tool_calls:[{id:'stale-context-log',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'create',table:'business_records',values:{record_type:'log',name:'Deleted duplicate invoice INV-OLD'}})}}]};
+          const confirming=wire.messages.some(item=>item.role==='user'&&item.content==='yes');
+          message={content:'',tool_calls:[{id:'stale-context-log',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(confirming?{operation:'confirm'}:{operation:'create',table:'business_records',values:{record_type:'log',name:'Deleted duplicate invoice INV-OLD'}})}}]};
         }else{
           const value=JSON.parse(result.content);results.push(value);
-          message={content:value.completed?`Saved invoice ${value.review.invoice.invoiceNumber} for Fixture customer, USD 6190.`:'The invoice could not be logged due to temporary unavailability.'};
+          message={content:value.completed?`Saved invoice ${value.review?.invoice?.invoiceNumber||value.invoiceNumber} for Fixture customer, USD 6190.`:'The invoice could not be logged due to temporary unavailability.'};
         }
         return new Response(JSON.stringify({choices:[{message,finish_reason:message.tool_calls?'tool_calls':'stop'}]}),{status:200,headers:{'content-type':'application/json'}});
       }}):({async generate({messages,tools,toolChoice}){
@@ -76,8 +77,119 @@ async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseRep
     await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'123456',$2,$3,$4,'processing') on conflict(provider_message_id) do nothing",[id,phone,mimeType==='application/pdf'?'document':'image',caption]);
     return {reply:await handler({...scope,message:caption,messageId:id,media:{bytes,mimeType,fileName:mimeType==='application/pdf'?'fixture.pdf':'fixture.jpg'}}),bytes};
   }
-  return {...f,scope,handler,turn,results,get extractions(){return extractions;}};
+  async function textTurn(id,message){
+    await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'123456',$2,'text',$3,'processing')",[id,phone,message]);
+    return handler({...scope,message,messageId:id});
+  }
+  return {...f,scope,handler,turn,textTurn,results,get extractions(){return extractions;}};
 }
+
+const reviewedInvoice=clientPhone=>({invoiceNumber:'INV-2026-0720',clientName:'Fixture customer',clientEmail:null,clientPhone,
+  invoiceDate:'2026-07-20',dueDate:'2026-08-19',subtotal:6190,tax:0,total:6190,outstanding:6190,currency:'USD',
+  direction:'receivable',notes:'Net 30',lineItems:[{description:'Fixture service',quantity:1,unitPrice:6190,amount:6190}]});
+
+async function retainReview(f,clientPhone,invoiceChanges={}){
+  const pending=createWhatsAppPendingActionStore({supabase:f.supabase}),extracting=await pending.beginInvoiceReview(f.scope);
+  const review=await pending.transitionInvoiceReview({...extracting,...f.scope,fromStage:'extracting',action:{
+    type:'invoice_review_draft',stage:'proposal',sourceMessageId:'review-phone-source',invoice:{...reviewedInvoice(clientPhone),...invoiceChanges},missingFields:[],currencySource:'photo'}});
+  assert.equal(review.action.stage,'proposal');
+  return {pending,review};
+}
+
+for(const existingCustomer of [false,true])test(`real owner review confirmation saves canonical phone and assumed consent for ${existingCustomer?'an existing':'a new'} customer`,async()=>{
+  const f=await fixture({nativeWire:true});try{
+    const contactPhone=existingCustomer?'+91 98765-43210':'+919818685252',normalized=existingCustomer?'+919876543210':'+919818685252';
+    let customerId=null;
+    if(existingCustomer)customerId=(await f.db.query("insert into customers(workspace_id,name) values($1,'Fixture customer') returning id",[f.scope.workspaceId])).rows[0].id;
+    await retainReview(f,contactPhone);
+    assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,0);
+    const reply=await f.textTurn('review-phone-confirm','yes');
+    assert.equal(reply.plannerFailure,undefined,JSON.stringify({reply,errors:f.errors,results:f.results}));
+    assert.match(reply.answer,/Saved invoice INV-2026-0001/,JSON.stringify({reply,errors:f.errors,results:f.results}));
+    const customers=(await f.db.query("select id,phone from customers where workspace_id=$1 and name='Fixture customer'",[f.scope.workspaceId])).rows;
+    assert.equal(customers.length,1);assert.equal(customers[0].phone,normalized);
+    if(existingCustomer)assert.equal(customers[0].id,customerId);
+    const consent=(await f.db.query('select customer_id,phone,source,consent_text_version,consented_by,categories,revoked_at from whatsapp_consents where workspace_id=$1 and phone=$2',[f.scope.workspaceId,normalized])).rows;
+    assert.equal(consent.length,1);assert.equal(consent[0].customer_id,customers[0].id);assert.equal(consent[0].source,'verbal');
+    assert.equal(consent[0].consent_text_version,'owner_supplied_assumed_v1');assert.equal(consent[0].consented_by,f.scope.ownerId);
+    assert.deepEqual(consent[0].categories,['invoice_updates']);assert.equal(consent[0].revoked_at,null);
+    const invoices=(await f.db.query('select customer_id,metadata from invoices where workspace_id=$1',[f.scope.workspaceId])).rows;
+    assert.equal(invoices.length,1);assert.equal(invoices[0].customer_id,customers[0].id);
+    assert.equal(invoices[0].metadata.client_phone,normalized);assert.equal(invoices[0].metadata.debtor_phone,normalized);
+    assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});
+
+test('owner invoice store rejects invalid reviewed contact before creating customer or invoice rows',async()=>{
+  const f=await fixture({nativeWire:true});try{
+    const store=createWhatsAppInvoiceStore({supabase:f.supabase,...f.scope,audience:'owner',ownerPhone:phone,
+      messageId:'invalid-review-phone',message:'yes',authorize:()=>authorizeOwnerPhone({supabase:f.supabase,...f.scope})});
+    await assert.rejects(store.createCustomer({name:'Invalid phone customer',phone:'12345'}),/Send it with the country code, like \+919818685252\./);
+    assert.equal((await f.db.query("select count(*)::int n from customers where name='Invalid phone customer'")).rows[0].n,0);
+    const customer=(await f.db.query("insert into customers(workspace_id,name) values($1,'Fixture customer') returning id",[f.scope.workspaceId])).rows[0];
+    await assert.rejects(store.createAssistantInvoice({customerId:customer.id,invoice:reviewedInvoice('12345')}),/Send it with the country code, like \+919818685252\./);
+    assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,0);
+    assert.equal((await f.db.query('select phone from customers where id=$1',[customer.id])).rows[0].phone,null);
+    assert.equal((await f.db.query('select count(*)::int n from whatsapp_consents where customer_id=$1',[customer.id])).rows[0].n,0);
+    assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});
+
+test('real owner review rejects a malformed phone with exact format guidance before saving any invoice or customer',async()=>{
+  const f=await fixture({nativeWire:true});try{
+    const {pending}=await retainReview(f,'12345');
+    const reply=await f.textTurn('review-invalid-confirm','yes');
+    assert.match(reply.answer,/Send it with the country code, like \+919818685252\./,JSON.stringify({reply,errors:f.errors,results:f.results}));
+    assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,0);
+    assert.equal((await f.db.query("select count(*)::int n from customers where name='Fixture customer'")).rows[0].n,0);
+    assert.equal((await pending.loadInvoiceReview(f.scope)).action.stage,'proposal');
+    assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});
+
+test('owner invoice store saves an explicitly supplied bare Indian phone with assumed consent',async()=>{
+  const f=await fixture({nativeWire:true});try{
+    const message='9818685252',messageId='store-bare-indian';
+    await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'123456',$2,'text',$3,'processing')",[messageId,phone,message]);
+    const store=createWhatsAppInvoiceStore({supabase:f.supabase,...f.scope,audience:'owner',ownerPhone:phone,messageId,message,
+      authorize:()=>authorizeOwnerPhone({supabase:f.supabase,...f.scope})});
+    const customer=await store.createCustomer({name:'Fixture customer',phone:message});
+    assert.equal(customer.phone,'+919818685252');
+    const consent=(await f.db.query('select source,customer_id from whatsapp_consents where workspace_id=$1 and phone=$2',[f.scope.workspaceId,customer.phone])).rows;
+    assert.equal(consent.length,1);assert.equal(consent[0].customer_id,customer.id);assert.equal(consent[0].source,'verbal');
+    assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});
+
+test('reviewed contact proof rejects proposal, mismatched target or phone, expired and consumed reviews',async()=>{
+  const f=await fixture({nativeWire:true});try{
+    const makeCustomer=async(name,email)=>(await f.db.query('insert into customers(workspace_id,name,email) values($1,$2,$3) returning id',[f.scope.workspaceId,name,email])).rows[0].id;
+    const customerId=await makeCustomer('Fixture customer','client@example.test');
+    const wrongName=await makeCustomer('Another customer',null);
+    const wrongEmail=await makeCustomer('Fixture customer','another@example.test');
+    const {pending,review}=await retainReview(f,'+919818685252');
+    const messageId='review-proof-confirm';
+    await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'123456',$2,'text','yes','processing')",[messageId,phone]);
+    const save=async(targetId=customerId,contactPhone='+919818685252')=>{
+      const result=await f.supabase.rpc('whatsapp_owner_save_phone',{p_workspace_id:f.scope.workspaceId,p_owner_id:f.scope.ownerId,p_phone:phone,
+        p_customer_id:targetId,p_invoice_id:null,p_contact_phone:contactPhone,p_message_id:messageId,p_user_message:'yes'});
+      assert.equal(result.error,null,JSON.stringify(result));assert.equal(result.data.ok,false,JSON.stringify(result));assert.equal(result.data.code,'INVALID');
+    };
+    await save();
+    const saving=await pending.transitionInvoiceReview({...review,...f.scope,fromStage:'proposal',action:{...review.action,stage:'saving'}});
+    assert.equal(saving.action.stage,'saving');
+    await save(wrongName);
+    await f.db.query("update whatsapp_pending_actions set action=jsonb_set(action,'{invoice,clientEmail}',to_jsonb('client@example.test'::text)) where id=$1",[saving.id]);
+    await save(wrongEmail);await save(customerId,'+919876543210');
+    await f.db.query("update whatsapp_pending_actions set expires_at=now()-interval '1 minute' where id=$1",[saving.id]);
+    await save();
+    await f.db.query("update whatsapp_pending_actions set expires_at=now()+interval '10 minutes',consumed_at=now() where id=$1",[saving.id]);
+    await save();
+    assert.equal((await f.db.query('select count(*)::int n from customers where id=any($1::uuid[]) and phone is not null',[[customerId,wrongName,wrongEmail]])).rows[0].n,0);
+    assert.equal((await f.db.query('select count(*)::int n from whatsapp_consents where customer_id=any($1::uuid[])',[[customerId,wrongName,wrongEmail]])).rows[0].n,0);
+    assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});
 
 for(const caption of ['log this','please save it','record the attached'])test(`current attachment caption '${caption}' cannot log an earlier deletion through native Cloudflare calls and real SQL`,async()=>{
   const f=await fixture({caption,nativeWire:true,history:[{role:'user',content:'delete it'},{role:'assistant',content:'Deleted duplicate invoice INV-OLD.'}]});

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {execFileSync} from 'node:child_process';
+import {Worker} from 'node:worker_threads';
 import {AIProvider,DEFAULT_MODEL,DEFAULT_FALLBACK_MODEL,ZEN_MIMO_MODEL,ZEN_MUSE_MODEL,CF_PRIMARY_MODEL,GEMINI_FALLBACK_MODEL,
   VERIFIED_MODEL_CATALOG,isModelId,isRetiredModelId,sanitizeModelSettings,verifyModel} from '../ai/provider.mjs';
 import {zenResponsesRequest,zenResponsesResult} from '../ai/zen-responses.mjs';
@@ -40,12 +40,14 @@ test('retired raw selections survive sanitization and retired-only generation fa
   assert.equal((await valid.generate({messages:[{role:'user',content:'Hello'}]})).content,'Existing selected backup');assert.equal(calls,1);
 });
 
-test('retired environment defaults cannot reintroduce retired catalog entries or activate a replacement',()=>{
-  const script=`import {VERIFIED_MODEL_CATALOG,isModelId,sanitizeModelSettings,DEFAULT_MODEL,AIProvider} from './ai/provider.mjs';
-    const provider=new AIProvider({fallbackModel:null,fetchImpl:()=>{throw Error('No retired request');}});
-    let code;try{await provider.generate({messages:[{role:'user',content:'Hi'}]});}catch(error){code=error.code;}
-    console.log(JSON.stringify({allowed:isModelId(DEFAULT_MODEL),retiredCatalog:VERIFIED_MODEL_CATALOG.some(item=>item.id===DEFAULT_MODEL),settings:sanitizeModelSettings({primaryModel:DEFAULT_MODEL}),code}));`;
-  const result=JSON.parse(execFileSync(process.execPath,['--input-type=module','-e',script],{cwd:new URL('..',import.meta.url),env:{ZEN_PRIMARY_MODEL:retired},encoding:'utf8'}));
+test('retired environment defaults cannot reintroduce retired catalog entries or activate a replacement',async()=>{
+  const childEnv={...process.env,ZEN_PRIMARY_MODEL:retired};delete childEnv.ZEN_FALLBACK_MODEL;
+  const worker=new Worker(new URL('./fixtures/provider-environment-worker.mjs',import.meta.url),{env:childEnv});
+  let result;
+  try{result=await new Promise((resolve,reject)=>{
+    worker.once('message',resolve);worker.once('error',reject);
+    worker.once('exit',code=>reject(new Error(`Environment test worker exited before reporting its result (${code})`)));
+  });}finally{await worker.terminate();}
   assert.deepEqual(result,{allowed:false,retiredCatalog:false,settings:{primaryModel:retired,fallbackModel:null},code:'INVALID_MODEL'});
 });
 
