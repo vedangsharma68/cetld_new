@@ -57,3 +57,26 @@ test('processing acknowledgements cannot crowd John out of the recent owner hist
     }});
   assert.equal((await handler({...OWNER_CHAT_SCOPE,message:'What about John?',messageId:'turn-3'})).answer,'John is still in context.');
 });
+
+for (const pendingQuestion of [true, false]) {
+  test(`owner contact card uses deterministic debtor flow (pending=${pendingQuestion})`, async () => {
+    const writes = [];
+    let consumed = 0;
+    const row = pendingQuestion ? {id: 7, action: {type: 'invoice_debtor_phone', stage: 'awaiting_phone',
+      invoiceId: 'invoice-7', clientName: 'Buyer'}} : null;
+    const db = createOwnerChatDatabase();
+    const handler = createOwnerMessageHandler({supabase: db.supabase, authorize: async () => true,
+      replyStore: null, logger: {info(){},error(){}}, historyReader: async () => [],
+      pendingActionStoreFactory: () => ({loadPendingAction: async () => row,
+        loadPendingActionState: async () => ({generation: 0, id: null, version: null}),
+        consumePendingAction: async () => { consumed++; }}),
+      invoiceStoreFactory: () => ({saveDebtorPhone: async input => {writes.push(input);}}),
+      agentFactory: async () => {throw Error('contact must not reach planner');}});
+    const result = await handler({...OWNER_CHAT_SCOPE, messageId: 'card-owner',
+      message: JSON.stringify({name: 'Unrelated name', phone: '+14155550244'}),
+      contactCard: {name: 'Unrelated name', phone: '+14155550244'}});
+    assert.match(result.answer, pendingQuestion ? /Saved \+14155550244 for Buyer/ : /Which customer or invoice/);
+    assert.equal(writes.length, pendingQuestion ? 1 : 0);
+    assert.equal(consumed, pendingQuestion ? 1 : 0);
+  });
+}

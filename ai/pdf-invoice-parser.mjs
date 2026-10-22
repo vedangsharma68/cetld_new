@@ -184,7 +184,7 @@ function partyName(block) {
 
 function explicitPhone(block) {
   for (const line of block) {
-    const match = line.match(/(?:PHONE|TEL|MOBILE|CONTACT)\s*:?\s*(\+\s*[\d().\s-]+)/i);
+    const match = line.match(/(?:PHONE|TEL|MOBILE|CONTACT|WHATSAPP)\s*:?\s*(\+\s*[\d().\s-]+)/i);
     if (!match) continue;
     const value = `+${match[1].replace(/\D/g, '')}`;
     if (/^\+[1-9]\d{7,14}$/.test(value)) return value;
@@ -194,7 +194,7 @@ function explicitPhone(block) {
 
 function explicitPhoneRaw(block) {
   for (const line of block) {
-    const match = line.match(/(?:PHONE|TEL|MOBILE|CONTACT)\s*:?\s*([+\d][\d().\s-]{7,})/i);
+    const match = line.match(/(?:PHONE|TEL|MOBILE|CONTACT|WHATSAPP)\s*:?\s*([+\d][\d().\s-]{7,})/i);
     if (!match) continue;
     const printed = clean(match[1]);
     const normalized = printed.replace(/[\s().-]/g, '');

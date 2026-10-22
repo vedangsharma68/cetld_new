@@ -67,7 +67,12 @@ export function parseMetaMessages(payload, expectedPhoneNumberId, expectedWabaId
       // selection reference is absent or malformed.
       if ((buttonReply || listReply) && (typeof interactionId !== 'string'
           || !interactionId.trim() || Buffer.byteLength(interactionId, 'utf8') > MAX_INTERACTION_ID_LENGTH)) continue;
-      const body = type === 'text' ? message?.text?.body : type === 'button' ? (/^(stop|pause)$/i.test(message?.button?.payload||'')?message.button.payload:message?.button?.text) : type === 'interactive' ? (buttonReply?.title || listReply?.title) : media?.caption || '';
+      // Persist the small contact payload in the existing text column so retries
+      // retain its type and data without a schema change. Never select among cards.
+      const card = type === 'contacts' && message.contacts?.length === 1 ? message.contacts[0] : null;
+      const contactBody = JSON.stringify({name: String(card?.name?.formatted_name || '').slice(0, 255),
+        phone: card?.phones?.length === 1 ? String(card.phones[0].phone || '').slice(0, 100) : ''});
+      const body = type === 'contacts' ? contactBody : type === 'text' ? message?.text?.body : type === 'button' ? (/^(stop|pause)$/i.test(message?.button?.payload||'')?message.button.payload:message?.button?.text) : type === 'interactive' ? (buttonReply?.title || listReply?.title) : media?.caption || '';
       if (!id || id.length > 256 || !E164.test(phone) || !type || type.length > 64 || typeof body !== 'string' || body.length > 4000) continue;
       const seconds = Number(message?.timestamp);
       const timestamp = Number.isSafeInteger(seconds) && seconds > 0 ? new Date(seconds * 1000).toISOString() : null;
@@ -473,7 +478,8 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       let response;
       try{
         response = event.media_error&&!owner ? MEDIA_FETCH_FAILED_REPLY : await handle({ workspaceId: binding.workspaceId, customerId: binding.customerId, ownerId:binding.ownerId,
-        phone: event.sender_phone, message: event.message_text, messageId: event.provider_message_id, media,
+        phone: event.sender_phone, message: event.message_text,
+        ...(event.message_type === 'contacts' ? {contactCard: JSON.parse(event.message_text)} : {}), messageId: event.provider_message_id, media,
         ...(owner&&typeof interactionId==='string'&&Buffer.byteLength(interactionId,'utf8')<=MAX_INTERACTION_ID_LENGTH
           ?{interactionId}:{}),
         mediaError: owner?ownerMediaError:event.media_ref && !media ? 'Stored media unavailable' : null, signal, deadlineAt,
