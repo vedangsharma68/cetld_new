@@ -31,12 +31,15 @@ test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, wit
     for(const [index,message] of [
       'New invoice QA-VERIFY-001 for QA Text Customer, amount Rs 2,500, due 25 October 2026',
       'QA-EDGE-002 नया invoice 🧾🔥 for QA Emoji Customer ₹1,200 due kal, please check',
+      'new invoice QA-REPRO-001, QA Repro Customer, Rs 1,500, due 25 Oct',
+      'new invoice QA-REPRO-002 for QA Repro Customer, Rs 1,500, due 25 Oct',
     ].entries()){
       const reply=await turn(`qa-native-${index}`,message);
       assert.match(reply.answer,/Created invoice/);
       const saved=(await db.query('select result from whatsapp_direct_write_receipts where provider_message_id=$1',[`qa-native-${index}`])).rows[0].result;
-      assert.equal(saved.ok,true);assert.equal(Number(saved.record.total_amount),index?1200:2500);
-      assert.equal(saved.record.due_date,index?'2026-10-19':'2026-10-25');
+      assert.equal(saved.ok,true);assert.equal(Number(saved.record.total_amount),[2500,1200,1500,1500][index]);
+      assert.equal(saved.record.due_date,index===1?'2026-10-19':'2026-10-25');
+      assert.equal(saved.record.metadata.source_invoice_number,['QA-VERIFY-001','QA-EDGE-002','QA-REPRO-001','QA-REPRO-002'][index]);
       assert.equal(saved.record.status,'draft');
       const calls=providerCalls;
       const replay=await handler({workspaceId,ownerId,customerId,phone,messageId:`qa-native-${index}`,message});
@@ -59,7 +62,7 @@ test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, wit
     assert.equal((await db.query("select count(*)::int n from customers where name='No Invoice QA'")).rows[0].n,0);
     assert.equal((await db.query("select count(*)::int n from whatsapp_direct_write_receipts where provider_message_id='qa-native-customer-unique'")).rows[0].n,0);
     assert.deepEqual((await db.query('select whatsapp_owner_partial_payment_capability() value')).rows[0].value,{ok:true,version:4,bookkeepingInstructions:1});
-    assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,3);
+    assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,5);
     assert.equal((await db.query('select count(*)::int n from payments')).rows[0].n,0);
     assert.equal((await db.query("select count(*)::int n from whatsapp_messages where audience='customer'")).rows[0].n,0);
     assert.equal(f.errors.length,0,JSON.stringify(f.errors));

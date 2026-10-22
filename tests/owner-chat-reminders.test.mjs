@@ -195,6 +195,41 @@ test('owner reminder approval uses native pending confirmations and leaves deliv
    assert.match(retry.answer,/Approved and queued/);assert.deepEqual(await row(i.id),after);
    await noSends();
   });
+  await t.test('first pronoun reminder after text creation decodes model filters and preserves specific refusals and preview',async()=>{
+   const history=[];let mode='create',modelCalls=0,filters;
+   const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test'},logger,historyReader:async()=>history,
+    providerFactory:()=>({async generate({messages}){
+     modelCalls++;
+     if(mode==='create'&&messages.some(m=>m.role==='tool'))return {content:'Created invoice.'};
+     if(mode!=='create')assert.equal(modelCalls,1,'Reminder result needs no model reply repair');
+     return {toolCalls:[{id:'fresh-reminder',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(mode==='create'
+      ?{request:'new invoice QA-REPRO-001, QA Repro Customer, Rs 1,500, due tomorrow'}
+      :{operation:'sendReminderNow',table:'invoices',filters:JSON.stringify(filters)})}}]};
+    }})});
+   const turn=async message=>{
+    const id=await inbound(message),result=await handler({...scope,message,messageId:id});
+    history.push({role:'user',content:message},{role:'assistant',content:result.answer});
+    return result;
+   };
+   const created=await turn('new invoice QA-REPRO-001, QA Repro Customer, Rs 1,500, due tomorrow');
+   assert.match(created.answer,/Created invoice/);
+   const fresh=(await db.query("select * from invoices where workspace_id=$1 and metadata->>'source_invoice_number'='QA-REPRO-001'",[workspaceId])).rows[0];
+   assert.ok(fresh);assert.equal(Number(fresh.total_amount),1500);assert.equal(fresh.status,'draft');
+   filters=target(fresh.invoice_number);mode='reminder';
+   const remind=async()=>{modelCalls=0;const reply=await turn('send him a reminder to pay');assert.equal(reply.plannerFailure,undefined,JSON.stringify(reply));assert.equal(modelCalls,1);return reply;};
+   assert.match((await remind()).answer,/usable WhatsApp number/);
+   await db.query('update customers set phone=$2 where id=$1',[fresh.customer_id,'+12025550109']);
+   assert.match((await remind()).answer,/agreed to WhatsApp reminders/);
+   await db.query("insert into whatsapp_consents(workspace_id,customer_id,phone,source,consent_text_version,categories) values($1,$2,'+12025550109','inbound_message','fixture',array['invoice_updates'])",[workspaceId,fresh.customer_id]);
+   assert.match((await remind()).answer,/sent, unpaid receivable invoice/);
+   await db.query("update invoices set status='sent' where id=$1",[fresh.id]);
+   const before=await row(fresh.id),preview=await remind();
+   assert.match(preview.answer,/Reminder preview/);assert.match(preview.answer,/Reply yes/);
+   assert.deepEqual(await row(fresh.id),before);await cancel();
+   filters=[...target(fresh.invoice_number),{column:'customer_name',operator:'eq',value:'QA Repro Customer'}];
+   assert.match((await remind()).answer,/identify one invoice/);assert.deepEqual(await row(fresh.id),before);
+   await noSends();
+  });
   await t.test('RPC cannot be called by authenticated or anonymous roles',async()=>{
    const id=await inbound('yes');
    for(const role of ['anon','authenticated']){
