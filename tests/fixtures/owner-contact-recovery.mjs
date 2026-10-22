@@ -6,6 +6,8 @@ import {applyNoFooterMigration} from './no-footer-reminders.mjs';
 import {createWhatsAppInvoiceStore} from '../../automation/whatsapp/invoice-store.mjs';
 import {createWhatsAppPendingActionStore} from '../../automation/whatsapp/pending-actions.mjs';
 import {createOwnerMessageHandler} from '../../automation/whatsapp/owner-handler.mjs';
+import {createOwnerWorkspaceTools} from '../../automation/whatsapp/owner-workspace-tools.mjs';
+import {createWhatsAppBoundMessageHandler} from '../../automation/whatsapp/assistant-handler.mjs';
 
 export async function verifyOwnerContactRecovery(){
  const f=await createOfflineSqlNetwork(),{db,supabase}=f;
@@ -28,7 +30,12 @@ export async function verifyOwnerContactRecovery(){
   await db.query(`update workspace_settings set owner_bot_preferences='{"confirmationMode":"direct"}',default_timezone='UTC',follow_up_preferences=$2 where workspace_id=$1`,
    [workspaceId,{contactStart:'00:00',contactEnd:'23:59',allowedWeekdays:[0,1,2,3,4,5,6],maxReminders:3}]);
   const history=[],scope={workspaceId,ownerId,customerId,phone};let seq=0,modelCalls=0;
+  const printed=Object.fromEntries(Object.entries({invoiceNumber:'PRINT-001',customerName:'Printed Buyer',invoiceDate:'2026-10-01',dueDate:'2026-10-31',
+    subtotal:100,tax:0,total:100,outstandingAmount:100,currency:'USD',direction:'receivable',clientEmail:null,clientPhone:'+14155550244',clientPhoneRaw:null,
+    notes:null,paymentTerms:null,lineItems:[{description:'Printed service',quantity:1,unitPrice:100,amount:100}]})
+    .map(([key,value])=>[key,{value,confidence:.99}]));
   const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},providerFactory:()=>({}),
+   toolsFactory:options=>createOwnerWorkspaceTools({...options,attachmentIngestFactory:input=>createWhatsAppBoundMessageHandler({...input,extract:async()=>structuredClone(printed)})}),
    historyReader:async()=>history,agentFactory:async({message,tools,businessProfile})=>{
     modelCalls++;
     assert.equal(businessProfile.currency,'INR');
@@ -36,6 +43,11 @@ export async function verifyOwnerContactRecovery(){
       const result=await tools.execute('workspaceData',{operation:'sendReminderNow',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:'US-001'}]});
       assert.equal(result.code,'missing_contact');
       return {answer:"I couldn't send a reminder to John Smith."};
+    }
+    if(message==='log this invoice'){
+      const result=await tools.execute('workspaceData',{operation:'saveAttachment'});
+      assert.equal(result.completed,true,JSON.stringify({result,errors:f.errors}));
+      return {answer:`Saved invoice ${result.review.invoice.invoiceNumber} for Printed Buyer.`};
     }
     if(message==='it is 9818685252'||message==='John Smith number is 12345'){
       const result=await tools.execute('workspaceData',{operation:'update',table:'customers',filters:[{column:'name',operator:'eq',value:'John Smith'}],values:{phone:message==='it is 9818685252'?'9818685252':'12345'}});
@@ -45,10 +57,10 @@ export async function verifyOwnerContactRecovery(){
     }
     throw Error('unexpected model request: '+message);
    }});
-  const turn=async message=>{
+  const turn=async(message,{contactCard,media}={})=>{
    const messageId='contact-'+(++seq);
-   await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[messageId,phone,message]);
-   const result=await handler({...scope,message,messageId});
+   await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,$3,$4,'processing')",[messageId,phone,contactCard?'contacts':media?'image':'text',message]);
+   const result=await handler({...scope,message,messageId,...(contactCard?{contactCard}:{}),...(media?{media}:{})});
    history.push({role:'user',content:message},{role:'assistant',content:result.answer});
    return result;
   };
@@ -122,14 +134,55 @@ export async function verifyOwnerContactRecovery(){
   const countryMessage='+91',countryId='contact-country-code';
   await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[countryId,phone,countryMessage]);
   const pending=createWhatsAppPendingActionStore({supabase}),state=await pending.loadPendingActionState(scope);
-  await pending.storePendingAction({...scope,expectedState:state,source:'whatsapp',action:{type:'invoice_debtor_phone',stage:'awaiting_phone',invoiceId,clientPhoneRaw:'9876543210'}});
+  await pending.storePendingAction({...scope,expectedState:state,source:'whatsapp',action:{type:'invoice_debtor_phone',stage:'awaiting_phone',invoiceId,clientName:'John Smith',clientPhoneRaw:'9876543210'}});
   const store=createWhatsAppInvoiceStore({supabase,workspaceId,customerId,audience:'owner',ownerId,ownerPhone:phone,messageId:countryId,message:countryMessage,authorize:async()=>true});
   await store.saveDebtorPhone({invoiceId,phone:'+919876543210',assumedConsentAt:new Date().toISOString()});
   assert.equal(await contact(),'+919876543210');
   assert.equal((await db.query("select source from whatsapp_consents where workspace_id=$1 and phone='+919876543210'",[workspaceId])).rows[0].source,'verbal');
   const metadata=(await db.query('select metadata from invoices where id=$1',[invoiceId])).rows[0].metadata;
   assert.equal(metadata.debtor_phone,'+919876543210');assert.equal(metadata.client_phone,'+919876543210');
+  // Durable cards prove their phone field independently of digits in the name.
+  const cardTurn=(card,persisted=card)=>turn(JSON.stringify(persisted),{contactCard:card});
+  const cardCalls=modelCalls;
+  assert.equal((await cardTurn({name:'John Smith 2',phone:'12345'})).answer,'Send it with the country code, like +919818685252.');
+  assert.equal(await contact(),'+919876543210');assert.equal((await pending.loadPendingAction(scope)).action.stage,'awaiting_phone');
+  const actualCard={name:'John Smith 2',phone:'9876501234'};
+  const forged=await cardTurn({...actualCard,phone:'+9129876501234'},actualCard);
+  assert.doesNotMatch(forged.answer,/Saved/);assert.equal(await contact(),'+919876543210');
+  assert.equal((await pending.loadPendingAction(scope)).action.stage,'awaiting_phone');
+  const cardSaved=await cardTurn(actualCard);assert.match(cardSaved.answer,/Saved \+919876501234 for John Smith/);
+  assert.equal(await contact(),'+919876501234');assert.equal(await pending.loadPendingAction(scope),null);
+  const cardConsent=(await db.query("select source,consent_text_version from whatsapp_consents where workspace_id=$1 and customer_id=$2 and phone='+919876501234'",[workspaceId,debtor])).rows;
+  assert.equal(cardConsent.length,1);assert.equal(cardConsent[0].source,'verbal');assert.equal(cardConsent[0].consent_text_version,'owner_supplied_assumed_v1');
+  const unsolicited=await cardTurn({name:'Another contact 3',phone:'+14155550245'});
+  assert.equal(unsolicited.answer,'Which customer or invoice is this number for?');assert.equal(await contact(),'+919876501234');
+  const nextState=await pending.loadPendingActionState(scope);
+  await pending.storePendingAction({...scope,expectedState:nextState,source:'whatsapp',action:{type:'invoice_debtor_phone',stage:'awaiting_phone',invoiceId,clientName:'John Smith'}});
+  const stoppedConsent=(await consent()).find(row=>row.phone==='+919818685252');
+  const suppressions=(await db.query("select * from whatsapp_suppressions where workspace_id=$1 and phone='+919818685252'",[workspaceId])).rows;
+  const stoppedCard={name:'John Smith 2',phone:'+919818685252'},stoppedReply=await cardTurn(stoppedCard);
+  // The existing phone-change guard also blocks switching back to a stopped
+  // number. Its rejection must preserve both STOP and the contact question.
+  assert.equal(stoppedReply.plannerFailure?.code,'23514');assert.doesNotMatch(stoppedReply.answer,/Saved/);
+  assert.equal(await contact(),'+919876501234');
+  assert.deepEqual((await consent()).find(row=>row.phone==='+919818685252'),stoppedConsent);
+  assert.deepEqual((await db.query("select * from whatsapp_suppressions where workspace_id=$1 and phone='+919818685252'",[workspaceId])).rows,suppressions);
+  const blockedPending=await pending.loadPendingAction(scope);
+  assert.equal(blockedPending.action.type,'invoice_debtor_phone');assert.equal(blockedPending.action.stage,'awaiting_phone');
+  await pending.consumePendingAction({...blockedPending,...scope});
+  assert.equal(modelCalls,cardCalls,'contact cards must not reach the planner');
+  // The printed E.164 contact must save before its review is marked complete.
+  const printedReply=await turn('log this invoice',{media:{bytes:Buffer.from('isolated printed invoice source'),mimeType:'image/jpeg',fileName:'printed-phone.jpg'}});
+  assert.equal(printedReply.plannerFailure,undefined,JSON.stringify({printedReply,errors:f.errors}));
+  assert.match(printedReply.answer,/Saved invoice/);assert.doesNotMatch(printedReply.answer,/couldn.t|could not|country code|WhatsApp number/i);
+  const printedCustomer=(await db.query("select id,phone from customers where workspace_id=$1 and name='Printed Buyer'",[workspaceId])).rows;
+  assert.equal(printedCustomer.length,1);assert.equal(printedCustomer[0].phone,'+14155550244');
+  const printedInvoice=(await db.query("select metadata from invoices where workspace_id=$1 and customer_id=$2",[workspaceId,printedCustomer[0].id])).rows;
+  assert.equal(printedInvoice.length,1);assert.equal(printedInvoice[0].metadata.client_phone,'+14155550244');assert.equal(printedInvoice[0].metadata.debtor_phone,'+14155550244');
+  const printedConsent=(await db.query("select source from whatsapp_consents where workspace_id=$1 and customer_id=$2 and phone='+14155550244'",[workspaceId,printedCustomer[0].id])).rows;
+  assert.equal(printedConsent.length,1);assert.equal(printedConsent[0].source,'verbal');
+  assert.notEqual((await pending.loadPendingAction(scope))?.action?.type,'invoice_debtor_phone');
   assert.equal(f.requests.some(r=>r.url.includes('graph.facebook.com')),false);
-  return {normalized:true,retriedPreview:true,invalidRejected:true,businessProfile:true,businessNameSaved:true,stopPreserved:true};
+  return {normalized:true,retriedPreview:true,invalidRejected:true,businessProfile:true,businessNameSaved:true,stopPreserved:true,contactCard:true,printedPhone:true};
  }finally{await db.close();}
 }

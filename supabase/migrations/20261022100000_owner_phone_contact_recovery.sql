@@ -56,8 +56,16 @@ begin
  if not found or coalesce(c.metadata->>'whatsapp_owner','false')='true' then return jsonb_build_object('ok',false,'code','NOT_FOUND'); end if;
  -- A typed contact must occur in the current message. An attachment review
  -- instead attests its persisted phone only while that scoped review saves.
- if regexp_replace(p_user_message,'[^0-9]','','g') not in
-    (regexp_replace(p_contact_phone,'[^0-9]','','g'),regexp_replace(p_contact_phone,'^\+91',''))
+ if not exists(select 1 from public.whatsapp_inbound_events e
+      where e.provider_message_id=p_message_id and e.sender_phone=p_phone and e.message_text=p_user_message
+      and case when e.message_type='contacts' then
+        -- Only the persisted card phone attests contact input. Digits in its
+        -- name must neither reject the phone nor attest a different number.
+        (e.message_text::jsonb->>'phone') ~ '^\+?[0-9[:space:]-]+$'
+        and regexp_replace(e.message_text::jsonb->>'phone','[[:space:]-]','','g')
+          in (p_contact_phone,regexp_replace(p_contact_phone,'^\+91',''))
+      else regexp_replace(p_user_message,'[^0-9]','','g') in
+        (regexp_replace(p_contact_phone,'[^0-9]','','g'),regexp_replace(p_contact_phone,'^\+91','')) end)
     and not exists(select 1 from public.whatsapp_pending_actions a
       join public.whatsapp_resolve_verified_owner(p_phone) b on b.workspace_id=a.workspace_id and b.customer_id=a.customer_id
       where a.workspace_id=p_workspace_id and a.phone=p_phone and a.consumed_at is null
