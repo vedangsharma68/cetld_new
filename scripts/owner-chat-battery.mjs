@@ -726,7 +726,7 @@ const FAST_SCENARIOS = [
     const started=Date.now();
     const result=await harness.handler({...OWNER_CHAT_SCOPE,message,messageId,createdAt:DEFAULT_NOW.toISOString()});
     const elapsed=Date.now()-started;
-    const expected='My AI brain is out of juice for today. Cloudflare daily quota resets at 5:30am IST; Gemini request-per-day quotas reset at midnight Pacific time.';
+    const expected='My AI brain is out of juice for today. Cloudflare daily quota resets at 5:30am IST; Gemini request-per-day quotas reset at midnight Pacific time. Try again after the quota resets.';
     if(result.answer!==expected)throw new Error(`quota failure returned the wrong owner reply: ${JSON.stringify(result.answer)}`);
     if(result.plannerFailure?.code!=='OWNER_AI_QUOTA_EXHAUSTED')throw new Error(`quota reply had unexpected failure code: ${result.plannerFailure?.code}`);
     if(elapsed>=3_000)throw new Error(`all-provider quota response exceeded 3 seconds (${elapsed}ms)`);

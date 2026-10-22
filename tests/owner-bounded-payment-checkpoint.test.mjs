@@ -42,5 +42,5 @@ test('a failed customer match is rendered without denying an invoice that the sc
   creates++;return {ok:false,code:'NOT_FOUND',operation:'create',table:'payments'};
  }),getReplyRequirement:()=>null,getWriteAttempted:()=>creates>0},provider:{async generate(){calls++;return provider().generate();}}});
  assert.equal(calls,0);assert.equal(creates,1);assert.equal(result.boundedPaymentReply,true);
- assert.equal(result.answer,'The invoice and customer could not be matched for this payment. This payment was not recorded.');
+ assert.equal(result.answer,'The invoice and customer could not be matched for this payment. This payment was not recorded. Check cetld before retrying.');
 });

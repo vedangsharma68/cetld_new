@@ -194,7 +194,7 @@ test('event301 exact canceled legacy payment confirmation returns a scoped no-pe
   assert.match((await turn('event300-legacy-cancel','cancel')).answer,/Canceled the payment proposal/i);
   run.confirm();const calls=run.calls(),executions=run.executions.length;
   const stale=await turn('event301-stale-yes','yes');
-  assert.equal(stale.answer,'There is no pending action to confirm. Nothing was changed.');
+  assert.equal(stale.answer,'There is no pending action to confirm. Nothing was changed. Send a new request.');
   assert.equal(stale.plannerFailure,undefined);assert.equal(run.calls(),calls);
   assert.deepEqual(run.executions.slice(executions).map(x=>x.args.operation),['pending']);
   assert.deepEqual(await f.snapshot(),before);

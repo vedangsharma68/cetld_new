@@ -966,7 +966,7 @@ test('quota exhaustion survives the provider wrapper and returns provider-specif
   }};
   const startedAt=Date.now();
   const result=await runOwnerAgent({provider,tools,message:'Hi'});
-  assert.equal(result.answer,'My AI brain is out of juice for today. Cloudflare daily quota resets at 5:30am IST; Gemini request-per-day quotas reset at midnight Pacific time.');
+  assert.equal(result.answer,'My AI brain is out of juice for today. Cloudflare daily quota resets at 5:30am IST; Gemini request-per-day quotas reset at midnight Pacific time. Try again after the quota resets.');
   assert.equal(result.plannerFailure.code,'OWNER_AI_QUOTA_EXHAUSTED');
   assert.ok(Date.now()-startedAt<3000);
 });

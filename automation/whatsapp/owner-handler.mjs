@@ -14,6 +14,7 @@ import {createWhatsAppInvoiceStore} from './invoice-store.mjs';
 import {createWhatsAppPendingActionStore} from './pending-actions.mjs';
 import {createOwnerSettingsStore} from './owner-settings.mjs';
 import {runOwnerAgent, ownerAgentFailureReply,ownerIsConfirmation} from './owner-agent.mjs';
+import {ownerFailureGuidance} from './owner-failure-replies.mjs';
 import {createOwnerWorkspaceTools} from './owner-workspace-tools.mjs';
 import {createOwnerReplyStore} from './owner-reply-store.mjs';
 import {createProviderHealthStore} from '../../ai/provider-health.mjs';
@@ -529,7 +530,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         if(replyStore){
           try{
             const saved=await replyStore.find(boundedScope);
-            if(saved?.answer&&await authorizeRequest(boundedScope))return {...saved,replayed:true,
+            if(saved?.answer&&await authorizeRequest(boundedScope))return {...saved,answer:ownerFailureGuidance(saved.answer,{code:saved.plannerFailure?.code}),replayed:true,
               agentDiagnostics:{rounds:0,toolRounds:0,cacheHits:0,safetyRejects:[]}};
           }catch{logger?.warn?.('WhatsApp owner reply receipt lookup failed',{code:'OWNER_REPLY_STORE_FAILED'});}
         }
@@ -537,6 +538,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
           ?standaloneOwnerGreeting(scope.message):null;
         const result=basic?{answer:basic,agentDiagnostics:{rounds:0,toolRounds:0,cacheHits:0,safetyRejects:[]}}
           :await processTurn(boundedScope,tools=>{activeTools=tools;},()=>{},authorizeRequest);
+        if(result?.answer)result.answer=ownerFailureGuidance(result.answer,{code:result.plannerFailure?.code,
+          writeAttempted:activeTools?.getWriteAttempted?.()===true});
         if(result?.checkpoint)latestCheckpoint=result.checkpoint;
         if(replyStore&&result?.answer&&!result?.deferred&&await authorizeRequest(boundedScope)){
           try{return await replyStore.save(boundedScope,result);}

@@ -144,7 +144,7 @@ export async function verifyOwnerContactRecovery(){
   // Durable cards prove their phone field independently of digits in the name.
   const cardTurn=(card,persisted=card)=>turn(JSON.stringify(persisted),{contactCard:card});
   const cardCalls=modelCalls;
-  assert.equal((await cardTurn({name:'John Smith 2',phone:'12345'})).answer,'Send it with the country code, like +919818685252.');
+  assert.equal((await cardTurn({name:'John Smith 2',phone:'12345'})).answer,'The phone number is not in a supported format. Send it with the country code, like +919818685252.');
   assert.equal(await contact(),'+919876543210');assert.equal((await pending.loadPendingAction(scope)).action.stage,'awaiting_phone');
   const actualCard={name:'John Smith 2',phone:'9876501234'};
   const forged=await cardTurn({...actualCard,phone:'+9129876501234'},actualCard);
