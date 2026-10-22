@@ -46,7 +46,8 @@ async function setup(preferences={},{approve=true}={}){
   }});
   try{await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060000_customer_reminder_tone.sql',import.meta.url),'utf8'));await f.db.exec(await readFile(new URL('../supabase/migrations/20261005070000_approved_whatsapp_reminders.sql',import.meta.url),'utf8'));await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060100_invoice_details_templates.sql',import.meta.url),'utf8'));
     await applyNoFooterMigration(f.db,{approve});
-    await f.db.exec(await readFile(new URL('../supabase/migrations/20261020105604_invoice_reminder_full_customer_name.sql',import.meta.url),'utf8'));}catch(error){await f.close();throw error;}
+    await f.db.exec(await readFile(new URL('../supabase/migrations/20261020105604_invoice_reminder_full_customer_name.sql',import.meta.url),'utf8'));
+    await f.db.exec(await readFile(new URL('../supabase/migrations/20261022221930_default_payment_reminder_draft.sql',import.meta.url),'utf8'));}catch(error){await f.close();throw error;}
   const ownerId=randomUUID(),foreignOwner=randomUUID();
   await f.db.query('insert into auth.users(id) values($1),($2)',[ownerId,foreignOwner]);
   async function workspace(actor){await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${actor}';set role authenticated`);
@@ -87,6 +88,33 @@ test('real runtime + new forward SQL + signed webhook persist one five-parameter
     assert.equal((await wrong.sendReminder({workspaceId:f.scope.workspaceId,invoiceId:f.scope.invoiceId,customerId:f.customerId,to:phone})).reason,'scope');
     await f.db.exec("set role authenticated");
     await assert.rejects(f.db.query('select * from app.first_party_reminder_dispatches'),/permission denied/);await f.db.exec('reset role');
+  }finally{await f.close();}
+});
+
+test('deployed gate requires the exact default payment draft, independently of a valid snapshot hash',async()=>{
+  const f=await setup();try{
+    const [claim]=await f.store.claimDueFollowups({...f.scope,now:new Date().toISOString(),limit:1});
+    const settings=await f.store.getWorkspacePreferences(f.scope);
+    assert.equal((await f.store.authorizeDelivery({...f.scope,claimId:claim.id,preferencesVersion:settings.updated_at})).authorized,true);
+    const provider=createApprovedReminderProvider({env:f.configured,supabase:f.supabase,store:f.store,...f.scope,fetchImpl:f.fetchImpl});
+    const input={...f.scope,customerId:f.customerId,to:phone,idempotencyKey:`reminder:${f.scope.workspaceId}:${claim.id}`};
+    input.body=(await provider.prepareReminder(input)).body;
+    let captured;
+    f.intercept(async(url,options)=>{
+      if(url.pathname.endsWith('/rpc/cetld_core_authorize_first_party_reminder')){captured=JSON.parse(options.body);throw Error('capture before reservation');}
+    });
+    assert.equal((await provider.sendReminder(input)).status,'blocked');f.intercept(null);
+    const draft=captured.p_snapshot.defaultDraft;
+    assert.equal(draft,`Hi Fixture customer, this is Fixture studio. Invoice ${captured.p_snapshot.template.parameters[2]} has an outstanding balance of USD 125.00, due on ${captured.p_snapshot.template.parameters[4]}. Please arrange payment, or reply here if you have any questions.`);
+    for(const bad of [undefined,null,'',draft.replace('125.00','100.00'),draft.replace('USD','EUR'),draft.replace(captured.p_snapshot.template.parameters[2],'INV-OTHER'),
+      draft.replace('Fixture customer','Someone else'),draft.replace('due on','due after'),draft.replace('Please arrange payment','An update'),draft+'\n\nFixture studio']){
+      const snapshot={...captured.p_snapshot,defaultDraft:bad};
+      const result=await f.supabase.rpc('cetld_core_authorize_first_party_reminder',{...captured,p_snapshot:snapshot,p_snapshot_hash:reminderFingerprint(snapshot)});
+      assert.equal(result.error,null,JSON.stringify(f.errors));assert.equal(result.data.authorized,false,String(bad));
+    }
+    assert.equal((await f.db.query('select count(*)::int n from app.first_party_reminder_dispatches')).rows[0].n,0);
+    assert.equal((await f.supabase.rpc('cetld_core_authorize_first_party_reminder',captured)).data.authorized,true);
+    assert.equal(f.graph.length,0);
   }finally{await f.close();}
 });
 

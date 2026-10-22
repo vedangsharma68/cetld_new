@@ -31,6 +31,7 @@ test('owner reminder approval uses native pending confirmations and leaves deliv
    await db.exec(await readFile(new URL(`../supabase/migrations/${file}`,import.meta.url),'utf8'));
   await applyNoFooterMigration(db,{approve:true});
   await db.exec(await readFile(new URL('../supabase/migrations/20261020105604_invoice_reminder_full_customer_name.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../supabase/migrations/20261022221930_default_payment_reminder_draft.sql',import.meta.url),'utf8'));
   const ownerId=randomUUID(),phone='+12025550107',recipient='+12025550108';
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
   await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);

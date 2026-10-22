@@ -72,6 +72,7 @@ test('five parameters use full trimmed name, invoice balance, INR default, and w
   for(const timeZone of ['Asia/Kolkata','America/Los_Angeles','Pacific/Kiritimati'])assert.equal(formatReminderDueDate('2026-10-18',timeZone),'18 Oct 2026');
   assert.equal(formatReminderDueDate('2026-10-18T23:30:00Z','Asia/Kolkata'),'19 Oct 2026');
   assert.equal(formatReminderDueDate('2026-10-18T00:30:00Z','America/Los_Angeles'),'17 Oct 2026');
+  assert.equal(formatReminderDueDate('2026-09-21','UTC'),'21 Sep 2026');
   assert.throws(()=>formatReminderDueDate('2026-02-30','UTC'),/Invalid/);
   assert.throws(()=>formatReminderDueDate('2026-10-18','invalid/timezone'),/time zone/i);
   for(const patch of [{currency:''},{currency:'XYZ!'}, {total_amount:NaN},{total_amount:'1.001'},{total_amount:1,amount_paid:1},{amount_paid:-1}])assert.throws(()=>formatReminderAmount({...invoice,...patch}),/Invalid/);
