@@ -35,7 +35,10 @@ function dueDate(text, calendar) {
 // model-generated request, so the model cannot introduce an amount or code.
 export function parseTextInvoice(message,{clock=()=>new Date(),timezone='Asia/Kolkata'}={}) {
   if(typeof message!=='string'||message.length>1200)return null;
-  const text=message.trim().replace(/^QA TEXT TEST \d+:\s*/i,'');
+  const text=message.trim().replace(/^QA TEXT TEST \d+:\s*/i,'')
+    // A comma separates an explicit invoice number from the customer just as
+    // "for" does. Keep the remaining amount/date grammar and validation shared.
+    .replace(/^((?:new|नया)\s+invoice)\s+([A-Za-z0-9][A-Za-z0-9./-]{0,99})\s*,\s*/iu,'$1 $2 for ');
   const match=/^(?:([A-Za-z0-9][A-Za-z0-9./-]{0,99})\s+)?(?:new|नया)\s+invoice(?:\s+([A-Za-z0-9][A-Za-z0-9./-]{0,99}))?\s+(?:[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u200D\s]*\s)?for\s+(.+?)(?:,\s*(?:amount\s+)?|\s+(?:amount\s+)?(?=(?:Rs\.?|INR|₹)\s*\d))(?:Rs\.?|INR|₹)\s*(\d(?:[\d,]*\d)?(?:\.\d{1,2})?)\s*,?\s+due\s+(.+?)(?:,\s*please check)?\s*[.!]?\s*$/iu.exec(text);
   if(!match||match[1]&&match[2])return null;
   if(match[1]&&(!/\d/.test(match[1])||!/[./-]/.test(match[1])))return null;

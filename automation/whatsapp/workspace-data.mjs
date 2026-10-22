@@ -329,6 +329,21 @@ function decodeReadFilters(value,table){
   if(!Array.isArray(decoded)||decoded.length>8)throw new TypeError('invalid filters');
   return decoded.map(filter=>validateFilter(filter,table));
 }
+function decodeReminderFilters(value){
+  // Some providers serialize this nested array twice. Decode only its
+  // container, never infer, drop or combine targets, and never repair a send.
+  try{
+    if(typeof value==='string'){
+      if(value.length>8192)throw new TypeError();
+      value=JSON.parse(value);
+    }
+    if(!Array.isArray(value)||value.length!==1)throw new TypeError();
+    const filter=validateFilter(value[0],'invoices');
+    if(!['invoice_number','id','customer_name'].includes(filter.column)||filter.operator!=='eq'
+      ||typeof filter.value!=='string'||!filter.value.trim()||filter.value.length>100)throw new TypeError();
+    return [filter];
+  }catch{throw new TypeError('invalid reminder target');}
+}
 function exactInvoiceNumberTarget(filters){
   if(!Array.isArray(filters)||filters.length!==1)return null;
   const filter=filters[0];
@@ -449,7 +464,8 @@ function normalizeRequest(raw,scope,planRequest,ctx,validationFeedback=null,text
     const filters=args.filters===undefined?[]:args.filters;
     let normalizedFilters;
     try{
-      const structuredFilters=operation==='read'?decodeReadFilters(filters,table||'invoices')
+      const structuredFilters=['previewReminder','sendReminderNow'].includes(operation)?decodeReminderFilters(filters)
+        :operation==='read'?decodeReadFilters(filters,table||'invoices')
         :operation==='update'&&table==='invoices'&&ownObject(values)&&!Object.hasOwn(values,'status')?decodeInvoiceCorrectionFilters(filters):filters;
       if(correctionTransport){
         correctionTransport.filtersDecoded=typeof filters==='string'&&Array.isArray(structuredFilters);
@@ -1249,6 +1265,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       }
       if(error.message===PHONE_FORMAT_GUIDANCE)return fail('INVALID_PHONE',PHONE_FORMAT_GUIDANCE);
       const errors={
+        'invalid reminder target':['REMINDER_TARGET','I couldn’t identify one invoice for the reminder. Send its invoice number. Nothing was approved or queued.'],
         'invalid consent target':['CONSENT_TARGET_REQUIRED','Tell me one customer name and current number, or one invoice number, and confirm they agreed to WhatsApp invoice reminders.'],
         'invalid invoice status':['INVALID_STATUS','Use the catalog invoice status values: draft, sent, overdue, paid, void or cancelled. Unpaid is a positive outstanding balance, not a stored status; use current total_amount and amount_paid, including partial payments. No database write was attempted.'],
         'invalid batch':['BATCH_SHAPE','Atomic batches support 2–10 create/update items in operations, each with table, filters and values. One unambiguous record per item; all commit or all roll back. Nest custom business fields in values.custom_fields. Payment creates, status changes and deletes are separate operations. No write was attempted.'],
@@ -1270,6 +1287,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       };
       const detail=errors[error.message];
       return detail?{ok:false,code:'INVALID',validationCode:detail[0],validationShape:shape,writeAttempted:false,message:detail[1],
+        ...(detail[0]==='REMINDER_TARGET'?{reminderPreparationFailure:true}:{}),
         ...(detail[0]==='FILTER_SHAPE'&&ctx.filterShapeDiagnostic?{filterShapeDiagnostic:ctx.filterShapeDiagnostic}:{})}:fail();
     }
   };

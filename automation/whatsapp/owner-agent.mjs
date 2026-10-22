@@ -1995,6 +1995,14 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     finalAnswer=async({prompt='Give one concise final answer using completed tool results only. Answer the owner directly. Explain failed lookups honestly; proposed changes await confirmation. Do not use tools.',repairLimit=1}={})=>{
       checkpointPhase='final';await saveCheckpoint();
       const requirement=replyRequirement();
+      // Reminder preparation already has a server-rendered preview or a
+      // specific refusal. A second model pass cannot improve those facts and
+      // previously hid them behind reply-repair failures.
+      const reminderReply=tools.getReminderReply?.();
+      if(typeof reminderReply==='string'&&reminderReply)return resultFor(reminderReply,{reminderReply:true});
+      const reminderFailure=ownerEvidence(transcript,requirement).at(-1);
+      if(reminderFailure?.reminderPreparationFailure===true&&!writeMayHaveBeenAttempted())
+        return resultFor(reminderFailure.message,{reminderPreparationFailureReply:true});
       const lastRead=ownerEvidence(transcript).at(-1);
       if(lastRead?.code==='NAME_CONFIRMATION_REQUIRED'&&lastRead.requiresNameConfirmation===true){
         const answer=lastRead.message;
@@ -2471,6 +2479,8 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
       if(resultStates.some(state=>state.readOnly))readOnlyToolRounds++;
       if(resultStates.some(state=>state.success)&&firstSuccessfulReadRound===null)firstSuccessfulReadRound=diagnostics.toolRounds;
       emitRound(round);activeRound=null;
+      if(tools.getReminderReply?.()||ownerEvidence(transcript,replyRequirement()).at(-1)?.reminderPreparationFailure===true)
+        return await finalAnswer({});
       const nextReadWouldFinalize=firstSuccessfulReadRound!==null&&diagnostics.toolRounds>firstSuccessfulReadRound;
       const recoverCurrentDate=requestedDateChange&&!dateReadRecoveryUsed&&cachedInvoiceRead&&nextReadWouldFinalize
         &&!writeMayHaveBeenAttempted()&&readOnlyToolRounds<OWNER_AGENT_MAX_READ_ONLY_TOOL_ROUNDS

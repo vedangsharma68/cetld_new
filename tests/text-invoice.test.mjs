@@ -8,6 +8,9 @@ import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 const clock=()=>new Date('2026-10-18T12:18:00Z');
 const scope={workspaceId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',ownerId:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',phone:'+919871367051'};
 const examples=[
+  ['new invoice QA-REPRO-001, QA Repro Customer, Rs 1,500, due 25 Oct','QA Repro Customer',1500,'2026-10-25','QA-REPRO-001'],
+  ['new invoice QA-REPRO-002 for QA Repro Customer, Rs 1,500, due 25 Oct','QA Repro Customer',1500,'2026-10-25','QA-REPRO-002'],
+  ['New invoice 12345, QA Repro Customer, INR 1,500.25, due tomorrow','QA Repro Customer',1500.25,'2026-10-19','12345'],
   ['New invoice QA-VERIFY-001 for QA Text Customer, amount Rs 2,500, due 25 October 2026','QA Text Customer',2500,'2026-10-25','QA-VERIFY-001'],
   ['New invoice QA-EDGE-002 for QA Text Customer, amount INR 2,500, due 2026-10-25','QA Text Customer',2500,'2026-10-25','QA-EDGE-002'],
   ['New invoice for QA Text Customer, amount Rs 2,500, due 25 October 2026','QA Text Customer',2500,'2026-10-25',undefined],
@@ -53,6 +56,10 @@ test('text grammar refuses incomplete, impossible, ambiguous or extra instructio
     'Do not create New invoice for QA, amount Rs 5, due 25 October 2026',
     'What format is New invoice for QA, amount Rs 5, due 25 October 2026?',
     'New invoice for QA, amount Rs 5',
+    'new invoice QA-REPRO-001, QA Repro Customer, Rs 1,50, due 25 Oct',
+    'new invoice QA-REPRO-001, QA Repro Customer, Rs 1,500, due 31 Feb',
+    'new invoice QA-REPRO-001, QA Repro Customer, Rs 1,500, due 25 Oct and send a reminder',
+    'new invoice QA-REPRO-001 QA-OTHER-001, QA Repro Customer, Rs 1,500, due 25 Oct',
   ])assert.equal(parseTextInvoice(message,{clock}),null,message);
 });
 
