@@ -435,3 +435,85 @@ input[type="checkbox"]:not(.toggle):not(.choice-card input):not(.paid-invoice-to
 #tally-import-form .tally-import-help dt{margin-bottom:4px;font-weight:600}
 #tally-import-form .tally-import-help dd{margin:0;color:var(--muted);line-height:1.5;overflow-wrap:anywhere}
 #tally-import-form #tally-review:empty,#tally-import-form .form-error:empty{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);clip-path:inset(50%);white-space:nowrap;border:0}
+
+/* Intrinsic sizes must never force a panel or action outside its container. */
+.content :is(.panel,.panel-head,.panel-body,.field,.two-cols,.row,.page-intro>div),.detail-drawer :is(.detail-body,.detail-hero>div,.client-card>div){min-width:0}
+.content :is(h1,h2,h3,p,small,dd),.detail-drawer :is(h2,p,dd,strong,small){overflow-wrap:anywhere}
+.btn{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+.btn>.icon{flex-shrink:0}
+.two-cols{grid-template-columns:repeat(2,minmax(0,1fr))}
+.dialog-head{gap:12px;min-width:0}
+.dialog-head h2{min-width:0;overflow-wrap:anywhere}
+.dialog-head>.btn{flex-shrink:0}
+.dialog-foot{flex-wrap:wrap}
+.dialog-foot>.btn{min-width:0}
+/* The footer may have nine actions. Bound its height so the invoice remains scrollable. */
+dialog.detail-drawer{inset:0 0 0 auto;width:min(520px,100%);max-width:100%;height:100dvh;max-height:100dvh;overflow-y:auto}
+.detail-drawer .detail-body{flex:1 0 100px;min-width:0;overflow:auto}
+.detail-drawer .detail-hero{gap:12px}
+.detail-drawer .drawer-actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:8px;justify-content:stretch;max-height:42dvh;overflow-y:auto;overscroll-behavior:contain;scroll-padding:12px;padding:12px 16px max(12px,env(safe-area-inset-bottom));min-width:0}
+.detail-drawer .drawer-actions>.btn{width:100%;min-width:0;min-height:44px;margin:0;padding:10px 12px;flex:none;white-space:normal;text-align:center;overflow-wrap:anywhere}
+.table-wrap{max-width:100%;overscroll-behavior-x:contain}
+.table-wrap:focus-visible{outline:2px solid var(--mint);outline-offset:-3px}
+.search-row>.search{min-width:0}
+.settings-content #follow-up-preferences-form{display:grid;grid-template-columns:minmax(0,1fr);gap:24px}
+#follow-up-preferences-form>.preference-group{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-width:0;margin:0;padding:18px;border:1px solid var(--line);border-radius:10px}
+#follow-up-preferences-form>.preference-group>legend{padding:0 7px;font-weight:600;font-size:.95rem}
+#follow-up-preferences-form .setting-row{gap:16px;min-height:44px;font-size:.875rem;line-height:1.5}
+#follow-up-preferences-form .setting-row+.setting-row{border-top:1px solid var(--line);padding-top:14px}
+#follow-up-preferences-form .settings-hint{margin:0;line-height:1.55;font-size:.8rem}
+.template-tokens{display:flex;flex-wrap:wrap;gap:7px}
+.template-tokens>.btn{min-height:44px;font-family:monospace;font-size:.75rem;padding:8px}
+.app-update{position:sticky;bottom:0;z-index:50;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:12px;padding:12px max(16px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--white);color:var(--ink);box-shadow:0 -4px 20px #0002;font-size:.875rem}
+body:has(.app-update) .assistant-fab{bottom:100px}
+@media(max-width:600px){
+  .two-cols{grid-template-columns:minmax(0,1fr)}
+  .panel-head{flex-wrap:wrap}
+  .responsive-table td,.responsive-table :is(strong,small){overflow-wrap:anywhere}
+  .conversation-thread>header{flex-wrap:wrap;gap:12px}
+  #follow-up-preferences-form>.preference-group{padding:14px}
+  .field :is(input,select,textarea),.search input,.filter{font-size:1rem}
+}
+@media(max-height:600px){
+  .sidebar{overflow-y:auto}
+  .detail-drawer .detail-hero{padding:14px 20px}
+  .detail-drawer .dialog-head{padding:12px 20px}
+}
+.sidebar{overflow-y:auto;overscroll-behavior:contain}
+.reminder-delivery-preview,.approved-delivery-summary{padding:16px;border:1px solid var(--line);border-radius:10px;background:var(--soft);min-width:0}
+.reminder-delivery-preview h3,.approved-delivery-summary h3{font-size:.95rem;line-height:1.5;overflow-wrap:anywhere}
+.reminder-delivery-preview p,.approved-delivery-summary p{font-size:.8rem;line-height:1.6;margin:10px 0;color:var(--muted)}
+.reminder-delivery-preview blockquote,.approved-delivery-summary blockquote{margin:14px 0;padding:14px;border-left:3px solid var(--mint);background:var(--white);white-space:pre-wrap;overflow-wrap:anywhere;font-size:.875rem;line-height:1.65}
+.delivery-acknowledgement{display:flex;align-items:flex-start;gap:10px;font-size:.85rem;line-height:1.55;cursor:pointer}
+.delivery-acknowledgement input{margin-top:3px!important}
+.reminder-review-body>.settings-hint{font-size:.8rem;color:var(--muted);line-height:1.55}
+/* Overview has a narrow ledger even on desktop: respond to its container. */
+.panel:has(.invoice-table){container-type:inline-size}
+.invoice-table{table-layout:fixed;white-space:normal;min-width:650px}
+.invoice-table th:first-child{width:28%}
+.invoice-table th:nth-child(2){width:18%}
+.invoice-table th:nth-child(3){width:25%}
+.invoice-table th:last-child{width:64px;padding-inline:10px}
+.invoice-table .row-action{padding-inline:10px}
+.invoice-table .invoice-open{white-space:normal;max-width:100%;overflow-wrap:anywhere}
+@container(max-width:650px){
+  .invoice-table{display:block;min-width:0;white-space:normal}
+  .invoice-table thead{display:none}
+  .invoice-table tbody{display:grid;gap:10px;padding:10px}
+  .invoice-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px;padding:15px;border:1px solid var(--line);border-radius:9px;background:var(--white)}
+  .invoice-table td{display:block;padding:0;border:0;min-width:0;text-align:left;overflow-wrap:anywhere}
+  .invoice-table td::before{content:attr(data-label);display:block;color:var(--muted);font-size:.64rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;margin-bottom:5px}
+  .invoice-table td:first-child{grid-column:1/-1}
+  .invoice-table td[data-label="Due date"]{grid-column:1;grid-row:2}
+  .invoice-table td[data-label="Balance"]{grid-column:2;grid-row:2}
+  .invoice-table td[data-label="Status"]{grid-column:1/-1;grid-row:3}
+  .invoice-table .row-action{display:none}
+  .invoice-table .invoice-open{width:100%;min-height:44px}
+}
+@media(max-width:650px){.invoice-table{min-width:0}}
+.whatsapp-inbox .conversation-row{grid-template-columns:minmax(0,1fr)}
+.whatsapp-inbox .conversation-row>span,.detail-facts>div{min-width:0}
+.detail-facts :is(dt,dd){overflow-wrap:anywhere}
+.payment-table{table-layout:fixed;white-space:normal}
+.payment-table td{overflow-wrap:anywhere}
+@media(max-width:600px){.content .btn{min-height:44px}}

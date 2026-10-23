@@ -117,7 +117,10 @@ test('a partial payment changes the core invoice balance by only the received am
   assert.equal(Number(invoice.total_amount), 100);
   assert.equal(Number(invoice.amount_paid), 50);
   assert.equal(invoice.status, 'sent');
-  assert.equal(invoice.metadata.followup_state, 'draft');
+  assert.equal(invoice.metadata.followup_state, 'paused');
+  assert.equal(invoice.metadata.reminder_review_reason, 'delivery_form_review');
+  // The additive reminder migration visibly holds this pre-existing approval
+  // because it has no reviewed delivery receipt. A payment cannot resume it.
   assert.equal(invoice.metadata.approved_reminder_text, undefined);
   // A balance change invalidates the reviewed message; payment must not
   // re-enable a reminder schedule for an ineligible invoice.

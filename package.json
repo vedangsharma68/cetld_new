@@ -9,7 +9,10 @@
     "typecheck": "tsc --noEmit",
     "test:owner-chat": "node scripts/owner-chat-battery.mjs --fast",
     "test:owner-chat:live": "node scripts/owner-chat-battery.mjs --live",
-    "check:release": "node scripts/check-owner-chat-gate.mjs"
+    "check:release": "node scripts/check-owner-chat-gate.mjs",
+    "build:frontend": "node scripts/build-frontend.mjs",
+    "test:ui": "playwright test",
+    "postcheck:release": "npm run build:frontend"
   },
   "keywords": [],
   "author": "",
@@ -25,6 +28,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.8",
+    "@playwright/test": "1.56.1",
     "@types/node": "26.6.2",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
