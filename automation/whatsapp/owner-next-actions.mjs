@@ -1,6 +1,7 @@
 import {createHmac,timingSafeEqual,randomUUID} from 'node:crypto';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
 import {isExternallyManagedInvoice} from '../../invoice/business-fields.mjs';
+import {personalNoteReply} from '../../ai/personal-note.mjs';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const actions=new Set(['select','view_file','edit_details','edit_amount','edit_due_date','edit_more','record_payment','unpaid_invoices','recent_invoices','find_invoice']);
@@ -72,6 +73,7 @@ function refFor(choices,clock) {
 // A field-only reply may use only the immediately preceding, scoped edit
 // prompt. General questions never inherit a record from conversation history.
 export function ownerMenuInvoiceEdit(message){
+  if(personalNoteReply(message))return null;
   const match=/^(?:(?:change|set|update)\s+(?:the\s+)?)?(customer\s+name|notes?|due\s+date|issue\s+date|invoice\s+date)\s*(?::|=|\bto\b)?\s+([^\r\n;]{1,2000})$/i.exec(String(message||'').trim());
   if(!match||/\b(?:and|then)\s+(?:create|record|update|change|delete|send|refund)\b/i.test(match[2]))return null;
   const field={'customer name':'customer_name',note:'notes',notes:'notes','due date':'due_date','issue date':'issue_date','invoice date':'issue_date'}[match[1].toLowerCase().replace(/\s+/g,' ')];

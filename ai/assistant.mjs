@@ -4,6 +4,7 @@ import {createAssistantTools} from './tools.mjs';
 import {randomUUID} from 'node:crypto';
 import {AMOUNT_PRECISION_MESSAGE,CURRENCY_SUPPORT_MESSAGE,SUPPORTED_TWO_DECIMAL_CURRENCIES,isSupportedCurrency} from '../currency-contract.mjs';
 import {conversationRecallRequest,conversationRecallAnswer} from './conversation-recall.mjs';
+import {personalNoteReply} from './personal-note.mjs';
 
 const createProposalTool = {type:'function',function:{name:'createInvoice',description:'Prepare, but do not execute, a Cetld invoice. Extract only user-supplied facts; invoice number is optional. Return ISO dates.',parameters:{type:'object',properties:{invoiceNumber:{type:'string',maxLength:100},clientName:{type:'string',maxLength:255},dueDate:{type:'string',format:'date'},total:{type:'number',minimum:0.01},subtotal:{type:'number',minimum:0},tax:{type:'number',minimum:0},currency:{type:'string',enum:SUPPORTED_TWO_DECIMAL_CURRENCIES},items:{type:'array',maxItems:100,items:{type:'object',properties:{description:{type:'string',maxLength:500},quantity:{type:'number',minimum:0},unitPrice:{type:'number',minimum:0},amount:{type:'number',minimum:0}},required:['description'],additionalProperties:false}},notes:{type:'string',maxLength:2000}},required:['clientName','total','currency','dueDate'],additionalProperties:false}}};
 const updateProposalTool = {type:'function',function:{name:'updateInvoice',description:'Prepare, but do not execute, an update to one exact Cetld invoice.',parameters:{type:'object',properties:{target:{type:'string',minLength:1,maxLength:100},changes:{type:'object',properties:{total:{type:'number',minimum:0.01},dueDate:{type:'string',format:'date'},status:{type:'string',enum:['draft','sent','overdue','paid','void','cancelled']},clientName:{type:'string',maxLength:255},currency:{type:'string',enum:SUPPORTED_TWO_DECIMAL_CURRENCIES}},additionalProperties:false}},required:['target','changes'],additionalProperties:false}}};
@@ -667,6 +668,8 @@ export async function answerWorkspaceQuestion({provider, store, message, history
   // Channel attribution comes only from the same authorized persisted rows as
   // history. The browser conversation payload keeps its role/content contract.
   if(ownerHistory!==null&&(!ownerMode||!Array.isArray(ownerHistory)||ownerHistory.length!==history.length||ownerHistory.some((turn,index)=>!turn||turn.role!==history[index].role||turn.content!==history[index].content||!['web','whatsapp'].includes(turn.channel))))throw new APIError(503,'OWNER_CONVERSATION_UNAVAILABLE');
+  const note=ownerMode?personalNoteReply(message):null;
+  if(note)return withEvidence({answer:note,pendingAction:null,asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},{tool:'none',data:{complete:true,truncated:false}});
   const recall=conversationRecallRequest(message);
   if(recall)return withEvidence({answer:conversationRecallAnswer(recall,ownerHistory||history,redactInternalIds),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},{tool:'none',data:{complete:true,truncated:false}});
   if(ownerActions){const handled=await ownerActions.handle(message);if(handled)return handled;}

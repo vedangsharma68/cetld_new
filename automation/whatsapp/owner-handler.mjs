@@ -24,6 +24,7 @@ import {requestedOwnerInvoiceTotalChange,invoiceTotalCorrectionValues} from './i
 import {invoiceBalanceFields} from '../../invoice/business-fields.mjs';
 import {createOwnerConversation,readSharedOwnerHistory} from '../../ai/owner-conversation.mjs';
 import {ownerActionDecision,ownerActionFailure} from '../../ai/owner-actions.mjs';
+import {personalNoteReply} from '../../ai/personal-note.mjs';
 
 function totalCorrectionReply(message,result){
   const answer=invoiceCorrectionFallback(message,[result]),row=result?.record;
@@ -527,6 +528,11 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
       return await Promise.race([Promise.resolve().then(async()=>{
         verified=await authorizeRequest(boundedScope);
         if(!verified)return '';
+        // Personal notes do not read business context or persist assistant
+        // state, including reply receipts, conversation turns or expirations.
+        const note=!scope.interactionId&&!scope.media&&!scope.mediaError&&!scope.contactCard
+          ?personalNoteReply(scope.message):null;
+        if(note)return {answer:note,readOnly:true};
         if(replyStore){
           try{
             const saved=await replyStore.find(boundedScope);

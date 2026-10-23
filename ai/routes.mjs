@@ -12,6 +12,7 @@ import {createGeminiDiagnostic} from './diagnostic.mjs';
 import {createOwnerAssistantActions,ownerActionDecision} from './owner-actions.mjs';
 import {confirmAssistantAction,invoiceConfirmationAnswer} from './confirm-action.mjs';
 import {randomUUID} from 'node:crypto';
+import {personalNoteReply} from './personal-note.mjs';
 
 async function invoiceAccounting({env,fetchImpl,accountingFactory}) {
  try{
@@ -51,6 +52,10 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
       const body = req.method === 'GET' ? {} : requestBody(req, allowed, action === 'extract' ? 4400000 : action==='approve-reminder'?131072:32768);
       const workspaceId = uuid(req.method === 'GET' ? req.query.workspaceId : body.workspaceId);
       const store = await authorize(req, workspaceId, {env, fetchImpl});
+      // Reply after owner authorization, before settings/history/proposal
+      // lookups or conversation writes. A personal note saves no state.
+      const note=action==='assistant'&&store.role==='owner'?personalNoteReply(body.message):null;
+      if(note)return res.status(200).json({answer:note,pendingAction:null,readOnly:true});
       const conversation=store.role==='owner'?store.ownerConversation:null;
       if(action==='preview-reminder')return res.status(200).json(await previewReminderReview({store,body,env,clock}));
       if(action==='approve-reminder')return res.status(200).json(await approveReminderReview({store,body,env,clock}));
