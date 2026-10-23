@@ -96,6 +96,8 @@ export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[
       }
       const table=name(path),args=[],conditions=[];
       const expr=column=>{
+        const nested=/^([a-z_]\w*)->([a-z_]\w*)->>([a-z_]\w*)$/i.exec(column);
+        if(nested)return `${name(nested[1])}->'${nested[2]}'->>'${nested[3]}'`;
         if(path==='invoices'&&column==='customer.name')return '(select fixture_customer.name from public.customers fixture_customer where fixture_customer.workspace_id=invoices.workspace_id and fixture_customer.id=invoices.customer_id)';
         const parts=column.split('->>');if(parts.length===1)return name(column);
         if(parts.length!==2||!/^\w+$/.test(parts[1]))throw Error('unsupported fixture json selector');

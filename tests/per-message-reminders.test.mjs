@@ -6,6 +6,7 @@ import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {applyNoFooterMigration} from './fixtures/no-footer-reminders.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
 import {createApprovedReminderProvider} from '../automation/whatsapp/approved-reminders.mjs';
+import {REMINDER_TEMPLATES} from '../automation/whatsapp/reminder-templates.mjs';
 import {reminderFingerprint} from '../automation/whatsapp/reminder-fingerprint.mjs';
 import {approveReviewedReminder} from './fixtures/reviewed-reminder.mjs';
 import {CoreAutomationStore} from '../automation/core-store.mjs';
@@ -54,6 +55,22 @@ test('per-message review binds the real API, PostgreSQL approval, dispatch and r
    await service();await db.exec(await readFile(new URL('../supabase/migrations/'+migration,import.meta.url),'utf8'));
    const after=(await db.query('select * from invoices where id=$1',[valid])).rows[0];
    assert.deepEqual(after.metadata.approved_reminder_delivery,receipt);assert.equal(after.followup_state,'approved');assert.equal(after.automation_version,before.automation_version);assert.equal(+new Date(after.next_follow_up_at),+new Date(before.next_follow_up_at));
+   // Reserve without HTTP and record the receipt after the migration, while
+   // count_before is still current: this exercises receipt cadence recovery.
+   const legacyScope={ownerId,workspaceId,invoiceId:valid};
+   const [claim]=await store.claimDueFollowups({...legacyScope,now:new Date().toISOString(),limit:1});
+   assert.equal((await store.authorizeDelivery({...legacyScope,claimId:claim.id,preferencesVersion:(await store.getWorkspacePreferences(legacyScope)).updated_at})).authorized,true);
+   let captured;
+   f.intercept(async(url,options)=>{if(url.pathname.endsWith('/rpc/cetld_core_authorize_first_party_reminder')){captured=JSON.parse(options.body);throw Error('No fixture HTTP dispatch')}});
+   const provider=createApprovedReminderProvider({env,supabase:f.supabase,store,ownerId,workspaceId,fetchImpl:f.fetchImpl});
+   await provider.sendReminder({...legacyScope,customerId,to:phone,body:receipt.body,idempotencyKey:`reminder:${workspaceId}:${claim.id}`});f.intercept(null);
+   assert.ok(captured);const reserved=await f.supabase.rpc('cetld_core_authorize_first_party_reminder',captured);assert.equal(reserved.data.authorized,true,JSON.stringify({reserved,errors:f.errors}));
+   const recorded=await f.supabase.rpc('cetld_core_record_first_party_receipt',{p_callback_token:reserved.data.callback_token,p_waba_id:env.WHATSAPP_WABA_ID,p_phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID,p_phone:phone,p_message_id:'wamid.legacy.cadence',p_status:'accepted'});
+   assert.equal(recorded.data.ok,true,JSON.stringify(recorded));
+   const advanced=(await db.query('select * from invoices where id=$1',[valid])).rows[0];
+   assert.equal(advanced.reminder_count,before.reminder_count+1);assert.equal(advanced.followup_state,'approved');
+   assert.ok(+new Date(advanced.next_follow_up_at)>=Date.now()+3*86400000-10000,'legacy receipt advances by configured three-day cadence');
+   assert.deepEqual(advanced.metadata.approved_reminder_delivery,receipt);assert.equal(receipt.version,undefined);assert.equal(receipt.mode,undefined);
    const held=(await db.query('select * from invoices where id=$1',[legacy])).rows[0];assert.equal(held.followup_state,'paused');assert.equal(held.metadata.reminder_review_reason,'delivery_form_review');assert.match(held.metadata.approved_reminder_text,/Legacy owner words/);
    const pending=(await db.query('select * from owner_assistant_proposals where id=$1',[proposal.id])).rows[0];assert.equal(pending.state,'pending');assert.deepEqual(pending.action,proposal);
    const blocked=await preview(await invoice());assert.equal(blocked.code,409);assert.equal(blocked.data.error,'PENDING');
@@ -145,6 +162,56 @@ test('per-message review binds the real API, PostgreSQL approval, dispatch and r
    assert.equal(checked.error,null,JSON.stringify(f.errors));assert.equal(checked.data.authorized,false);assert.equal(graph.length,count);
    await store.markDeliveryFailed({...scope,claimId:claim.id,token:authorization.token,unknown:false,error:'unapproved_form'});
   });
+  await t.test('legacy words, form, template identity and parameters must match protected confirmation evidence',async()=>{
+   const id=await invoice(),legacy=await approveReviewedReminder(db,{workspaceId,invoiceId:id});
+   const proof=(await db.query("select * from owner_assistant_proposals where action#>>'{payload,invoiceId}'=$1",[id])).rows[0];
+   const provider=createApprovedReminderProvider({env,supabase:f.supabase,store,ownerId,workspaceId,fetchImpl:f.fetchImpl}),input={ownerId,workspaceId,invoiceId:id,to:phone};
+   assert.equal((await provider.prepareReminder(input)).body,legacy.body);
+   const mutations=[p=>{p.preview+=' Changed';},p=>{p.approvalText+=' Changed';},p=>{p.template.name+='other';},p=>{p.template.language='hi';},p=>{p.template.revision='other';},p=>{p.template.parameters[0]='Other customer';},p=>{p.template.reviewedDelivery={version:2,type:'freeform',body:p.preview};}];
+   for(const mutate of mutations){
+    const action=structuredClone(proof.action);mutate(action.payload);
+    await db.query('update owner_assistant_proposals set action=$2 where id=$1',[proof.id,action]);
+    await assert.rejects(provider.prepareReminder(input),error=>error.code==='DELIVERY_REVIEW_REQUIRED');
+    assert.equal((await db.query('select app.legacy_reminder_approval_matches($1,i) allowed from invoices i where id=$2',[ownerId,id])).rows[0].allowed,false);
+   }
+   // Historical WhatsApp confirmations have a receipt pointer, not inline words.
+   await db.query('delete from owner_assistant_proposals where id=$1',[proof.id]);
+   const pending=(await db.query("insert into whatsapp_pending_actions(workspace_id,customer_id,phone,source,action,consumed_at) values($1,$2,$3,'whatsapp',$4,clock_timestamp()) returning *",[workspaceId,customerId,phone,{type:'owner_reminder_approval',...proof.action.payload}])).rows[0];
+   const messageId='legacy-confirm-'+randomUUID();
+   await db.query("insert into whatsapp_direct_write_receipts(provider_message_id,workspace_id,owner_id,phone,idempotency_key,request,result) values($1,$2,$3,$4,$1,$5,$6)",[messageId,workspaceId,ownerId,phone,{operation:'reminder.confirm',pendingId:pending.id,pendingVersion:pending.version},{ok:true,completed:true,action:'reminder.approved'}]);
+   assert.equal((await provider.prepareReminder(input)).body,legacy.body);
+   assert.equal((await db.query('select app.legacy_reminder_approval_matches($1,i) allowed from invoices i where id=$2',[ownerId,id])).rows[0].allowed,true);
+   await db.query('delete from whatsapp_pending_actions where id=$1',[pending.id]);
+   await assert.rejects(provider.prepareReminder(input),error=>error.code==='DELIVERY_REVIEW_REQUIRED');
+   assert.equal((await db.query('select app.legacy_reminder_approval_matches($1,i) allowed from invoices i where id=$2',[ownerId,id])).rows[0].allowed,false);
+   await db.query("update invoices set followup_state='paused',next_follow_up_at=null where id=$1",[id]);
+  });
+  await t.test('a member cannot downgrade immutable v2 approval to a versionless legacy artifact, even with an older genuine legacy receipt',async()=>{
+   await service();await db.query("insert into workspace_members(workspace_id,user_id,role) values($1,$2,'member') on conflict do nothing",[workspaceId,other]);
+   for(const withOldReceipt of [false,true]){
+    await inbound();const id=await invoice();
+    const legacy=await approveReviewedReminder(db,{workspaceId,invoiceId:id});
+    if(!withOldReceipt)await db.query("delete from owner_assistant_proposals where action#>>'{payload,invoiceId}'=$1",[id]);
+    const legacyText=(await db.query('select metadata from invoices where id=$1',[id])).rows[0].metadata.approved_reminder_text;
+    const p=await preview(id);assert.equal((await approve(p.data)).code,200);await asUser(other);await db.exec('set role authenticated');
+    await db.query("update invoices set metadata=metadata||jsonb_build_object('approved_reminder_delivery',$2::jsonb,'approved_reminder_text',$3::text) where id=$1",[id,legacy,legacyText]);
+    await service();const count=graph.length,scope={ownerId,workspaceId,invoiceId:id};
+    const provider=createApprovedReminderProvider({env,supabase:f.supabase,store,ownerId,workspaceId,fetchImpl:f.fetchImpl});
+    await assert.rejects(provider.prepareReminder({...scope,to:phone}),error=>error.code==='DELIVERY_REVIEW_REQUIRED');
+    assert.equal((await provider.sendReminder({...scope,customerId,to:phone,body:legacy.body,idempotencyKey:`reminder:${workspaceId}:${randomUUID()}`})).reason,'needs_re_review');
+    const [claim]=await store.claimDueFollowups({...scope,now:new Date().toISOString(),limit:1});assert.ok(claim);
+    const settings=await store.getWorkspacePreferences(scope),currentInvoice=await store.getInvoice(scope);
+    assert.equal((await store.authorizeDelivery({...scope,claimId:claim.id,preferencesVersion:settings.updated_at})).authorized,true);
+    const consent=(await db.query('select * from whatsapp_consents where workspace_id=$1 and customer_id=$2 and revoked_at is null',[workspaceId,customerId])).rows[0];
+    const entry=REMINDER_TEMPLATES.find(t=>t.name===legacy.name);
+    const snapshot={invoiceId:id,customerId,phone,body:legacy.body,invoiceVersion:currentInvoice.automation_version,invoiceUpdatedAt:currentInvoice.updated_at,preferencesUpdatedAt:settings.updated_at,delivery:legacy,
+     consentId:consent.id,consentCreatedAt:consent.created_at.toISOString(),template:{name:entry.name,language:entry.language,body:entry.body,revision:entry.revision,wabaId:env.WHATSAPP_WABA_ID,phoneNumberId:env.WHATSAPP_PHONE_NUMBER_ID,parameters:legacy.parameters}};
+    const denied=await f.supabase.rpc('cetld_core_authorize_first_party_reminder',{p_owner_id:ownerId,p_workspace_id:workspaceId,p_claim_id:claim.id,p_snapshot:snapshot,p_snapshot_hash:reminderFingerprint(snapshot)});
+    assert.equal(denied.error,null,JSON.stringify(f.errors));assert.equal(denied.data.authorized,false);assert.equal(denied.data.reason,'needs_re_review');
+    assert.equal(graph.length,count);assert.equal((await db.query('select count(*)::int n from app.first_party_reminder_dispatches where invoice_id=$1',[id])).rows[0].n,0);
+    assert.equal((await db.query('select count(*)::int n from app.reminder_approvals where invoice_id=$1',[id])).rows[0].n,1);
+   }
+  });
   await t.test('a service approval cannot be moved onto a scheduled send; replay does not create another approval',async()=>{
    await inbound();const id=await invoice(),p=await preview(id);assert.equal((await approve(p.data)).code,200);assert.equal((await approve(p.data)).data.replayed,true);
    await service();assert.equal((await db.query('select count(*)::int n from app.reminder_approvals where invoice_id=$1',[id])).rows[0].n,1);
@@ -181,5 +248,22 @@ test('per-message review binds the real API, PostgreSQL approval, dispatch and r
    await service();const customer=(await db.query('select reminder_tone from customers where id=$1',[customerId])).rows[0];assert.equal(customer.reminder_tone,null,'per-message tone must not change the customer default');assert.equal((await store.getWorkspacePreferences({workspaceId})).follow_up_preferences.tone,'professional');
   });
 
+ }finally{await f.close()}
+});
+
+for(const [routine,old,replacement,expected] of [
+ ['public.cetld_core_record_first_party_receipt(text,text,text,text,text,text)',"      if i.automation_version=(d.snapshot->>'invoiceVersion')::bigint", "      if (i.automation_version)=(d.snapshot->>'invoiceVersion')::bigint",/Reminder receipt cadence patch point changed/],
+ ['public.cetld_core_authorize_first_party_reminder(uuid,uuid,uuid,jsonb,text)','length(p_snapshot::text)>8000','length(p_snapshot::text)>7999',/Reminder snapshot size patch point changed/],
+])test('held migration aborts atomically on a real installed-function mismatch: '+routine,async()=>{
+ const f=await createOfflineSqlNetwork({excludeMigrations:['20261023061702_shared_owner_assistant.sql']});
+ try{
+  for(const file of ['20261018060000_customer_reminder_tone.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060100_invoice_details_templates.sql'])await f.db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
+  await applyNoFooterMigration(f.db,{approve:true});
+  for(const file of ['20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql','20261023061702_shared_owner_assistant.sql'])await f.db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
+  const definition=(await f.db.query('select pg_get_functiondef($1::regprocedure) definition',[routine])).rows[0].definition;
+  assert.ok(definition.includes(old));await f.db.exec(definition.replace(old,replacement));
+  await assert.rejects(f.db.exec(await readFile(new URL('../supabase/migrations/'+migration,import.meta.url),'utf8')),expected);
+  await f.db.exec('rollback');
+  assert.equal((await f.db.query("select to_regclass('app.reminder_approvals') present")).rows[0].present,null);
  }finally{await f.close()}
 });

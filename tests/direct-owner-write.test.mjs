@@ -8,6 +8,26 @@ const entityId='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const phone='+919871367051';
 const updatedAt='2026-10-03T10:00:00.000Z';
 
+test('instruction identity omits only the parser-generated issue date and preserves supplied dates and amounts',async()=>{
+  const keys=[];
+  const quote='new invoice for Retry Customer, Rs 1,500, due 30 Oct';
+  const client={async rpc(_name,args){keys.push(args.p_idempotency_key);return {data:{ok:false,code:'INVALID'}};},from(table){
+    const q={select(){return q;},eq(){return q;},order(){return q;},async limit(){return {data:[],error:null};},
+      async maybeSingle(){return {data:table==='whatsapp_inbound_events'?{provider_message_id:'current-event',sender_phone:phone,message_text:currentQuote,status:'processing'}:null,error:null};}};return q;
+  }};
+  let currentQuote=quote;
+  const adapter=createDirectOwnerWriteAdapter({supabase:client});
+  const apply=payload=>adapter.apply({workspaceId,ownerId,phone,providerMessageId:'current-event',
+    authorization:{kind:'instruction',quote:currentQuote},operation:'invoice.create',deduplicateInvoiceInstruction:true,payload});
+  const payload={customer_name:'Retry Customer',total_amount:1500,currency:'INR',issue_date:'2026-10-18',due_date:'2026-10-30'};
+  await apply(payload);await apply({...payload,issue_date:'2026-10-19'});
+  assert.equal(keys[0],keys[1]);
+  await apply({...payload,total_amount:1510});assert.notEqual(keys[0],keys[2]);
+  currentQuote='Create the invoice using the supplied issue date and details';
+  await apply(payload);await apply({...payload,issue_date:'2026-10-19'});
+  assert.notEqual(keys[3],keys[4],'an explicit issue date stays in the identity');
+});
+
 test('invoice creation checks scoped persisted evidence before reporting a duplicate',async()=>{
   const customerId='dddddddd-dddd-4ddd-8ddd-dddddddddddd';
   const payload={invoice_number:'QA-EDGE-002',customer_name:'QA_100%',customer_email:'QA@example.test'};

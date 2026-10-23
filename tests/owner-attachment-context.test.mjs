@@ -55,7 +55,7 @@ function fixture(){
 const call=args=>({toolCalls:[{id:'fixture-call',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(args)}}],model:'fixture'});
 
 test('a photo alone is analysis only and each explicit later save reuses its retained fields without a planner',async()=>{
-  for(const message of ['log this invoice','save it','add it','Can you save it?','yea, they are fine; log this invoice','Log this invoice, do not send customer reminders']){
+  for(const message of ['log this invoice','save it','add it','can you save this invoice','could you please save it','please save this invoice','yea, they are fine; log this invoice','Log this invoice, do not send customer reminders']){
     const f=fixture(),provider={async generate(){assert.fail('The planner must not reconstruct a complete retained invoice');}};
     const analyzed=await runOwnerAgent({tools:f.tools('',f.sourceId,{bytes:f.sourceBytes,mimeType:'application/pdf'}),message:'',clock,provider,
       attachmentDescriptor:{available:true,mimeType:'application/pdf'}});
@@ -71,7 +71,7 @@ test('a photo alone is analysis only and each explicit later save reuses its ret
 });
 
 test('questions, declined saves and conditional or deferred saves cannot authorize a retained attachment',async()=>{
-  for(const message of ['Should I log this invoice?','Save this invoice tomorrow','Save this invoice if it is valid',
+  for(const message of ['Will you save this invoice?','can you save this invoice?','Save this invoice? Please explain','What happens, save this invoice?','When will you save this invoice','Which invoice will you save','How do you save this invoice','Why save this invoice','Whose invoice did you save','Whom did you save it for','is this saved','did you save this invoice','Should I log this invoice?','Save this invoice tomorrow','Save this invoice if it is valid',
     "Don't save it",'What do you mean by log this invoice?','Log this invoice on Monday','Save this invoice at 5']){
     const f=fixture();
     await f.tools('',f.sourceId,{bytes:f.sourceBytes,mimeType:'application/pdf'}).execute('workspaceData',{operation:'analyzeAttachment'});
@@ -80,6 +80,7 @@ test('questions, declined saves and conditional or deferred saves cannot authori
       provider:{async generate(){calls++;return calls===1?call({operation:'saveAttachment'}):{model:'fixture',content:'No invoice was saved.'};}}});
     assert.ok(calls>0,'the deterministic branch must not turn discussion into a save');
     assert.equal(f.saved,0);assert.equal(f.files,0);assert.equal(f.extractions,1);assert.equal(f.current.action.stage,'proposal');
+    assert.ok(result.answer,'a question receives an answer');
     assert.doesNotMatch(result.answer,/Saved invoice/);
   }
 });

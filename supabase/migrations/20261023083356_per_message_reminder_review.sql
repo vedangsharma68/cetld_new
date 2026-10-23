@@ -232,6 +232,39 @@ end $$;
 revoke all on function public.owner_assistant_reminder_dispatch_preview(uuid,uuid,uuid) from public,anon,authenticated;
 grant execute on function public.owner_assistant_reminder_dispatch_preview(uuid,uuid,uuid) to service_role;
 
+-- #173 receipts are protected from invoice editors. Reconstruct only the exact
+-- legacy artifact they prove; never grandfather writable metadata by itself.
+-- WhatsApp receipts store a pending-action pointer, so its retained, consumed
+-- proposal is required too. Missing evidence requires a fresh owner review.
+create function app.legacy_reminder_approval_matches(p_owner_id uuid,i public.invoices) returns boolean
+language sql stable security definer set search_path='' as $$
+ select coalesce(i.metadata#>>'{approved_reminder_delivery,type}'='template',false)
+ and i.metadata#>>'{approved_reminder_delivery,version}' is null
+ -- An older template approval cannot replace a later immutable v2 approval.
+ and not exists(select 1 from app.reminder_approvals r where r.workspace_id=i.workspace_id and r.owner_id=p_owner_id and r.invoice_id=i.id)
+ and exists(
+  select 1 from (
+   select p.action->'payload' payload from public.owner_assistant_proposals p
+   where p.workspace_id=i.workspace_id and p.owner_id=p_owner_id and p.state='confirmed'
+    and p.action->>'type'='owner_reminder' and p.result->>'ok'='true' and p.result->>'action'='reminder.approved'
+   union all
+   select a.action from public.whatsapp_direct_write_receipts r join public.whatsapp_pending_actions a
+    on a.workspace_id=r.workspace_id and a.phone=r.phone and a.id::text=r.request->>'pendingId'
+    and a.version::text=r.request->>'pendingVersion' and a.consumed_at is not null
+   where r.workspace_id=i.workspace_id and r.owner_id=p_owner_id and r.request->>'operation'='reminder.confirm'
+    and r.result->>'ok'='true' and r.result->>'action'='reminder.approved' and a.action->>'type'='owner_reminder_approval'
+  ) evidence
+  where payload->>'invoiceId'=i.id::text and payload#>'{template,reviewedDelivery}' is null
+   and payload->>'preview'=i.metadata#>>'{approved_reminder_delivery,body}'
+   and payload->>'approvalText'=i.metadata->>'approved_reminder_text'
+   and payload#>'{template,name}'=i.metadata#>'{approved_reminder_delivery,name}'
+   and payload#>'{template,language}'=i.metadata#>'{approved_reminder_delivery,language}'
+   and payload#>'{template,revision}'=i.metadata#>'{approved_reminder_delivery,revision}'
+   and payload#>'{template,parameters}'=i.metadata#>'{approved_reminder_delivery,parameters}'
+ )
+$$;
+revoke all on function app.legacy_reminder_approval_matches(uuid,public.invoices) from public,anon,authenticated,service_role;
+
 -- Extend the installed gate at its delivery-validation block only. The complete
 -- lock/claim/suppression/consent/payment/contact/version/receipt prefix and suffix
 -- remain verbatim. Abort rather than partially patch an unexpected definition.
@@ -262,6 +295,12 @@ begin
     p_snapshot:=p_snapshot||jsonb_build_object('body',body,'delivery',review_result->'delivery','deliveryForm',review_result->'form');
     p_snapshot_hash:=encode(sha256(convert_to(app.reminder_canonical_json(p_snapshot),'UTF8')),'hex');
   else
+    if not app.legacy_reminder_approval_matches(p_owner_id,i) then
+      update public.invoices set followup_state='paused',next_follow_up_at=null,
+        metadata=metadata||jsonb_build_object('followup_state','paused','next_follow_up_at',null,'reminder_review_reason','delivery_form_review')
+        where workspace_id=p_workspace_id and id=i.id;
+      return '{"authorized":false,"reason":"needs_re_review"}';
+    end if;
 $new$||old_block||E'\n  end if;\n');
   marker:=$old$return jsonb_build_object('authorized',true,'snapshot_hash',p_snapshot_hash,'callback_token',token);$old$;
   if position(marker in def)=0 then raise exception 'Reminder gate receipt patch point changed';end if;
@@ -274,7 +313,7 @@ $new$||old_block||E'\n  end if;\n');
   receipt:=replace(receipt,marker,marker||E'\n      if i.metadata#>>''{approved_reminder_delivery,version}''=''2'' and i.metadata#>>''{approved_reminder_delivery,mode}''=''immediate'' then next_at:=null;end if;');
   marker:='      if i.automation_version=(d.snapshot->>''invoiceVersion'')::bigint and i.followup_state in (''approved'',''active'',''scheduled'')';
   if position(marker in receipt)=0 then raise exception 'Reminder receipt cadence patch point changed';end if;
-  receipt:=replace(receipt,marker,marker||E'\n        and not (i.metadata#>>''{approved_reminder_delivery,version}''=''2'' and i.metadata#>>''{approved_reminder_delivery,mode}''=''immediate'')');
+  receipt:=replace(receipt,marker,marker||E'\n        and not (coalesce(i.metadata#>>''{approved_reminder_delivery,version}'','''')=''2'' and coalesce(i.metadata#>>''{approved_reminder_delivery,mode}'','''')=''immediate'')');
   execute receipt;
  end if;
 end $dispatch$;
@@ -287,7 +326,8 @@ update public.invoices i set followup_state='paused',next_follow_up_at=null,
  metadata=i.metadata||jsonb_build_object('followup_state','paused','next_follow_up_at',null,'reminder_review_reason','delivery_form_review')
  where i.followup_state in ('approved','active','scheduled') and not exists(
  select 1 from public.workspace_settings s join public.customers x on x.workspace_id=s.workspace_id
- where i.workspace_id=s.workspace_id and x.id=i.customer_id
+ join public.workspaces w on w.id=s.workspace_id
+ where app.legacy_reminder_approval_matches(w.owner_id,i) and i.workspace_id=s.workspace_id and x.id=i.customer_id
  and i.metadata#>>'{approved_reminder_delivery,type}'='template'
  and app.checked_reminder_template(i,s,x,i.metadata->'approved_reminder_delivery') is not null);
 -- A v2 reminder carries both exact text and the separately reviewed template.
