@@ -1,4 +1,4 @@
-const SUCCESS_ACTIONS = new Set(['capabilities', 'prepareDelete', 'confirmDelete', 'cancelDelete', 'undoDelete']);
+const SUCCESS_ACTIONS = new Set(['capabilities', 'pendingDelete', 'prepareDelete', 'confirmDelete', 'cancelDelete', 'undoDelete']);
 
 const ERROR_MESSAGES = Object.freeze({
   SIGN_IN_REQUIRED: 'Sign in again before changing this invoice.',
@@ -28,6 +28,7 @@ export function createInvoiceLifecycleClient({
   origin = globalThis.location?.origin || '',
   now = () => Date.now(),
   capabilityTtlMs = 10000,
+  precheckTimeoutMs = 15000,
 } = {}) {
   if (typeof accessToken !== 'function' || typeof fetchImpl !== 'function') throw new TypeError('accessToken and fetchImpl are required');
   const capabilities = new Map();
@@ -60,6 +61,41 @@ export function createInvoiceLifecycleClient({
 
   return Object.freeze({
     request,
+    async prepareDeleteReview(payload) {
+      let timer;
+      const prepare = async () => {
+        // Retry only once when the server has expired/cleared the old proposal.
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            return await request('prepareDelete', payload);
+          } catch (error) {
+            if (error.code !== 'ACTION_PENDING') throw error;
+          }
+          let pending;
+          try {
+            pending = await request('pendingDelete', {workspaceId: payload.workspaceId});
+          } catch (error) {
+            if (error.code === 'ACTION_EXPIRED' && attempt === 0) continue;
+            throw error;
+          }
+          if (pending.pending === false && attempt === 0) continue;
+          if (pending.pending === true && pending.proposalId && String(pending.invoiceId) === String(payload.invoiceId)) return pending;
+          if (pending.pending !== false && (!pending.proposalId || !pending.invoiceId || pending.pending !== true)) {
+            throw new Error('The server could not load the pending deletion confirmation. Close this dialog and try Delete invoice again.');
+          }
+          throw new Error(pending.pending === false
+            ? 'The deletion confirmation expired again. Close this dialog and try Delete invoice again.'
+            : 'Another invoice deletion is pending. Open that invoice to finish or cancel it, then try again.');
+        }
+      };
+      try {
+        return await Promise.race([prepare(), new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Checking invoice details timed out. Close this dialog and try Delete invoice again.')), precheckTimeoutMs);
+        })]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
     async getCapabilities(workspaceId, {force = false} = {}) {
       const key = String(workspaceId || '');
       if (!key) return {available: false};
