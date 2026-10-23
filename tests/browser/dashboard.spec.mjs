@@ -37,6 +37,37 @@ async function layout(page){
   }).map(e=>e.className||e.tagName).slice(0,10));
   expect(overflow).toEqual([]);
 }
+test('past-due draft labels agree across ledger, drawer and conversations; issued overview stays unchanged',async({page})=>{
+  await boot(page);
+  await page.evaluate(()=>{
+    const base={...__ui.state.invoices[0],client:'Status test business',currency:'INR',amount_minor:10000,paid_minor:2000,due_date:'2024-01-15',invoice_direction:'receivable',followup_state:'draft',customer_id:null};
+    __ui.state.invoices=[{...base,id:'draft-status',number:'DRAFT-STATUS',status:'draft'},{...base,id:'issued-status',number:'ISSUED-STATUS',status:'sent'}];
+    __ui.state.settings.default_currency='INR';__ui.state.page='Overview';__ui.state.search='';__ui.state.filter='All';__ui.render();
+  });
+  await expect(page.locator('.quiet-control')).toContainText('Delivery control');
+  await expect(page.locator('.quiet-control .muted')).toHaveText('Customer delivery is restricted to approved test recipients.');
+  await expect(page.locator('.stats .stat').nth(1)).toContainText('1 INR invoice needs attention');
+  await expect(page.locator('.stats .stat').nth(0).locator('.metric-value')).toHaveAttribute('data-counter','8000');
+  await expect(page.locator('.stats .stat').nth(1).locator('.metric-value')).toHaveAttribute('data-counter','8000');
+  for(const pageName of ['Overview','Invoices']){
+    await page.evaluate(name=>{__ui.state.page=name;__ui.render()},pageName);
+    const draftRow=page.locator('tr').filter({has:page.locator('[data-action="detail"][data-id="draft-status"]')});
+    await expect(draftRow.locator('[data-label="Status"] .tag')).toHaveText('Draft');
+    await expect(draftRow).toContainText('Unissued draft balance (not yet receivable)');
+    const issuedRow=page.locator('tr').filter({has:page.locator('[data-action="detail"][data-id="issued-status"]')});
+    await expect(issuedRow.locator('[data-label="Status"] .tag')).toHaveText('Overdue');
+  }
+  for(const [id,label] of [['draft-status','Draft'],['issued-status','Overdue']]){
+    await page.evaluate(id=>__ui.detail(id),id);
+    await expect(page.locator('.detail-hero .tag')).toHaveText(label);
+    await page.keyboard.press('Escape');
+    await page.evaluate(id=>{__ui.state.page='Conversations';__ui.state.conversationId=id;__ui.render()},id);
+    await expect(page.locator('.conversation-balance .tag')).toHaveText(label);
+  }
+  await page.evaluate(()=>{__ui.state.page='Invoices';__ui.state.filter='Overdue';__ui.render()});
+  await expect(page.locator('tbody tr')).toHaveCount(1);
+  await expect(page.locator('tbody tr')).toContainText('ISSUED-STATUS');
+});
 async function scrollPage(page,top,by=false){
   await page.locator('.content').evaluate((e,{top,by})=>e[by?'scrollBy':'scrollTo']({top,behavior:'instant'}),{top,by});
 }

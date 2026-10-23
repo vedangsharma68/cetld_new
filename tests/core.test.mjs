@@ -30,6 +30,32 @@ test('deleted invoices are omitted from totals and cannot accept payment or appr
   assert.throws(()=>settleInvoice({...deleted,alreadyPaid:true}),/deleted invoices/i);
 });
 test('due dates use date-only comparison',()=>{assert.equal(status(invoice,'2026-09-01'),'Due today');assert.equal(status(invoice,'2026-09-02'),'Overdue');assert.equal(status(invoice,'2026-08-31'),'Open');});
+test('issued invoice status preserves all date and payment outcomes',()=>{
+  for(const issued of ['issued','sent','open','overdue','partially_paid','partially-paid']){
+    const row={...invoice,status:issued,due_date:'2024-01-15',invoice_direction:'receivable'};
+    assert.equal(status(row,'2024-01-16'),'Overdue',issued);
+    assert.equal(status(row,'2024-01-15'),'Due today',issued);
+    assert.equal(status(row,'2024-01-14'),'Open',issued);
+    assert.equal(status({...row,paid_minor:row.amount_minor},'2024-01-16'),'Paid',issued);
+  }
+});
+test('past-due unissued drafts show Draft using the shared balance discriminator',()=>{
+  // Reproduce the live draft due 2024-01-15, including approved reminder drafts.
+  for(const followup_state of ['draft','approved','paused','cancelled']){
+    const row={...invoice,status:'draft',due_date:'2024-01-15',invoice_direction:'receivable',followup_state};
+    assert.equal(status(row,'2024-01-16'),'Draft',followup_state);
+    assert.equal(status(row,'2024-01-14'),'Open','future-due draft is unchanged');
+    assert.equal(status(row,'2024-01-15'),'Due today','due-today draft is unchanged');
+  }
+});
+test('terminal and fully paid invoice status takes precedence over past-due dates',()=>{
+  const row={...invoice,due_date:'2024-01-15'};
+  for(const [value,label] of [['paid','Paid'],['void','Void'],['cancelled','Cancelled']]){
+    assert.equal(status({...row,status:value},'2024-01-16'),label);
+    assert.equal(status({...row,status:value,paid_minor:row.amount_minor},'2024-01-16'),label);
+  }
+  assert.equal(status({...row,status:'draft',paid_minor:row.amount_minor},'2024-01-16'),'Paid');
+});
 test('CSV export quotes values and neutralizes spreadsheet formulas',()=>{assert.equal(csvCell('=IMPORTXML("x")'),'"\'=IMPORTXML(""x"")"');assert.equal(csvCell('A, B'),'"A, B"');});
 
 
