@@ -1,3 +1,4 @@
+import {summarizeReceivables,receivableKind} from '../../invoice/receivables.mjs';
 // Output safety: an assistant sentence is not a database receipt.
 import {requestedInvoiceDateChange,requestedInvoiceMoneyChange} from './invoice-corrections.mjs';
 const COMPLETION = /\b(?:deleted|removed|created|saved|updated|changed|corrected|restored|reopened|reversed|recorded|sent|cancelled|canceled|reset|completed|marked[^.!?]{0,24}paid)\b/i;
@@ -113,7 +114,7 @@ function numericEvidence(results) {
       for(const [currency,sums]of groups)for(const sum of Object.values(sums))add(sum,currency);
     }else if(value&&typeof value==='object'){
       const currency=value.currency||inheritedCurrency;
-      for(const [key,item]of Object.entries(value))visit(item,currency,key);
+      for(const [key,item]of Object.entries(value))visit(item,/^[A-Z]{3}$/.test(key)?key:currency,key);
       const total=number(value.total_amount),paid=value.amount_paid==null?0:number(value.amount_paid);
       if(total!==null&&paid!==null)add(Math.max(total-paid,0),currency);
     }else if(moneyField.test(field))add(value,inheritedCurrency);
@@ -245,6 +246,37 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
     const candidates=label==='$'?['USD','CAD','AUD','SGD']:[currencies[label]||label];
     return !candidates.some(currency=>numbers.has(amount,currency));
   }))return 'fresh_database_read_required';
+  // Numeric presence alone does not make a draft a customer receivable.
+  const reads=success.filter(r=>r.readOnly===true&&r.table==='invoices'&&Array.isArray(r.rows)
+    &&r.rows.length&&r.rows.every(row=>row.status&&row.currency&&row.total_amount!=null));
+  if(reads.length&&!success.some(completedOwnerResult)){
+    const rows=reads.at(-1).rows;
+    const issuedValues=new Map();
+    const add=groups=>{for(const [currency,row] of Object.entries(groups)){
+      if(!issuedValues.has(currency))issuedValues.set(currency,new Set(['0.00']));
+      issuedValues.get(currency).add(row.outstandingAmount);
+    }};
+    try{
+      add(summarizeReceivables(rows).currencies);
+      for(const row of rows)if(receivableKind(row)==='issued')add(summarizeReceivables([row]).currencies);
+      const clauses=text.split(/\n|[.!?](?=\s|$)/);
+      for(const clause of clauses){
+        if(!/\b(?:outstanding|balances?|owed|owes?)\b/i.test(clause)||/\b(?:hypothetical|would|if)\b|excluded from outstanding/i.test(clause)
+          ||/\b(?:draft|unissued)\b/i.test(clause)&&!/\boutstanding\b/i.test(clause))continue;
+        for(const match of clause.matchAll(/([$€£₹]|\b(?:Rs\.?|USD|INR|EUR|GBP|CHF|AED|SGD|AUD|CAD))\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(USD|INR|EUR|GBP|CHF|AED|SGD|AUD|CAD)\b/gi)){
+          // Validate the amount attached to the receivable label, rather than
+          // totals or paid allocations elsewhere in the same sentence.
+          const preceding=clause.slice(0,match.index);
+          const labels=[...preceding.matchAll(/\b(?:paid\s+balances?|overpayment(?:\s+balance)?|(?:unissued\s+)?drafts?(?:\s+balance)?|total(?:\s+amount)?|amount\s+paid|paid|subtotal|tax|outstanding(?:\s+balances?)?|remaining(?:\s+balance)?|balances?|owed|owes?)\b/gi)];
+          const attached=clause.slice(match.index+match[0].length).match(/^\s*(outstanding|balance|owed|paid|total|overpayment)\b/i)?.[1]||labels.at(-1)?.[0]||'';
+          if(!/outstanding|remaining|balance|owed|owes?/i.test(attached)||/paid|overpayment|draft|total|tax/i.test(attached))continue;
+          const label=(match[1]||match[4]).toUpperCase(),value=Number((match[2]||match[3]).replaceAll(',','')).toFixed(2);
+          const candidates=label==='$'?['USD','CAD','AUD','SGD']:[currencies[label]||label];
+          if(!candidates.some(currency=>value==='0.00'||issuedValues.get(currency)?.has(value)))return 'fresh_database_read_required';
+        }
+      }
+    }catch{return 'fresh_database_read_required';}
+  }
   const source=JSON.stringify(results)+String(message||'');
   const ids=[...text.matchAll(/\bINV[-/][A-Z0-9][A-Z0-9/-]*/gi)].map(m=>m[0]);
   const attachmentNotSaved=results.some(result=>result?.ok===false&&result?.review&&result?.outcome==='not_saved');

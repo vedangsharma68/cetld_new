@@ -1,3 +1,4 @@
+import {summarizeReceivables} from '../../invoice/receivables.mjs';
 import {normalizeOwnerPhoneValues,PHONE_FORMAT_GUIDANCE} from './owner-phone.mjs';
 import {sanitizeReminderTemplate} from '../preferences.mjs';
 import {taxComponents} from '../../ai/tools.mjs';
@@ -156,7 +157,7 @@ function catalog(table=null) {
     consentOperation:'recordConsent: target one customer or invoice with filters, without values. The current owner message must affirm that the recipient agreed to WhatsApp invoice reminders and identify the customer, invoice or current phone. Never reassign another customer or owner binding, restore revoked consent, clear STOP or send a reminder.',
     tables:Object.fromEntries(Object.entries(TABLES).filter(([name])=>!table||name===table).map(([name,spec])=>[name,{
       label:spec.label,columns:spec.columns,filters:spec.filters,
-      ...(name==='invoices'?{readValueConstraints:{status:INVOICE_STATUSES,unpaid:'Unpaid is a positive outstanding balance, not a stored invoice status. Read current total_amount and amount_paid using valid statuses; include partial payments and label drafts.'}}:{}),
+      ...(name==='invoices'?{readValueConstraints:{status:INVOICE_STATUSES,unpaid:'Unpaid is a positive outstanding balance, not a stored invoice status. Outstanding means issued receivables only, including partial payments. Report unissued drafts separately as not yet receivable; never add them to outstanding.'}}:{}),
       writeFields:WRITE_SCHEMA[name]||{},
       ...(name==='invoices'?{correctionValuesSchema:invoiceCorrectionValueSchema()}:{}),
       ...(['business_records','customers'].includes(name)?{writeTargetConstraints:{requiredFor:['update',...(name==='customers'?['delete']:[])],filtersRequired:true,operators:{eq:spec.filters,ilike:spec.filters.filter(field=>['name','company_name'].includes(field))},oneUnambiguousRecord:true}}:{}),
@@ -781,18 +782,10 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         requestedInvoiceMatched,invoice:{invoice_number:rows[0].invoice_number,currency:rows[0].currency,total_amount:rows[0].total_amount,amount_paid:rows[0].amount_paid,...invoiceBalanceFields(rows[0])}};
       await ctx.assertAuthorized();ctx.assertLive();
     }
-    let outstandingTotals;
+    let outstandingTotals, balanceSummary;
     if(table==='invoices'&&ownerInvoiceReadIntent(message)?.balance&&!ownerInvoiceReadAnalysis(message)&&params.offset===0&&!truncated){
-      const groups=new Map();
-      for(const row of rows){
-        if(row.metadata?.invoice_direction==='payable'||['void','cancelled'].includes(row.status))continue;
-        const total=Number(row.total_amount),paid=Number(row.amount_paid??0);
-        if(!/^[A-Z]{3}$/.test(row.currency||'')||!Number.isFinite(total)||!Number.isFinite(paid))return safeError({code:'UNAVAILABLE'});
-        const cents=(groups.get(row.currency)||0)+Math.max(Math.round(total*100)-Math.round(paid*100),0);
-        if(!Number.isSafeInteger(cents))return safeError({code:'UNAVAILABLE'});
-        groups.set(row.currency,cents);
-      }
-      outstandingTotals=[...groups].sort(([a],[b])=>a.localeCompare(b)).map(([currency,cents])=>({currency,outstanding_amount:(cents/100).toFixed(2)}));
+      balanceSummary=summarizeReceivables(rows);
+      outstandingTotals=Object.entries(balanceSummary.currencies).map(([currency,row])=>({currency,outstanding_amount:row.outstandingAmount}));
       if(!paymentHistory){
         const history=rows.length?await read({operation:'read',table:'payments',columns:['invoice_number','amount','reversed_amount','net_amount','paid_at'],
           filters:[{column:'invoice_id',operator:'in',value:rows.map(row=>row.id)}],limit:MAX_LIMIT,offset:0,order:null},ctx,{verifiedHistory:true})
@@ -817,7 +810,8 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     return sanitise({ok:true,rows:output.slice(0,params.limit),truncated,
       ...(table==='payments'?{complete:params.offset===0&&!truncated}:{}),
       ...(invoiceReadAnalysis?{invoiceReadAnalysis}:{}),
-      ...(outstandingTotals?{outstandingTotals}:{}),
+      ...(outstandingTotals?{outstandingTotals,balanceSummary}:{}),
+      offset:params.offset,
       ...(paymentHistory?{paymentHistory}:{}),
       ...(truncated?{nextOffset:params.offset+params.limit}:{})},scope);
   };

@@ -1,3 +1,4 @@
+import {receivableKind,summarizeReceivables} from './invoice/receivables.mjs';
 export function cents(value) {
   const text = String(value).trim();
   if (/^-\d+(\.\d+)?$/.test(text)) throw new Error('Enter a positive amount greater than zero.');
@@ -20,8 +21,13 @@ export function status(invoice, today = localDate()) {
   if (invoice.due_date === today) return 'Due today';
   return 'Open';
 }
-export function totals(invoices) {
-  return invoices.filter(x=>!x?.deleted_at&&(x.invoice_direction??x.metadata?.invoice_direction)!=='payable').reduce((t, x) => ({outstanding:t.outstanding+remaining(x), overdue:t.overdue+(status(x)==='Overdue'?remaining(x):0), collected:t.collected+x.paid_minor}), {outstanding:0,overdue:0,collected:0});
+export function totals(invoices, currency='INR') {
+  const active=invoices.filter(x=>!x?.deleted_at&&(x.invoice_direction??x.metadata?.invoice_direction)!=='payable'&&(x.currency||currency)===currency);
+  const summary=summarizeReceivables(active.map(x=>({...x,currency:x.currency||currency})));
+  return {outstanding:Math.round(Number(summary.currencies[currency]?.outstandingAmount||0)*100),
+    unissuedDrafts:Math.round(Number(summary.draftBalancesByCurrency[currency]?.outstandingAmount||0)*100),
+    overdue:active.filter(x=>receivableKind(x)==='issued'&&status(x)==='Overdue').reduce((sum,x)=>sum+remaining(x),0),
+    collected:active.reduce((sum,x)=>sum+x.paid_minor,0)};
 }
 export function payment(invoice, amount) {
   if(invoice?.deleted_at)throw new Error('Deleted invoices cannot accept payments.');

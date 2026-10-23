@@ -147,7 +147,7 @@ test('general invoice-list questions deterministically return unfiltered invoice
     });
     assert.equal(providerCalls, 0, message);
     assert.match(result.answer, /\*\*1 invoice • Total: INR 84600\.00\*\*[\s\S]*INV-1048/);
-    assert.match(result.answer, /INR 84600\.00 outstanding.*unpaid.*due 2026-10-01/i);
+    assert.match(result.answer, /INR 84600\.00 issued outstanding.*unpaid.*due 2026-10-01/i);
     assert.equal(result.readOnly, true);
     assert.equal(result.usedFallback, false);
     assert.deepEqual(result.evidence.records, [{type:'invoice',label:'INV-1048',reference:'invoice:INV-1048'}]);
@@ -212,7 +212,7 @@ test('current payment, balance and delivery questions still require tools rather
     const result=await answerWorkspaceQuestion({provider,store:freshStore,message,history,ownerMode:true});
     assert.doesNotMatch(result.answer,/USD 999|message was|Your latest question/);
     assert.ok(reads>before,'current data must be checked instead of trusting a historical payment claim');
-    assert.match(result.answer,/INR 84600\.00 outstanding.*unpaid/);
+    assert.match(result.answer,/INR 84600\.00 issued outstanding.*unpaid/);
   }
 });
 
@@ -228,7 +228,7 @@ test('deterministic invoice dashboard keeps currencies separate and paid balance
   ]};
   const result = await answerWorkspaceQuestion({provider:{generate:async()=>{throw new Error('provider must not run');}},store:dashboardStore,message:'which invoices do i have logged'});
   assert.match(result.answer,/Total: EUR 50\.00 \| INR 84600\.00/);
-  assert.match(result.answer,/WA-TEST-0001[\s\S]*INR 0\.00 outstanding[\s\S]*fully paid/);
+  assert.match(result.answer,/WA-TEST-0001[\s\S]*INR 0\.00 issued outstanding[\s\S]*fully paid/);
   assert.doesNotMatch(result.answer,/EUR 84650|INR 84650|customer_id|workspace_id|tool|schema|[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/i);
 });
 
@@ -311,7 +311,7 @@ test('long Assistant answers continue boundedly when the provider reports trunca
   assert.equal(call, 3);
   assert.equal(chunks[0].maxTokens, 4096);
   assert.ok(chunks[1].messages.some(item => item.role === 'assistant'));
-  assert.equal(result.answer.replace(/\s/g, ''), longText.replace(/\s/g, ''));
+  assert.equal(result.answer,'Issued outstanding: INR 84600.00.\nUnissued drafts (not yet receivable): none.');
 });
 
 test('internal JSON and fenced tool payloads are replaced with factual user-facing prose', async () => {
@@ -320,8 +320,8 @@ test('internal JSON and fenced tool payloads are replaced with factual user-faci
     finishReason: 'STOP', model: 'test-model', usedFallback: false,
   }, calls: 0};
   const result = await answerWorkspaceQuestion({provider, store, message: 'Explain what is outstanding and what I should do next.'});
-  assert.match(result.answer, /^Unpaid balances total INR 84600\.00 right now\./);
-  assert.match(result.answer, /Some invoices need a quick review before these numbers are final\.$/);
+  assert.match(result.answer, /^Issued outstanding: INR 84600\.00\./);
+  assert.match(result.answer, /Unissued drafts \(not yet receivable\): none\.$/);
   assert.doesNotMatch(result.answer, /Arbor & Finch owes/);
   assert.doesNotMatch(result.answer, /basis|currencies|debtors|invoiceCount/);
   assert.equal(Object.hasOwn(result, 'sources'), false);

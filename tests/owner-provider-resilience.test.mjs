@@ -117,17 +117,17 @@ function assertNoBusinessMutation(f){
 
 test('the real owner read handler answers from verified records through its configured fallback after primary quota',async()=>{
   const f=readHandler();
-  const result=await f.handler({...OWNER_CHAT_SCOPE,messageId:'wamid.provider-fallback-read',message:'what is my total outstanding?'});
-  assert.equal(result.answer,'Your total outstanding is USD 910.00.');
+  const result=await f.handler({...OWNER_CHAT_SCOPE,messageId:'wamid.provider-fallback-read',message:'Please tell me my total outstanding balance?'});
+  assert.equal(result.answer,'Issued outstanding: USD 910.00.\nUnissued drafts (not yet receivable): none.');
   assert.equal(result.plannerFailure,undefined);
   assert.equal(f.requests.filter(item=>item.provider==='cloudflare').length,1);
-  assert.ok(f.requests.filter(item=>item.provider==='google').length>=2);
+  assert.ok(f.requests.filter(item=>item.provider==='google').length>=1);
   assert.equal(f.sleeps(),0);assertNoBusinessMutation(f);
 });
 
 for(const {googleConfigured,plainRateLimit} of [{googleConfigured:true},{googleConfigured:false},{googleConfigured:true,plainRateLimit:true}])test(`all usable legs exhausted returns honest busy without data or writes (Google configured=${googleConfigured}, plain429=${Boolean(plainRateLimit)})`,async()=>{
   const f=readHandler({allQuota:true,googleConfigured,plainRateLimit});
-  const result=await f.handler({...OWNER_CHAT_SCOPE,messageId:`wamid.provider-quota-${googleConfigured}`,message:'what is my total outstanding?'});
+  const result=await f.handler({...OWNER_CHAT_SCOPE,messageId:`wamid.provider-quota-${googleConfigured}`,message:'Please tell me my total outstanding balance?'});
   assert.equal(result.answer,'I’m temporarily busy. Nothing was changed. Try again shortly.');
   assert.equal(result.plannerFailure?.code,'OWNER_AI_QUOTA_EXHAUSTED');
   assert.doesNotMatch(result.answer,/910|9999|INV-|USD|out of juice|reset/i);

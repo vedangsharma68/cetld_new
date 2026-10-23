@@ -54,7 +54,7 @@ test('event306 exact total instruction adjusts one service line, retains USD40 o
   assert.equal(row.metadata.subtotal,30);assert.equal(row.metadata.tax,0);assert.equal(row.metadata.line_items[0].amount,30);assert.equal(row.metadata.line_items[0].unitPrice,30);
   assert.equal(row.metadata.outstanding_amount,0);assert.equal(row.metadata.overpayment_amount,10);
   assert.deepEqual(row.metadata.source_document,{name:'synthetic.pdf'});assert.ok(['paused','cancelled'].includes(row.followup_state));assert.equal(row.next_follow_up_at,null);
-  assert.match(reply.answer,/Total: USD 30/);assert.match(reply.answer,/Paid: USD 40\.00/);assert.match(reply.answer,/Outstanding: USD 0\.00/);assert.match(reply.answer,/Overpayment: USD 10\.00/);
+  assert.match(reply.answer,/Total: USD 30/);assert.match(reply.answer,/Paid: USD 40\.00/);assert.match(reply.answer,/Issued outstanding: USD 0\.00/);assert.match(reply.answer,/Overpayment: USD 10\.00/);
   assert.deepEqual(await f.history(),original);assert.deepEqual(await f.read(f.ids[1]),foreign);
   const audit=await f.db.query('select * from invoice_correction_audits where invoice_id=$1',[f.ids[0]]);assert.equal(audit.rows.length,1);
   assert.equal((await f.turn('event306-total',request)).replayed,true);assert.deepEqual(await f.read(f.ids[0]),row);

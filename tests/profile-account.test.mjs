@@ -53,7 +53,7 @@ function accountFixture(profile, {metadata = {}, workspace = {id: 'workspace', n
     // Capture the name displayed by the real Overview and Settings renderers.
     escape: (value) => value, dashboardGreeting: () => 'Good morning',
     totals: () => ({}), intro: (title) => { context.title = title; return ''; },
-    button: () => '', icon: () => '', animatedMoney: () => '', overviewAssistant: () => '',
+    money: () => '', button: () => '', icon: () => '', animatedMoney: () => '', overviewAssistant: () => '',
     collectionsPulseCard: () => '', activityFeed: () => '', invoicePanel: () => '',
     currencyOptions: () => '', modelOptions: () => '', followUpPreferencesForm: () => '',
     ownerNumberForm: () => '', tag: () => '', document: {documentElement: {classList: {contains: () => false}}},

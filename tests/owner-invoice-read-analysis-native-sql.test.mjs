@@ -112,7 +112,7 @@ test('explicit global unpaid listing includes unpaid invoices across customers a
     const reply=await f.turn('global-unpaid-all-customers','Show me all unpaid invoices across all customers, including drafts. Do not change anything.');
     assert.match(reply.answer,new RegExp(`${alpha.invoice_number}.*Global Alpha Ltd.*USD 240\\.00`,'s'));
     assert.match(reply.answer,new RegExp(`${beta.invoice_number}.*Global Beta Inc.*INR 500\\.00`,'s'));
-    assert.match(reply.answer,/including drafts/i);assert.doesNotMatch(reply.answer,new RegExp(paid.invoice_number));
+    assert.match(reply.answer,/Issued outstanding: USD 240\.00/);assert.match(reply.answer,/Unissued drafts \(not yet receivable\): INR 500\.00, USD 834\.56/);assert.doesNotMatch(reply.answer,new RegExp(paid.invoice_number));
     assert.equal(f.executions.length,1);assert.deepEqual(f.executions[0].args.filters,[{column:'status',operator:'in',value:['draft','sent','overdue']}]);
     assert.equal(f.providerCalls.length,0);assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
     assert.ok(alpha.id&&beta.id&&paid.id);
@@ -225,7 +225,7 @@ test('currency mismatch, missing invoice, ambiguity, and stale version fail clos
   });
 });
 
-test('currency balances group separately, exclude unrelated invoices, and include drafts only on request',async()=>{
+test('currency balances keep issued receivables and unissued drafts separate with or without an explicit draft request',async()=>{
   const f=await fixture();try{
     const alpha='Example Alpha Ltd',beta='Example Beta Inc',unrelated='Unlisted Example LLC';
     const alphaMain=await f.addInvoice({customer:alpha,number:'AUTO',printedNumber:'ALPHA-1',currency:'USD',total:600,status:'sent',paid:100});
@@ -239,9 +239,9 @@ test('currency balances group separately, exclude unrelated invoices, and includ
     const excludedDraft=await f.turn('event270-no-drafts',base);
     assert.match(excludedDraft.answer,/USD 750\.00/);assert.match(excludedDraft.answer,/INR 900\.00/);
     assert.doesNotMatch(excludedDraft.answer,/850\.00|999999|9999999/);
-    assert.doesNotMatch(excludedDraft.answer,/including draft/i);
+    assert.match(excludedDraft.answer,/Unissued drafts \(not yet receivable\): USD 100\.00/);
     const includedDraft=await f.turn('event270-with-drafts',base.replace('grouped by currency.','grouped by currency, including draft invoices.'));
-    assert.match(includedDraft.answer,/USD 850\.00/);assert.match(includedDraft.answer,/INR 900\.00/);assert.match(includedDraft.answer,/including draft invoices/i);
+    assert.equal(includedDraft.answer,excludedDraft.answer);assert.doesNotMatch(includedDraft.answer,/USD 850\.00/);
     assert.match(includedDraft.answer,/Currencies are kept separate/i);
     assert.equal(f.providerCalls.length,0);assert.equal(f.outputs.filter(row=>row?.invoiceReadAnalysis?.kind==='currencyBalances').length,2);
     assert.deepEqual(await f.snapshot(),before);assert.ok(alphaMain.id);assert.deepEqual(f.errors,[]);

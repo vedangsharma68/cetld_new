@@ -1,3 +1,4 @@
+import {receivableKind,summarizeReceivables} from '../invoice/receivables.mjs';
 import {calendarDay, workspaceTimezone} from '../invoice/date-context.mjs';
 const MAX_ROWS = 5000;
 const STORE_PAGE_SIZE = 1000;
@@ -21,8 +22,8 @@ const definitions = [
     limit: { type: "integer", minimum: 1, maximum: MAX_PAGE_SIZE }, offset: { type: "integer", minimum: 0, maximum: MAX_OFFSET },
     invoiceId: { type: "string", format: "uuid" }, paidAtFrom: { type: "string", format: "date" }, paidAtTo: { type: "string", format: "date" },
   }),
-  tool("getOutstandingSummary", "Summarize unpaid receivables by currency, including drafts and excluding payables. Only issued rows marked receivable are confirmed customer receivables; separate draft, payable, and unclassified-direction balances for review. Uses invoices.amount_paid, not payment rows.", {}),
-  tool("getOverdueInvoices", "List unpaid invoices whose due date is before today's workspace-local date, optionally in an inclusive due-date range, grouped by currency in the summary. Payables are excluded. Draft invoices are included as past-due records, but they have not been issued in Cetld.", {dueDateFrom:{type:'string',format:'date'},dueDateTo:{type:'string',format:'date'}}),
+  tool("getOutstandingSummary", "Summarize issued outstanding receivables by currency. Unissued drafts are separate and not yet receivable. Exclude paid, cancelled, deleted and payable invoices; never combine currencies. Uses invoices.amount_paid, not payment rows.", {}),
+  tool("getOverdueInvoices", "List unpaid invoices whose due date is before today's workspace-local date, optionally in an inclusive due-date range, grouped by currency in the summary. Payables are excluded. Only issued receivables are overdue; unissued drafts are excluded.", {dueDateFrom:{type:'string',format:'date'},dueDateTo:{type:'string',format:'date'}}),
   tool("getDueInvoices", "List unpaid invoices due in an inclusive calendar date range in the workspace timezone. Payable, fully paid, void, and cancelled invoices are excluded.", {
     dueDateFrom:{type:'string',format:'date'}, dueDateTo:{type:'string',format:'date'},
   }, ["dueDateFrom", "dueDateTo"]),
@@ -469,11 +470,10 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
           if (paid > total) throw new TypeError("Invoice amount_paid exceeds total_amount");
           return total - paid;
         };
-        const applicable = invoices.filter((invoice) => !["void", "cancelled"].includes(invoice.status) && positiveBalance(invoice) > 0n);
-        const confirmedReceivables = applicable.filter(invoice => ["sent", "overdue"].includes(invoice.status) && safeInvoiceDirection(invoice.metadata) === "receivable" && positiveBalance(invoice) > 0n);
-        const drafts = applicable.filter(invoice => invoice.status === "draft" && safeInvoiceDirection(invoice.metadata) !== "payable" && positiveBalance(invoice) > 0n);
-        const payables = applicable.filter(invoice => safeInvoiceDirection(invoice.metadata) === "payable" && positiveBalance(invoice) > 0n);
-        const unclassified = applicable.filter(invoice => safeInvoiceDirection(invoice.metadata) !== "receivable" && safeInvoiceDirection(invoice.metadata) !== "payable" && positiveBalance(invoice) > 0n);
+        const summary = summarizeReceivables(invoices);
+        const confirmedReceivables = invoices.filter(invoice => receivableKind(invoice) === 'issued' && safeInvoiceDirection(invoice.metadata) === 'receivable' && positiveBalance(invoice) > 0n);
+        const payables = invoices.filter(invoice => !invoice.deleted_at && safeInvoiceDirection(invoice.metadata) === 'payable'
+          && !['paid','void','cancelled','canceled'].includes(invoice.status) && positiveBalance(invoice) > 0n);
         const customers = await query(store, 'customers', 'id,name,company_name');
         const names = new Map(customers.map(c => [c.id, c.company_name || c.name]));
         const grouped = new Map();
@@ -486,12 +486,10 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
         const debtors = [...grouped.values()].sort((a,b) => a.currency.localeCompare(b.currency) || (a.balance > b.balance ? -1 : a.balance < b.balance ? 1 : a.customerId.localeCompare(b.customerId)));
         const leaders = debtors.filter((row,index) => index === 0 || row.currency !== debtors[index - 1].currency);
         return {
-          basis: "invoices.amount_paid; draft and unclassified balances require review",
-          currencies: groupInvoiceAmounts(applicable.filter(invoice => safeInvoiceDirection(invoice.metadata) !== "payable")),
-          confirmedReceivablesByCurrency: groupInvoiceAmounts(confirmedReceivables),
-          draftBalancesByCurrency: groupInvoiceAmounts(drafts),
+          basis: "issued receivables only; invoices.amount_paid; unissued drafts separate",
+          ...summary,
+          confirmedReceivablesByCurrency: summary.currencies,
           payablesByCurrency: groupInvoiceAmounts(payables),
-          unclassifiedBalancesByCurrency: groupInvoiceAmounts(unclassified),
           debtors: leaders.map(({balance,...row}) => ({...row,outstandingAmount: money(balance)})),
           debtorCount: debtors.length, complete:true, truncated:false,
         };
@@ -502,7 +500,7 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
         const timezone = await getTimezone();
         const today = calendarDay(clock, timezone);
         const invoices = await query(store, "invoices", INVOICE_SELECT, { order: "id.asc" });
-        const overdue = invoices.filter((invoice) => invoice.due_date && invoice.due_date < today && safeInvoiceDirection(invoice.metadata) !== "payable" && withinDateBounds(invoice.due_date,bounds) && !["paid", "void", "cancelled"].includes(invoice.status) && cents(invoice.amount_paid, "amount_paid") < cents(invoice.total_amount, "total_amount"));
+        const overdue = invoices.filter((invoice) => receivableKind(invoice) === "issued" && invoice.due_date && invoice.due_date < today && withinDateBounds(invoice.due_date,bounds) && !["paid", "void", "cancelled"].includes(invoice.status) && cents(invoice.amount_paid, "amount_paid") < cents(invoice.total_amount, "total_amount"));
         const overdueCustomers = await customersForInvoices(overdue);
         const balances = overdue.map((invoice) => ({ ...safeInvoice(invoice), customerName: overdueCustomers.get(invoice.customer_id)?.company_name || overdueCustomers.get(invoice.customer_id)?.name || null, outstandingAmount: money(cents(invoice.total_amount, "total_amount") - cents(invoice.amount_paid, "amount_paid")) }));
         balances.sort((a,b) => a.dueDate.localeCompare(b.dueDate) || a.id.localeCompare(b.id));
@@ -514,7 +512,7 @@ export function createAssistantTools({ store, clock = () => new Date(), accounti
         const bounds = dateBounds(args.dueDateFrom,args.dueDateTo,'dueDateFrom','dueDateTo');
         if (!bounds.lower || !bounds.upper) throw new TypeError('A complete due-date range is required');
         const invoices = await query(store, "invoices", INVOICE_SELECT, { order: "id.asc" });
-        const due = invoices.filter(invoice => safeInvoiceDirection(invoice.metadata) !== "payable" && invoice.due_date
+        const due = invoices.filter(invoice => receivableKind(invoice) === "issued" && invoice.due_date
           && withinDateBounds(invoice.due_date,bounds)
           && !["paid", "void", "cancelled"].includes(invoice.status)
           && cents(invoice.amount_paid, "amount_paid") < cents(invoice.total_amount, "total_amount"));
