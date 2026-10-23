@@ -158,7 +158,13 @@ function ownerRequestsInvoiceAttachment(message) {
 }
 function ownerRequestsRetainedInvoiceSave(message) {
   if(personalNoteReply(message))return false;
-  const clauses=normalizedOwnerText(message).split(/[.!?;,]+|\b(?:and|but)\b/u).map(value=>value.trim()).filter(Boolean)
+  // Classify questions before punctuation or conjunction splitting can erase them.
+  const text=normalizedOwnerText(message);
+  if(/\?\s*$/.test(text))return false;
+  const clauses=(text.match(/[^.!?;]+[.!?;]*/gu)||[])
+    .filter(value=>!/[?]/u.test(value)&&!/^\s*(?:what|when|which|how|why|whose|whom)\b/u.test(value))
+    .flatMap(value=>value.split(/[.!;,]+|\b(?:and|but)\b/u)).map(value=>value.trim()).filter(Boolean)
+    .filter(value=>!/^(?:what|when|which|how|why|whose|whom|is\s+this\s+saved|did\s+you\s+save)\b/u.test(value))
     .filter(value=>!/^(?:please )?(?:(?:don't|do not|never|avoid)\s+(?:send|schedule|trigger|deliver)\b|no\s+)(?:[^.!?;]*\breminders?\b)/u.test(value));
   // Permission to discuss a possible/later save is not permission to save now.
   if(clauses.some(value=>/\b(?:if|whether|unless|later|tomorrow|next|after|when|once|until|before|approval|confirmation|maybe|perhaps|might|should|shall)\b|\b(?:can|could|would)\s+(?:i|it|we)\b|\b(?:don't|do not|never|must not|shouldn't|should not|avoid)\b|\bnot\s+(?:now|yet|to\s+(?:log|save|add))\b|^no\b|\b(?:on|by|in|at)\s+(?:(?:this|the)\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|october|november|december|\d+)\b/u.test(value)))return false;

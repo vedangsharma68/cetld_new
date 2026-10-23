@@ -1,3 +1,4 @@
+import {parseTextInvoice} from './text-invoice.mjs';
 import {verifyOwnerPaymentReceipt} from './owner-payment-readback.mjs';
 import {createHash} from 'node:crypto';
 import {validateInvoiceCorrection,invoiceBusinessFields,INVOICE_CORRECTION_FIELDS} from './invoice-corrections.mjs';
@@ -67,9 +68,19 @@ function isSettledPaidInvoice(record){
   const total=minorUnits(record?.total_amount);
   return record?.status==='paid'&&paid!==null&&total!==null&&paid>=total;
 }
+// Only the complete persisted text grammar proves this issue date was supplied
+// by our calendar. Unknown/structured instructions keep every explicit field.
+function invoiceInstructionPayload(quote,payload){
+  const date=payload?.issue_date;
+  if(typeof date!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date+'T12:00:00Z')))return canonical(payload);
+  const parsed=parseTextInvoice(quote,{clock:()=>new Date(date+'T12:00:00Z'),timezone:'UTC'});
+  if(!parsed||JSON.stringify(canonical(parsed.values))!==JSON.stringify(canonical(payload)))return canonical(payload);
+  const {issue_date,...supplied}=payload;
+  return canonical(supplied);
+}
 function stableKey({workspaceId,ownerId,phone,providerMessageId,operation,targetId,invoiceInstruction}){
   const identity=invoiceInstruction
-    ?[workspaceId,ownerId,phone,operation,'exact-invoice-instruction',invoiceInstruction.quote,canonical(invoiceInstruction.payload)]
+    ?[workspaceId,ownerId,phone,operation,'exact-invoice-instruction',invoiceInstruction.quote,invoiceInstructionPayload(invoiceInstruction.quote,invoiceInstruction.payload)]
     :[workspaceId,ownerId,phone,providerMessageId,operation,targetId??null];
   const digest=createHash('sha256').update(JSON.stringify(identity)).digest('hex');
   return `ownerwrite_${digest.slice(0,48)}`;
@@ -150,14 +161,14 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
         if(result?.error||!Array.isArray(result?.data))return failure('DATABASE_UNAVAILABLE');
         receipts=result.data;
       }catch{return failure('DATABASE_UNAVAILABLE');}
-      const expected=JSON.stringify(canonical(payload));
+      const expected=JSON.stringify(invoiceInstructionPayload(quote,payload));
       for(const receipt of receipts){
         if(receipt.workspace_id!==workspaceId||receipt.owner_id!==ownerId||receipt.phone!==phone)return failure('DENIED');
         const request=receipt.request;
         if(request?.operation!=='invoice.create'||request.authorizationKind!=='instruction'||request.authorizationQuote!==quote
-          ||JSON.stringify(canonical(request.payload))!==expected)continue;
+          ||JSON.stringify(invoiceInstructionPayload(request.authorizationQuote,request.payload))!==expected)continue;
         // A committed receipt proves this exact instruction, including its
-        // calendar dates, already ran. Verify its live invoice before reusing it.
+        // user-supplied calendar dates, already ran. Verify its live invoice before reusing it.
         if(receipt.result?.ok!==true||receipt.result.action!=='invoice.created'||receipt.result.entityType!=='invoice')return failure('WRITE_UNCONFIRMED');
         const completed=await this.lookupCompleted({workspaceId,ownerId,phone,providerMessageId:receipt.provider_message_id});
         if(!completed?.ok||!completed.completed||completed.record?.deleted_at!==null)return failure('WRITE_UNCONFIRMED');

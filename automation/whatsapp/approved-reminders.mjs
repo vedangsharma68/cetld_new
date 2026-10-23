@@ -1,5 +1,5 @@
 import {brandedReminder} from '../preferences.mjs';
-import {reminderDeliveryForm,matchesReminderDelivery} from './reminder-approval.mjs';
+import {reminderDeliveryForm,matchesReminderDelivery,hasPersistedLegacyReminderApproval} from './reminder-approval.mjs';
 import {getSendEligibility} from './consent.mjs';
 import {reminderFingerprint} from './reminder-fingerprint.mjs';
 import {APPROVED_REMINDER_WABA,REMINDER_TEMPLATES,selectReminderTemplate,selectInvoiceReminderTemplate,buildReminderTemplate} from './reminder-templates.mjs';
@@ -55,6 +55,8 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
     if(testGate)await testGate.verifyFacts({invoice,settings,entry});
     const delivery=reminderDeliveryForm({entry,parameters,body:rendered.body});
     if(!matchesReminderDelivery(reviewed,delivery)||invoice.metadata?.approved_reminder_text!==brandedReminder(rendered.body,settings.business_name))throw Object.assign(new Error('The outgoing words and delivery form need review.'),{code:'DELIVERY_REVIEW_REQUIRED'});
+    if(!await hasPersistedLegacyReminderApproval({supabase,ownerId,workspaceId,invoiceId:invoice.id,delivery,approvedText:invoice.metadata.approved_reminder_text}))
+      throw Object.assign(new Error('The reminder approval record needs review.'),{code:'DELIVERY_REVIEW_REQUIRED'});
     return {invoice,settings,eligibility,entry,parameters,delivery,...rendered};
   }
   return {async prepareReminder(input){if(!enabled())throw Error('Reminder disabled');const result=await facts(input);return {body:result.body,delivery:result.delivery};},
