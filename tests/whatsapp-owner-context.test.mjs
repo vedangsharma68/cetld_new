@@ -36,7 +36,7 @@ test('owner turn reuses one request-local authorization result across setup and 
   });
 
   const result=await handler({workspaceId,ownerId:binding.owner_id,customerId:binding.customer_id,phone,message:'Check my workspace',messageId:'turn-1'});
-  assert.equal(result.answer,'Your workspace is ready.');
+  assert.equal(result.answer,'Your business is ready.');
   assert.equal(authorizationCalls,1);
 });
 
@@ -52,7 +52,7 @@ test('processing acknowledgements cannot crowd John out of the recent owner hist
   const handler=createOwnerMessageHandler({supabase:db.supabase,authorize:async()=>true,replyStore:null,logger:{info(){},error(){}},
     agentFactory:async({history})=>{
       assert.ok(history.some(turn=>turn.content==='John Smith is my customer'));
-      assert.ok(history.every(turn=>!turn.content.startsWith('On it.')));assert.ok(history.length<=8);
+      assert.ok(history.every(turn=>!turn.content.startsWith('On it.')));assert.ok(history.length<=20);
       return {answer:'John is still in context.'};
     }});
   assert.equal((await handler({...OWNER_CHAT_SCOPE,message:'What about John?',messageId:'turn-3'})).answer,'John is still in context.');

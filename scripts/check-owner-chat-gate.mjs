@@ -59,6 +59,7 @@ export async function writeReleaseManifest({outputPath='owner-chat-build.json'}=
   paths.push('automation/whatsapp/owner-phone.mjs','supabase/migrations/20261022100000_owner_phone_contact_recovery.sql');
   paths.push('automation/whatsapp/owner-consent.mjs','supabase/migrations/20261022180000_owner_chat_record_consent.sql');
   paths.push('automation/whatsapp/reminder-parameters.mjs','supabase/migrations/20261022221930_default_payment_reminder_draft.sql');
+  paths.push('ai/confirm-action.mjs','ai/owner-conversation.mjs','ai/owner-actions.mjs','assistant-client.js','automation/whatsapp/reminder-approval.mjs','supabase/migrations/20261023061702_shared_owner_assistant.sql');
   const files={};for(const path of paths)files[path]=createHash('sha256').update(await readFile(path)).digest('hex');
   let commit=process.env.VERCEL_GIT_COMMIT_SHA||process.env.GITHUB_SHA;
   if(!commit)try{commit=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();}catch{commit=null;}

@@ -614,7 +614,7 @@ function validateAdapterSettingsValues(values) {
 }
 
 export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,getRuntimeConfig,planRequest,authorize,executeBatchOperation,
-  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,executeInvoiceReopening=null,executeReopeningDecision=null,executeReminderOperation=null,executeConsentOperation=null,confirmationMode='buttons',timezone='Asia/Kolkata',attachmentAvailable=false,invoiceEditContext=null}={}) {
+  message='',messageId=null,pending=null,pendingAtStart=null,clock=()=>new Date(),signal,deadlineAt,executeDirectOperation=null,executeInvoiceReopening=null,executeReopeningDecision=null,executeReminderOperation=null,executeConsentOperation=null,confirmationMode='buttons',timezone='Asia/Kolkata',attachmentAvailable=false,invoiceEditContext=null,ownerConversation=null}={}) {
   if(!supabase?.from||typeof scope?.workspaceId!=='string')throw new TypeError('Supabase and verified workspace scope required');
   let replyRequirement=null;
   let writeAttempted=false;
@@ -1052,6 +1052,8 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         &&(raw.operation===undefined||raw.operation==='create')&&(raw.table===undefined||raw.table==='invoices');
       const params=await normalizeRequest(textRequest?textInvoice:raw,scope,planRequest,ctx,validationFeedback,textInvoice?.values);
       ctx.phase='dispatch';
+      if(ownerConversation&&!['read','describe','checkAttachment','pending'].includes(params.operation)&&await ownerConversation.pending())
+        return {...fail('PENDING','Finish or cancel the saved Assistant proposal first. Send yes to confirm it, or cancel.'),writeAttempted:false};
       // This private execution option comes from the server's scoped preread,
       // never from model-visible arguments. Preserve its version through SQL.
       if(executionOptions.invoiceCorrectionReadGuard){

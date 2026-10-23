@@ -1917,7 +1917,7 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     }finally{phaseController.signal.removeEventListener('abort',onAbort);}
   };
   try{
-    const kept=history.filter(turn=>turn&&['user','assistant'].includes(turn.role)&&typeof turn.content==='string').slice(-8);
+    const kept=history.filter(turn=>turn&&['user','assistant'].includes(turn.role)&&typeof turn.content==='string').slice(-20);
     let currentDate,calendar;
     try{
       const now=clock();

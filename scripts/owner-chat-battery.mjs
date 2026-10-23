@@ -477,18 +477,18 @@ const FAST_SCENARIOS = [
       throw new Error('owner-agent round log included owner identifiers');
     assertNoForeignData(harness.db);
   }),
-  scenario('owner_history_keeps_only_the_most_recent_eight_turns',async()=>{
+  scenario('owner_history_keeps_only_the_most_recent_twenty_turns',async()=>{
     const harness=makeHandler({script:{'Show invoice INV-001.':{steps:[toolStep(invoiceRead({limit:6}))],final:(_request,result)=>replyForResult(result)}}});
-    for(let index=0;index<10;index++)harness.db.tables.whatsapp_messages.push({id:`history-${String(index).padStart(2,'0')}`,
+    for(let index=0;index<24;index++)harness.db.tables.owner_assistant_turns.push({id:`history-${String(index).padStart(2,'0')}`,
       workspace_id:OWNER_CHAT_SCOPE.workspaceId,phone:OWNER_CHAT_SCOPE.phone,audience:'owner',direction:index%2?'outbound':'inbound',
-      body:`owner-history-turn-${index}`,status:index%2?'sent':'received',kind:'text',provider_message_id:`history-wamid-${index}`,
+      role:index%2?'assistant':'user',content:`owner-history-turn-${index}`,status:index%2?'sent':'received',kind:'text',provider_message_id:`history-wamid-${index}`,
       created_at:new Date(DEFAULT_NOW.getTime()+index*1000).toISOString()});
     const [result]=await exactTurns(harness,[{message:'Show invoice INV-001.',createdAt:new Date(DEFAULT_NOW.getTime()+20_000).toISOString()}]);
     const conversationMessages=harness.observed.calls[0].request.messages.filter(item=>['user','assistant'].includes(item.role));
     const content=conversationMessages.map(item=>item.content);
-    if(conversationMessages.length!==8)throw new Error(`expected seven saved messages plus this turn, got ${conversationMessages.length}: ${JSON.stringify(content)}`);
-    if(!content.includes('owner-history-turn-9')||!content.includes('owner-history-turn-3')
-      ||content.includes('owner-history-turn-2')||content.includes('owner-history-turn-1'))
+    if(conversationMessages.length!==20)throw new Error(`expected nineteen saved messages plus this turn, got ${conversationMessages.length}: ${JSON.stringify(content)}`);
+    if(!content.includes('owner-history-turn-23')||!content.includes('owner-history-turn-5')
+      ||content.includes('owner-history-turn-4')||content.includes('owner-history-turn-1'))
       throw new Error('owner history did not retain the latest bounded context');
     if(!result.answer.includes('INV-001'))throw new Error('bounded-history conversation did not answer the current request');
     assertNoForeignData(harness.db);

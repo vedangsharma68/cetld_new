@@ -2,7 +2,7 @@ import {createHmac, timingSafeEqual} from 'node:crypto';
 import {APIError, uuid} from './http.mjs';
 
 const MAX_AGE_SECONDS = 10 * 60;
-const ACTIONS = new Set(['create_invoice', 'update_invoice']);
+const ACTIONS = new Set(['create_invoice', 'update_invoice', 'owner_reminder', 'owner_payment', 'owner_correction', 'owner_schedule']);
 
 function secretValue(secret) {
   if (typeof secret !== 'string' || secret.length < 32) throw new APIError(503, 'ACCOUNTING_CONFIRMATION_UNAVAILABLE');

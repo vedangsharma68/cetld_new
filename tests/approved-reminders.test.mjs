@@ -1,3 +1,4 @@
+import {approveReviewedReminder} from './fixtures/reviewed-reminder.mjs';
 import test from 'node:test';
 import {applyNoFooterMigration} from './fixtures/no-footer-reminders.mjs';
 import assert from 'node:assert/strict';
@@ -58,6 +59,7 @@ async function setup(preferences={},{approve=true}={}){
   await f.db.query("insert into whatsapp_consents(workspace_id,customer_id,phone,source,consent_text_version,categories) values($1,$2,$3,'inbound_message','fixture-v1',array['invoice_updates'])",[workspaceId,customerId,phone]);
   const invoiceId=(await f.db.query("insert into invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,status,metadata) values($1,$2,'INV-001',current_date-2,current_date-1,'USD',125,'sent','{\"invoice_direction\":\"receivable\"}') returning id",[workspaceId,customerId])).rows[0].id;
   await f.db.query("update invoices set metadata=metadata||jsonb_build_object('followup_state','approved','approved_reminder_text',E'Legacy reviewed draft\n\nFixture studio','approved_preferences_updated_at',(select updated_at from workspace_settings where workspace_id=$2)),next_follow_up_at=now()-interval '1 minute' where id=$1",[invoiceId,workspaceId]);
+  await approveReviewedReminder(f.db,{workspaceId,invoiceId});
   const scope={ownerId,workspaceId,invoiceId};
   const configured={...env,AUTOMATION_WORKSPACES:JSON.stringify([{ownerId,workspaceId}])};
   const store=new CoreAutomationStore({url:env.SUPABASE_URL,key:env.SUPABASE_SERVICE_ROLE_KEY,fetchImpl:f.fetchImpl});
@@ -291,6 +293,7 @@ for(const [workspaceTone,debtorTone,expected] of [
       assert.equal((await f.store.getInvoice(f.scope)).followup_state,'paused');
       await f.db.query("update invoices set metadata=metadata||jsonb_build_object('followup_state','approved','approved_reminder_text',E'Fresh offline review\\n\\nFixture studio','approved_preferences_updated_at',(select updated_at from workspace_settings where workspace_id=$2)),next_follow_up_at=now()-interval '1 minute' where id=$1",[f.scope.invoiceId,f.scope.workspaceId]);
     }
+    await approveReviewedReminder(f.db,{workspaceId:f.scope.workspaceId,invoiceId:f.scope.invoiceId});
     const result=await f.runtime.tick(f.scope);
     assert.equal(result.results[0]?.status,'sent',JSON.stringify({result,errors:f.errors}));
     assert.equal(f.graph.length,1);assert.equal(f.graph[0].template.name,`cetld_invoice_details_${expected}_v1`);

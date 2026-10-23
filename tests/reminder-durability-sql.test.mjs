@@ -1,3 +1,4 @@
+import {reminderDeliveryForm} from '../automation/whatsapp/reminder-approval.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,createHmac} from 'node:crypto';
@@ -48,6 +49,7 @@ async function setup({excludeMigrations=[]}={}){
   const body=template.body.replace(/\{\{([1-6])\}\}/g,(_,n)=>['Fixture studio','Fixture recipient',invoice.invoice_number,'125.00','USD',new Date(invoice.due_date).toISOString().slice(0,10)][Number(n)-1]);
   await f.db.query(`update invoices set metadata=metadata||jsonb_build_object('followup_state','approved','approved_reminder_text',$2::text,
     'approved_preferences_updated_at',(select updated_at from workspace_settings where workspace_id=$3)),next_follow_up_at=now()-interval '1 minute' where id=$1`,[invoice.id,body,workspaceId]);
+  await f.db.query("update invoices set metadata=metadata||jsonb_build_object('approved_reminder_delivery',$2::jsonb) where id=$1",[invoice.id,reminderDeliveryForm({entry:template,parameters:['Fixture studio','Fixture recipient',invoice.invoice_number,'125.00','USD',new Date(invoice.due_date).toISOString().slice(0,10)],body})]);
   await f.db.query(`insert into app.first_party_reminder_templates(workspace_id,owner_id,waba_id,phone_number_id,name,language,revision,body,approved,approval_reference,approved_at)
     values($1,$2,$3,$4,$5,$6,$7,$8,true,'OFFLINE FIXTURE ONLY',now())`,[workspaceId,ownerId,template.wabaId,template.phoneNumberId,template.name,template.language,template.revision,template.body]);
   const scope={ownerId,workspaceId,invoiceId:invoice.id};

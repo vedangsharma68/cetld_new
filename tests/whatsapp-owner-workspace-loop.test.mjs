@@ -60,7 +60,7 @@ test('the system prompt stays short and describes workspaceData generically',asy
  assert.match(systemPrompt,/workspaceData/);
  assert.match(systemPrompt,/getAIProviderConfiguration/);
  assert.doesNotMatch(systemPrompt,/invoice|payment|delete|undo|attachment|confirmation/i);
- assert.deepEqual(historyContents.slice(0,8),history.slice(-8).map(turn=>turn.content));
+ assert.deepEqual(historyContents.slice(0,20).slice(0,-1),history.slice(-20).map(turn=>turn.content));
  assert.equal(historyContents.at(-1),message);
  assert.deepEqual(context,{currentDate:'2026-10-02',calendar:{timezone:'Asia/Kolkata',currentDate:'2026-10-02',tomorrow:'2026-10-03',dayAfterTomorrow:'2026-10-04',yesterday:'2026-10-01',nextWeek:'2026-10-09'},attachment:{available:true,mimeType:'image/jpeg'},historyAvailable:false,settingsAvailable:false,toolsAvailable:true});
  const unavailable=await runOwnerAgent({provider:{async generate(request){

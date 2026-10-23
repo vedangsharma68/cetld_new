@@ -2,6 +2,7 @@ import {invoiceSyncPersistence} from '../automation/invoice-sync-store.mjs';
 import {APIError, uuid, readJSON, readBounded} from './http.mjs';
 import {DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, sanitizeModelSettings} from './provider.mjs';
 import {createDeletedAtCompatibility} from '../invoice/deleted-at-compat.mjs';
+import {createOwnerConversation} from './owner-conversation.mjs';
 
 const TABLES = new Set(['invoices', 'customers', 'payments', 'invoice_files']);
 
@@ -43,6 +44,15 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
   }
   const store = {
     workspaceId, userId, role,
+    ownerConversation: createOwnerConversation({workspaceId,ownerId:userId,rpc:async(name,args)=>({data:await request(`/rest/v1/rpc/${name}`,{method:'POST',body:JSON.stringify(args)})})}),
+    async ownerAssistantRPC(name,args={}) {
+      if(role!=='owner'||!['owner_assistant_preview_reminder','owner_assistant_resolve_token','owner_assistant_claim_token'].includes(name))throw new APIError(403,'OWNER_REQUIRED');
+      return request(`/rest/v1/rpc/${name}`,{method:'POST',body:JSON.stringify({...args,p_workspace_id:workspaceId,p_owner_id:userId})});
+    },
+    async getOwnerAssistantSettings() {
+      if(role!=='owner')throw new APIError(403,'OWNER_REQUIRED');
+      return checkRows(await request('/rest/v1/workspace_settings?'+new URLSearchParams({workspace_id:`eq.${workspaceId}`,select:'workspace_id,business_name,default_timezone,follow_up_preferences,updated_at',limit:'1'})))[0]||null;
+    },
     async query(table, {select = '*', filters = {}, order = 'id.asc', limit = 100, offset = 0} = {}) {
       if (!TABLES.has(table) || Object.hasOwn(filters, 'workspace_id') || !Number.isInteger(limit) || limit < 1 || limit > 1000 || !Number.isInteger(offset) || offset < 0 || offset > 10000) throw new APIError(400, 'INVALID_QUERY');
       const scoped = select === '*' || select.split(',').includes('workspace_id') ? select : select + ',workspace_id';

@@ -1,3 +1,4 @@
+import {reminderDeliveryForm,matchesReminderDelivery} from './reminder-approval.mjs';
 import {reminderFingerprint} from './reminder-fingerprint.mjs';
 import {getSendEligibility} from './consent.mjs';
 
@@ -53,7 +54,9 @@ export function createFirstPartyReminderProvider({env=process.env,supabase,store
       if(parameters.some(value=>typeof value!=='string'||!value.trim()||value.length>256||/[\r\n{}]/.test(value)))return blocked('invalid_invoice_facts');
       const body=template.body.replace(/\{\{([1-6])\}\}/g,(_,n)=>parameters[Number(n)-1]);
       if(body!==input.body||body!==invoice.metadata?.approved_reminder_text)return blocked('reviewed_body_mismatch');
-      snapshot={invoiceId:input.invoiceId,customerId:input.customerId,phone:input.to,body,
+      const delivery=reminderDeliveryForm({entry:template,parameters,body});
+      if(!matchesReminderDelivery(invoice.metadata?.approved_reminder_delivery,delivery))return blocked('needs_re_review');
+      snapshot={delivery,invoiceId:input.invoiceId,customerId:input.customerId,phone:input.to,body,
         invoiceVersion:invoice.automation_version,invoiceUpdatedAt:invoice.updated_at,preferencesUpdatedAt:settings.updated_at,
         consentId:eligibility.consent.id,consentCreatedAt:eligibility.consent.created_at,
         template:{name:template.name,language:template.language,body:template.body,revision:template.revision,

@@ -261,6 +261,12 @@ test('Assistant review carries all extracted PDF line items through invoice vali
     const url=new URL(rawUrl),method=init.method||'GET';
     if(url.pathname==='/auth/v1/user')return jsonResponse({id:userId,email:'qa@example.test'});
     if(url.pathname==='/rest/v1/workspace_members')return jsonResponse([{workspace_id:WORKSPACE_ID,user_id:userId,role:'owner'}]);
+    if(url.pathname.startsWith('/rest/v1/rpc/owner_assistant_')){
+      const args=JSON.parse(init.body);assert.equal(args.p_workspace_id,WORKSPACE_ID);assert.equal(args.p_owner_id,userId);
+      if(url.pathname.endsWith('owner_assistant_history'))return jsonResponse([]);
+      if(url.pathname.endsWith('owner_assistant_append'))return jsonResponse({id:1});
+      throw Error('Unexpected owner conversation operation');
+    }
     if(url.pathname==='/rest/v1/invoices'&&method==='GET')return jsonResponse([]);
     if(url.pathname==='/rest/v1/customers'&&method==='GET')return jsonResponse([]);
     if(url.pathname==='/rest/v1/customers'&&method==='POST'){

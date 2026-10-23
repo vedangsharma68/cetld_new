@@ -19,7 +19,7 @@ function responseMessage(payload) {
 function assistantResult(payload) {
   const answer = responseMessage(payload);
   const pendingAction = payload?.pendingAction;
-  if (pendingAction && ['create_invoice', 'update_invoice'].includes(pendingAction.type) && typeof pendingAction.confirmationToken === 'string' && pendingAction.confirmationToken) {
+  if (pendingAction && ['create_invoice', 'update_invoice','owner_reminder','owner_payment','owner_correction','owner_schedule'].includes(pendingAction.type) && typeof pendingAction.confirmationToken === 'string' && pendingAction.confirmationToken) {
     return {answer, pendingAction};
   }
   return answer;
@@ -86,8 +86,19 @@ export function createAssistantClient({
   if (typeof fetchImpl !== 'function') throw new Error('A fetch implementation is required.');
 
   return {
+    async load({workspaceId,signal}={}) {
+      if(!workspaceId)throw new Error('Open a business before using the assistant.');
+      const token=await getAccessToken();if(!token)throw new Error('Sign in to read your business conversation.');
+      const response=await fetchImpl('/api/ai?action=assistant-history&workspaceId='+encodeURIComponent(workspaceId),{headers:{Authorization:`Bearer ${token}`},credentials:'same-origin',signal});
+      const payload=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(publicErrorMessage(payload.error));
+      if(!Array.isArray(payload.turns))throw new Error('The business conversation could not be loaded.');
+      const turns=payload.turns.map(turn=>({role:turn.role,content:turn.content,...(turn.pending_action?{pendingAction:turn.pending_action}:{})}));
+      if(payload.pending){const turn=turns.find(t=>t.pendingAction?.proposalId===payload.pending.proposalId);if(turn)turn.pendingAction=payload.pending;else turns.push({role:'assistant',content:payload.pendingSummary||'A business action is waiting for your confirmation.',pendingAction:payload.pending});}
+      return turns;
+    },
     async send({workspaceId, messages, signal, onProgress} = {}) {
-      if (!workspaceId) throw new Error('Open a workspace before using the assistant.');
+      if (!workspaceId) throw new Error('Open a business before using the assistant.');
       const token = await getAccessToken();
       if (!token) throw new Error('Sign in to ask about your live financial data.');
 

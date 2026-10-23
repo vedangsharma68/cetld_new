@@ -120,7 +120,7 @@ test('assistant uses only safe tools and renders factual results without model p
   const store={query:async table=>{calls++;return table==='invoices'?[{id:F,customer_id:U,currency:'INR',total_amount:'100.00',amount_paid:'25.00',status:'sent'}]:[{id:U,name:'Client'}];}};
   const provider={generate:async()=>({content:'Invented balance 999999',model:DEFAULT_MODEL,usedFallback:false,toolCalls:[{function:{name:'getOutstandingSummary',arguments:'{}'}}]})};
   const result=await answerWorkspaceQuestion({provider,store,message:'Who owes the most?'});
-  assert.equal(calls,2);assert.match(result.answer,/75.00/);assert.ok(!result.answer.includes('999999'));assert.equal(result.evidence.source,'Cetld workspace');assert.equal(result.evidence.complete,true);assert.doesNotMatch(JSON.stringify(result.evidence),/workspace_id|customer_id|tool|sql/i);
+  assert.equal(calls,2);assert.match(result.answer,/75.00/);assert.ok(!result.answer.includes('999999'));assert.equal(result.evidence.source,'Cetld business');assert.equal(result.evidence.complete,true);assert.doesNotMatch(JSON.stringify(result.evidence),/workspace_id|customer_id|tool|sql/i);
   provider.generate=async()=>({toolCalls:[{function:{name:'deleteInvoice',arguments:'{}'}}]});
   const unavailable=await answerWorkspaceQuestion({provider,store,message:'Delete everything'});
   assert.match(unavailable.answer,/could not tell what you are asking/i);
