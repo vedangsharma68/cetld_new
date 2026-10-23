@@ -1,6 +1,7 @@
 import {brandedReminder} from '../preferences.mjs';
 import {reminderDeliveryForm,matchesReminderDelivery,hasPersistedLegacyReminderApproval} from './reminder-approval.mjs';
 import {getSendEligibility} from './consent.mjs';
+import {getCommercialRecipientEligibility} from './commercial-recipient.mjs';
 import {reminderFingerprint} from './reminder-fingerprint.mjs';
 import {APPROVED_REMINDER_WABA,REMINDER_TEMPLATES,selectReminderTemplate,selectInvoiceReminderTemplate,buildReminderTemplate} from './reminder-templates.mjs';
 import {buildInvoiceReminderParameters,buildDefaultInvoiceReminderDraft} from './reminder-parameters.mjs';
@@ -21,9 +22,18 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
     &&/^v\d+\.\d+$/.test(env.WHATSAPP_GRAPH_API_VERSION||'')&&!!env.WHATSAPP_ACCESS_TOKEN;}
   function scope(input){return UUID.test(ownerId||'')&&UUID.test(workspaceId||'')&&input.workspaceId===workspaceId&&UUID.test(input.invoiceId||'')
     &&(test.mode!=='test'||input.invoiceId===test.invoiceId&&input.to===test.phone);}
-  function allowed(to){const configured=String(env.WHATSAPP_TEST_ALLOWLIST||'').split(',').map(v=>v.trim());return QA.has(to)&&configured.includes(to);}
+  async function recipientBlock(to){
+    if(env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'){
+      const eligibility=await getCommercialRecipientEligibility({env,supabase,workspaceId,phone:to});
+      return eligibility.allowed?null:blocked(eligibility.reason);
+    }else{
+      // Default test mode retains the fixed QA set AND configured allowlist.
+      const configured=String(env.WHATSAPP_TEST_ALLOWLIST||'').split(',').map(v=>v.trim());
+      return QA.has(to)&&configured.includes(to)?null:blocked('test_allowlist');
+    }
+  }
   async function facts(input){
-    if(!scope(input)||!allowed(input.to))throw Error('Reminder scope unavailable');
+    if(!scope(input)||await recipientBlock(input.to))throw Error('Reminder scope unavailable');
     const [invoice,settings,eligibility]=await Promise.all([
       store.getInvoice({ownerId,workspaceId,invoiceId:input.invoiceId}),
       store.getWorkspacePreferences({ownerId,workspaceId}),
@@ -62,7 +72,8 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
   return {async prepareReminder(input){if(!enabled())throw Error('Reminder disabled');const result=await facts(input);return {body:result.body,delivery:result.delivery};},
     async sendReminder(input={}){
       if(!enabled())return blocked('disabled');
-      if(!allowed(input.to))return blocked('test_allowlist');
+      const recipientDenied=await recipientBlock(input.to);
+      if(recipientDenied)return recipientDenied;
       if(!scope(input)||!UUID.test(input.customerId||''))return blocked('scope');
       const prefix=`reminder:${workspaceId}:`,claimId=String(input.idempotencyKey||'').slice(prefix.length);
       if(!String(input.idempotencyKey||'').startsWith(prefix)||!UUID.test(claimId))return blocked('claim');

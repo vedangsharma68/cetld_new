@@ -1,6 +1,7 @@
 import {authorizeOwnerPhone} from './owner-binding.mjs';
 import {createConversationStore,conversationCallbackToken} from './conversation-store.mjs';
 import {getSendEligibility} from './consent.mjs';
+import {getCommercialRecipientEligibility} from './commercial-recipient.mjs';
 import {normalizeOwnerActionButtons} from './owner-action-buttons.mjs';
 import {ownerButtonClaimIssue} from './owner-grounding.mjs';
 import {readOwnerTestReview,readOwnerTestReceipt,claimOwnerTest} from './owner-test.mjs';
@@ -84,8 +85,8 @@ async function unboundSuppression(supabase, phone) {
 }
 
 /**
- * Test-only Cloud API transport. The feature flag and E.164 test allowlist are
- * mandatory even when a caller supplies an injected fetch implementation.
+ * Cloud API transport with a default QA gate and explicit commercial opt-in.
+ * Recipient gates apply even with an injected fetch implementation.
  * No reminders or arbitrary template/body sends are exposed here.
  */
 export function createWhatsAppOutbound({
@@ -101,13 +102,17 @@ export function createWhatsAppOutbound({
 } = {}) {
   const allowlist = allowlistFromEnv(env);
 
-  function preflight({workspaceId, to, kind}) {
-    // All gates run before any credential use or network operation.
+  async function preflight({workspaceId, to, kind}) {
+    // Recipient gates run before Cloud API credential use or transport.
     if (env.WHATSAPP_OUTBOUND_ENABLED !== 'true') return block(logger, 'disabled', {workspaceId, to, kind});
-    if (!allowlist) return block(logger, 'invalid_test_allowlist', {workspaceId, to, kind});
-    // The configured allowlist may narrow the test, never widen it beyond the
-    // fixed contacts authorized for QA.
-    if (!E164.test(to) || !APPROVED_QA_RECIPIENTS.has(to) || !allowlist.has(to)) return block(logger, 'test_allowlist', {workspaceId, to, kind});
+    if (env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED === 'true') {
+      const eligibility = await getCommercialRecipientEligibility({env, supabase, workspaceId, phone: to});
+      if (!eligibility.allowed) return block(logger, eligibility.reason, {workspaceId, to, kind});
+    } else {
+      // Default test mode: the configured allowlist can only narrow the fixed QA set.
+      if (!allowlist) return block(logger, 'invalid_test_allowlist', {workspaceId, to, kind});
+      if (!E164.test(to) || !APPROVED_QA_RECIPIENTS.has(to) || !allowlist.has(to)) return block(logger, 'test_allowlist', {workspaceId, to, kind});
+    }
     if (!env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) return block(logger, 'missing_credentials', {workspaceId, to, kind});
     if (!/^\d{5,30}$/.test(String(env.WHATSAPP_PHONE_NUMBER_ID))) return block(logger, 'invalid_phone_number_id', {workspaceId, to, kind});
     if (!/^v\d+\.\d+$/.test(String(env.WHATSAPP_GRAPH_API_VERSION || ''))) return block(logger, 'missing_graph_api_version', {workspaceId, to, kind});
@@ -218,7 +223,7 @@ export function createWhatsAppOutbound({
   }
 
   async function sendInvoiceUpdateTemplate({workspaceId, to, invoiceId, customerId, businessName, expectedUpdatedAt, idempotencyKey} = {}) {
-    const blocked = preflight({workspaceId, to, kind: 'invoice_update'});
+    const blocked = await preflight({workspaceId, to, kind: 'invoice_update'});
     if (blocked) return blocked;
     nonempty(workspaceId, 'workspaceId');
     recipient(to);
@@ -271,7 +276,7 @@ export function createWhatsAppOutbound({
 
   async function sendServiceReply({workspaceId = null, to, body, buttons, ownerActionFallback, lastInboundAt, kind = 'normal', messageId, businessName, audience='customer', ownerLinkResult, phase='answer'} = {}) {
     if(!['answer','ack'].includes(phase)||(phase==='ack'&&(audience!=='owner'||kind!=='normal')))throw new TypeError('invalid owner delivery phase');
-    const blocked = preflight({workspaceId, to, kind});
+    const blocked = await preflight({workspaceId, to, kind});
     if (blocked) return blocked;
     recipient(to);
     if (!SERVICE_KINDS.has(kind)) throw new TypeError('invalid service reply kind');
@@ -354,7 +359,7 @@ export function createWhatsAppOutbound({
 
   async function sendServiceMedia({workspaceId, to, media, caption, lastInboundAt, messageId, businessName,audience='customer'} = {}) {
     const kind = 'normal';
-    const blocked = preflight({workspaceId, to, kind});
+    const blocked = await preflight({workspaceId, to, kind});
     if (blocked) return blocked;
     recipient(to); nonempty(workspaceId, 'workspaceId'); nonempty(messageId, 'messageId');
     if (!withinServiceWindow(lastInboundAt, clock)) return block(logger, 'service_window_closed', {workspaceId, to, kind});
@@ -404,7 +409,7 @@ export function createWhatsAppOutbound({
   async function sendOwnerTestTemplate({review}={}) {
     const {workspaceId,ownerId,invoiceId,recipient:to,idempotencyKey:key}=review||{};
     const kind='invoice_update';
-    const blocked=preflight({workspaceId,to,kind});
+    const blocked=await preflight({workspaceId,to,kind});
     if(blocked)return blocked;
     if(!conversationStore)return block(logger,'missing_store',{workspaceId,to,kind});
     const read=()=>readOwnerTestReview({supabase,env,fetchImpl,workspaceId,ownerId,invoiceId});
