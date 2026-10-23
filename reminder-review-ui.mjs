@@ -81,3 +81,12 @@ export function approvedDeliverySummary(approval) {
   if(approval.form==='service'&&approval.windowClosedPolicy!=='hold')return '<p class="notice">Delivery policy needs review before this reminder can send.</p>';
   return `<section class="approved-delivery-summary"><h3>Approved delivery</h3><strong>${approval.form==='service'?'Your message · service message':`Approved template: ${escape(approval.templateName)}`}</strong><blockquote>${escape(approval.text)}</blockquote><p>${approval.form==='service'?'If the 24-hour window closes before send: hold for re-review. No template substitution.':'Only these approved template words may be sent.'}</p></section>`;
 }
+
+// Read the immutable delivery receipt written by #173, rather than the editable draft.
+export function queuedReminderDeliveryView(invoice) {
+  if(!invoice||!['approved','active','scheduled'].includes(invoice.followup_state)||['paid','void','cancelled'].includes(invoice.status))return '';
+  const delivery=invoice.metadata?.approved_reminder_delivery??invoice.approved_reminder_delivery;
+  const reviewedAt=invoice.metadata?.approved_reminder_delivery_reviewed_at??invoice.approved_reminder_delivery_reviewed_at;
+  if(delivery?.type!=='template'||typeof delivery.name!=='string'||!delivery.name||typeof delivery.body!=='string'||!delivery.body||!Number.isFinite(Date.parse(reviewedAt)))return '<section class="approved-delivery-summary"><h3>Delivery needs re-review</h3><p>The outgoing words and delivery form have not been confirmed for this reminder. Review delivery before it can send.</p></section>';
+  return approvedDeliverySummary({form:'template',templateName:delivery.name,text:delivery.body});
+}

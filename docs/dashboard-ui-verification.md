@@ -25,7 +25,9 @@ Already-open tabs running code from before this change cannot run a checker they
 
 ## Reminder approval integration dependency
 
-`reminder-review-ui.mjs` provides the frontend review form and an isolated, browser-tested controller. Its production transport is intentionally **not connected yet**: the parallel backend must provide its endpoint and persisted approval contract before the existing draft/approval flow can be replaced safely.
+`reminder-review-ui.mjs` provides the frontend review form and an isolated, browser-tested controller. After rebasing onto #173, Conversations and invoice drawers display the exact `approved_reminder_delivery` receipt body/name, with a re-review notice for pending reminders without a complete receipt. Editable draft text is never substituted in this pending-delivery preview.
+
+The editor’s production transport is **not connected yet**. Main at #173 exposes template-only reminder proposals through Assistant; its route schema does not accept custom text/tone overrides, and `reminderDeliveryForm` and the SQL approval gate require templates. The custom service-message/tone preview and approval contract still needs to be supplied before the existing draft/approval flow can be replaced safely.
 
 The controller's normalized interface expects:
 
@@ -35,4 +37,4 @@ The controller's normalized interface expects:
 - Template delivery: `{form: 'template', text, templateName}`. The name must match the approved template for the selected tone. The actual expanded words are shown, with an explicit replacement acknowledgement when they differ from the edit.
 - Approval must atomically bind the token to the actor, invoice version, text, tone, delivery form and hold policy, return `{approved: true}`, and persist the reviewed form and words for the queued view.
 
-The selected policy is **hold for re-review if the service window closes**. There is no automatic template fallback. A draft edit, tone change, expired preview, unconfirmed delivery form or backend error disables approval. Existing consent, invoice eligibility, owner permissions and send authorization remain server responsibilities and must not be bypassed by an adapter. Production wiring and the pending-reminder summary remain blocked on that backend contract; fixture tests of this component are not a claim of integrated delivery.
+The selected policy is **hold for re-review if the service window closes**. There is no automatic template fallback. A draft edit, tone change, expired preview, unconfirmed delivery form or backend error disables approval. Existing consent, invoice eligibility, owner permissions and send authorization remain server responsibilities and must not be bypassed by an adapter. Production editor/approval wiring remains blocked on that backend contract; fixture tests of this component are not a claim of integrated delivery.

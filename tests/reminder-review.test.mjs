@@ -23,3 +23,12 @@ test('review and scheduled summaries escape text, show form, and start without a
   assert.match(approvedDeliverySummary(service().delivery),/hold for re-review/);
   assert.match(approvedDeliverySummary({form:'template',text:'<script>',templateName:'<img>'}),/&lt;img&gt;/);
 });
+
+test('queued reminders show the server receipt words, never the later editable draft',async()=>{
+  const {queuedReminderDeliveryView}=await import('../reminder-review-ui.mjs');
+  const invoice={status:'sent',followup_state:'approved',reminder_text:'Different editable words',metadata:{approved_reminder_delivery:{type:'template',name:'cetld_invoice_details_firm_v1',body:'Exactly approved words'},approved_reminder_delivery_reviewed_at:'2026-10-23T10:00:00Z'}};
+  const html=queuedReminderDeliveryView(invoice);
+  assert.match(html,/Exactly approved words/);assert.match(html,/cetld_invoice_details_firm_v1/);assert.doesNotMatch(html,/Different editable words/);
+  assert.equal(queuedReminderDeliveryView({...invoice,status:'paid'}),'');
+  assert.match(queuedReminderDeliveryView({...invoice,metadata:{}}),/Delivery needs re-review/);
+});
