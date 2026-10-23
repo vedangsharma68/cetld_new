@@ -1,4 +1,4 @@
-import {parseTextInvoice,textInvoiceFailure} from './text-invoice.mjs';
+import {parseTextInvoice,textInvoiceFailure,textInvoiceClarification,isTextInvoiceValidationFailure} from './text-invoice.mjs';
 import {personalNoteReply} from '../../ai/personal-note.mjs';
 import {verifyOwnerPaymentReceipt,ownerPartialPaymentAvailable} from './owner-payment-readback.mjs';
 import {requestedOwnerPayment,ownerPaymentAmountMentioned} from './owner-payment-intent.mjs';
@@ -1850,7 +1850,8 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     const last=ownerEvidence(activeTranscript||[]).at(-1);
     if(!requestedPayment&&!requestedMoney&&!requestedDateChange&&requestedReadAnalysis?.kind!=='conditionalPayment'&&last?.ok===true&&last.readOnly===true
       &&last.emptyResult?.message&&!answer.includes(last.emptyResult.message))answer+='\n'+last.emptyResult.message;
-    answer=ownerFailureGuidance(answer,{code:last?.code,failed:last?.ok===false,writeAttempted:writeMayHaveBeenAttempted()});
+    if(!extra.invoiceCreationClarificationReply||writeMayHaveBeenAttempted())
+      answer=ownerFailureGuidance(answer,{code:last?.code,failed:last?.ok===false,writeAttempted:writeMayHaveBeenAttempted()});
     return {
     answer:replyRequirement()?.businessNameReminderNotice&&!answer.includes(replyRequirement().businessNameReminderNotice)
       ?`${answer}\n\n${replyRequirement().businessNameReminderNotice}`:answer,media:extra.media||media||tools.getMedia?.()||null,model:extra.model||lastServedModel,
@@ -1963,6 +1964,10 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     const requestedInvoiceCreation=tools.supportsBoundedInvoiceCreation===true
       &&attachmentDescriptor?.available!==true&&!attachmentDescriptor?.errorCode&&!tools.getAttachmentReviewContext?.()
       ?parseTextInvoice(message,{clock,timezone}):null;
+    const invoiceClarification=tools.supportsBoundedInvoiceCreation===true&&!checkpoint&&!initialToolResults.length
+      &&attachmentDescriptor?.available!==true&&!attachmentDescriptor?.errorCode&&!tools.getAttachmentReviewContext?.()
+      &&!replyRequirement()?.confirmationText&&!writeMayHaveBeenAttempted()?textInvoiceClarification(message,{clock,timezone}):null;
+    if(invoiceClarification)return resultFor(invoiceClarification,{invoiceCreationClarificationReply:true});
     // A captionless attachment supplies a new source, not a reference to an
     // earlier customer or pending write. Read it before consulting the planner.
     let requireAttachmentAnalysis=!checkpoint&&!String(message||'').trim()
@@ -2019,6 +2024,9 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
       if(reminderFailure?.reminderPreparationFailure===true&&!writeMayHaveBeenAttempted())
         return resultFor(reminderFailure.message,{reminderPreparationFailureReply:true});
       const lastRead=ownerEvidence(transcript).at(-1);
+      if((lastRead?.invoiceCreationClarification===true||isTextInvoiceValidationFailure(lastRead))
+        &&!writeMayHaveBeenAttempted()&&!ownerEvidence(transcript).some(completedOwnerResult))
+        return resultFor(textInvoiceFailure(lastRead),{invoiceCreationClarificationReply:true});
       if(lastRead?.invoiceCreationInternalFailure===true&&!ownerEvidence(transcript).some(completedOwnerResult))
         return resultFor(textInvoiceFailure(lastRead),{invoiceCreationFailureReply:true});
       if(lastRead?.code==='NAME_CONFIRMATION_REQUIRED'&&lastRead.requiresNameConfirmation===true){
@@ -2455,12 +2463,6 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         }else if(cacheKey&&toolCache.has(cacheKey)){
           output=alreadyAnswered(toolCache.get(cacheKey));
           diagnostics.cacheHits++;
-          if(name==='workspaceData'&&args.request===undefined&&args.operation==='create'&&args.table==='invoices'
-            &&output?.ok===false&&output.code==='INVALID'&&output.validationCode==='INVALID_FIELDS'){
-            output={...output,invoiceCreationFailure:true,invoiceCreationInternalFailure:true};
-            output.message=textInvoiceFailure(output);
-            toolCache.set(cacheKey,output);
-          }
           if(name==='workspaceData'&&output?.ok===true&&output?.operation==='read'&&output?.table==='invoices')cachedInvoiceRead=true;
           lastAttemptedToolName=name;
         }else{
@@ -2496,6 +2498,10 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
           if(output?.writeAttempted===true)observedWriteAttempted=true;
           if(cacheKey)toolCache.set(cacheKey,output);
         }
+        if(name==='workspaceData'&&isTextInvoiceValidationFailure(output)&&!writeMayHaveBeenAttempted()){
+          output={...output,invoiceCreationClarification:true,message:textInvoiceFailure(output)};
+          if(cacheKey)toolCache.set(cacheKey,output);
+        }
         if(name==='ingestInvoiceAttachment'&&output?.ok){didIngest=true;media=tools.getMedia?.()||null;}
         if(tools.getMedia?.()?.invoice_id)mediaReference={invoiceId:tools.getMedia().invoice_id};
         if(output?.writeAttempted===true)observedWriteAttempted=true;
@@ -2519,9 +2525,9 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         settledToolCalls.add(call);
         pendingToolCalls=pendingToolCalls.filter(item=>item.call!==call);
         await saveCheckpoint();
-        // A spelling suggestion never authorizes the model to retry using its
-        // own guess, including another call already queued in this round.
-        if(output?.code==='NAME_CONFIRMATION_REQUIRED'){
+        // Name and invoice clarifications require the owner's answer before
+        // another action, including any call already queued in this round.
+        if(output?.code==='NAME_CONFIRMATION_REQUIRED'||output?.invoiceCreationClarification===true&&!writeMayHaveBeenAttempted()){
           pendingToolCalls=[];activeToolBatch=[];settledToolCalls=new Set();
           emitRound(round);activeRound=null;
           return await finalAnswer({});

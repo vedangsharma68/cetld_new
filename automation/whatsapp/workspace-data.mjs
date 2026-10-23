@@ -5,7 +5,7 @@ import {isExternallyManagedInvoice,invoiceBalanceFields} from '../../invoice/bus
 import {applyPaymentReversals,isMissingReversalStorage} from '../../payment-reversals.mjs';
 import {resolveWorkspaceRecord,validateCustomFields,ownerCalendar,nameConfirmationResult} from './workspace-records.mjs';
 import {ownerInvoiceReadIntent} from './owner-invoice-read-intent.mjs';
-import {parseTextInvoice,textInvoiceFailure} from './text-invoice.mjs';
+import {parseTextInvoice,textInvoiceFailure,textInvoiceClarification,isTextInvoiceValidationFailure} from './text-invoice.mjs';
 import {ownerInvoiceReadAnalysis,invoiceReadAnalysisArgs,deriveInvoiceReadAnalysis} from './owner-invoice-read-analysis.mjs';
 import {INVOICE_CORRECTION_FIELDS,INVOICE_BUSINESS_METADATA_FIELDS,INVOICE_EXTENDED_CORRECTION_FIELDS,validateInvoiceCorrection,invoiceBusinessFields,requestedInvoiceDateChange,requestedInvoiceMoneyChange} from './invoice-corrections.mjs';
 import {sanitizeOwnerBotPreferences,mergeOwnerBotPreferences,OWNER_BOT_LANGUAGE_OPTIONS} from './bot-preferences.mjs';
@@ -107,10 +107,10 @@ function definition() {
   // model request; describe exposes it when the model needs unfamiliar fields.
   const batchItem={type:'object',additionalProperties:false,properties:{operation:{type:'string',enum:['create','update']},table:{type:'string',enum:Object.keys(WRITE_SCHEMA).filter(table=>table!=='payments')},filters:{type:'array',items:{type:'object'}},values:{type:'object'}},required:['operation','table','values']};
   return {type:'function',function:{name:'workspaceData',
-    description:'Invoice update: total_amount/subtotal/line_items; status separate. Payment: amount/currency; confirm. Reminder: confirm. recordConsent: agreed.',
+    description:'Invoice create: customer_name/total_amount/currency/issue_date/due_date; preserve invoice_number. Invoice update: total_amount/subtotal/line_items; status separate. amount: payments only. line_items: update/review only. Payment/reminder: confirm. recordConsent: agreed.',
     parameters:{type:'object',additionalProperties:false,
       properties:{
-        operations:{type:'array',minItems:2,maxItems:10,items:batchItem,description:'Atomic batch.'},
+        operations:{type:'array',minItems:2,maxItems:10,items:batchItem},
         request:{type:'string',minLength:1,maxLength:1200},
         operation:{type:'string',enum:OPERATIONS},
         table:{type:'string',enum:Object.keys(TABLES)},
@@ -120,7 +120,7 @@ function definition() {
             operator:{type:'string',enum:FILTER_OPERATORS},
             value:{type:['string','number','boolean','null','array'],items:{type:['string','number','boolean','null']}}},
           required:['column','operator','value']}},
-        values:{type:'object',properties:{amount:{type:'number'},currency:{type:'string'},due_date:{type:['string','null']},issue_date:{type:'string'},total_amount:{type:'number'},subtotal:{type:'number'},line_items:{type:'array',items:{type:'object',properties:{description:{type:'string'},amount:{type:'number'}},required:['description','amount']}}}},
+        values:{type:'object',properties:{invoice_number:{type:'string'},customer_name:{type:'string'},amount:{type:'number'},currency:{type:'string'},due_date:{type:['string','null']},issue_date:{type:'string'},total_amount:{type:'number'},subtotal:{type:'number'}}},
         limit:{type:'integer',minimum:1,maximum:MAX_LIMIT},
         offset:{type:'integer',minimum:0,maximum:100000},
         order:{type:'object',additionalProperties:false,
@@ -1077,6 +1077,9 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         &&(raw.operation===undefined||raw.operation==='create')&&(raw.table===undefined||raw.table==='invoices');
       const params=await normalizeRequest(textRequest?textInvoice:raw,scope,planRequest,ctx,validationFeedback,textInvoice?.values);
       ctx.phase='dispatch';
+      const clarification=!attachmentAvailable&&params.operation==='create'&&params.table==='invoices'
+        ?textInvoiceClarification(message,{clock,timezone}):null;
+      if(clarification)return {ok:false,code:'CLARIFICATION_REQUIRED',writeAttempted:false,invoiceCreationClarification:true,message:clarification};
       if(executionOptions.parsedOwnerInvoiceCreate===true){
         if(!textInvoice||params.operation!=='create'||params.table!=='invoices'
           ||JSON.stringify(params.values)!==JSON.stringify(textInvoice.values))throw new TypeError('invalid invoice fields');
@@ -1370,10 +1373,12 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       ||result.validationShape?.operation==='create'&&result.validationShape?.table==='invoices'
       ||raw?.operation==='create'&&raw?.table==='invoices');
     if(creationFailed){
-      // Unsupported structured keys and provider planning failures belong to
-      // the assistant. Preserve INVALID for genuinely malformed owner input.
-      if(result.planningFailure||result.validationCode==='INVALID_FIELDS'
-        &&result.validationShape?.valueFields?.some(field=>!WRITE_SCHEMA.invoices.create.includes(field)&&field!=='amount'))
+      if(isTextInvoiceValidationFailure(result))result={...result,invoiceCreationClarification:true,
+        message:textInvoiceClarification(message,{clock,timezone})||textInvoiceFailure(result)};
+      // A verified preflight rejection asks for facts before another create.
+      // Other assistant planning failures retain the cautious failure reply.
+      if(!result.invoiceCreationClarification&&(result.planningFailure||result.validationCode==='INVALID_FIELDS'
+        &&result.validationShape?.valueFields?.some(field=>!WRITE_SCHEMA.invoices.create.includes(field)&&field!=='amount')))
         result={...result,invoiceCreationInternalFailure:true};
       const answer=textInvoiceFailure(result);
       if(answer)result={...result,message:answer,invoiceCreationFailure:true};
