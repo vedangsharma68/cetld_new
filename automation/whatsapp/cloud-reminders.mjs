@@ -1,6 +1,7 @@
 import {reminderDeliveryForm,matchesReminderDelivery} from './reminder-approval.mjs';
 import {reminderFingerprint} from './reminder-fingerprint.mjs';
 import {getSendEligibility} from './consent.mjs';
+import {getCommercialRecipientEligibility} from './commercial-recipient.mjs';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const QA=new Set(['+919871367051','+919818685252']);
@@ -22,8 +23,14 @@ export function createFirstPartyReminderProvider({env=process.env,supabase,store
     &&!template.body.replace(/\{\{[1-6]\}\}/g,'').includes('{{');
   return {async sendReminder(input={}) {
     if(env.WHATSAPP_REMINDERS_ENABLED!=='true'||env.AUTOMATION_OUTBOUND_ENABLED!=='true'||env.WHATSAPP_OUTBOUND_ENABLED!=='true')return blocked('disabled');
-    const allowlist=String(env.WHATSAPP_TEST_ALLOWLIST||'').split(',').map(s=>s.trim());
-    if(!QA.has(input.to)||!allowlist.includes(input.to))return blocked('test_allowlist');
+    if(env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'){
+      const eligibility=await getCommercialRecipientEligibility({env,supabase,workspaceId,phone:input.to});
+      if(!eligibility.allowed)return blocked(eligibility.reason);
+    }else{
+      // Default test mode retains the fixed QA set AND configured allowlist.
+      const allowlist=String(env.WHATSAPP_TEST_ALLOWLIST||'').split(',').map(s=>s.trim());
+      if(!QA.has(input.to)||!allowlist.includes(input.to))return blocked('test_allowlist');
+    }
     if(!UUID.test(ownerId||'')||!UUID.test(workspaceId||'')||input.workspaceId!==workspaceId
       ||!UUID.test(input.invoiceId||'')||!UUID.test(input.customerId||''))return blocked('scope');
     const prefix=`reminder:${workspaceId}:`,claimId=String(input.idempotencyKey||'').slice(prefix.length);

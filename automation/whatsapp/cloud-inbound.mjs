@@ -1,4 +1,4 @@
-import {resolveOwnerBinding,resolveOwnerIdentity} from './owner-binding.mjs';
+import {resolveOwnerBinding,resolveOwnerIdentity,resolveServiceOwnerBinding} from './owner-binding.mjs';
 import {createOwnerMessageHandler} from './owner-handler.mjs';
 import {createConversationStore} from './conversation-store.mjs';
 import { resolveActiveBindings, revokeConsentForPhone, suppressUnknownPhone } from './consent.mjs';
@@ -91,7 +91,7 @@ function dataOrThrow(result, operation) {
 
 /** Service-role-only durable inbox. No webhook body is stored. */
 export class SupabaseInboundInbox {
-  constructor(supabase) { if (!supabase) throw new Error('Supabase service client required'); this.supabase = supabase; }
+  constructor(supabase,{env=process.env}={}) { if (!supabase) throw new Error('Supabase service client required'); this.supabase = supabase; this.env=env; }
 
   async enqueue(messages) {
     if (!messages.length) return [];
@@ -112,7 +112,7 @@ export class SupabaseInboundInbox {
       // Only bare cancel can mean an owner's pending action. Clear opt-outs
       // install the barrier without depending on owner lookup availability.
       const owner=message.message_type==='button'||!ambiguousOwnerCancel(message.message_text)?null
-        :await resolveOwnerBinding({supabase:this.supabase,phone:message.sender_phone});
+        :await (this.env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'?resolveServiceOwnerBinding:resolveOwnerBinding)({supabase:this.supabase,phone:message.sender_phone});
       if(!owner)stopIds.push(message.provider_message_id);
     }
     if (!stopIds.length) return inserted;
@@ -227,9 +227,10 @@ export class SupabaseInboundInbox {
 const stopReply = 'You won’t receive any more WhatsApp invoice updates from this business.';
 
 /** Route only through service-role consent/customer binding; never use a claimed name. */
-export function createInboundRuntime({ env = process.env, fetchImpl = globalThis.fetch, supabase, inbox = new SupabaseInboundInbox(supabase), outbound,
+export function createInboundRuntime({ env = process.env, fetchImpl = globalThis.fetch, supabase, inbox = new SupabaseInboundInbox(supabase,{env}), outbound,
   onBoundMessage, onOwnerMessage, conversationStore = createConversationStore(supabase), reminderReceiptStore=null, logger = console, clock = () => Date.now() } = {}) {
   if (!supabase) throw new Error('Supabase service client required');
+  const resolveReplyOwner=env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'?resolveServiceOwnerBinding:resolveOwnerBinding;
   let ownerHandler=onOwnerMessage||null;
   const runOwnerMessage=async input=>{
     if(!ownerHandler)ownerHandler=createOwnerMessageHandler({supabase,env,fetchImpl});
@@ -237,7 +238,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
   };
   async function ownerFailureContext(event){
     let binding;
-    try{binding=await resolveOwnerBinding({supabase,phone:event.sender_phone});}
+    try{binding=await resolveReplyOwner({supabase,phone:event.sender_phone});}
     catch(error){
       logger?.error?.('WhatsApp owner recovery binding lookup failed',{messageId:event.provider_message_id,
         code:String(error?.code||'OWNER_BINDING_UNAVAILABLE').slice(0,60)});
@@ -259,7 +260,10 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       const invoiceUpdates = createWhatsAppInvoiceUpdateStore({supabase});
       return createWhatsAppOutbound({env, fetchImpl, supabase, logger, ...invoiceUpdates,
         authorizeInboundReply: async input => input.audience==='owner'
-          ? {allowed:dataOrThrow(await supabase.rpc(input.phase==='ack'?'whatsapp_claim_owner_ack':'whatsapp_claim_owner_reply',{p_provider_message_id:input.messageId,p_sender_phone:input.phone,p_workspace_id:input.workspaceId}),'claim owner reply')===true}
+          ? {allowed:dataOrThrow(await supabase.rpc(env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'?'whatsapp_claim_service_owner_reply'
+            :input.phase==='ack'?'whatsapp_claim_owner_ack':'whatsapp_claim_owner_reply',{
+              p_provider_message_id:input.messageId,p_sender_phone:input.phone,p_workspace_id:input.workspaceId,
+              ...(env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'?{p_phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID,p_phase:input.phase||'answer'}:{})}),'claim owner reply')===true}
           : inbox.claimReply(input)});
     });
     return outboundPromise;
@@ -302,7 +306,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     // it. Historical verification cannot exempt an unbound recipient.
     // Template reminder buttons retain their recipient opt-out path.
     if(event.message_type!=='button'&&ambiguousOwnerCancel(event.message_text)){
-      const owner=await resolveOwnerBinding({supabase,phone:event.sender_phone});
+      const owner=await resolveReplyOwner({supabase,phone:event.sender_phone});
       // A webhook replay of a durable owner job must not become a recipient
       // opt-out if the binding changed after the original turn.
       if((event.owner_job_checkpoint||event.owner_ack_claimed_at||event.owner_job_workspace_id)
@@ -379,7 +383,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     // Clear opt-outs always exit before owner/model routing. Only bare cancel
     // needs a current binding to distinguish an action from recipient refusal.
     const explicitOptOut=isOptOut(event.message_text)&&!ambiguousOwnerCancel(event.message_text);
-    const owner=explicitOptOut?null:await resolveOwnerBinding({supabase,phone:event.sender_phone});
+    const owner=explicitOptOut?null:await resolveReplyOwner({supabase,phone:event.sender_phone});
     // A resumed owner job cannot be reinterpreted as a debtor message after
     // unbinding. Validate its persisted scope before STOP/link routing.
     if(!explicitOptOut&&(event.owner_job_checkpoint||event.owner_ack_claimed_at||event.owner_job_workspace_id)
@@ -420,7 +424,14 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
         }
       }
     const bindings=owner?[owner]:await resolveActiveBindings({supabase,phone:event.sender_phone});
-    if(bindings.length!==1)return 'verify';
+    if(bindings.length!==1){
+      if(env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'){
+        const sender=await getOutbound();
+        await sender.sendServiceReply({workspaceId:null,to:event.sender_phone,kind:'verification',
+          messageId:event.provider_message_id,lastInboundAt:event.provider_timestamp||event.received_at,businessName:'CETLD'});
+      }
+      return 'verify';
+    }
     const binding = bindings[0];
     if (!binding.workspaceId || (!owner && (!binding.customerId || !binding.customer))) throw new Error('Incomplete sender binding');
     if(owner&&!event.owner_job_workspace_id&&typeof inbox.beginOwnerJob==='function')await inbox.beginOwnerJob(event,binding.workspaceId,binding.ownerId);
