@@ -5,12 +5,12 @@ import fs from 'node:fs';
 const app = fs.readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 
 test('primary navigation leads with assistant without removing existing destinations', () => {
-  assert.match(app, /const nav=\[\['Overview','grid'\],\['Assistant','assistant'\],\['Business records','grid'\],\['Invoices','invoice'\],\['Conversations','chat'\],\['Payments','wallet'\],\['Connections','link'\]\]/);
+  assert.match(app, /const nav=\[\['Overview','grid'\],\['Assistant','assistant'\],\['Business records','records'\],\['Invoices','invoice'\],\['Conversations','chat'\],\['Payments','wallet'\],\['Connections','link'\]\]/);
   assert.match(app, /data-page="Settings"[\s\S]*icon\('cog'\)/);
 });
 
 test('overview includes a restrained entry point to the real assistant', () => {
-  assert.match(app, /Ask cetld about your receivables…/);
+  assert.match(app, /Your next move, made clear\./);
   assert.match(app, /data-action="assistant-suggest"/);
   assert.match(app, /data-action="navigate" data-page="Assistant"/);
   assert.match(app, /action==='assistant-suggest'\)\{if\(state\.page!=='Assistant'\)state\.page='Assistant';return await sendAssistant\(b\.dataset\.prompt\)\}/);
@@ -56,7 +56,7 @@ test('connections only surfaces supported accounting integrations and neutral cr
   assert.match(connectionSource,/Import from Tally/);
   assert.match(connectionSource,/import-tally/);
   assert.doesNotMatch(connectionSource,/Coming soon|Integration support is coming soon/);
-  assert.match(connectionSource,/Credentials are stored securely\./);
+  assert.match(connectionSource,/Secure credentials/);
   for(const hidden of ['Supabase','WhatsApp / WAPI','Resend','Sentry'])assert.doesNotMatch(connectionSource,new RegExp(hidden));
 });
 

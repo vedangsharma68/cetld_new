@@ -173,6 +173,45 @@ test('drawer actions remain reachable with 200% text zoom',async({page},info)=>{
   await page.screenshot({path:info.outputPath('text-zoom.png')});
 });
 
+test('optional reply style preserves form values, visible confirmation, and validation',async({page})=>{
+  await boot(page);
+  for(const width of [390,768,1440]){
+    await page.setViewportSize({width,height:900});
+    await page.evaluate(()=>{__ui.state.page='Settings';__ui.render()});
+    const form=page.locator('#owner-bot-preferences-form'),summary=form.locator('.reply-style-disclosure>summary');
+    await expect(form.locator('[name=confirmationMode]')).toBeVisible();
+    await expect(form.getByText('Required business approvals still apply.')).toBeVisible();
+    await expect(form.locator('[type=submit]')).toBeVisible();
+    await expect(form.locator('[name=assistantName]')).toBeVisible();
+    await expect(form.locator('[name=tone]')).toBeHidden();
+    await summary.focus();await page.keyboard.press('Enter');
+    await form.locator('[name=assistantName]').fill('QA <assistant>');
+    await form.locator('[name=tone]').selectOption('formal');
+    await form.locator('[name=replyLength]').selectOption('short');
+    await form.locator('[name=confirmationMode]').selectOption('buttons');
+    await form.locator('[name=customInstruction]').fill('Use brief replies.');
+    await summary.focus();await page.keyboard.press('Enter');
+    await form.locator('[type=submit]').click();
+    await expect(page.locator('.reply-style-disclosure>summary')).toContainText('QA <assistant>');
+    await expect(page.locator('.reply-style-disclosure>summary')).toContainText('Formal');
+    await expect(page.locator('[name=confirmationMode]')).toHaveValue('buttons');
+    expect(await page.evaluate(()=>__ui.state.settings.owner_bot_preferences.customInstruction)).toBe('Use brief replies.');
+    await page.locator('.reply-style-disclosure>summary').click();
+    await page.locator('[name=assistantName]').fill('');
+    await page.locator('.reply-style-disclosure>summary').click();
+    await page.locator('#owner-bot-preferences-form [type=submit]').click();
+    // Required identity stays outside disclosure so native validation can focus it.
+    await expect(page.locator('[name=assistantName]')).toBeVisible();
+    await expect(page.locator('[name=assistantName]')).toBeFocused();
+    await page.locator('[name=assistantName]').fill('QA <assistant>');
+    await page.locator('#owner-bot-preferences-form [name=tone]').evaluate(e=>{e.add(new Option('Invalid test tone','invalid'));e.value='invalid'});
+    await page.locator('.reply-style-disclosure>summary').click();
+    await page.locator('#owner-bot-preferences-form [type=submit]').click();
+    await expect(page.locator('#owner-bot-preferences-form [data-error]')).toBeVisible();
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  }
+});
+
 for(const width of [360,800,1280])test(`queued reminders show approved delivery at ${width}px`,async({page},info)=>{
   await page.setViewportSize({width,height:800});await boot(page);
   await page.evaluate(()=>{
