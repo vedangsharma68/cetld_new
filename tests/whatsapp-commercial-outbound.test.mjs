@@ -169,14 +169,17 @@ for (const kind of ['cloud-outbound','approved-reminders','cloud-reminders']) {
     });
   }
 
-  test(`${kind}: commercial verbal invoice consent permits a non-QA recipient using fakes only`, async t => {
-    const f = harness(t,kind);
+  test(`${kind}: UNSET allowlist still requires consent and permits only an eligible proactive recipient`, async t => {
+    const f = harness(t,kind,{env:{WHATSAPP_TEST_ALLOWLIST:undefined}});
     if (kind==='approved-reminders') assert.equal((await f.provider.prepareReminder(f.input)).body,f.input.body);
     assert.equal((await f.send()).status,'accepted');
     assert.equal(f.calls.length,1);assert.equal(f.calls[0].to,COMMERCIAL.slice(1));
     const consentReads = f.reads.filter(r=>r.table==='whatsapp_consents');
     assert.ok(consentReads.length>=2, 'existing fresh consent rechecks still execute');
     assert.ok(consentReads.every(r=>r.filters.workspace_id===workspaceId && r.filters.phone===COMMERCIAL));
+    f.state.whatsapp_consents=[];
+    assert.deepEqual(await f.send(),{status:'blocked',reason:'missing_consent'});
+    assert.equal(f.calls.length,1,'unset skips only allowlist narrowing, never consent');
   });
 
   for (const [list,reason] of [[QA,'test_allowlist'],['','invalid_test_allowlist'],['bad','invalid_test_allowlist'],
@@ -196,6 +199,13 @@ for (const kind of ['cloud-outbound','approved-reminders','cloud-reminders']) {
   test(`${kind}: commercial allowlist cannot substitute for consent`, async t => {
     const f = harness(t,kind,{env:{WHATSAPP_TEST_ALLOWLIST:COMMERCIAL},mutate:s=>{s.whatsapp_consents=[];}});
     assert.deepEqual(await f.send(),{status:'blocked',reason:'missing_consent'});assert.equal(f.calls.length,0);
+  });
+
+  test(`${kind}: caller reply labels cannot exempt a proactive send with an UNSET allowlist`,async t=>{
+    const f=harness(t,kind,{env:{WHATSAPP_TEST_ALLOWLIST:undefined},mutate:s=>{s.whatsapp_consents=[];}});
+    assert.deepEqual(await f.send({audience:'owner',kind:'verification',messageId:'wamid.claimed',reply:{audience:'owner'}}),{status:'blocked',reason:'missing_consent'});
+    assert.equal((await f.send({workspaceId:null,audience:'owner',kind:'verification'})).status,'blocked');
+    assert.equal(f.calls.length,0);
   });
 
   const flags = kind==='cloud-outbound' ? ['WHATSAPP_OUTBOUND_ENABLED']
@@ -223,10 +233,10 @@ for (const kind of ['cloud-outbound','approved-reminders','cloud-reminders']) {
 }
 
 for (const method of ['sendServiceReply','sendServiceMedia','sendOwnerTestTemplate']) {
-  test(`cloud-outbound: ${method} applies commercial consent before any transport`, async t => {
+  test(`cloud-outbound: ${method} cannot dispatch without its own authority`, async t => {
     const f = harness(t,'cloud-outbound',{mutate:s=>{s.whatsapp_consents=[];}});
     const args = method==='sendOwnerTestTemplate' ? {review:{...f.input,recipient:COMMERCIAL}} : f.input;
-    assert.deepEqual(await f.provider[method](args),{status:'blocked',reason:'missing_consent'});
+    assert.deepEqual(await f.provider[method](args),{status:'blocked',reason:method==='sendOwnerTestTemplate'?'missing_consent':'missing_inbound_context'});
     assert.equal(f.calls.length,0);
   });
 }

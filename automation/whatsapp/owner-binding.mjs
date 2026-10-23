@@ -55,3 +55,12 @@ export async function authorizeOwnerPhone({supabase,workspaceId,ownerId,phone}) 
   const binding=await resolveOwnerBinding({supabase,phone});
   return Boolean(binding&&binding.workspaceId===workspaceId&&(!ownerId||binding.ownerId===ownerId));
 }
+
+// Reply-only proof: customer consent does not establish owner identity. Existing
+// write/approval routines continue using their original owner resolver.
+export async function resolveServiceOwnerBinding({supabase,phone}) {
+  phone=normalizeWhatsAppPhone(phone);
+  const rows=data(await supabase.rpc('whatsapp_resolve_service_owner',{p_phone:phone}));
+  if(!Array.isArray(rows)||rows.length!==1)return null;
+  return checkedOwnerBinding(rows[0],phone);
+}

@@ -4,7 +4,7 @@ const E164 = /^\+[1-9][0-9]{7,14}$/;
 const denied = reason => ({allowed: false, reason});
 
 /** Commercial recipients require fresh consent; an optional test list only narrows. */
-export async function getCommercialRecipientEligibility({env, supabase, workspaceId, phone}) {
+export function commercialRecipientRestriction({env, phone}) {
   if (typeof phone !== 'string' || !E164.test(phone)) return denied('invalid_phone');
   const raw = env.WHATSAPP_TEST_ALLOWLIST;
   if (raw !== undefined) {
@@ -13,6 +13,12 @@ export async function getCommercialRecipientEligibility({env, supabase, workspac
     if (!values.length || values.some(value => !E164.test(value))) return denied('invalid_test_allowlist');
     if (!values.includes(phone)) return denied('test_allowlist');
   }
+  return null;
+}
+
+export async function getCommercialRecipientEligibility({env, supabase, workspaceId, phone}) {
+  const restricted = commercialRecipientRestriction({env, phone});
+  if (restricted) return restricted;
   try {
     return await getSendEligibility({supabase, workspaceId, phone, category: 'invoice_updates'});
   } catch {

@@ -1,7 +1,8 @@
 import {authorizeOwnerPhone} from './owner-binding.mjs';
 import {createConversationStore,conversationCallbackToken} from './conversation-store.mjs';
 import {getSendEligibility} from './consent.mjs';
-import {getCommercialRecipientEligibility} from './commercial-recipient.mjs';
+import {getCommercialRecipientEligibility,commercialRecipientRestriction} from './commercial-recipient.mjs';
+import {getServiceReplyAuthority} from './service-reply-authority.mjs';
 import {normalizeOwnerActionButtons} from './owner-action-buttons.mjs';
 import {ownerButtonClaimIssue} from './owner-grounding.mjs';
 import {readOwnerTestReview,readOwnerTestReceipt,claimOwnerTest} from './owner-test.mjs';
@@ -102,11 +103,19 @@ export function createWhatsAppOutbound({
 } = {}) {
   const allowlist = allowlistFromEnv(env);
 
-  async function preflight({workspaceId, to, kind}) {
+  const serviceAuthority = input => getServiceReplyAuthority({supabase,env,clock,...input});
+
+  async function preflight({workspaceId, to, kind, reply = null}) {
     // Recipient gates run before Cloud API credential use or transport.
     if (env.WHATSAPP_OUTBOUND_ENABLED !== 'true') return block(logger, 'disabled', {workspaceId, to, kind});
     if (env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED === 'true') {
-      const eligibility = await getCommercialRecipientEligibility({env, supabase, workspaceId, phone: to});
+      const restricted = commercialRecipientRestriction({env,phone:to});
+      if(restricted)return block(logger,restricted.reason,{workspaceId,to,kind});
+      // Only service methods can enter this branch. The authority is read from
+      // the authenticated durable inbox, never inferred from audience/kind/null.
+      const eligibility = reply
+        ? await serviceAuthority({workspaceId,phone:to,kind,...reply})
+        : await getCommercialRecipientEligibility({env, supabase, workspaceId, phone: to});
       if (!eligibility.allowed) return block(logger, eligibility.reason, {workspaceId, to, kind});
     } else {
       // Default test mode: the configured allowlist can only narrow the fixed QA set.
@@ -276,7 +285,9 @@ export function createWhatsAppOutbound({
 
   async function sendServiceReply({workspaceId = null, to, body, buttons, ownerActionFallback, lastInboundAt, kind = 'normal', messageId, businessName, audience='customer', ownerLinkResult, phase='answer'} = {}) {
     if(!['answer','ack'].includes(phase)||(phase==='ack'&&(audience!=='owner'||kind!=='normal')))throw new TypeError('invalid owner delivery phase');
-    const blocked = await preflight({workspaceId, to, kind});
+    const reply={messageId,audience,phase};
+    const authorityInput={workspaceId,phone:to,kind,...reply};
+    const blocked = await preflight({workspaceId, to, kind, reply});
     if (blocked) return blocked;
     recipient(to);
     if (!SERVICE_KINDS.has(kind)) throw new TypeError('invalid service reply kind');
@@ -329,7 +340,8 @@ export function createWhatsAppOutbound({
     let customerId=null;
     if (kind === 'normal') {
       if (!supabase) return block(logger, 'missing_store', {workspaceId, to, kind});
-      const eligibility = audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}:await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
+      const eligibility = env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'?await serviceAuthority(authorityInput)
+        :audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}:await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
       if (!eligibility.allowed) return block(logger, eligibility.reason, {workspaceId, to, kind});
       customerId=eligibility.customer?.id||null;
     }
@@ -350,21 +362,29 @@ export function createWhatsAppOutbound({
       if (suppression) return denyPrepared({workspaceId,to,kind,key,reason:suppression,claimed:true});
     }
     if (kind === 'normal') {
-      const finalEligibility = audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}:await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
+      const finalEligibility = env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'?await serviceAuthority(authorityInput)
+        :audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}:await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
       if (!finalEligibility.allowed||(audience==='customer'&&finalEligibility.customer?.id!==customerId))
         return denyPrepared({workspaceId,to,kind,key,reason:finalEligibility.allowed?'customer_binding_changed':finalEligibility.reason||'owner_binding_changed',claimed:true});
+    }
+    if(env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'&&kind!=='normal'){
+      const finalAuthority=await serviceAuthority(authorityInput);
+      if(!finalAuthority.allowed)return denyPrepared({workspaceId,to,kind,key,reason:finalAuthority.reason,claimed:true});
     }
     return postMessage({workspaceId,to,kind,key,payload});
   }
 
   async function sendServiceMedia({workspaceId, to, media, caption, lastInboundAt, messageId, businessName,audience='customer'} = {}) {
     const kind = 'normal';
-    const blocked = await preflight({workspaceId, to, kind});
+    const reply={messageId,audience};
+    const authorityInput={workspaceId,phone:to,kind,...reply};
+    const blocked = await preflight({workspaceId, to, kind, reply});
     if (blocked) return blocked;
     recipient(to); nonempty(workspaceId, 'workspaceId'); nonempty(messageId, 'messageId');
     if (!withinServiceWindow(lastInboundAt, clock)) return block(logger, 'service_window_closed', {workspaceId, to, kind});
     if (!await verifiedBusinessName(supabase, workspaceId, nonempty(businessName, 'businessName', 200))) return block(logger, 'business_name_mismatch', {workspaceId, to, kind});
-    const eligibility = audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}
+    const eligibility = env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'?await serviceAuthority(authorityInput)
+      :audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}
       :await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
     if (!eligibility.allowed) return block(logger, eligibility.reason, {workspaceId, to, kind});
     if(typeof authorizeInboundReply!=='function')return block(logger,'missing_inbound_authorizer',{workspaceId,to,kind});
@@ -397,7 +417,8 @@ export function createWhatsAppOutbound({
     }
     const authorization=await authorizeInboundReply({workspaceId,phone:to,kind,messageId,...(audience==='owner'?{audience}:{})});
     if(authorization?.allowed!==true)return denyPrepared({workspaceId,to,kind,key,reason:authorization?.reason||'inbound_reply_denied'});
-    const finalEligibility=audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}
+    const finalEligibility=env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'?await serviceAuthority(authorityInput)
+      :audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}
       :await getSendEligibility({supabase,workspaceId,phone:to,category:'invoice_updates'});
     if(!finalEligibility.allowed||audience==='customer'&&finalEligibility.customer?.id!==eligibility.customer?.id)
       return denyPrepared({workspaceId,to,kind,key,reason:finalEligibility.allowed?'customer_binding_changed':finalEligibility.reason||'owner_binding_changed',claimed:true});
