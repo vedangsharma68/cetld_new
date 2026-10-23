@@ -7,7 +7,7 @@ const label=tone=>tone[0].toUpperCase()+tone.slice(1);
 // Transport-independent view: all window/eligibility facts and approval tokens come from the server.
 export function reminderReviewForm({text,tone='professional',customer,number,sendNow=false}) {
   return `<form id="draft-form"><div class="dialog-body reminder-review-body"><p>${escape(customer)} · ${escape(number)}</p>
-    <label class="field">Delivery timing<select name="sendNow"><option value="false" ${!sendNow?'selected':''}>Scheduled follow-up · approved template</option><option value="true" ${sendNow?'selected':''}>Send once now · service message when eligible</option></select></label>
+    <label class="field">Delivery timing<select name="sendNow"><option value="false" ${!sendNow?'selected':''}>Scheduled follow-up</option><option value="true" ${sendNow?'selected':''}>Send once now</option></select></label>
     <label class="field">Tone for this reminder<select name="tone">${REMINDER_TONES.map(t=>`<option value="${t}" ${t===tone?'selected':''}>${label(t)}</option>`).join('')}</select></label>
     <label class="field">Your message<textarea name="message" rows="7" maxlength="4000" required>${escape(text)}</textarea></label>
     <p class="settings-hint">Cetld uses approved templates for scheduled reminders. For a one-off send, your edited message can send within the customer’s 24-hour service window. Saving a draft resets approval.</p>
@@ -88,7 +88,10 @@ export function mountReminderReview(form,{requestPreview,approve,onSaveDraft,onA
 
 export function reminderToneDraft({invoice,settings,customer},tone) {
   const entry=selectInvoiceReminderTemplate({},tone);
-  return buildReminderTemplate(entry,buildInvoiceReminderParameters({invoice,settings,customer})).body;
+  const body=buildReminderTemplate(entry,buildInvoiceReminderParameters({invoice,settings,customer})).body;
+  // Editable draft copy can use natural grammar. The delivery preview always
+  // renders the server's exact Meta-approved template, including its fixed copy.
+  return body.replace(`I'm Cetld, ${settings.business_name}'s assistant.`,()=>`I'm Cetld, an assistant for ${settings.business_name}.`);
 }
 
 export function approvedDeliverySummary(approval) {

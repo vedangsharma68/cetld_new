@@ -884,6 +884,12 @@ body:has(.nav-scrim.open) .assistant-fab{display:none}
   body{--assistant-fab-bottom:max(22px,env(safe-area-inset-bottom))}
   body:has(.app-update){--assistant-fab-bottom:100px}
   .content{padding-bottom:calc(48px + var(--assistant-fab-bottom) + 16px)}
+  /* Reserve actual viewport space: page-end padding alone cannot protect
+     controls higher up in an idle screen from a fixed launcher. */
+  .shell:has(.assistant-fab){position:fixed;inset:0;min-height:0}
+  .shell:has(.assistant-fab) .main{height:100dvh;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding-bottom:calc(48px + var(--assistant-fab-bottom) + 16px)}
+  .shell:has(.assistant-fab) .main>:is(.topbar,.demo-mode){flex-shrink:0}
+  .shell:has(.assistant-fab) .content{flex:1;min-height:0;width:100%;overflow-y:auto;padding-bottom:16px}
   .assistant-fab{bottom:var(--assistant-fab-bottom);transition:opacity .16s ease}
   body.assistant-fab-hidden .assistant-fab{opacity:0;visibility:hidden;pointer-events:none}
 }

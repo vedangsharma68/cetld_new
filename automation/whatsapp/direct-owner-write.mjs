@@ -236,8 +236,10 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
         if(!verified)return failure('WRITE_UNCONFIRMED');
         return {...verified,entityType:outcome.entityType,entityId:outcome.entityId,replayed:true};
       }
+      // The duplicate-claim guard accepts existingInvoice only after this
+      // scoped receipt and its persisted invoice have both been verified.
       return {ok:true,completed:true,action:outcome.action,entityType:outcome.entityType,
-        entityId:outcome.entityId,record,replayed:true,...(correctionEvidence?{correction:correctionEvidence}:{}),...(outcome.action==='invoice.reopened'?{invoiceNumber:outcome.invoiceNumber,currency:outcome.currency,
+        entityId:outcome.entityId,record,replayed:true,...(outcome.action==='invoice.created'?{existingInvoice:{invoiceNumber:record.invoice_number}}:{}),...(correctionEvidence?{correction:correctionEvidence}:{}),...(outcome.action==='invoice.reopened'?{invoiceNumber:outcome.invoiceNumber,currency:outcome.currency,
           reversedAmount:outcome.reversedAmount,balanceAfter:outcome.balanceAfter,paymentCount:outcome.paymentCount,paymentHistoryPreserved:true,cashRefund:false}: {})};
     },
     async applyBatch({workspaceId,ownerId,phone,providerMessageId,authorization,operations}={}){
@@ -366,7 +368,7 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
         if(!verified)return failure('WRITE_UNCONFIRMED');
         return {...verified,entityType,entityId,replayed:outcome.replayed===true};
       }
-      return {ok:true,completed:true,action:outcome.action,entityType,entityId,record,replayed:outcome.replayed===true,...(correctionEvidence?{correction:correctionEvidence}:{})};
+      return {ok:true,completed:true,action:outcome.action,entityType,entityId,record,replayed:outcome.replayed===true,...(outcome.replayed===true&&outcome.action==='invoice.created'?{existingInvoice:{invoiceNumber:record.invoice_number}}:{}),...(correctionEvidence?{correction:correctionEvidence}:{})};
     },
   });
 }

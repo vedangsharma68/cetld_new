@@ -2144,7 +2144,9 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         }else if(completedOwnerResult(last)&&last.operation==='create'&&last.table==='invoices'
           &&typeof last.record?.invoice_number==='string'&&isSupportedCurrency(last.record.currency)
           &&Number.isFinite(Number(last.record.total_amount))){
-          answer=`Created invoice ${last.record.invoice_number}. Total: ${last.record.currency} ${Number(last.record.total_amount).toFixed(2)}.`;
+          answer=last.replayed===true
+            ?`Invoice ${last.record.invoice_number} already exists. Total: ${last.record.currency} ${Number(last.record.total_amount).toFixed(2)}. No new invoice was created.`
+            :`Created invoice ${last.record.invoice_number}. Total: ${last.record.currency} ${Number(last.record.total_amount).toFixed(2)}.`;
         }else if(last?.ok===false&&!evidence.some(completedOwnerResult))answer=textInvoiceFailure(last)||last.message;
         if(answer&&!ownerReplySafetyIssue(answer,requirement)&&!ownerGroundingIssue(answer,evidence,message,requirement||{}))
           return resultFor(answer,{boundedInvoiceCreateReply:true});

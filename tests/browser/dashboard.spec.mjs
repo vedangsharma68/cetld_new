@@ -37,9 +37,12 @@ async function layout(page){
   }).map(e=>e.className||e.tagName).slice(0,10));
   expect(overflow).toEqual([]);
 }
+async function scrollPage(page,top,by=false){
+  await page.locator('.content').evaluate((e,{top,by})=>e[by?'scrollBy':'scrollTo']({top,behavior:'instant'}),{top,by});
+}
 for(const [width,height] of [[390,844],[768,1024]])for(const theme of ['light','dark'])test(`Assistant launcher clears navigation and content at ${width}x${height} in ${theme}`,async({page},info)=>{
   await page.setViewportSize({width,height});await boot(page);
-  await page.evaluate(()=>scrollTo({top:0,behavior:'instant'}));
+  await scrollPage(page,0);
   await page.evaluate(theme=>document.documentElement.classList.toggle('dark',theme==='dark'),theme);
   const fab=page.locator('.assistant-fab');
   await expect(fab).toBeVisible();
@@ -50,15 +53,15 @@ for(const [width,height] of [[390,844],[768,1024]])for(const theme of ['light','
   await page.screenshot({path:info.outputPath('navigation.png')});
   await page.keyboard.press('Escape');await expect(fab).toBeVisible();
   // Put the reported Live badge where the fixed launcher would cover it.
-  await page.locator('.collections-pulse .live-label').evaluate(e=>scrollTo({top:Math.max(120,e.getBoundingClientRect().top+scrollY-innerHeight+100),behavior:'instant'}));
-  await expect.poll(()=>page.evaluate(()=>scrollY)).toBeGreaterThan(64);await expect(fab).toBeHidden();
+  await page.locator('.collections-pulse .live-label').evaluate(e=>{const content=e.closest('.content');content.scrollTo({top:Math.max(120,e.getBoundingClientRect().top+content.scrollTop-content.clientHeight+100),behavior:'instant'})});
+  await expect.poll(()=>page.locator('.content').evaluate(e=>e.scrollTop)).toBeGreaterThan(64);await expect(fab).toBeHidden();
   await page.screenshot({path:info.outputPath('scroll-down.png')});
-  await page.evaluate(()=>scrollBy({top:-80,behavior:'instant'}));await expect(fab).toBeVisible();
+  await scrollPage(page,-80,true);await expect(fab).toBeVisible();
   // A rerender must preserve the scroll visibility state.
-  await page.evaluate(()=>scrollBy({top:120,behavior:'instant'}));await expect(fab).toBeHidden();
+  await scrollPage(page,120,true);await expect(fab).toBeHidden();
   await page.evaluate(()=>__ui.render());await expect(fab).toBeHidden();
-  await page.evaluate(()=>scrollTo({top:20,behavior:'instant'}));await expect(fab).toBeVisible();
-  await page.evaluate(()=>scrollTo({top:40,behavior:'instant'}));
+  await scrollPage(page,20);await expect(fab).toBeVisible();
+  await scrollPage(page,40);
   await expect(fab).toBeHidden();await expect(fab).toBeVisible();
   await expect(fab).toHaveCSS('transition-duration','0s');
   await page.emulateMedia({reducedMotion:'no-preference'});await expect(fab).toHaveCSS('transition-duration','0.16s');
@@ -66,11 +69,11 @@ for(const [width,height] of [[390,844],[768,1024]])for(const theme of ['light','
   for(const update of [false,true]){
     if(update)await page.evaluate(()=>{const bar=document.createElement('div');bar.className='app-update';bar.textContent='A new version is ready';document.body.append(bar)});
     if(update)await expect(fab).toHaveCSS('bottom','100px');
-    await page.evaluate(()=>scrollTo({top:document.documentElement.scrollHeight,behavior:'instant'}));await expect(fab).toBeHidden();
-    await page.evaluate(()=>scrollBy({top:-1,behavior:'instant'}));await expect(fab).toBeVisible();
+    await scrollPage(page,1e7);await expect(fab).toBeHidden();
+    await scrollPage(page,-1,true);await expect(fab).toBeVisible();
     const clearance=await page.evaluate(()=>{
       const fab=document.querySelector('.assistant-fab'),content=document.querySelector('.content'),footer=document.querySelector('.app-footer');
-      return {padding:parseFloat(getComputedStyle(content).paddingBottom),footprint:fab.getBoundingClientRect().height+parseFloat(getComputedStyle(fab).bottom),footerBottom:footer.getBoundingClientRect().bottom,lastCardBottom:document.querySelector('.page').getBoundingClientRect().bottom,fabTop:fab.getBoundingClientRect().top};
+      return {padding:parseFloat(getComputedStyle(document.querySelector('.main')).paddingBottom),footprint:fab.getBoundingClientRect().height+parseFloat(getComputedStyle(fab).bottom),footerBottom:footer.getBoundingClientRect().bottom,lastCardBottom:document.querySelector('.page').getBoundingClientRect().bottom,fabTop:fab.getBoundingClientRect().top};
     });
     expect(clearance.padding).toBeGreaterThanOrEqual(clearance.footprint);
     expect(clearance.footerBottom).toBeLessThan(clearance.fabTop);expect(clearance.lastCardBottom).toBeLessThan(clearance.fabTop);
@@ -187,8 +190,17 @@ async function reviewFixture(page,kind='service'){
     });
   },kind);
 }
-for(const width of [360,800,1280])test(`reminder exact-word approval at ${width}px`,async({page},info)=>{
+for(const width of [360,390,800,1280])test(`reminder exact-word approval at ${width}px`,async({page},info)=>{
   await page.setViewportSize({width,height:740});await reviewFixture(page);
+  const timing=page.getByRole('combobox',{name:'Delivery timing'});
+  for(const value of ['false','true']){
+    await timing.selectOption(value);
+    expect(await timing.evaluate(e=>{
+      const style=getComputedStyle(e),canvas=document.createElement('canvas'),context=canvas.getContext('2d');
+      context.font=style.font;
+      return context.measureText(e.selectedOptions[0].textContent).width<=e.clientWidth-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight);
+    })).toBe(true);
+  }
   const approve=page.locator('[data-approve-reminder]');await expect(approve).toBeDisabled();
   await page.getByRole('button',{name:'Preview delivery',exact:true}).click();await expect(page.locator('[data-delivery-preview]')).toContainText('Will send as your message');
   await expect(approve).toBeDisabled();await page.locator('[data-delivery-ack]').check();await expect(approve).toBeEnabled();
@@ -299,7 +311,7 @@ for(const width of [390,1280])test(`Overview and Collections Pulse separate issu
   const card=page.locator('.stats .stat').first();
   await expect(card).toContainText('Issued outstanding');
   await expect(card.locator('[data-counter]')).toHaveAttribute('data-counter','100');
-  await expect(card).toContainText('1 INR issued invoice');
+  await expect(card).toContainText('1 INR issued invoice plus');
   await expect(card).toContainText(/plus.*20,496(?:\.00)? in unissued drafts \(not yet receivable\)/);
   await expect(page.locator('.currency-caption')).toHaveText('Top cards show INR only. Other currencies appear in Collections Pulse.');
   const primary=page.locator('.pulse-metric.is-primary');
@@ -310,4 +322,33 @@ for(const width of [390,1280])test(`Overview and Collections Pulse separate issu
   await expect(primary).toContainText(/plus.*4,490(?:\.00)? in unissued drafts/);
   await expect(page.locator('.pulse-currency-note')).toContainText('Currencies are shown separately. No FX conversion is applied. Unissued drafts are not yet receivable.');
   await layout(page);
+});
+
+test('auth loading ends on the sign-in screen and when an account renders',async({page})=>{
+  await boot(page);
+  await expect(page.locator('body')).not.toHaveClass(/auth-loading/);
+  await page.evaluate(()=>{document.body.classList.add('auth-loading','preserved-body-class');__ui.state.demo=false;__ui.render()});
+  await expect(page.locator('.shell')).toBeVisible();
+  await expect(page.locator('body')).not.toHaveClass(/auth-loading/);
+  await expect(page.locator('body')).toHaveClass(/preserved-body-class/);
+  await page.evaluate(()=>{document.body.classList.add('auth-loading');__ui.state.user=null;__ui.render()});
+  await expect(page.locator('#auth-form')).toBeVisible();
+  await expect(page.locator('body')).not.toHaveClass(/auth-loading/);
+});
+
+for(const theme of ['light','dark'])test(`idle mobile content clears the Assistant launcher at 390px in ${theme}`,async({page},info)=>{
+  await page.setViewportSize({width:390,height:844});await boot(page);
+  await page.evaluate(theme=>{document.documentElement.classList.toggle('dark',theme==='dark');__ui.state.demo=false;__ui.render()},theme);
+  const fab=page.locator('.assistant-fab'),action=page.getByRole('button',{name:'What needs my attention today?',exact:true});
+  await expect(fab).toBeVisible();
+  expect(await page.locator('.content').evaluate(e=>e.scrollTop)).toBe(0);
+  const clear=()=>page.evaluate(()=>document.querySelector('.content').getBoundingClientRect().bottom<document.querySelector('.assistant-fab').getBoundingClientRect().top);
+  expect(await clear()).toBe(true);
+  expect(await page.locator('.content').evaluate(e=>e.getBoundingClientRect().top)).toBeGreaterThanOrEqual(0);
+  await page.screenshot({path:info.outputPath('overview-idle.png'),animations:'disabled'});
+  await action.scrollIntoViewIfNeeded();
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  await page.evaluate(()=>document.body.classList.remove('assistant-fab-hidden'));
+  await expect(fab).toBeVisible();await action.click({trial:true});expect(await clear()).toBe(true);
+  expect(await action.evaluate(e=>{const r=e.getBoundingClientRect(),c=e.closest('.content').getBoundingClientRect();return r.top>=c.top&&r.bottom<=c.bottom})).toBe(true);
 });
