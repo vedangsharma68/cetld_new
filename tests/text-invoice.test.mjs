@@ -226,3 +226,13 @@ test('invoice create tool guidance exposes customer and number fields and scopes
   assert.equal(definition.parameters.properties.values.properties.invoice_number.type,'string');
   assert.match(definition.description,/amount: payments only/);assert.match(definition.description,/line_items: update\/review only/);
 });
+
+test('a model cannot fill the missing production due date with invented invoice facts',async()=>{
+  const message=productionMessages[2];
+  const tool=createWorkspaceDataTool({supabase:{from(){assert.fail('No reads');}},scope,message,clock:productionClock,
+    authorize:async()=>true,confirmationMode:'direct',executeDirectOperation(){assert.fail('No write');}});
+  const result=await tool.execute({operation:'create',table:'invoices',values:{
+    invoice_number:'MODEL-001',customer_name:'Wrong Customer',total_amount:9999,currency:'INR',issue_date:'2026-10-23',due_date:'2099-12-01'}});
+  assert.equal(result.writeAttempted,false);assert.equal(result.invoiceCreationClarification,true);
+  assert.equal(result.message,'What due date should I use for the INR 2100.00 invoice for QA Question Customer?');
+});
