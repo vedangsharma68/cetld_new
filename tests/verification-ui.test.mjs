@@ -1,3 +1,4 @@
+import {receivableBalanceLabel} from '../invoice/receivables.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -198,7 +199,7 @@ test(`repeated invoice drawer opens gate test-preview requests with button eligi
     readyReminderPreviewToken:()=>null,accessToken:async()=>'fixture-session',
     fetch:async(url,options)=>{calls.push({url:String(url),method:options.method});return Response.json(preview);},
     openDialog:(_title,body)=>drawers.push(body),escape,status:()=> 'Open',remaining:()=>10000,
-    terminalInvoice:()=>false,activeException:()=>null,followupStage:()=>['Draft',''],
+    receivableBalanceLabel,terminalInvoice:()=>false,activeException:()=>null,followupStage:()=>['Draft',''],
     money:()=>'$100',tag:()=>'',day:()=>'',deliveryState:()=>'',invoiceBusinessDetails:()=>'',
     customFieldsView:()=>'',icon:()=>'',canRetryInvoiceSync:()=>false,isExternallyManagedInvoice:()=>false,
     button:(action,label)=>`<button data-action="${action}">${label}</button>`,

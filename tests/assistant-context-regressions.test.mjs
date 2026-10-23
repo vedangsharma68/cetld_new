@@ -207,7 +207,7 @@ test('largest confirmed receivable is ranked within currency and unknown directi
     invoice('00000000-0000-4000-8000-000000000009',FOREIGN,'SECRET-INV',{workspace_id:WS_B,total_amount:'990000.00'}),
   ];
   const store=scopedStore(WS_A,{invoices:fixtureInvoices,customers,payments});
-  fixtureInvoices.push(invoice('00000000-0000-4000-8000-000000000010',SHIV,'SHIV-1051',{total_amount:'770.00',metadata:{secret:'do not leak'}}));
+  fixtureInvoices.push(invoice('00000000-0000-4000-8000-000000000010',SHIV,'SHIV-1051',{total_amount:'770.00',metadata:{invoice_direction:'uncertain',secret:'do not leak'}}));
   const storeWithUnclassified=scopedStore(WS_A,{invoices:fixtureInvoices,customers,payments});
   const summary=await createAssistantTools({store:storeWithUnclassified}).execute('getOutstandingSummary');
   assert.deepEqual(summary.debtors,[{customerId:SHIV,customerName:'Shiv Engineering',currency:'INR',outstandingAmount:'4200.00'},{customerId:APP_REV,customerName:'App Revolution',currency:'USD',outstandingAmount:'6250.00'}]);

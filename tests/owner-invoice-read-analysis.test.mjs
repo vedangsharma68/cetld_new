@@ -5,7 +5,7 @@ import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 
 const question='If Offline Ledger Company pays USD 1000 against QA-2048, how much would be overpaid? Just explain; do not record a payment or change anything.';
-const row={invoice_number:'INV-2048-1',currency:'USD',total_amount:'1234.56',amount_paid:'400',metadata:{source_invoice_number:'QA-2048'}};
+const row={status:'sent',invoice_number:'INV-2048-1',currency:'USD',total_amount:'1234.56',amount_paid:'400',metadata:{source_invoice_number:'QA-2048'}};
 test('plain unpaid list requests are read-only and derive net balances without equating unpaid with a status',()=>{
   for(const message of ['show me my unpaid invoices','Please list outstanding invoices.','show unpaid invoices'])
     assert.equal(ownerInvoiceReadAnalysis(message)?.kind,'unpaidInvoices');
@@ -19,7 +19,7 @@ test('plain unpaid list requests are read-only and derive net balances without e
     {...row,invoice_number:'BILL-1',status:'draft',metadata:{invoice_direction:'payable'}}]);
   assert.deepEqual(derived.invoices.map(row=>[row.invoiceNumber,row.outstanding]),[['INV-2048-1','834.56'],['REVERSED-1','1234.56']]);
   const reply=invoiceReadAnalysisReply({ok:true,readOnly:true,operation:'read',table:'invoices',invoiceReadAnalysis:derived});
-  assert.match(reply,/including drafts/);assert.doesNotMatch(reply,/BILL-1|FULL-1|OVER-1|no payments|never paid/i);
+  assert.match(reply,/Unissued drafts \(not yet receivable\): USD 834.56/);assert.doesNotMatch(reply,/BILL-1|FULL-1|OVER-1|no payments|never paid/i);
   assert.equal(deriveInvoiceReadAnalysis(parsed,[{...row,status:'draft'}],{truncated:true}),null);
   assert.equal(deriveInvoiceReadAnalysis(parsed,[{...row,status:'void'}]),null);
   assert.equal(deriveInvoiceReadAnalysis(parsed,[{...row,status:'sent',amount_paid:null}]),null);

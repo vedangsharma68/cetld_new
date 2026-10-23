@@ -24,7 +24,7 @@ test('overpayments and malformed payment amounts are rejected',()=>{for(const x 
 test('deleted invoices are omitted from totals and cannot accept payment or approval',()=>{
   const deleted={id:'deleted',amount_minor:50000,paid_minor:12000,due_date:'2026-01-01',status:'sent',followup_state:'draft',deleted_at:'2026-09-10T00:00:00Z'};
   assert.equal(remaining(deleted),0);
-  assert.deepEqual(totals([{amount_minor:10000,paid_minor:2000,due_date:'2026-10-01'},deleted]),{outstanding:8000,overdue:8000,collected:2000});
+  assert.deepEqual(totals([{amount_minor:10000,paid_minor:2000,due_date:'2026-10-01',status:'sent'},deleted]),{outstanding:8000,unissuedDrafts:0,overdue:8000,collected:2000});
   assert.equal(canApprove(deleted),false);
   assert.throws(()=>payment(deleted,1),/deleted invoices/i);
   assert.throws(()=>settleInvoice({...deleted,alreadyPaid:true}),/deleted invoices/i);

@@ -1,3 +1,4 @@
+import {receivableKind,summarizeReceivables} from './invoice/receivables.mjs';
 import {remaining,localDate} from './core.mjs';
 
 const amount=value=>Number.isSafeInteger(value)&&value>0?value:0;
@@ -20,16 +21,18 @@ export function collectionsPulse(invoices=[],payments=[],{today=localDate(),defa
   const byCurrency=new Map();
   const bucket=code=>{
     const currency=currencyOf(code,defaultCurrency);
-    if(!byCurrency.has(currency))byCurrency.set(currency,{currency,outstanding:0,overdue:0,dueNext7Days:0,collectedThisMonth:0});
+    if(!byCurrency.has(currency))byCurrency.set(currency,{currency,outstanding:0,unissuedDrafts:0,overdue:0,dueNext7Days:0,collectedThisMonth:0});
     return byCurrency.get(currency);
   };
   const activeInvoices=invoices.filter(invoice=>!invoice?.deleted_at&&(invoice.invoice_direction??invoice.metadata?.invoice_direction)!=='payable');
   const invoiceById=new Map(activeInvoices.map(invoice=>[invoice.id,invoice]));
+  const summary=summarizeReceivables(activeInvoices.map(invoice=>({...invoice,currency:currencyOf(invoice.currency,defaultCurrency)})));
+  for(const [currency,row] of Object.entries(summary.currencies))bucket(currency).outstanding=Math.round(Number(row.outstandingAmount)*100);
+  for(const [currency,row] of Object.entries(summary.draftBalancesByCurrency))bucket(currency).unissuedDrafts=Math.round(Number(row.outstandingAmount)*100);
   for(const invoice of activeInvoices){
     const balance=remaining(invoice);
-    if(!balance||['cancelled','canceled','void'].includes(String(invoice.status||'').toLowerCase()))continue;
+    if(!balance||receivableKind(invoice)!=='issued')continue;
     const row=bucket(invoice.currency);
-    row.outstanding+=balance;
     if(invoice.due_date<today)row.overdue+=balance;
     else if(invoice.due_date<=through)row.dueNext7Days+=balance;
   }

@@ -9,7 +9,7 @@ test('dashboard retains gross payment receipt and calculates net collections aft
   const payment={id:'receipt',workspace_id:'own',invoice_id:'invoice',amount:'20.00',paid_at:'2026-10-04T10:00:00Z',reference:'Original transfer'};
   const reversal={workspace_id:'own',invoice_id:'invoice',payment_id:'receipt',amount:'20.00',recorded_at:'2026-10-04T11:00:00Z'};
   const rows=applyPaymentReversals([payment],[reversal],'own');assert.equal(rows[0].amount,'20.00');assert.equal(rows[0].reference,'Original transfer');assert.equal(rows[0].net_amount,0);
-  const pulse=collectionsPulse([{id:'invoice',currency:'INR',amount_minor:5500,paid_minor:0,due_date:'2026-10-31'}],rows.map(p=>({...p,amount_minor:2000,net_amount_minor:0})),{today:'2026-10-04'});
+  const pulse=collectionsPulse([{id:'invoice',status:'sent',currency:'INR',amount_minor:5500,paid_minor:0,due_date:'2026-10-31'}],rows.map(p=>({...p,amount_minor:2000,net_amount_minor:0})),{today:'2026-10-04'});
   assert.equal(pulse[0].collectedThisMonth,0);assert.equal(pulse[0].outstanding,5500);
   assert.throws(()=>applyPaymentReversals([payment],[{...reversal,workspace_id:'foreign'}],'own'));
   assert.throws(()=>applyPaymentReversals([payment],[{...reversal,amount:19}],'own'));

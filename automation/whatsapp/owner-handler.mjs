@@ -1,3 +1,4 @@
+import {receivableBalanceLabel} from '../../invoice/receivables.mjs';
 import {answerDebtorPhone} from './assistant-handler.mjs';
 import {normalizeOwnerPhone,saveOwnerPhone,PHONE_FORMAT_GUIDANCE,recentPhoneSubject} from './owner-phone.mjs';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
@@ -31,7 +32,7 @@ function totalCorrectionReply(message,result){
   if(!answer||!row)return null;
   const balances=invoiceBalanceFields(row),paid=Number(row.amount_paid);
   if(!Number.isFinite(paid)||paid<0||balances.outstanding_amount===null||balances.overpayment_amount===null)return null;
-  return `${answer}\nPaid: ${row.currency} ${paid.toFixed(2)}\nOutstanding: ${row.currency} ${balances.outstanding_amount.toFixed(2)}\nOverpayment: ${row.currency} ${balances.overpayment_amount.toFixed(2)}`;
+  return `${answer}\nPaid: ${row.currency} ${paid.toFixed(2)}\n${receivableBalanceLabel(row)}: ${row.currency} ${balances.outstanding_amount.toFixed(2)}\nOverpayment: ${row.currency} ${balances.overpayment_amount.toFixed(2)}`;
 }
 
 // Exact standalone messages only. Mixed greetings and business requests go to

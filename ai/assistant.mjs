@@ -1,3 +1,4 @@
+import {receivablesAnswer,isOutstandingBalanceQuestion,receivableBalanceLabel} from '../invoice/receivables.mjs';
 import {calendarDay, workspaceTimezone} from '../invoice/date-context.mjs';
 import {APIError} from './http.mjs';
 import {createAssistantTools} from './tools.mjs';
@@ -72,7 +73,7 @@ function emptyAnswer(source) {
   switch (source?.tool) {
     case 'getOutstandingSummary': {
       const hasPositiveLedgerBalance = Object.values(data?.currencies || {}).some(row => Number(row?.outstandingAmount) > 0);
-      return !hasPositiveLedgerBalance ? "There aren't any outstanding balances in this business right now." : null;
+      return !hasPositiveLedgerBalance ? receivablesAnswer(data) : null;
     }
     case 'getOverdueInvoices':
       return !data?.count && !(data?.invoices?.length) ? "There aren't any overdue invoices in this business right now." : null;
@@ -150,6 +151,7 @@ function invoicePaymentLabel(row) {
   return redactInternalIds(row.invoiceStatus || row.status || 'status not recorded');
 }
 
+
 function invoiceListAnswer(rows, {count = rows.length, truncated = false, paidOnly = false} = {}) {
   if (!count) return paidOnly ? 'There are no fully paid invoices in this business right now.' : "I couldn't find invoices matching those filters.";
   const visible = rows.slice(0, 10);
@@ -164,7 +166,7 @@ function invoiceListAnswer(rows, {count = rows.length, truncated = false, paidOn
     const outstanding = redactInternalIds(row.outstandingAmount ?? 'not recorded');
     const due = redactInternalIds(row.dueDate || 'no due date set');
     const direction = row.invoiceDirection === 'payable' ? ' • payable' : !row.invoiceDirection || row.invoiceDirection === 'uncertain' ? ' • direction needs review' : '';
-    return `- 🧾 ${number} — ${customer} — ${currency} ${total} total / ${currency} ${outstanding} outstanding — ${invoicePaymentLabel(row)} — ${row.dueDate ? `due ${due}` : due}${direction}`;
+    return `- 🧾 ${number} — ${customer} — ${currency} ${total} total / ${currency} ${outstanding} ${receivableBalanceLabel(row).toLowerCase()} — ${invoicePaymentLabel(row)} — ${row.dueDate ? `due ${due}` : due}${direction}`;
   });
   const partial = count > visible.length || truncated || rows.length > visible.length
     ? `\nShowing the first ${visible.length} of ${count}${truncated ? '; more invoices and their amounts were not included' : ''}.`
@@ -180,7 +182,7 @@ function simpleLedgerReadTool(message) {
   const prompt = message.trim().toLowerCase().replace(/[!?.,]+$/g, '').replace(/\s+/g, ' ');
   if (/^(?:which|what) invoices? (?:are|were|is|was) overdue$/.test(prompt)
     || /^(?:list|show(?: me)?)(?: all| the)? overdue invoices?$/.test(prompt)) return 'getOverdueInvoices';
-  if (/^(?:what|how much) is outstanding$/.test(prompt) || /^how many (?:(?:outstanding|unpaid) invoices(?: (?:do (?:i|we) have|are there))?|invoices are (?:outstanding|unpaid))$/.test(prompt)) return 'getOutstandingSummary';
+  if (isOutstandingBalanceQuestion(message) || /^how many (?:(?:outstanding|unpaid) invoices(?: (?:do (?:i|we) have|are there))?|invoices are (?:outstanding|unpaid))$/.test(prompt)) return 'getOutstandingSummary';
   if (/^what payments were recorded$/.test(prompt)) return 'getPayments';
   if (/^what happened recently$/.test(prompt)) return 'getActivity';
   return null;
@@ -329,7 +331,7 @@ function invoiceDetailsFallback(invoice, message = '') {
   const directionNote = direction === 'receivable' ? ' Direction is marked receivable.' : direction === 'payable' ? ' Direction is marked payable.' : ' Invoice direction needs a quick review.';
   const details = [invoice.subtotal !== undefined && invoice.subtotal !== null ? `subtotal ${invoice.currency} ${invoice.subtotal}` : '', invoice.tax !== undefined && invoice.tax !== null ? `tax ${invoice.currency} ${invoice.tax}` : ''].filter(Boolean);
   const amounts = details.length ? `\n- ${details.join(' • ')}` : '';
-  return `**1 invoice • Total: ${invoice.currency} ${total}**\n- 🧾 ${number} — ${customer} — ${invoice.currency} ${total} total\n- ${invoice.currency} ${outstanding} outstanding • ${invoice.currency} ${paid} paid • ${paymentState}\n- Status: ${invoiceStatus} • Due: ${dueDate}${amounts}\n${directionNote.trim()}`;
+  return `**1 invoice • Total: ${invoice.currency} ${total}**\n- 🧾 ${number} — ${customer} — ${invoice.currency} ${total} total\n- ${invoice.currency} ${outstanding} ${receivableBalanceLabel(invoice).toLowerCase()} • ${invoice.currency} ${paid} paid • ${paymentState}\n- Status: ${invoiceStatus} • Due: ${dueDate}${amounts}\n${directionNote.trim()}`;
 }
 
 function invoiceListFallback(rows) {
@@ -340,21 +342,7 @@ function factualFallback(sources, message = '') {
   const source = sources[0];
   const data = source?.data || {};
   if (source?.tool === 'getOutstandingSummary') {
-    const rows = Array.isArray(data.debtors) ? data.debtors : [];
-    const format = groups => Object.entries(groups || {}).filter(([, row]) => Number(row?.outstandingAmount) > 0).map(([currency, row]) => `${currency} ${row.outstandingAmount}`).join(', ');
-    const ledger = format(data.currencies);
-    const count = Object.values(data.currencies || {}).reduce((sum, row) => sum + (row.invoiceCount || 0), 0);
-    if (/\bhow many\b/i.test(message)) return `${count} outstanding invoice${count === 1 ? '' : 's'}.${ledger ? ` Total outstanding: ${ledger}.` : ''}`;
-    if (!ledger) return "There aren't any outstanding balances in this business right now.";
-    const parts = [`Unpaid balances total ${ledger.replace(/, ([^,]+)$/, ' and $1')} right now.`];
-    const receivables = format(data.confirmedReceivablesByCurrency);
-    const drafts = format(data.draftBalancesByCurrency);
-    const payables = format(data.payablesByCurrency);
-    const unclassified = format(data.unclassifiedBalancesByCurrency);
-    if (receivables) parts.push(`Confirmed customer balances: ${receivables}.`);
-    if (rows.length) parts.push(`Largest confirmed customer balances:\n${rows.slice(0, 5).map(row => `- ${redactInternalIds(row.customerName || 'Unknown customer')} — 💰 ${row.currency} ${row.outstandingAmount}`).join('\n')}`);
-    if (drafts || unclassified || payables) parts.push('Some invoices need a quick review before these numbers are final.');
-    return parts.join('\n');
+    return receivablesAnswer(data, {countOnly: /\bhow many\b/i.test(message)});
   }
   if (source?.tool === 'getOverdueInvoices') {
     const rows = Array.isArray(data.invoices) ? data.invoices : [];
@@ -432,7 +420,7 @@ function largestDebtorFallback(data) {
       : `Largest confirmed customer receivables by currency:\n${ranks.join('\n')}\nAmounts in different currencies cannot be compared.`;
     const excluded = Object.values(data.draftBalancesByCurrency || {}).some(row => Number(row?.outstandingAmount) > 0)
       || Object.values(data.unclassifiedBalancesByCurrency || {}).some(row => Number(row?.outstandingAmount) > 0);
-    return excluded ? `${ranking}\nDraft and unclassified balances are excluded until their status and direction are confirmed.` : ranking;
+    return receivablesAnswer(data)+`\n${ranking}`+(excluded ? `\nDraft and unclassified balances are excluded from customer debt.` : '');
   }
 
   const format = groups => Object.entries(groups || {})
@@ -440,13 +428,13 @@ function largestDebtorFallback(data) {
     .map(([currency, row]) => `${currency} ${row.outstandingAmount}`)
     .join(', ');
   const openBalances = format(data?.currencies);
-  if (!openBalances) return 'No confirmed customer receivables are outstanding.';
+  if (!openBalances) return receivablesAnswer(data)+'\nNo confirmed customer debtor can be ranked.';
   const draft = Boolean(format(data?.draftBalancesByCurrency));
   const payable = Boolean(format(data?.payablesByCurrency));
   const unclassified = Boolean(format(data?.unclassifiedBalancesByCurrency));
   const types = [draft ? 'draft' : '', unclassified ? 'unclassified' : '', payable ? 'payable' : ''].filter(Boolean);
   const review = types.length ? ` These ${types.join('/')} balances need review before any customer follow-up.` : ' Review status and direction before customer follow-up.';
-  return `No confirmed customer debtor can be ranked. Other open balances by currency: ${openBalances}.${review}`;
+  return receivablesAnswer(data)+`\nNo confirmed customer debtor can be ranked. Other issued balances by currency: ${openBalances}.${review}`;
 }
 function containsUnsupportedNumber(answer, sources) {
   const sourceText = JSON.stringify(sources);
@@ -803,6 +791,6 @@ export async function answerWorkspaceQuestion({provider, store, message, history
     messages.push({role: 'assistant', content: chunk});
     messages.push({role: 'user', content: 'Continue from the exact point where you stopped. Do not repeat completed text. Finish the answer and close any Markdown structure you opened.'});
   }
-  const safeAnswer = !answer || isInternalPayload(answer) || containsInternalId(answer) || containsUnsupportedNumber(answer, sources) || containsFinancialOrStatusAssertion(answer) || wasCutOff(final?.finishReason) ? factualFallback(sources,message) : redactInternalIds(answer);
+  const safeAnswer = sources[0]?.tool === 'getOutstandingSummary' || !answer || isInternalPayload(answer) || containsInternalId(answer) || containsUnsupportedNumber(answer, sources) || containsFinancialOrStatusAssertion(answer) || wasCutOff(final?.finishReason) ? factualFallback(sources,message) : redactInternalIds(answer);
   return withEvidence({answer: safeAnswer, asOf: clock().toISOString(), timezone, model: final.model, usedFallback: plan.usedFallback || final.usedFallback, readOnly: true}, sources[0]);
 }

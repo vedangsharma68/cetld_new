@@ -21,9 +21,9 @@ test('verified empty history permits truthful zero-payment replies; zero allocat
 
 test('rupee and INR formatting variants match amounts and reject unsupported amounts',()=>{
   for(const amount of ['Rs 1,500.00','Rs. 1,500.00','INR 1500','1,500.00 INR','₹1,500.00'])
-    assert.equal(ownerGroundingIssue(`Outstanding: ${amount}.`,[evidence()]),null,amount);
+    assert.equal(ownerGroundingIssue(`Unissued draft balance: ${amount}.`,[evidence()]),null,amount);
   for(const amount of ['Rs 1,501.00','Rs. 1,501.00','INR 1501','1,501.00 INR','₹1,501.00'])
-    assert.equal(ownerGroundingIssue(`Outstanding: ${amount}.`,[evidence()]),'fresh_database_read_required',amount);
+    assert.equal(ownerGroundingIssue(`Unissued draft balance: ${amount}.`,[evidence()]),'fresh_database_read_required',amount);
 });
 
 test('numeric identifiers and row counts cannot substantiate a money claim',()=>{
@@ -42,12 +42,12 @@ test('aggregate evidence is per currency and clamps each invoice balance before 
   assert.equal(ownerGroundingIssue('Outstanding: INR 40.00.',[partial]),'fresh_database_read_required');
 });
 
-test('three-invoice outstanding query accepts a grounded mocked provider draft without repair',async()=>{
+test('three draft invoices are reported separately instead of the obsolete inclusive outstanding answer',async()=>{
   let calls=0,reads=0;
   const response=await runOwnerAgent({message:'what is my total outstanding?',clock:()=>new Date('2026-10-23T09:48:00Z'),
     tools:{definitions:[{type:'function',function:{name:'workspaceData',parameters:{type:'object'}}}],async execute(){reads++;return evidence();}},
     provider:{async generate(){calls++;return calls===1?{toolCalls:[{id:'read-outstanding',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'read',table:'invoices'})}}]}:
       {content:'Your total outstanding is INR 4,750.00. There is no payment history.'};}}});
-  assert.equal(response.plannerFailure,undefined);assert.equal(response.answer,'Your total outstanding is INR 4,750.00. There is no payment history.');
-  assert.equal(calls,2);assert.equal(reads,1);
+  assert.equal(response.plannerFailure,undefined);assert.equal(response.answer,'Issued outstanding: none.\nUnissued drafts (not yet receivable): INR 4750.00.');
+  assert.equal(calls,1);assert.equal(reads,1);
 });

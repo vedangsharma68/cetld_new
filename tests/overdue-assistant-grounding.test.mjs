@@ -9,7 +9,7 @@ const CUSTOMER_MINERAL='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const CUSTOMER_SHIV='dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const CUSTOMER_PAID='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 
-const invoice=(id,customerId,invoiceNumber,dueDate,currency,totalAmount,amountPaid,status='draft')=>({
+const invoice=(id,customerId,invoiceNumber,dueDate,currency,totalAmount,amountPaid,status='sent')=>({
   id,workspace_id:WORKSPACE_ID,customer_id:customerId,invoice_number:invoiceNumber,
   issue_date:dueDate,due_date:dueDate,currency,total_amount:totalAmount,amount_paid:amountPaid,status,
   created_at:`${dueDate}T09:00:00Z`,updated_at:`${dueDate}T09:00:00Z`,metadata:{},
@@ -51,15 +51,15 @@ function providerWithOverdueToolAndFalseEmptyAnswer(){
   }};
 }
 
-test('overdue results include unpaid past-due drafts from the ledger and exclude a future paid invoice',async()=>{
+test('overdue results include issued past-due receivables and exclude paid invoices',async()=>{
   const overdue=await createAssistantTools({store:workspaceStore(),clock:fixedClock}).execute('getOverdueInvoices',{});
 
   assert.equal(overdue.asOfUtcDate,'2026-09-28');
   assert.equal(overdue.count,3);
   assert.deepEqual(overdue.invoices.map(row=>[row.invoiceNumber,row.dueDate,row.currency,row.outstandingAmount,row.invoiceStatus]),[
-    ['INV-005','2021-06-27','AUD','1564.00','draft'],
-    ['1223113','2024-01-15','INR','1725.00','draft'],
-    ['GST-3425-26','2026-09-26','AUD','4490.00','draft'],
+    ['INV-005','2021-06-27','AUD','1564.00','sent'],
+    ['1223113','2024-01-15','INR','1725.00','sent'],
+    ['GST-3425-26','2026-09-26','AUD','4490.00','sent'],
   ]);
   assert.deepEqual(overdue.balancesByCurrency.AUD,{invoiceCount:2,totalAmount:'6054.00',amountPaid:'0.00',outstandingAmount:'6054.00'});
   assert.deepEqual(overdue.balancesByCurrency.INR,{invoiceCount:1,totalAmount:'1725.00',amountPaid:'0.00',outstandingAmount:'1725.00'});
@@ -70,7 +70,7 @@ test('paid-invoice questions read verified settlement records without a model pl
   const provider={generate:async()=>{throw new Error('Paid invoice lookup must not call the model');}};
   for (const message of ['which invoices are paid??','What invoice was paid?','List paid invoices','How many invoices are paid?']) {
     const result=await answerWorkspaceQuestion({provider,store:workspaceStore(),message,clock:fixedClock});
-    assert.match(result.answer,/\*\*1 fully paid invoice • Total: CHF 1650\.00\*\*[\s\S]*1001 — Ann Revolution — CHF 1650\.00 total \/ CHF 0\.00 outstanding — fully paid/);
+    assert.match(result.answer,/\*\*1 fully paid invoice • Total: CHF 1650\.00\*\*[\s\S]*1001 — Ann Revolution — CHF 1650\.00 total \/ CHF 0\.00 issued outstanding — fully paid/);
     assert.equal(result.answer.split('\n').length,2,'the lead and invoice should render on separate short lines');
     assert.doesNotMatch(result.answer,/INV-005|1223113|GST-3425-26|couldn.t safely check/i);
     assert.deepEqual(result.evidence.records.map(row=>row.label),['1001']);
@@ -126,10 +126,10 @@ function providerWithFalseEmptyOutstandingAnswer(){
 
 test('Assistant replaces an incorrect empty-outstanding answer without calling unknown-direction invoices customer debt',async()=>{
   const provider=providerWithFalseEmptyOutstandingAnswer();
-  const result=await answerWorkspaceQuestion({provider,store:workspaceStore(),message:'How much is outstanding?',clock:fixedClock});
-  assert.match(result.answer,/^Unpaid balances total AUD 6054\.00 and INR 1725\.00 right now\./i);
-  assert.match(result.answer,/Some invoices need a quick review before these numbers are final\.$/i);
-  assert.equal(result.answer.split('review').length - 1, 1);
+  const result=await answerWorkspaceQuestion({provider,store:workspaceStore({invoices:invoices.map(row=>({...row,status:row.status==='paid'?'paid':'draft'})),customers,payments:[],invoice_files:[]}),message:'How much is outstanding?',clock:fixedClock});
+  assert.match(result.answer,/^Issued outstanding: none\./i);
+  assert.match(result.answer,/Unissued drafts \(not yet receivable\): AUD 6054\.00, INR 1725\.00\./i);
+  assert.equal(result.answer.split('review').length - 1, 0);
   assert.doesNotMatch(result.answer,/customers? owe|debtor/i);
 });
 
@@ -151,7 +151,7 @@ test('Assistant bypasses an incorrect empty-overdue model answer and returns gro
     ['1223113','MineralTree'],
     ['GST-3425-26','Shiv Engineering'],
   ]) assert.match(result.answer,new RegExp(`${number} for ${customer}`));
-  assert.match(result.answer,/draft; not sent/i,'draft invoices must be clearly identified as unsent');
+  assert.doesNotMatch(result.answer,/draft; not sent/i);
   assert.match(result.answer,/Some invoices need a quick review before follow-up\./i,'review flags should be one short plain-language line');
   assert.equal(result.answer.split('\n').filter(line=>line.startsWith('- ')).length,3,'each overdue invoice should have its own bullet');
   assert.match(result.answer,/direction unclassified/i,'legacy rows without invoice direction cannot be called confirmed receivables');
@@ -168,9 +168,7 @@ test('overdue summaries exclude payables and retain uncertain-direction follow-u
   const result=await answerWorkspaceQuestion({provider:providerWithOverdueToolAndFalseEmptyAnswer(),store,message:'Which invoices are overdue?',clock:fixedClock});
 
   assert.doesNotMatch(result.answer,/PAY-101|INR 125\.00|direction: payable/i);
-  assert.match(result.answer,/UNC-202.*USD 240\.00.*direction uncertain/i);
-  assert.match(result.answer,/Some invoices need a quick review before follow-up\./i);
-  assert.equal((result.answer.match(/quick review/g)||[]).length,1);
+  assert.equal(result.answer,"There aren't any overdue invoices in this business right now.");
   assert.doesNotMatch(result.answer,/confirm classification before treating|confirm unclassified/i);
 });
 

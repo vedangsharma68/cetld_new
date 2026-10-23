@@ -1,3 +1,4 @@
+import {receivableKind,summarizeReceivables,receivablesAnswer,isOutstandingBalanceQuestion} from '../../invoice/receivables.mjs';
 // Bounded explanations derive money from current scoped reads. They never
 // authorize a payment, proposal, refund or change to the ledger.
 const clean=value=>String(value||'').normalize('NFKC').replace(/[’‘]/g,"'").trim();
@@ -16,6 +17,7 @@ function explanationTail(tail){
 export function ownerInvoiceReadAnalysis(message){
   const text=clean(message);
   if(!text||text.length>1200)return null;
+  if(isOutstandingBalanceQuestion(text))return {kind:'outstandingSummary'};
   if(/^how\s+many\s+(?:(?:unpaid|outstanding)\s+invoices|invoices\s+are\s+(?:unpaid|outstanding))[.!?]?$/i.test(text))
     return {kind:'unpaidInvoices',includeDrafts:true,countOnly:true};
   if(/^(?:now\s+)?(?:please\s+)?(?:show|list)(?:\s+me)?(?:\s+(?:my|our|the))?\s+(?:unpaid|outstanding)\s+invoices[.!?]?$/i.test(text))
@@ -60,24 +62,25 @@ export function ownerHypotheticalOverpayment(message){
 }
 export function invoiceReadAnalysisArgs(analysis){
   if(!analysis)return null;
-  const filters=analysis.kind==='conditionalPayment'
+  const filters=analysis.kind==='outstandingSummary'?[]:analysis.kind==='conditionalPayment'
     ?[{column:'invoice_number',operator:'eq',value:analysis.invoiceNumber},{column:'customer_name',operator:'eq',value:analysis.customerName}]
     :analysis.kind==='unpaidInvoices'
     ?[{column:'status',operator:'in',value:['draft','sent','overdue']}]
-    :[{column:'customer_name',operator:'in',value:analysis.customerNames},...(analysis.includeDrafts?[]:[{column:'status',operator:'neq',value:'draft'}])];
+    :[{column:'customer_name',operator:'in',value:analysis.customerNames}];
   return {operation:'read',table:'invoices',columns:['invoice_number','customer_name','currency','total_amount','amount_paid','outstanding_amount','overpayment_amount','status'],filters,limit:50,offset:0};
 }
 export function deriveInvoiceReadAnalysis(analysis,rows,{truncated=false}={}){
   if(!analysis||!Array.isArray(rows)||truncated)return null;
   const parsed=rows.map(row=>({row,total:money(row.total_amount),paid:money(row.amount_paid)}));
   if(parsed.some(item=>item.total===null||item.paid===null||!/^[A-Z]{3}$/.test(item.row.currency||'')))return null;
+  if(analysis.kind==='outstandingSummary')return {kind:analysis.kind,readOnly:true,complete:true,balanceSummary:summarizeReceivables(rows)};
   if(analysis.kind==='unpaidInvoices'){
     if(parsed.some(({row})=>!['draft','sent','overdue'].includes(row.status)||typeof row.invoice_number!=='string'||!row.invoice_number))return null;
     const invoices=parsed.filter(({row,total,paid})=>row.metadata?.invoice_direction!=='payable'&&paid<total)
       .map(({row,total,paid})=>({invoiceNumber:row.invoice_number,customerName:clean(row.customer?.name||row.customer?.[0]?.name||row.customer_name),
         currency:row.currency,total:amount(total),paid:amount(paid),outstanding:amount(total-paid),status:row.status,
         direction:row.metadata?.invoice_direction==='payable'?'payable':'receivable'}));
-    return {kind:analysis.kind,readOnly:true,complete:true,invoices,includesDrafts:invoices.some(row=>row.status==='draft'),...(analysis.countOnly?{countOnly:true}:{})};
+    return {kind:analysis.kind,readOnly:true,complete:true,invoices,balanceSummary:summarizeReceivables(rows),includesDrafts:invoices.some(row=>row.status==='draft'),...(analysis.countOnly?{countOnly:true}:{})};
   }
   if(analysis.kind==='conditionalPayment'){
     if(parsed.length!==1)return null;
@@ -87,45 +90,37 @@ export function deriveInvoiceReadAnalysis(analysis,rows,{truncated=false}={}){
     const nextPaid=paid+analysis.paymentCents;
     if(!Number.isSafeInteger(nextPaid))return null;
     return {kind:analysis.kind,invoiceNumber:row.invoice_number,requestedInvoiceNumber:analysis.invoiceNumber,currency:row.currency,
-      total:amount(total),paid:amount(paid),hypotheticalPayment:amount(analysis.paymentCents),currentOutstanding:amount(Math.max(total-paid,0)),
+      total:amount(total),paid:amount(paid),unissuedDraft:receivableKind(row)==='draft',hypotheticalPayment:amount(analysis.paymentCents),currentOutstanding:amount(Math.max(total-paid,0)),
       resultingOutstanding:amount(Math.max(total-nextPaid,0)),resultingOverpayment:amount(Math.max(nextPaid-total,0)),readOnly:true};
   }
-  const expected=new Set(analysis.customerNames.map(name=>name.toLowerCase())),groups=new Map();
-  for(const {row,total,paid} of parsed){
+  const expected=new Set(analysis.customerNames.map(name=>name.toLowerCase()));
+  for(const {row} of parsed){
     if(row.metadata?.invoice_direction==='payable')continue;
     if(!expected.has(clean(row.customer?.name||row.customer?.[0]?.name||row.customer_name).toLowerCase()))return null;
-    const sum=(groups.get(row.currency)||0)+Math.max(total-paid,0);
-    if(!Number.isSafeInteger(sum))return null;
-    groups.set(row.currency,sum);
   }
-  return {kind:analysis.kind,readOnly:true,complete:true,invoiceCount:rows.length,includesDrafts:analysis.includeDrafts,
-    groups:[...groups].sort(([a],[b])=>a.localeCompare(b)).map(([currency,cents])=>({currency,outstanding:amount(cents)}))};
+  const balanceSummary=summarizeReceivables(rows);
+  return {kind:analysis.kind,readOnly:true,complete:true,invoiceCount:rows.length,includesDrafts:Object.keys(balanceSummary.draftBalancesByCurrency).length>0,
+    balanceSummary,groups:Object.entries(balanceSummary.currencies).map(([currency,row])=>({currency,outstanding:row.outstandingAmount}))};
 }
 export function invoiceReadAnalysisReply(result){
   if(result?.ok!==true||result.readOnly!==true||result.operation!=='read'||result.table!=='invoices'||result.truncated===true)return null;
   const a=result.invoiceReadAnalysis;
   if(a?.readOnly!==true)return null;
+  if(a.kind==='outstandingSummary'&&a.complete===true)return receivablesAnswer(a.balanceSummary);
   if(a.kind==='unpaidInvoices'&&a.complete===true){
     if(!a.invoices.length)return 'No unpaid invoices were found. Would you like to see all invoices? No changes were made.';
-    if(a.countOnly){
-      const groups=new Map();
-      for(const row of a.invoices)groups.set(row.currency,(groups.get(row.currency)||0)+money(row.outstanding));
-      const totals=[...groups].sort(([a],[b])=>a.localeCompare(b)).map(([currency,cents])=>`${currency} ${amount(cents)}`).join(', ');
-      return `${a.invoices.length} outstanding invoice${a.invoices.length===1?'':'s'}.${totals?` Total outstanding: ${totals}.`:''}`;
-    }
-    let answer=`Unpaid invoices${a.includesDrafts?', including drafts':''}:`;
+    if(a.countOnly)return receivablesAnswer(a.balanceSummary,{countOnly:true});
+    let answer=receivablesAnswer(a.balanceSummary)+'\nInvoices (drafts labelled separately):';
     let shown=0;
     for(const row of a.invoices){
-      const tags=[...(row.status==='draft'?['draft']:[]),...(row.direction==='payable'?['payable']:[])];
+      const tags=[...(row.status==='draft'?['unissued draft; not yet receivable']:[]),...(row.direction==='payable'?['payable']:[])];
       const line=`\n${row.invoiceNumber}${row.customerName?` (${row.customerName})`:''}: ${row.currency} ${row.outstanding}${tags.length?` (${tags.join(', ')})`:''}`;
       if(answer.length+line.length>850)break;
       answer+=line;shown++;
     }
     return answer+(shown<a.invoices.length?`\nShowing ${shown} of ${a.invoices.length}. Ask about a specific customer for the rest.`:'')+'\nNo changes were made.';
   }
-  if(a.kind==='conditionalPayment')return `For invoice ${a.invoiceNumber}, the current outstanding balance is ${a.currency} ${a.currentOutstanding}. If an additional ${a.currency} ${a.hypotheticalPayment} were paid, the overpayment would be ${a.currency} ${a.resultingOverpayment} and the remaining balance would be ${a.currency} ${a.resultingOutstanding}. This is an explanation only. No changes were made.`;
-  if(a.kind==='currencyBalances'&&a.complete===true)return a.groups.length
-    ?`Outstanding balances for the requested customers${a.includesDrafts?', including draft invoices':''}:\n${a.groups.map(group=>`${group.currency} ${group.outstanding}`).join('\n')}\nCurrencies are kept separate. No changes were made.`
-    :'No outstanding receivable balances were found for the requested customers. Would you like to see their invoices? No changes were made.';
+  if(a.kind==='conditionalPayment')return `For invoice ${a.invoiceNumber}, the current ${a.unissuedDraft?'unissued draft balance (not yet receivable)':'issued outstanding balance'} is ${a.currency} ${a.currentOutstanding}. If an additional ${a.currency} ${a.hypotheticalPayment} were paid, the overpayment would be ${a.currency} ${a.resultingOverpayment} and the remaining balance would be ${a.currency} ${a.resultingOutstanding}. This is an explanation only. No changes were made.`;
+  if(a.kind==='currencyBalances'&&a.complete===true)return receivablesAnswer(a.balanceSummary)+'\nCurrencies are kept separate. No changes were made.';
   return null;
 }

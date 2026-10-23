@@ -16,7 +16,7 @@ test('calculates outstanding, overdue, seven-day due and calendar-month payments
     {invoice_id:'soon',amount_minor:1000,paid_at:'2026-08-31T20:00:00-04:00'},
   ];
   assert.deepEqual(collectionsPulse(invoices,payments,{today:'2026-09-23',defaultCurrency:'INR'}),[
-    {currency:'INR',outstanding:28500,overdue:7500,dueNext7Days:12000,collectedThisMonth:3500},
+    {currency:'INR',unissuedDrafts:0,outstanding:28500,overdue:7500,dueNext7Days:12000,collectedThisMonth:3500},
   ]);
 });
 
@@ -25,14 +25,14 @@ test('keeps currencies separate and derives payment currency from its invoice',(
     invoice('inr','INR',12500,0,'2026-09-24'),invoice('usd','USD',9900,0,'2026-09-25'),
   ],[{invoice_id:'usd',amount_minor:1200,created_at:'2026-09-15T00:00:00Z'}],{today:'2026-09-23'});
   assert.deepEqual(rows,[
-    {currency:'INR',outstanding:12500,overdue:0,dueNext7Days:12500,collectedThisMonth:0},
-    {currency:'USD',outstanding:9900,overdue:0,dueNext7Days:9900,collectedThisMonth:1200},
+    {currency:'INR',unissuedDrafts:0,outstanding:12500,overdue:0,dueNext7Days:12500,collectedThisMonth:0},
+    {currency:'USD',unissuedDrafts:0,outstanding:9900,overdue:0,dueNext7Days:9900,collectedThisMonth:1200},
   ]);
 });
 
 test('returns a zeroed default-currency card for an empty workspace',()=>{
   assert.deepEqual(collectionsPulse([],[],{today:'2026-09-23',defaultCurrency:'EUR'}),[
-    {currency:'EUR',outstanding:0,overdue:0,dueNext7Days:0,collectedThisMonth:0},
+    {currency:'EUR',unissuedDrafts:0,outstanding:0,overdue:0,dueNext7Days:0,collectedThisMonth:0},
   ]);
 });
 
@@ -44,7 +44,7 @@ test('deleted invoices and their payment rows never enter collections reports',(
     {invoice_id:'active',amount_minor:1000,paid_at:'2026-09-15T00:00:00Z'},
     {invoice_id:'deleted',amount_minor:5000,paid_at:'2026-09-15T00:00:00Z'},
   ],{today:'2026-09-20',defaultCurrency:'INR'});
-  assert.deepEqual(rows,[{currency:'INR',outstanding:9000,overdue:0,dueNext7Days:9000,collectedThisMonth:1000}]);
+  assert.deepEqual(rows,[{currency:'INR',unissuedDrafts:0,outstanding:9000,overdue:0,dueNext7Days:9000,collectedThisMonth:1000}]);
 });
 
 test('excludes cancelled balances and ignores payments outside the current month',()=>{
@@ -62,7 +62,7 @@ test('uses the workspace timezone at a calendar-month boundary and skips unknown
     {invoice_id:'missing',amount_minor:900,paid_at:'2026-09-30T20:30:00Z'},
   ],{today:'2026-10-01',defaultCurrency:'INR',timeZone:'Asia/Kolkata'});
   assert.deepEqual(rows,[
-    {currency:'USD',outstanding:1000,overdue:0,dueNext7Days:0,collectedThisMonth:300},
+    {currency:'USD',unissuedDrafts:0,outstanding:1000,overdue:0,dueNext7Days:0,collectedThisMonth:300},
   ]);
 });
 

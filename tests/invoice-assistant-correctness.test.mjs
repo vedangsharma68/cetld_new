@@ -86,13 +86,13 @@ test('how-many intent leads with a count, keeps currencies separate, and exclude
   for(const invoices of [[base,{...base,id:userId,invoice_number:'BILL-9',total_amount:'9999.00',metadata:{invoice_direction:'payable'}},{...base,id:customerId,currency:'USD'}],[]]){
     const f=await productionStore({invoices});
     const result=await answerWorkspaceQuestion({provider:noProvider,store:f.store,clock,message:'How many invoices are outstanding?'});
-    assert.match(result.answer,invoices.length?/^2 outstanding invoices\. Total outstanding: INR 118\.00, USD 118\.00\./:/^0 outstanding invoices\./);
+    assert.match(result.answer,invoices.length?/^2 issued outstanding invoices\. Issued outstanding: INR 118\.00, USD 118\.00\./:/^0 issued outstanding invoices\./);
     assert.doesNotMatch(result.answer,/9999/);
   }
   const ownerAnalysis=deriveInvoiceReadAnalysis(ownerInvoiceReadAnalysis('How many invoices are outstanding?'),[base,{...base,metadata:{invoice_direction:'payable'}}]);
-  assert.equal(invoiceReadAnalysisReply({ok:true,readOnly:true,operation:'read',table:'invoices',invoiceReadAnalysis:ownerAnalysis}),'1 outstanding invoice. Total outstanding: INR 118.00.');
+  assert.equal(invoiceReadAnalysisReply({ok:true,readOnly:true,operation:'read',table:'invoices',invoiceReadAnalysis:ownerAnalysis}),'1 issued outstanding invoice. Issued outstanding: INR 118.00.\nUnissued drafts (not yet receivable): none.');
   const f=await productionStore();const result=await answerWorkspaceQuestion({provider:noProvider,store:f.store,clock,message:'How much is outstanding?'});
-  assert.match(result.answer,/^Unpaid balances total INR 118\.00/);
+  assert.match(result.answer,/^Issued outstanding: INR 118\.00/);
 });
 
 test('PDF and image directions survive the real upload-confirm save and metadata update paths',async()=>{

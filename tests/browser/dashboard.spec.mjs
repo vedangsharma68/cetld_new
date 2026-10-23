@@ -288,3 +288,26 @@ for(const width of [360,800,1280])test(`queued reminders show approved delivery 
   await layout(page);await summary.scrollIntoViewIfNeeded();await page.screenshot({path:info.outputPath('queued-delivery.png'),animations:'disabled'});
   await page.evaluate(()=>__ui.detail(__ui.state.invoices[0].id));await expect(page.locator('dialog .approved-delivery-summary')).toContainText('Exactly the words approved');await page.keyboard.press('Escape');
 });
+
+for(const width of [390,1280])test(`Overview and Collections Pulse separate issued outstanding from unissued drafts at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:844});await boot(page);
+  await page.evaluate(async()=>{
+    const {receivablesLedger}=await import('/tests/fixtures/receivables.mjs');
+    __ui.state.invoices=receivablesLedger.map(row=>({...row,number:row.invoice_number,client:'Test customer',amount_minor:Math.round(Number(row.total_amount)*100),paid_minor:Math.round(Number(row.amount_paid)*100)}));
+    __ui.state.payments=[];__ui.state.page='Overview';__ui.render();
+  });
+  const card=page.locator('.stats .stat').first();
+  await expect(card).toContainText('Issued outstanding');
+  await expect(card.locator('[data-counter]')).toHaveAttribute('data-counter','100');
+  await expect(card).toContainText('1 INR issued invoice');
+  await expect(card).toContainText(/plus.*20,496(?:\.00)? in unissued drafts \(not yet receivable\)/);
+  await expect(page.locator('.currency-caption')).toHaveText('Top cards show INR only. Other currencies appear in Collections Pulse.');
+  const primary=page.locator('.pulse-metric.is-primary');
+  await expect(primary).toContainText('Issued outstanding');
+  await expect(primary.locator('strong[data-currency=INR]')).toHaveText('₹1');
+  await expect(primary.locator('strong[data-currency=USD]')).toContainText('255.06');
+  await expect(primary.locator('strong[data-currency=AUD]')).toContainText('0');
+  await expect(primary).toContainText(/plus.*4,490(?:\.00)? in unissued drafts/);
+  await expect(page.locator('.pulse-currency-note')).toContainText('Currencies are shown separately. No FX conversion is applied. Unissued drafts are not yet receivable.');
+  await layout(page);
+});

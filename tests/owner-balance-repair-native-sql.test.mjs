@@ -27,16 +27,17 @@ test('owner outstanding read returns scoped per-currency totals and verified his
         return {content:'Your total outstanding is INR 4,750.00. There is no payment history.'};
       }})});
     const turn=async id=>{
-      const message='what is my total outstanding?';
+      const message='Please tell me my total outstanding balance?';
       await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[id,phone,message]);
       return handler({workspaceId,ownerId,customerId,phone,messageId:id,message});
     };
     const before=(await db.query('select jsonb_agg(to_jsonb(i) order by id) value from invoices i')).rows[0].value;
     const response=await turn('balance-live-shape');
-    assert.equal(response.plannerFailure,undefined);assert.match(response.answer,/INR 4,750.00/);assert.match(response.answer,/no payment history/);
-    assert.equal(calls,2);assert.equal(results.length,1);
+    assert.equal(response.plannerFailure,undefined);assert.equal(response.answer,'Issued outstanding: none.\nUnissued drafts (not yet receivable): INR 4750.00.');
+    assert.equal(calls,1);assert.equal(results.length,1);
     const evidence=results[0];assert.equal(evidence.ok,true,JSON.stringify(evidence));
-    assert.deepEqual(evidence.outstandingTotals,[{currency:'INR',outstanding_amount:'4750.00'}]);
+    assert.deepEqual(evidence.outstandingTotals,[]);
+    assert.equal(evidence.balanceSummary.draftBalancesByCurrency.INR.outstandingAmount,'4750.00');
     assert.equal(evidence.paymentHistory.ok,true);assert.equal(evidence.paymentHistory.truncated,false);assert.deepEqual(evidence.paymentHistory.rows,[]);
     assert.equal(ownerGroundingIssue(response.answer,[evidence]),null);
     assert.equal(ownerGroundingIssue('Outstanding: Rs 4,751.00.',[evidence]),'fresh_database_read_required');
