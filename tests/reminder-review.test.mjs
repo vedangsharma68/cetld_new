@@ -32,3 +32,14 @@ test('queued reminders show the server receipt words, never the later editable d
   assert.equal(queuedReminderDeliveryView({...invoice,status:'paid'}),'');
   assert.match(queuedReminderDeliveryView({...invoice,metadata:{}}),/Delivery needs re-review/);
 });
+
+test('editable tone drafts avoid possessive apostrophes in business names',async()=>{
+  const {reminderToneDraft}=await import('../reminder-review-ui.mjs');
+  for(const business_name of ['CETLD test','QA Sharma Traders',"James' Studio",'A$&B']){
+    for(const tone of ['gentle','relaxed','firm','professional']){
+      const text=reminderToneDraft({invoice:{invoice_number:'INV-1',total_amount:'1500.00',currency:'INR',due_date:'2026-10-30'},settings:{business_name},customer:{name:'Customer'}},tone);
+      assert.ok(text.includes(`I'm Cetld, an assistant for ${business_name}.`));
+      assert.ok(!text.includes(`${business_name}'s assistant`));
+    }
+  }
+});

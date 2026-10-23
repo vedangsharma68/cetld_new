@@ -187,8 +187,17 @@ async function reviewFixture(page,kind='service'){
     });
   },kind);
 }
-for(const width of [360,800,1280])test(`reminder exact-word approval at ${width}px`,async({page},info)=>{
+for(const width of [360,390,800,1280])test(`reminder exact-word approval at ${width}px`,async({page},info)=>{
   await page.setViewportSize({width,height:740});await reviewFixture(page);
+  const timing=page.getByRole('combobox',{name:'Delivery timing'});
+  for(const value of ['false','true']){
+    await timing.selectOption(value);
+    expect(await timing.evaluate(e=>{
+      const style=getComputedStyle(e),canvas=document.createElement('canvas'),context=canvas.getContext('2d');
+      context.font=style.font;
+      return context.measureText(e.selectedOptions[0].textContent).width<=e.clientWidth-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight);
+    })).toBe(true);
+  }
   const approve=page.locator('[data-approve-reminder]');await expect(approve).toBeDisabled();
   await page.getByRole('button',{name:'Preview delivery',exact:true}).click();await expect(page.locator('[data-delivery-preview]')).toContainText('Will send as your message');
   await expect(approve).toBeDisabled();await page.locator('[data-delivery-ack]').check();await expect(approve).toBeEnabled();
@@ -310,4 +319,16 @@ for(const width of [390,1280])test(`Overview and Collections Pulse separate issu
   await expect(primary).toContainText(/plus.*4,490(?:\.00)? in unissued drafts/);
   await expect(page.locator('.pulse-currency-note')).toContainText('Currencies are shown separately. No FX conversion is applied. Unissued drafts are not yet receivable.');
   await layout(page);
+});
+
+test('auth loading ends on the sign-in screen and when an account renders',async({page})=>{
+  await boot(page);
+  await expect(page.locator('body')).not.toHaveClass(/auth-loading/);
+  await page.evaluate(()=>{document.body.classList.add('auth-loading','preserved-body-class');__ui.state.demo=false;__ui.render()});
+  await expect(page.locator('.shell')).toBeVisible();
+  await expect(page.locator('body')).not.toHaveClass(/auth-loading/);
+  await expect(page.locator('body')).toHaveClass(/preserved-body-class/);
+  await page.evaluate(()=>{document.body.classList.add('auth-loading');__ui.state.user=null;__ui.render()});
+  await expect(page.locator('#auth-form')).toBeVisible();
+  await expect(page.locator('body')).not.toHaveClass(/auth-loading/);
 });
