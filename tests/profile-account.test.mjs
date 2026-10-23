@@ -92,7 +92,7 @@ test(`provider ${key} is used with ${profile ? 'an empty' : 'no'} profile row`, 
   assert.equal(state.profile.fullName, 'Ada Lovelace');
   assert.equal(state.profile.initials, 'AL');
   if (!profile) assert.equal(rows.profiles.full_name, 'Ada Lovelace');
-  assert.equal(rows.workspaces.name, "Ada Lovelace's workspace");
+  assert.equal(rows.workspaces.name, "Ada Lovelace's business");
   assertDisplayedName(context, 'Ada Lovelace', 'Ada');
 });
 
@@ -100,8 +100,8 @@ test('unnamed email account creates a neutral workspace', async () => {
   const {context, state, rows} = accountFixture(null, {workspace: null});
   await context.ensureAccount(state.user);
   assert.equal(rows.profiles.full_name, null);
-  assert.equal(rows.workspaces.name, 'My workspace');
-  assert.equal(state.profile.secondaryLabel, 'My workspace');
+  assert.equal(rows.workspaces.name, 'My business');
+  assert.equal(state.profile.secondaryLabel, 'My business');
   assertDisplayedName(context, '', '');
 });
 
@@ -110,7 +110,7 @@ test('workspace creation uses the saved name before stale provider metadata', as
     metadata: {full_name: 'QA'}, workspace: null,
   });
   await context.ensureAccount(state.user);
-  assert.equal(rows.workspaces.name, "Mary-Jane McDonald's workspace");
+  assert.equal(rows.workspaces.name, "Mary-Jane McDonald's business");
   assertDisplayedName(context, 'Mary-Jane McDonald', 'Mary-Jane');
 });
 
