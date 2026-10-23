@@ -16,34 +16,34 @@ test('profile reads existing auth metadata and keeps initials in sync', () => {
 
 test('profile uses safe fallbacks when metadata is missing', () => {
   assert.deepEqual(profileFromUser({email: 'vedang@example.com'}), {
-    fullName: 'Vedang',
+    fullName: '',
     businessName: '',
-    initials: 'VE',
+    initials: 'AC',
     secondaryLabel: 'Business owner',
   });
-  assert.equal(profileFromUser(null).fullName, 'Account');
+  assert.equal(profileFromUser(null).fullName, '');
   assert.equal(profileFromUser(null).initials, 'AC');
 });
 
-for (const [localPart, fullName, initials] of [
-  ['vedangsharma52+clientqa1', 'Vedangsharma52', 'VE'],
-  ['clientqa1', 'Clientqa1', 'CL'],
-  ['vedang.sharma', 'Vedang Sharma', 'VS'],
-  ['VEDANG_sharma-clientqa1+qa.test-tag', 'Vedang Sharma Clientqa1', 'VC'],
-  ['.vedang__sharma--', 'Vedang Sharma', 'VS'],
-  ['+tag', 'Account', 'AC'],
-  ['._-+tag', 'Account', 'AC'],
-]) test(`email fallback formats ${localPart}`, () => {
+for (const localPart of [
+  'vedangsharma52+clientqa1',
+  'clientqa1',
+  'vedang.sharma',
+  'VEDANG_sharma-clientqa1+qa.test-tag',
+  '.vedang__sharma--',
+  '+tag',
+  '._-+tag',
+]) test(`email local-part ${localPart} is never treated as a name`, () => {
   const profile = profileFromUser({
     email: `${localPart}@example.com`,
     user_metadata: {full_name: ' ', name: ''},
   });
-  assert.equal(profile.fullName, fullName);
-  assert.equal(profile.initials, initials);
+  assert.equal(profile.fullName, '');
+  assert.equal(profile.initials, 'AC');
 });
 
 for (const key of ['full_name', 'fullName', 'name'])
-test(`explicit ${key} takes precedence over the email fallback without reformatting`, () => {
+test(`explicit ${key} is preserved without reformatting`, () => {
   const profile = profileFromUser({
     email: 'vedang.sharma+clientqa1@example.com',
     user_metadata: {[key]: '  Mary-Jane McDonald  '},
