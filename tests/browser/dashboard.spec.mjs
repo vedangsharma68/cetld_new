@@ -177,10 +177,11 @@ for(const width of [360,800,1280])test(`queued reminders show approved delivery 
   await page.setViewportSize({width,height:800});await boot(page);
   await page.evaluate(()=>{
     const s=__ui.state,x=s.invoices[0];
-    x.followup_state='scheduled';x.status='sent';x.reminder_text='Later editable text that must not replace the receipt';
+    x.followup_state='approved';x.status='sent';x.reminder_text='Later editable text that must not replace the receipt';
     x.metadata={approved_reminder_delivery:{type:'template',name:'cetld_invoice_details_firm_v1',body:'Exactly the words approved for this pending reminder.'},approved_reminder_delivery_reviewed_at:new Date().toISOString()};
     s.page='Conversations';s.conversationId=x.id;__ui.render();
   });
+  await expect(page.locator('.draft-state')).toContainText('Reviewed · awaiting delivery');
   const summary=page.locator('.approved-delivery-summary');await expect(summary).toContainText('cetld_invoice_details_firm_v1');await expect(summary).toContainText('Exactly the words approved');await expect(summary).not.toContainText('Later editable text');
   await layout(page);await summary.scrollIntoViewIfNeeded();await page.screenshot({path:info.outputPath('queued-delivery.png'),animations:'disabled'});
   await page.evaluate(()=>__ui.detail(__ui.state.invoices[0].id));await expect(page.locator('dialog .approved-delivery-summary')).toContainText('Exactly the words approved');await page.keyboard.press('Escape');
