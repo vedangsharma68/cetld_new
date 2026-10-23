@@ -2,7 +2,7 @@ const SUCCESS_ACTIONS = new Set(['capabilities', 'prepareDelete', 'confirmDelete
 
 const ERROR_MESSAGES = Object.freeze({
   SIGN_IN_REQUIRED: 'Sign in again before changing this invoice.',
-  OWNER_REQUIRED: 'Only the workspace owner can delete or restore invoices.',
+  OWNER_REQUIRED: 'Only the business owner can delete or restore invoices.',
   INVOICE_NOT_FOUND: 'This invoice is no longer available. Refresh the ledger and try again.',
   ACTION_STALE: 'This invoice changed while you were reviewing it. Refresh the ledger and try again.',
   ACTION_EXPIRED: 'This confirmation expired. Open the invoice again to start over.',

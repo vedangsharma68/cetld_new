@@ -88,7 +88,7 @@ test('owner WhatsApp settings expose customization only to the owner and escape 
   assert.match(owner,/name="customInstruction"/);
   assert.match(owner,/<option value="Hindi"/);
   assert.match(owner,/&lt;helper&gt;/);
-  assert.match(owner,/workspace permissions and approval rules still apply/i);
+  assert.match(owner,/business permissions and approval rules still apply/i);
   const member=ownerWhatsAppSettings({owner:false});
   assert.doesNotMatch(member,/owner-bot-preferences-form/);
   assert.deepEqual(readOwnerBotPreferences({

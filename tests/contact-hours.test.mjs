@@ -78,7 +78,7 @@ test('UI saves selected days and clock times using canonical keys only, removing
   assert.deepEqual(saved.allowedWeekdays,[0,3]);assert.equal(saved.contactStart,'10:15');assert.equal(saved.contactEnd,'16:45');assert.equal(saved.other,'keep');
   for(const key of ['weekdays','hoursStart','hoursEnd','start_local','end_local'])assert.equal(key in saved,false);
   const html=followUpPreferencesForm(saved,'America/New_York');
-  assert.match(html,/workspace timezone: America\/New_York/);assert.match(html,/value="10:15"/);assert.match(html,/value="16:45"/);
+  assert.match(html,/Business timezone: America\/New_York/);assert.match(html,/value="10:15"/);assert.match(html,/value="16:45"/);
   assert.equal((followUpPreferencesForm().match(/name="weekday"[^>]+checked/g)||[]).length,7);
   assert.equal(formPreferences({contactStart:'00:00',contactEnd:'23:59'}).contactStart,'00:00');
 });

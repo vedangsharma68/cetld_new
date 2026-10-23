@@ -73,7 +73,7 @@ test('invoice details expose the action outside financial controls and switching
  vm.runInNewContext(action+';globalThis.run=downloadInvoiceOriginal',context);
  const trigger={disabled:false,setAttribute(){},removeAttribute(){}};
  const result=context.run(invoiceId,trigger);assert.equal(trigger.disabled,true);state.user={id:randomUUID()};release({blob:new Blob([original]),fileName:'original.pdf'});
- await assert.rejects(result,/workspace changed/);assert.equal(saves,0);assert.equal(trigger.disabled,false);assert.deepEqual(state.invoices,before);
+ await assert.rejects(result,/business changed/);assert.equal(saves,0);assert.equal(trigger.disabled,false);assert.deepEqual(state.invoices,before);
 });
 
 test('actual SQL RLS permits own original, denies foreign workspace and anonymous download before Storage',async()=>{

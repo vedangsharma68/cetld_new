@@ -41,7 +41,7 @@ test('privacy and terms keep static contact content with only the auth callback 
 
 test('the existing client application is available from the app route', () => {
   assert.match(app, /id="app"/);
-  assert.match(app, /src="\/app\.js"/);
+  assert.match(app, /src="\/app\.js(?:\?v=[a-f0-9]{64})?"/);
 });
 
 test('landing hero rotation reserves descender room and animates a measured width', () => {
