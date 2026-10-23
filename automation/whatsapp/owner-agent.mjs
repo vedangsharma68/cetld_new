@@ -1,4 +1,5 @@
 import {parseTextInvoice,textInvoiceFailure} from './text-invoice.mjs';
+import {personalNoteReply} from '../../ai/personal-note.mjs';
 import {verifyOwnerPaymentReceipt,ownerPartialPaymentAvailable} from './owner-payment-readback.mjs';
 import {requestedOwnerPayment,ownerPaymentAmountMentioned} from './owner-payment-intent.mjs';
 import {ownerInvoiceReadIntent} from './owner-invoice-read-intent.mjs';
@@ -156,6 +157,7 @@ function ownerRequestsInvoiceAttachment(message) {
   return !/\b(?:don't|do not|never|must not|shouldn't|should not|avoid)\b|\bnot\s+(?:now|yet|to\s+(?:log|save|add|create|record|enter))\b|(?:^|[.!?;,])\s*no\b/u.test(text);
 }
 function ownerRequestsRetainedInvoiceSave(message) {
+  if(personalNoteReply(message))return false;
   const clauses=normalizedOwnerText(message).split(/[.!?;,]+|\b(?:and|but)\b/u).map(value=>value.trim()).filter(Boolean)
     .filter(value=>!/^(?:please )?(?:(?:don't|do not|never|avoid)\s+(?:send|schedule|trigger|deliver)\b|no\s+)(?:[^.!?;]*\breminders?\b)/u.test(value));
   // Permission to discuss a possible/later save is not permission to save now.
