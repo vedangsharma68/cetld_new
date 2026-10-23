@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {parseTextInvoice,TEXT_INVOICE_FORMAT,textInvoiceFailure} from '../automation/whatsapp/text-invoice.mjs';
+import {parseTextInvoice,TEXT_INVOICE_FORMAT,TEXT_INVOICE_CLARIFICATION,textInvoiceFailure,textInvoiceClarification} from '../automation/whatsapp/text-invoice.mjs';
 import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs';
 import {ownerGroundingIssue} from '../automation/whatsapp/owner-grounding.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
@@ -86,7 +86,7 @@ test('invalid create returns explicit accepted format and the owner agent preser
   assert.equal(answer.answer,textInvoiceFailure(result));
 });
 
-test('repeating an invalid structured create is an assistant failure, including supported fields with wrong types',async()=>{
+test('an INVALID_FIELDS create asks one clarification before a generic failure or repeated model call',async()=>{
   let providerCalls=0,toolCalls=0;
   const args={operation:'create',table:'invoices',values:{customer_name:'QA',total_amount:'one thousand'}};
   const result=await runOwnerAgent({message:'Create the invoice with the details I gave you',clock,
@@ -94,9 +94,9 @@ test('repeating an invalid structured create is an assistant failure, including 
     tools:{definitions:[{type:'function',function:{name:'workspaceData',parameters:{type:'object'}}}],getWriteAttempted:()=>false,
       async execute(){toolCalls++;return {ok:false,code:'INVALID',validationCode:'INVALID_FIELDS',writeAttempted:false,
         validationShape:{operation:'create',table:'invoices',valueFields:['customer_name','total_amount']},message:TEXT_INVOICE_FORMAT};}}});
-  assert.equal(providerCalls,2);assert.equal(toolCalls,1,'the rejected write is cached, not retried');
-  assert.match(result.answer,/couldn[’']t complete the invoice/);assert.match(result.answer,/Nothing was changed/);
-  assert.doesNotMatch(result.answer,/Check the details|clear request|Try: new invoice/);
+  assert.equal(providerCalls,1);assert.equal(toolCalls,1);
+  assert.equal(result.answer,TEXT_INVOICE_CLARIFICATION);
+  assert.equal(result.answer.match(/\?/g).length,1);
 });
 
 test('a generic error or owner-supplied code cannot ground a duplicate claim',()=>{
@@ -108,14 +108,14 @@ test('a generic error or owner-supplied code cannot ground a duplicate claim',()
   assert.equal(ownerGroundingIssue(reply,[{ok:true,readOnly:true,table:'invoices',rows:[{invoice_number:'OTHER'}]}]),'unverified_invoice_duplicate');
 });
 
-test('invalid natural-language creation plans return format help; authorization and protected fields stay enforced',async()=>{
+test('invalid natural-language creation plans ask for clarification; authorization and protected fields stay enforced',async()=>{
   const message='New invoice for QA, amount Rs 500';
   let writes=0;
   const make=options=>createWorkspaceDataTool({supabase:{from(){throw Error('No live reads');}},scope,clock,message,authorize:async()=>true,
     planRequest:async()=>({operation:'create',table:'invoices',values:{}}),
     executeDirectOperation:async()=>{writes++;throw Error('No write expected');},...options});
   const bad=await make().execute({request:message});
-  assert.equal(bad.invoiceCreationFailure,true);assert.ok(bad.message.endsWith(TEXT_INVOICE_FORMAT));
+  assert.equal(bad.invoiceCreationFailure,true);assert.equal(bad.message,TEXT_INVOICE_CLARIFICATION);
   const valid=examples[0][0];
   const denied=await make({message:valid,authorize:async()=>false}).execute({request:valid});
   assert.equal(denied.code,'DENIED');
@@ -149,4 +149,80 @@ test('text interception keeps unknown fields, scope and attachment guards',async
   assert.equal((await make({message:'Create an invoice'}).execute({operation:'create',table:'invoices',values:{amount:2500}})).ok,false);
   assert.equal((await make({attachmentAvailable:true}).execute({operation:'create',table:'invoices',values:parseTextInvoice(message,{clock}).values})).ok,false);
   assert.equal(writes,0);
+});
+
+const productionClock=()=>new Date('2026-10-23T13:57:49Z');
+const productionMessages=[
+  'Invoice QA Dedup Customer for 3200 rupees, invoice number QA-TEXT-001, due 20 November.',
+  'invoice QA Dedup Customer for 3200 rupees due 20 November',
+  'can you invoice QA Question Customer for 2100 rupees?',
+];
+
+test('production utterances parse exactly, or ask only for the missing due date without a model or write',async()=>{
+  for(const [index,message] of productionMessages.entries()){
+    const parsed=parseTextInvoice(message,{clock:productionClock});
+    if(index<2)assert.deepEqual(parsed,{operation:'create',table:'invoices',values:{
+      ...(index===0?{invoice_number:'QA-TEXT-001'}:{}),customer_name:'QA Dedup Customer',
+      total_amount:3200,currency:'INR',issue_date:'2026-10-23',due_date:'2026-11-20'}});
+    else assert.equal(parsed,null);
+    let writes=0;
+    const result=await runOwnerAgent({message,clock:productionClock,logger:{info(){}},
+      provider:{generate(){assert.fail('Canonical text must not call an AI provider');}},
+      tools:{supportsBoundedInvoiceCreation:true,definitions:[{type:'function',function:{name:'workspaceData',parameters:{type:'object'}}}],
+        getWriteAttempted:()=>writes>0,async execute(name,args,options){
+          writes++;assert.equal(name,'workspaceData');assert.deepEqual(args,parsed);assert.equal(options.parsedOwnerInvoiceCreate,true);
+          return {ok:true,completed:true,operation:'create',table:'invoices',record:{invoice_number:args.values.invoice_number||'INV-2026-0001',currency:'INR',total_amount:3200}};
+        }}});
+    assert.equal(writes,index<2?1:0);
+    if(index<2)assert.match(result.answer,/Created invoice/);
+    else assert.equal(result.answer,'What due date should I use for the INR 2100.00 invoice for QA Question Customer?');
+  }
+});
+
+test('natural invoice ambiguity cannot silently drop extra numbers, amounts, dates or actions',async()=>{
+  for(const message of [
+    'invoice QA for 3,20 rupees due 20 November',
+    'invoice QA for 3200.001 rupees due 20 November',
+    'invoice QA for 3200 rupees, invoice number ONE, invoice number TWO, due 20 November',
+    'invoice QA for 3200 rupees or 2100 rupees due 20 November',
+    'invoice QA for 3200 rupees due 31 February',
+    'invoice QA for 3200 rupees due 20 November and send a reminder',
+    'invoice QA for 3200 rupees due 20 November or 21 November',
+  ]){
+    assert.equal(parseTextInvoice(message,{clock:productionClock}),null,message);
+    assert.equal(textInvoiceClarification(message,{clock:productionClock}),TEXT_INVOICE_CLARIFICATION,message);
+    const tool=createWorkspaceDataTool({supabase:{from(){assert.fail('No database access');}},scope,message,clock:productionClock,
+      authorize:async()=>true,confirmationMode:'direct',executeDirectOperation(){assert.fail('No write');}});
+    const result=await tool.execute({operation:'create',table:'invoices',values:{customer_name:'QA',total_amount:3200,currency:'INR',issue_date:'2026-10-23',due_date:'2026-11-20'}});
+    assert.equal(result.invoiceCreationClarification,true);assert.equal(result.writeAttempted,false);
+  }
+  for(const message of ['Do not invoice QA for 3200 rupees due 20 November',
+    'What happens if I invoice QA for 3200 rupees due 20 November?',
+    '"invoice QA for 3200 rupees due 20 November"']){
+    assert.equal(parseTextInvoice(message,{clock:productionClock}),null);assert.equal(textInvoiceClarification(message,{clock:productionClock}),null);
+  }
+});
+
+test('the production model shape is rejected before dispatch and asks one clarification even if marked internal',async()=>{
+  let writes=0,providerCalls=0;
+  const args={operation:'create',table:'invoices',values:{amount:3200,subtotal:3200,due_date:'2026-11-20',total_amount:3200,issue_date:'2026-10-23',currency:'INR',line_items:[{description:'Invoice',amount:3200}]}};
+  const tool=createWorkspaceDataTool({supabase:{from(){assert.fail('No reads');}},scope,message:'Create the invoice from my details',
+    clock:productionClock,authorize:async()=>true,confirmationMode:'direct',executeDirectOperation(){writes++;return {ok:true};}});
+  const rejected=await tool.execute(args);
+  assert.equal(rejected.code,'INVALID');assert.equal(rejected.validationCode,'INVALID_FIELDS');assert.equal(rejected.writeAttempted,false);
+  assert.deepEqual(rejected.validationShape,{operation:'create',table:'invoices',filters:[],valueFields:Object.keys(args.values)});
+  assert.equal(rejected.message,TEXT_INVOICE_CLARIFICATION);assert.equal(writes,0);
+  const result=await runOwnerAgent({message:'Create the invoice from my details',clock:productionClock,
+    provider:{async generate(){providerCalls++;return {toolCalls:[{id:'production-invalid',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(args)}}]};}},
+    tools:{definitions:[tool.definition],getWriteAttempted:()=>false,async execute(){return {...rejected,invoiceCreationClarification:false,invoiceCreationInternalFailure:true};}}});
+  assert.equal(result.answer,TEXT_INVOICE_CLARIFICATION);assert.equal(providerCalls,1);assert.equal(writes,0);
+  // An uncertain write must keep the check-before-retry response.
+  assert.match(textInvoiceFailure({...rejected,invoiceCreationClarification:false,invoiceCreationInternalFailure:true,writeAttempted:true}),/Check cetld before retrying/);
+});
+
+test('invoice create tool guidance exposes customer and number fields and scopes amount/items to their supported operations',()=>{
+  const {function:definition}=createWorkspaceDataTool({supabase:{from(){}},scope}).definition;
+  assert.equal(definition.parameters.properties.values.properties.customer_name.type,'string');
+  assert.equal(definition.parameters.properties.values.properties.invoice_number.type,'string');
+  assert.match(definition.description,/amount: payments only/);assert.match(definition.description,/line_items: update\/review only/);
 });
