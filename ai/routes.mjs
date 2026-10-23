@@ -155,7 +155,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         return res.status(200).json({answer,pendingAction:null});
       }
       const ownerActions=conversation?createOwnerAssistantActions({store,conversation,clock}):null;
-      let result = await answerWorkspaceQuestion({provider, store, message: body.message, history, clock, accounting,ownerMode:Boolean(conversation),ownerActions});
+      let result = await answerWorkspaceQuestion({provider, store, message: body.message, history,ownerHistory:rows, clock, accounting,ownerMode:Boolean(conversation),ownerActions});
       if (result.pendingAction) {
         const type = result.pendingAction.type;
         const action = ['create_invoice','update_invoice','owner_reminder','owner_payment','owner_correction','owner_schedule'].includes(type)?type:null;
