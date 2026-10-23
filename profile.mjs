@@ -8,18 +8,12 @@ const userMetadata = (user) =>
 
 export function profileFromUser(user) {
   const metadata = userMetadata(user);
-  const email = firstNonEmpty(user?.email);
-  const emailName = email.split('@')[0].split('+')[0]
-    .split(/[._\s-]+/)
-    .filter(Boolean)
-    .map((word) => word[0].toUpperCase() + word.slice(1).toLowerCase())
-    .join(' ');
+  // An email address does not tell us the user's name. Keep unnamed profiles
+  // empty so only provider metadata or a name saved in Settings is used.
   const fullName = firstNonEmpty(
     metadata.full_name,
     metadata.fullName,
     metadata.name,
-    emailName,
-    'Account',
   );
   const businessName = firstNonEmpty(
     metadata.business_name,
