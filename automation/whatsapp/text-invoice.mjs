@@ -1,4 +1,5 @@
 import {ownerCalendar} from './workspace-records.mjs';
+import {ownerInvoiceCreationFailureReply} from './owner-failure-replies.mjs';
 
 export const TEXT_INVOICE_FORMAT = "Couldn't read that. Try: new invoice for Ravi, Rs 2,500, due 25 Oct.";
 
@@ -58,6 +59,7 @@ export function parseTextInvoice(message,{clock=()=>new Date(),timezone='Asia/Ko
 
 export function textInvoiceFailure(result) {
   if(result?.ok!==false)return null;
+  if(result.invoiceCreationInternalFailure===true)return ownerInvoiceCreationFailureReply({writeAttempted:result.writeAttempted===true});
   if(['INVALID','INVALID_AUTHORIZATION','INVALID_FIELDS'].includes(result.code))return TEXT_INVOICE_FORMAT;
   if(result.code==='INVOICE_EXISTS')return 'That invoice number or code already exists for this customer, possibly in deleted invoices. Check before retrying.';
   if(['DATABASE_UNAVAILABLE','UNAVAILABLE','WRITE_UNCONFIRMED'].includes(result.code))return 'I couldn’t check if the invoice was created. Check cetld before retrying; this doesn’t mean it’s a duplicate.';

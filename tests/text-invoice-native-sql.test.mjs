@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createDirectOwnerWriteAdapter} from '../automation/whatsapp/direct-owner-write.mjs';
 import {CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 
 test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, without outbound delivery',async()=>{
@@ -22,7 +23,7 @@ test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, wit
       providerFactory:()=>({async generate({messages}){
         providerCalls++;
         if(messages.some(item=>item.role==='tool'))return {model:CF_PRIMARY_MODEL,content:'Created invoice.'};
-        return {model:CF_PRIMARY_MODEL,toolCalls:[{id:'text-create',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'create',table:'invoices',values:{amount:2500,currency:'INR',due_date:'2026-10-25',issue_date:'2026-10-18',customer_name:'QA Text Customer'}})}}]};
+        return {model:CF_PRIMARY_MODEL,toolCalls:[{id:'text-create',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'create',table:'invoices',values:{invoiceNumber:'WRONG',clientName:'WRONG',total:999999,dueDate:'2099-12-01',currency:'INR'}})}}]};
       }})});
     const turn=async(messageId,message)=>{
       await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'offline',$2,'text',$3,'processing')",[messageId,phone,message]);
@@ -33,13 +34,14 @@ test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, wit
       'QA-EDGE-002 नया invoice 🧾🔥 for QA Emoji Customer ₹1,200 due kal, please check',
       'new invoice QA-REPRO-001, QA Repro Customer, Rs 1,500, due 25 Oct',
       'new invoice QA-REPRO-002 for QA Repro Customer, Rs 1,500, due 25 Oct',
+      'new invoice QA-MEDIA-001 for QA Media Customer, Rs 1,500, due 30 Oct',
     ].entries()){
       const reply=await turn(`qa-native-${index}`,message);
       assert.match(reply.answer,/Created invoice/);
       const saved=(await db.query('select result from whatsapp_direct_write_receipts where provider_message_id=$1',[`qa-native-${index}`])).rows[0].result;
-      assert.equal(saved.ok,true);assert.equal(Number(saved.record.total_amount),[2500,1200,1500,1500][index]);
-      assert.equal(saved.record.due_date,index===1?'2026-10-19':'2026-10-25');
-      assert.equal(saved.record.metadata.source_invoice_number,['QA-VERIFY-001','QA-EDGE-002','QA-REPRO-001','QA-REPRO-002'][index]);
+      assert.equal(saved.ok,true);assert.equal(Number(saved.record.total_amount),[2500,1200,1500,1500,1500][index]);
+      assert.equal(saved.record.due_date,index===1?'2026-10-19':index===4?'2026-10-30':'2026-10-25');
+      assert.equal(saved.record.metadata.source_invoice_number,['QA-VERIFY-001','QA-EDGE-002','QA-REPRO-001','QA-REPRO-002','QA-MEDIA-001'][index]);
       assert.equal(saved.record.status,'draft');
       const calls=providerCalls;
       const replay=await handler({workspaceId,ownerId,customerId,phone,messageId:`qa-native-${index}`,message});
@@ -52,6 +54,14 @@ test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, wit
     assert.ok(sameCustomer.every(row=>row.status==='draft'));
     const duplicate=await turn('qa-native-duplicate','New invoice QA-EDGE-002 for QA Emoji Customer, amount Rs 1,200, due 25 October 2026');
     assert.match(duplicate.answer,/already exists/);
+    const repeated=await turn('qa-native-media-repeated','new invoice QA-MEDIA-001 for QA Media Customer, Rs 1,500, due 30 Oct');
+    assert.match(repeated.answer,/already exists/);
+    assert.equal((await db.query("select count(*)::int n from invoices where metadata->>'source_invoice_number'='QA-MEDIA-001'")).rows[0].n,1);
+    const beforeTypo=(await db.query('select count(*)::int n from invoices')).rows[0].n;
+    const typo=await turn('qa-native-name-confirmation','new invoice QA-TYPO-001 for QA Mdeia Customer, Rs 1,500, due 30 Oct');
+    assert.match(typo.answer,/Did you mean QA Media Customer\? Reply with the full name/);
+    assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,beforeTypo);
+    assert.equal((await db.query("select count(*)::int n from whatsapp_direct_write_receipts where provider_message_id='qa-native-name-confirmation'")).rows[0].n,0);
     // Reproduce the broad SQL uniqueness handler without modifying its source:
     // payment capability fingerprints must stay valid after the invoice fix.
     await db.exec(`create function public.qa_customer_unique_failure() returns trigger language plpgsql as $$
@@ -61,8 +71,120 @@ test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, wit
     assert.match(unavailable.answer,/couldn’t check if the invoice was created/);assert.doesNotMatch(unavailable.answer,/already exists/);
     assert.equal((await db.query("select count(*)::int n from customers where name='No Invoice QA'")).rows[0].n,0);
     assert.equal((await db.query("select count(*)::int n from whatsapp_direct_write_receipts where provider_message_id='qa-native-customer-unique'")).rows[0].n,0);
+    await db.exec('drop trigger qa_customer_unique_failure on public.customers');
+    const retry=await turn('qa-native-customer-unique-retry','New invoice QA-NONEXISTENT for No Invoice QA, amount Rs 100, due 25 October 2026');
+    assert.match(retry.answer,/Created invoice/);
+    const retryAgain=await turn('qa-native-customer-unique-repeated','New invoice QA-NONEXISTENT for No Invoice QA, amount Rs 100, due 25 October 2026');
+    assert.match(retryAgain.answer,/already exists/);
+    assert.equal((await db.query("select count(*)::int n from invoices where metadata->>'source_invoice_number'='QA-NONEXISTENT'")).rows[0].n,1);
     assert.deepEqual((await db.query('select whatsapp_owner_partial_payment_capability() value')).rows[0].value,{ok:true,version:4,bookkeepingInstructions:1});
-    assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,5);
+    assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,7);
+    assert.equal((await db.query('select count(*)::int n from payments')).rows[0].n,0);
+    assert.equal((await db.query("select count(*)::int n from whatsapp_messages where audience='customer'")).rows[0].n,0);
+    assert.equal(f.errors.length,0,JSON.stringify(f.errors));
+    assert.equal(providerCalls,0,'complete owner text must not depend on garbage planner fields or a final model reply');
+    await db.query("update workspace_settings set owner_bot_preferences=owner_bot_preferences||'{\"confirmationMode\":\"buttons\"}' where workspace_id=$1",[workspaceId]);
+    let confirmationModelCalls=0;
+    const confirming=createOwnerMessageHandler({supabase,clock:()=>new Date(),env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
+      providerFactory:()=>({async generate({messages}){
+        confirmationModelCalls++;
+        const tool=messages.findLast(item=>item.role==='tool');
+        if(!tool)return {model:CF_PRIMARY_MODEL,toolCalls:[{id:'confirm-existing-proposal',type:'function',function:{name:'workspaceData',arguments:'{"operation":"confirm"}'}}]};
+        const result=JSON.parse(tool.content);
+        assert.equal(result.ok,true);assert.equal(result.action,'invoice_created');
+        return {model:CF_PRIMARY_MODEL,content:`Created invoice ${result.invoiceNumber}.`};
+      }})});
+    const confirmedTurn=async(messageId,message)=>{
+      await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'offline',$2,'text',$3,'processing')",[messageId,phone,message]);
+      return confirming({workspaceId,ownerId,customerId,phone,messageId,message});
+    };
+    const proposed=await confirmedTurn('qa-native-confirm-propose','new invoice QA-CONFIRM-001 for QA Confirm Customer, Rs 1,500, due 30 Oct');
+    assert.match(proposed.answer,/Reply yes.*cancel/);assert.equal(confirmationModelCalls,0);
+    assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,7);
+    const pending=(await db.query("select action from whatsapp_pending_actions where workspace_id=$1 and consumed_at is null",[workspaceId])).rows[0].action;
+    assert.equal(pending.type,'owner_invoice_create');assert.equal(pending.invoice.invoiceNumber,'QA-CONFIRM-001');
+    const confirmed=await confirmedTurn('qa-native-confirm-yes','yes');assert.match(confirmed.answer,/Created invoice/);
+    assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,8);
+    const replayed=await confirming({workspaceId,ownerId,customerId,phone,messageId:'qa-native-confirm-yes',message:'yes'});
+    assert.equal(replayed.replayed,true);assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,8);
+  }finally{await db.close();}
+});
+
+test('unnumbered owner invoice retries reuse only an exact scoped instruction and verified receipt',async()=>{
+  const f=await createOfflineSqlNetwork(),{db,supabase}=f;
+  let today='2026-10-18';
+  try{
+    const seedOwner=async(phone,label)=>{
+      const ownerId=randomUUID();
+      await db.query('insert into auth.users(id) values($1)',[ownerId]);
+      await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
+      const workspaceId=(await db.query('select (public.create_workspace($1,$2)).id',[label,label.toLowerCase()])).rows[0].id;
+      const verification=(await db.query('select * from owner_start_whatsapp_verification($1,$2)',[workspaceId,phone])).rows[0];
+      await db.exec("reset role;set request.jwt.claim.role='service_role';set request.jwt.claim.sub=''");
+      assert.equal((await db.query('select whatsapp_verify_owner_code($1,$2) value',[phone,verification.code])).rows[0].value.ok,true);
+      const customerId=(await db.query('select * from whatsapp_resolve_verified_owner($1)',[phone])).rows[0].customer_id;
+      await db.query("update workspace_settings set owner_bot_preferences=owner_bot_preferences||'{\"confirmationMode\":\"direct\"}' where workspace_id=$1",[workspaceId]);
+      return {workspaceId,ownerId,customerId,phone};
+    };
+    const first=await seedOwner('+919871367052','RetryQA');
+    const second=await seedOwner('+919871367053','OtherRetryQA');
+    const lossy=Object.create(supabase);
+    lossy.rpc=async(name,args)=>{
+      const result=await supabase.rpc(name,args);
+      if(name==='whatsapp_apply_direct_owner_write'&&args.p_provider_message_id==='unnumbered-lost-ack')
+        throw Error('Simulated lost response after the committed write');
+      return result;
+    };
+    const handler=createOwnerMessageHandler({supabase:lossy,clock:()=>new Date(today+'T12:18:00Z'),env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
+      providerFactory:()=>({async generate(){throw Error('Complete owner invoice instructions do not need a planner');}})});
+    const turn=async(scope,messageId,message)=>{
+      await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'offline',$2,'text',$3,'processing')",[messageId,scope.phone,message]);
+      return handler({...scope,messageId,message});
+    };
+    const count=async(scope)=>(await db.query('select count(*)::int n from invoices where workspace_id=$1',[scope.workspaceId])).rows[0].n;
+    const message='new invoice for Retry Customer, Rs 1,500, due 30 Oct';
+    const lost=await turn(first,'unnumbered-lost-ack',message);
+    assert.match(lost.answer,/couldn’t check if the invoice was created/);assert.doesNotMatch(lost.answer,/Created invoice/);
+    assert.equal(await count(first),1);
+    const retry=await turn(first,'unnumbered-new-id',message);
+    assert.match(retry.answer,/Created invoice/);assert.equal(await count(first),1);
+    assert.match((await turn(first,'unnumbered-repeated',message)).answer,/Created invoice/);assert.equal(await count(first),1);
+    const redelivery=await handler({...first,messageId:'unnumbered-new-id',message});
+    assert.equal(redelivery.replayed,true);assert.equal(await count(first),1);
+    const changed=await turn(first,'unnumbered-changed-facts',message.replace('1,500','1,510'));
+    assert.match(changed.answer,/Created invoice/);assert.equal(await count(first),2);
+    today='2026-10-19';
+    assert.match((await turn(first,'unnumbered-another-day',message)).answer,/Created invoice/);assert.equal(await count(first),3);
+    assert.match((await turn(second,'unnumbered-another-business',message)).answer,/Created invoice/);assert.equal(await count(second),1);
+    await db.exec(`create function public.qa_unnumbered_customer_failure() returns trigger language plpgsql as $$
+      begin raise unique_violation using message='synthetic customer failure';end;$$;
+      create trigger qa_unnumbered_customer_failure before insert on public.customers for each row execute function public.qa_unnumbered_customer_failure();`);
+    const failedMessage='new invoice for No Write Retry, Rs 100, due 30 Oct';
+    assert.match((await turn(first,'unnumbered-before-write-failed',failedMessage)).answer,/couldn’t check if the invoice was created/);
+    assert.equal(await count(first),3);
+    await db.exec('drop trigger qa_unnumbered_customer_failure on public.customers');
+    assert.match((await turn(first,'unnumbered-after-write-retry',failedMessage)).answer,/Created invoice/);
+    assert.match((await turn(first,'unnumbered-after-write-repeat',failedMessage)).answer,/Created invoice/);
+    assert.equal(await count(first),4);
+    const concurrentMessage='new invoice for Concurrent Retry, Rs 250, due 30 Oct';
+    const concurrent=await Promise.all([turn(first,'unnumbered-concurrent-a',concurrentMessage),turn(first,'unnumbered-concurrent-b',concurrentMessage)]);
+    assert.ok(concurrent.every(reply=>/Created invoice/.test(reply.answer)));assert.equal(await count(first),5);
+    // An old instruction cannot silently create another invoice after the
+    // original row changes or disappears; its receipt must still verify.
+    today='2026-10-18';
+    const original=(await db.query("select result->>'entityId' id from whatsapp_direct_write_receipts where provider_message_id='unnumbered-lost-ack'")).rows[0].id;
+    await db.query("update invoices set notes='changed after original save' where id=$1",[original]);
+    assert.match((await turn(first,'unnumbered-stale-receipt',message)).answer,/couldn’t check if the invoice was created/);
+    assert.equal(await count(first),5);
+    const current=(await db.query('select * from invoices where id=$1',[original])).rows[0];
+    const deleteMessage=`Delete invoice ${current.invoice_number}`;
+    await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values('unnumbered-delete-original','offline',$1,'text',$2,'processing')",[first.phone,deleteMessage]);
+    const deleted=await createDirectOwnerWriteAdapter({supabase}).apply({...first,providerMessageId:'unnumbered-delete-original',
+      authorization:{kind:'instruction',quote:deleteMessage},operation:'invoice.delete',targetId:original,
+      expectedUpdatedAt:current.updated_at.toISOString(),payload:{}});
+    assert.equal(deleted.ok,true);
+    assert.match((await turn(first,'unnumbered-deleted-receipt-record',message)).answer,/couldn’t check if the invoice was created/);
+    assert.equal(await count(first),5);
     assert.equal((await db.query('select count(*)::int n from payments')).rows[0].n,0);
     assert.equal((await db.query("select count(*)::int n from whatsapp_messages where audience='customer'")).rows[0].n,0);
     assert.equal(f.errors.length,0,JSON.stringify(f.errors));

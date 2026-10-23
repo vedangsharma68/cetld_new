@@ -1052,6 +1052,17 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         &&(raw.operation===undefined||raw.operation==='create')&&(raw.table===undefined||raw.table==='invoices');
       const params=await normalizeRequest(textRequest?textInvoice:raw,scope,planRequest,ctx,validationFeedback,textInvoice?.values);
       ctx.phase='dispatch';
+      if(executionOptions.parsedOwnerInvoiceCreate===true){
+        if(!textInvoice||params.operation!=='create'||params.table!=='invoices'
+          ||JSON.stringify(params.values)!==JSON.stringify(textInvoice.values))throw new TypeError('invalid invoice fields');
+        ctx.parsedOwnerInvoiceCreate=true;
+        const customer=await resolveWorkspaceRecord({supabase,scope,table:'customers',operation:'read',
+          filters:[{column:'name',operator:'eq',value:params.values.customer_name}],select:'id,name',
+          assertAuthorized:()=>ctx.assertAuthorized(),assertLive:()=>ctx.assertLive()});
+        if(!customer.ok&&!['NOT_FOUND'].includes(customer.code))return safeError(customer);
+        if(customer.ok&&(customer.rows?.length!==1||customer.row?.name!==params.values.customer_name))
+          return nameConfirmationResult(customer.rows||[]);
+      }
       if(ownerConversation&&!['read','describe','checkAttachment','pending'].includes(params.operation)&&await ownerConversation.pending())
         return {...fail('PENDING','Finish or cancel the saved Assistant proposal first. Send yes to confirm it, or cancel.'),writeAttempted:false};
       // This private execution option comes from the server's scoped preread,
@@ -1334,6 +1345,11 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       ||result.validationShape?.operation==='create'&&result.validationShape?.table==='invoices'
       ||raw?.operation==='create'&&raw?.table==='invoices');
     if(creationFailed){
+      // Unsupported structured keys and provider planning failures belong to
+      // the assistant. Preserve INVALID for genuinely malformed owner input.
+      if(result.planningFailure||result.validationCode==='INVALID_FIELDS'
+        &&result.validationShape?.valueFields?.some(field=>!WRITE_SCHEMA.invoices.create.includes(field)&&field!=='amount'))
+        result={...result,invoiceCreationInternalFailure:true};
       const answer=textInvoiceFailure(result);
       if(answer)result={...result,message:answer,invoiceCreationFailure:true};
     }

@@ -86,6 +86,19 @@ test('invalid create returns explicit accepted format and the owner agent preser
   assert.equal(answer.answer,textInvoiceFailure(result));
 });
 
+test('repeating an invalid structured create is an assistant failure, including supported fields with wrong types',async()=>{
+  let providerCalls=0,toolCalls=0;
+  const args={operation:'create',table:'invoices',values:{customer_name:'QA',total_amount:'one thousand'}};
+  const result=await runOwnerAgent({message:'Create the invoice with the details I gave you',clock,
+    provider:{async generate(){providerCalls++;return {toolCalls:[{id:'invalid-create-'+providerCalls,type:'function',function:{name:'workspaceData',arguments:JSON.stringify(args)}}]};}},
+    tools:{definitions:[{type:'function',function:{name:'workspaceData',parameters:{type:'object'}}}],getWriteAttempted:()=>false,
+      async execute(){toolCalls++;return {ok:false,code:'INVALID',validationCode:'INVALID_FIELDS',writeAttempted:false,
+        validationShape:{operation:'create',table:'invoices',valueFields:['customer_name','total_amount']},message:TEXT_INVOICE_FORMAT};}}});
+  assert.equal(providerCalls,2);assert.equal(toolCalls,1,'the rejected write is cached, not retried');
+  assert.match(result.answer,/couldn[’']t complete the invoice/);assert.match(result.answer,/Nothing was changed/);
+  assert.doesNotMatch(result.answer,/Check the details|clear request|Try: new invoice/);
+});
+
 test('a generic error or owner-supplied code cannot ground a duplicate claim',()=>{
   const reply='An invoice with the code QA-EDGE-002 already exists.';
   for(const code of ['INVALID','DATABASE_UNAVAILABLE','UNAVAILABLE','REPLAY_MISMATCH'])

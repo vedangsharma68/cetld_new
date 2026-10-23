@@ -958,7 +958,7 @@ test('owner interruption status remains available when the model service is down
   assert.doesNotMatch(reply,/PRIVATE_DATABASE_SECRET|PGRST/);
 });
 
-test('quota exhaustion survives the provider wrapper and returns provider-specific reset times',async()=>{
+test('quota exhaustion survives the provider wrapper and returns an honest busy reply',async()=>{
   const tools={definitions:[],async execute(){return {};}};
   const provider={async generate(){
     throw Object.assign(new AIError('RATE_LIMITED',429),{providerReason:'quota_exceeded',quotaExhausted:true,
@@ -966,9 +966,21 @@ test('quota exhaustion survives the provider wrapper and returns provider-specif
   }};
   const startedAt=Date.now();
   const result=await runOwnerAgent({provider,tools,message:'Hi'});
-  assert.equal(result.answer,'My AI brain is out of juice for today. Cloudflare daily quota resets at 5:30am IST; Gemini request-per-day quotas reset at midnight Pacific time. Try again after the quota resets.');
+  assert.equal(result.answer,'I’m temporarily busy. Nothing was changed. Try again shortly.');
   assert.equal(result.plannerFailure.code,'OWNER_AI_QUOTA_EXHAUSTED');
   assert.ok(Date.now()-startedAt<3000);
+});
+
+test('raw provider rate limits and exhausted provider failures stay honest before any tool runs',async()=>{
+  for(const error of [new AIError('RATE_LIMITED',429),new AIError('PROVIDER_UNAVAILABLE',503)]){
+    let calls=0;
+    const result=await runOwnerAgent({message:'what is my total outstanding?',tools:{definitions:[],getWriteAttempted:()=>false,
+      async execute(){assert.fail('A failed provider must not cause an unplanned write');}},
+      provider:{async generate(){calls++;throw error;}}});
+    assert.equal(calls,1);assert.equal(result.answer,'I’m temporarily busy. Nothing was changed. Try again shortly.');
+    assert.doesNotMatch(result.answer,/outstanding|USD|INR|saved|created|clear request/);
+    assert.equal(result.plannerFailure.code,error.status===429?'OWNER_AI_QUOTA_EXHAUSTED':'OWNER_AGENT_PROVIDER_FAILED');
+  }
 });
 
 test('a payable or uncertain attachment draft cannot become a receivable without explicit owner direction',async()=>{

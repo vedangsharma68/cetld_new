@@ -4,6 +4,7 @@ import {resolveWorkspaceRecord} from '../automation/whatsapp/workspace-records.m
 import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs';
 import {runOwnerAgent,ownerAgentFailureReply} from '../automation/whatsapp/owner-agent.mjs';
 import {ownerFailureGuidance} from '../automation/whatsapp/owner-failure-replies.mjs';
+import {textInvoiceFailure,TEXT_INVOICE_FORMAT} from '../automation/whatsapp/text-invoice.mjs';
 import {invoiceReadAnalysisReply} from '../automation/whatsapp/owner-invoice-read-analysis.mjs';
 
 const scope={workspaceId:'11111111-1111-4111-8111-111111111111'};
@@ -80,16 +81,33 @@ test('opaque failures become a human reason and next step, retaining specific an
   assert.equal(ownerFailureGuidance(specific),specific);
   assert.equal(ownerFailureGuidance('Saved invoice INV-1.'),'Saved invoice INV-1.');
   assert.match(ownerFailureGuidance('Send it with the country code, like +919818685252.'),/phone number.*format.*Send it with the country code/);
-  assert.match(ownerAgentFailureReply('OWNER_AI_QUOTA_EXHAUSTED',{quotaProviders:['cloudflare']}),/resets at 5:30am IST.*Try again after the quota resets/);
+  assert.equal(ownerAgentFailureReply('OWNER_AI_QUOTA_EXHAUSTED',{quotaProviders:['cloudflare']}),'I’m temporarily busy. Nothing was changed. Try again shortly.');
   for(const code of ['UNAVAILABLE','NOT_FOUND','INVALID','DENIED']){
     const reply=ownerFailureGuidance(`I could not complete that request (${code}).`,{code,failed:true});
     assert.doesNotMatch(reply,new RegExp(code));assert.match(reply,/Try|Check|Verify/);
   }
   for(const code of ['OWNER_AGENT_TOOL_FAILED','OWNER_AGENT_PROVIDER_FAILED','OWNER_LOOP_TIMEOUT','OWNER_REPLY_REPAIR_FAILED']){
-    assert.match(ownerAgentFailureReply(code),/interrupted|usable reply|verify|safe reply|took too long/);
+    assert.match(ownerAgentFailureReply(code),/interrupted|temporarily busy|usable reply|verify|safe reply|took too long/);
     assert.match(ownerAgentFailureReply(code),/Try|Check/);
     assert.match(ownerAgentFailureReply(code,{writeAttempted:true}),/check cetld|Check cetld|check your workspace/i);
   }
+});
+
+test('internal invoice failures never blame owner input and busy replies preserve uncertain writes',()=>{
+  const failed={ok:false,code:'INVALID',validationCode:'INVALID_FIELDS',invoiceCreationInternalFailure:true,writeAttempted:false};
+  const answer=textInvoiceFailure(failed);
+  assert.match(answer,/processing failed.*couldn’t complete.*Nothing was changed.*Try again/);
+  assert.equal(ownerFailureGuidance(answer,{code:'INVALID',failed:true}),answer);
+  assert.doesNotMatch(answer,/clear request|Check the details|missing|invalid|unsupported/);
+  assert.equal(textInvoiceFailure({ok:false,code:'INVALID'}),TEXT_INVOICE_FORMAT);
+  const uncertain=textInvoiceFailure({...failed,writeAttempted:true});
+  assert.match(uncertain,/couldn’t verify.*Check cetld/);assert.doesNotMatch(uncertain,/Nothing was changed/);
+  const busy=ownerAgentFailureReply('OWNER_AI_QUOTA_EXHAUSTED',{writeAttempted:true});
+  assert.match(busy,/temporarily busy.*couldn’t verify.*Check cetld/);assert.doesNotMatch(busy,/Nothing was changed/);
+  assert.match(ownerAgentFailureReply('OWNER_AI_QUOTA_EXHAUSTED',{writeAttempted:true,proposalOnly:true}),/preview was saved.*review it/);
+  assert.match(ownerAgentFailureReply('OWNER_AI_QUOTA_EXHAUSTED',{writeAttempted:true,verifiedNoBusinessChange:true}),/Nothing was changed/);
+  const receipt=ownerAgentFailureReply('OWNER_AGENT_PROVIDER_FAILED',{attemptedOperation:{operation:'create',table:'invoices',completed:true}});
+  assert.match(receipt,/couldn’t verify.*Check cetld/);assert.doesNotMatch(receipt,/Nothing was changed/);
 });
 
 test('the agent hardens a model-written opaque error using the actual failure code',async()=>{
