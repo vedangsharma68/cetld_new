@@ -17,7 +17,7 @@ export function status(invoice, today = localDate()) {
   if (invoice.status === 'cancelled') return 'Cancelled';
   if (invoice.status === 'paid') return 'Paid';
   if (!remaining(invoice)) return 'Paid';
-  if (invoice.due_date < today) return 'Overdue';
+  if (invoice.due_date < today) return receivableKind(invoice) === 'draft' ? 'Draft' : 'Overdue';
   if (invoice.due_date === today) return 'Due today';
   return 'Open';
 }
