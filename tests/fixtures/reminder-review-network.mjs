@@ -15,7 +15,7 @@ export async function createReminderReviewNetwork(){
  try{
   for(const file of ['20261018060000_customer_reminder_tone.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060100_invoice_details_templates.sql'])await db.exec(await readFile(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
   await applyNoFooterMigration(db,{approve:true});
-  for(const file of ['20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql','20261023061702_shared_owner_assistant.sql','20261023083356_per_message_reminder_review.sql'])await db.exec(await readFile(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
+  for(const file of ['20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql','20261023061702_shared_owner_assistant.sql','20261023083356_per_message_reminder_review.sql','20261023164251_exact_reminder_approval_artifact.sql'])await db.exec(await readFile(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
   const ownerId=randomUUID();await db.query('insert into auth.users(id) values($1)',[ownerId]);
   const asUser=()=>db.exec(`reset role;set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}'`);
   const service=()=>db.exec("reset role;set request.jwt.claim.role='service_role';set request.jwt.claim.sub=''");

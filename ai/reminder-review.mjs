@@ -5,7 +5,6 @@ import {reminderFingerprint} from '../automation/whatsapp/reminder-fingerprint.m
 import {REMINDER_TONES,selectInvoiceReminderTemplate,buildReminderTemplate} from '../automation/whatsapp/reminder-templates.mjs';
 import {buildInvoiceReminderParameters} from '../automation/whatsapp/reminder-parameters.mjs';
 import {reminderDeliveryForm} from '../automation/whatsapp/reminder-approval.mjs';
-import {brandedReminder} from '../automation/preferences.mjs';
 const secret=env=>env.AI_ACCOUNTING_CONFIRMATION_SECRET||env.ACCOUNTING_TOKEN_ENCRYPTION_KEY||env.SUPABASE_SERVICE_ROLE_KEY;
 const owner=store=>{if(store.role!=='owner'||!store.ownerConversation)throw new APIError(403,'OWNER_REQUIRED');};
 
@@ -34,9 +33,9 @@ export async function previewReminderReview({store,body,env,clock=()=>new Date()
  const deadline=Date.parse(window?.windowExpiresAt),open=Number.isFinite(deadline)&&deadline>clock().getTime();
  // Cetld product policy is stricter than WhatsApp's service-window capability.
  const service=sendNow&&open;
- const delivery={...(service?{type:'freeform',body:text}:{...template}),version:2,tone,mode:sendNow?'immediate':'scheduled',
+ const delivery={...(service?{type:'freeform',body:text}:{...template}),version:2,artifactVersion:1,tone,mode:sendNow?'immediate':'scheduled',
    windowExpiresAt:window?.windowExpiresAt??null,fallback:service&&approveFallback?template:null};
- const payload={invoiceId,preview:delivery.body,approvalText:brandedReminder(delivery.body,settings.business_name),sendNow,
+ const payload={invoiceId,preview:delivery.body,approvalText:delivery.body,sendNow,
    template:{name:entry.name,language:entry.language,revision:entry.revision,parameters,templatePreview:rendered.body,dashboardDraft:text,reviewedDelivery:delivery},
    snapshot:{invoiceVersion:String(invoice.automation_version),invoiceUpdatedAt:invoice.updated_at,settingsUpdatedAt:settings.updated_at,customer:projection}};
  const checked=await store.ownerAssistantRPC('owner_assistant_preview_reminder',{p_payload:payload});
