@@ -4,6 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 import {createDirectOwnerWriteAdapter} from '../automation/whatsapp/direct-owner-write.mjs';
+import {ownerCalendar} from '../automation/whatsapp/workspace-records.mjs';
 import {CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 
 test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, without outbound delivery',async()=>{
@@ -224,7 +225,9 @@ test('unnumbered owner invoice retries reuse only an exact scoped instruction an
 
 test('production rupee utterances commit exact facts, preserve explicit numbers, deduplicate retries, and clarify a missing date with zero writes',async()=>{
   const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+919871367059';
-  const clock=()=>new Date();
+  // Keep the instruction and expectation on the same instant even if this
+  // integration test itself straddles midnight in the business timezone.
+  const now=new Date(),clock=()=>new Date(now);
   try{
     await db.query('insert into auth.users(id) values($1)',[ownerId]);
     await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
@@ -234,6 +237,10 @@ test('production rupee utterances commit exact facts, preserve explicit numbers,
     assert.equal((await db.query('select whatsapp_verify_owner_code($1,$2) value',[phone,verification.code])).rows[0].value.ok,true);
     const customerId=(await db.query('select * from whatsapp_resolve_verified_owner($1)',[phone])).rows[0].customer_id;
     await db.query("update workspace_settings set owner_bot_preferences=owner_bot_preferences||'{\"confirmationMode\":\"direct\"}' where workspace_id=$1",[workspaceId]);
+    const {default_timezone:timezone}=(await db.query('select default_timezone from workspace_settings where workspace_id=$1',[workspaceId])).rows[0];
+    const issueDate=ownerCalendar(clock,timezone).currentDate;
+    const novemberDue=`${issueDate.slice(0,4)}-11-20`;
+    const dueDate=novemberDue<issueDate?`${Number(issueDate.slice(0,4))+1}-11-20`:novemberDue;
     let providerCalls=0;
     const handler=createOwnerMessageHandler({supabase,clock,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
       providerFactory:()=>({generate(){providerCalls++;assert.fail('Natural complete or missing-date text must not call the model');}})});
@@ -249,7 +256,7 @@ test('production rupee utterances commit exact facts, preserve explicit numbers,
     const query='select i.invoice_number,i.total_amount::text,i.currency,i.issue_date::text,i.due_date::text,c.name from invoices i join customers c on c.id=i.customer_id order by i.created_at,i.id';
     const saved=(await db.query(query)).rows;
     assert.equal(saved.length,2);assert.ok(saved.some(row=>row.invoice_number==='QA-TEXT-001'));
-    for(const row of saved)assert.deepEqual({...row,invoice_number:undefined},{invoice_number:undefined,total_amount:'3200',currency:'INR',issue_date:'2026-10-23',due_date:'2026-11-20',name:'QA Dedup Customer'});
+    for(const row of saved)assert.deepEqual({...row,invoice_number:undefined},{invoice_number:undefined,total_amount:'3200',currency:'INR',issue_date:issueDate,due_date:dueDate,name:'QA Dedup Customer'});
     assert.equal((await turn('prod-text-c',c)).answer,'What due date should I use for the INR 2100.00 invoice for QA Question Customer?');
     assert.deepEqual((await db.query(query)).rows,saved);
     assert.equal((await db.query("select count(*)::int n from customers where name='QA Question Customer'")).rows[0].n,0);
@@ -280,5 +287,42 @@ test('production rupee utterances commit exact facts, preserve explicit numbers,
     assert.equal((await db.query('select count(*)::int n from payments')).rows[0].n,0);
     assert.equal((await db.query("select count(*)::int n from whatsapp_messages where audience='customer'")).rows[0].n,0);
     assert.equal(providerCalls,0);assert.deepEqual(f.errors,[]);
+  }finally{await db.close();}
+});
+
+test('SQL invoice issue dates follow the saved business timezone on both sides of IST midnight',async()=>{
+  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+919871367060';
+  let instant;
+  const clock=()=>new Date(instant);
+  try{
+    await db.query('insert into auth.users(id) values($1)',[ownerId]);
+    await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
+    const workspaceId=(await db.query("select (public.create_workspace('Calendar QA','calendar-qa')).id")).rows[0].id;
+    const verification=(await db.query('select * from owner_start_whatsapp_verification($1,$2)',[workspaceId,phone])).rows[0];
+    await db.exec("reset role;set request.jwt.claim.role='service_role';set request.jwt.claim.sub=''");
+    assert.equal((await db.query('select whatsapp_verify_owner_code($1,$2) value',[phone,verification.code])).rows[0].value.ok,true);
+    const customerId=(await db.query('select * from whatsapp_resolve_verified_owner($1)',[phone])).rows[0].customer_id;
+    const handler=createOwnerMessageHandler({supabase,clock,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
+      providerFactory:()=>({generate(){assert.fail('Complete invoice instructions must not call the model');}})});
+    for(const [index,[now,timezone,expectedDay]] of [
+      ['2026-10-23T18:29:59Z','Asia/Kolkata','2026-10-23'],
+      ['2026-10-23T18:30:01Z','Asia/Kolkata','2026-10-24'],
+      ['2026-10-23T18:30:01Z','UTC','2026-10-23'],
+    ].entries()){
+      instant=now;
+      await db.query("update workspace_settings set default_timezone=$2,owner_bot_preferences=owner_bot_preferences||'{\"confirmationMode\":\"direct\"}' where workspace_id=$1",[workspaceId,timezone]);
+      const settings=(await db.query('select default_timezone from workspace_settings where workspace_id=$1',[workspaceId])).rows[0];
+      const issueDate=ownerCalendar(clock,settings.default_timezone).currentDate;
+      assert.equal(issueDate,expectedDay);
+      const number=`QA-MIDNIGHT-${index}`,messageId=`calendar-${index}`;
+      const message=`Invoice Calendar Customer for 3200 rupees, invoice number ${number}, due 20 November.`;
+      await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'offline',$2,'text',$3,'processing')",[messageId,phone,message]);
+      assert.match((await handler({workspaceId,ownerId,customerId,phone,messageId,message})).answer,/Created invoice/);
+      const saved=(await db.query('select issue_date::text,due_date::text from invoices where workspace_id=$1 and invoice_number=$2',[workspaceId,number])).rows[0];
+      assert.deepEqual(saved,{issue_date:issueDate,due_date:'2026-11-20'});
+    }
+    assert.equal((await db.query('select count(*)::int n from invoices where workspace_id=$1',[workspaceId])).rows[0].n,3);
+    assert.equal((await db.query("select count(*)::int n from whatsapp_messages where audience='customer'")).rows[0].n,0);
+    assert.deepEqual(f.errors,[]);
   }finally{await db.close();}
 });
