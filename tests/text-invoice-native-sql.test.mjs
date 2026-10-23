@@ -84,7 +84,7 @@ test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, wit
     assert.equal((await db.query("select count(*)::int n from whatsapp_direct_write_receipts where provider_message_id='qa-native-customer-unique'")).rows[0].n,0);
     await db.exec('drop trigger qa_customer_unique_failure on public.customers');
     const retry=await turn('qa-native-customer-unique-retry','New invoice QA-NONEXISTENT for No Invoice QA, amount Rs 100, due 25 October 2026');
-    assert.match(retry.answer,/Created invoice/);
+    assert.match(retry.answer,/Created invoice QA-NONEXISTENT\. Total: INR 100\.00\./);
     const retryAgain=await turn('qa-native-customer-unique-repeated','New invoice QA-NONEXISTENT for No Invoice QA, amount Rs 100, due 25 October 2026');
     assert.match(retryAgain.answer,/already exists/);
     assert.equal((await db.query("select count(*)::int n from invoices where metadata->>'source_invoice_number'='QA-NONEXISTENT'")).rows[0].n,1);
@@ -164,15 +164,19 @@ test('unnumbered owner invoice retries reuse only an exact scoped instruction an
     assert.match(lost.answer,/couldn’t check if the invoice was created/);assert.doesNotMatch(lost.answer,/Created invoice/);
     assert.equal(await count(first),1);
     assert.match((await db.query('select invoice_number from invoices where workspace_id=$1',[first.workspaceId])).rows[0].invoice_number,/^INV-2026-\d{4}$/);
+    const beforeReplay=(await db.query('select * from invoices where workspace_id=$1 order by id',[first.workspaceId])).rows;
+    const requestStart=f.requests.length;
     const retry=await turn(first,'unnumbered-new-id',message);
-    assert.match(retry.answer,/Created invoice/);assert.equal(await count(first),1);
-    assert.match((await turn(first,'unnumbered-repeated',message)).answer,/Created invoice/);assert.equal(await count(first),1);
+    assert.match(retry.answer,/already exists\. Total: INR 1500\.00\. No new invoice was created\./);assert.doesNotMatch(retry.answer,/Created invoice/);assert.equal(await count(first),1);
+    assert.match((await turn(first,'unnumbered-repeated',message)).answer,/already exists/);assert.equal(await count(first),1);
+    assert.deepEqual((await db.query('select * from invoices where workspace_id=$1 order by id',[first.workspaceId])).rows,beforeReplay);
+    assert.equal(f.requests.slice(requestStart).filter(request=>/\/rpc\/whatsapp_apply_(?:direct_owner|owner_contact)_write$/.test(new URL(request.url).pathname)).length,0,'receipt reuse performs zero write RPCs');
     const redelivery=await handler({...first,messageId:'unnumbered-new-id',message});
     assert.equal(redelivery.replayed,true);assert.equal(await count(first),1);
     const changed=await turn(first,'unnumbered-changed-facts',message.replace('1,500','1,510'));
     assert.match(changed.answer,/Created invoice/);assert.equal(await count(first),2);
     today='2026-10-19';
-    assert.match((await turn(first,'unnumbered-another-day',message)).answer,/Created invoice/);assert.equal(await count(first),2);
+    assert.match((await turn(first,'unnumbered-another-day',message)).answer,/already exists/);assert.equal(await count(first),2);
     assert.match((await turn(second,'unnumbered-another-business',message)).answer,/Created invoice/);assert.equal(await count(second),1);
     await db.exec(`create function public.qa_unnumbered_customer_failure() returns trigger language plpgsql as $$
       begin raise unique_violation using message='synthetic customer failure';end;$$;
@@ -182,11 +186,12 @@ test('unnumbered owner invoice retries reuse only an exact scoped instruction an
     assert.equal(await count(first),2);
     await db.exec('drop trigger qa_unnumbered_customer_failure on public.customers');
     assert.match((await turn(first,'unnumbered-after-write-retry',failedMessage)).answer,/Created invoice/);
-    assert.match((await turn(first,'unnumbered-after-write-repeat',failedMessage)).answer,/Created invoice/);
+    assert.match((await turn(first,'unnumbered-after-write-repeat',failedMessage)).answer,/already exists/);
     assert.equal(await count(first),3);
     const concurrentMessage='new invoice for Concurrent Retry, Rs 250, due 30 Oct';
     const concurrent=await Promise.all([turn(first,'unnumbered-concurrent-a',concurrentMessage),turn(first,'unnumbered-concurrent-b',concurrentMessage)]);
-    assert.ok(concurrent.every(reply=>/Created invoice/.test(reply.answer)));assert.equal(await count(first),4);
+    assert.ok(concurrent.every(reply=>/Created invoice|already exists/.test(reply.answer)));
+    assert.equal(concurrent.filter(reply=>/Created invoice/.test(reply.answer)).length,1);assert.equal(await count(first),4);
     // An old instruction cannot silently create another invoice after the
     // original row changes or disappears; its receipt must still verify.
     today='2026-10-18';
@@ -251,7 +256,7 @@ test('production rupee utterances commit exact facts, preserve explicit numbers,
     assert.equal((await db.query("select count(*)::int n from whatsapp_direct_write_receipts where provider_message_id='prod-text-c'")).rows[0].n,0);
     assert.equal((await db.query('select count(*)::int n from whatsapp_pending_actions')).rows[0].n,0,'no attachment review or proposal for direct create/clarification');
     assert.match((await turn('prod-text-a-repeat',a)).answer,/already exists/);
-    assert.match((await turn('prod-text-b-repeat',b)).answer,/Created invoice/);
+    assert.match((await turn('prod-text-b-repeat',b)).answer,/already exists/);
     assert.deepEqual((await db.query(query)).rows,saved);
     assert.equal((await handler({workspaceId,ownerId,customerId,phone,messageId:'prod-text-a',message:a})).replayed,true);
     // Confirm mode stages the same explicit number and commits it only on a

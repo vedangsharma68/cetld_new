@@ -83,6 +83,23 @@ test('exact unnumbered instruction replay still requires the current persisted i
   }
 });
 
+test('verified creation receipt exposes existing-invoice evidence without a write',async()=>{
+  const quote='new invoice for Retry Customer, Rs 1,500, due 30 Oct';
+  const payload={customer_name:'Retry Customer',total_amount:1500,currency:'INR',issue_date:'2026-10-18',due_date:'2026-10-30'};
+  const receipt={workspace_id:workspaceId,owner_id:ownerId,phone,provider_message_id:'previous-event',
+    request:{operation:'invoice.create',authorizationKind:'instruction',authorizationQuote:quote,payload},
+    result:{ok:true,action:'invoice.created',entityType:'invoice',entityId,updatedAt}};
+  const record={id:entityId,workspace_id:workspaceId,invoice_number:'INV-2026-6783',total_amount:'1500.00',currency:'INR',updated_at:updatedAt,deleted_at:null};
+  let writes=0;
+  const client={async rpc(){writes++;throw Error('Receipt verification must not write');},from(table){
+    const q={select(){return q},eq(){return q},order(){return q},async limit(){return {data:[receipt],error:null}},
+      async maybeSingle(){return {data:table==='invoices'?record:receipt,error:null}}};return q;
+  }};
+  const replay=await createDirectOwnerWriteAdapter({supabase:client}).lookupRepeatedInvoiceCreation({workspaceId,ownerId,phone,quote,payload});
+  assert.equal(replay.ok,true);assert.equal(replay.replayed,true);assert.equal(replay.completed,true);
+  assert.deepEqual(replay.existingInvoice,{invoiceNumber:'INV-2026-6783'});assert.equal(writes,0);
+});
+
 test('an exact prior invoice receipt cannot acknowledge a missing or deleted persisted invoice',async()=>{
   const quote='new invoice for Retry Customer, Rs 1,500, due 30 Oct';
   const payload={customer_name:'Retry Customer',total_amount:1500,currency:'INR',issue_date:'2026-10-18',due_date:'2026-10-30'};
