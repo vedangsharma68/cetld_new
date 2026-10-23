@@ -151,6 +151,13 @@ test('per-message review binds the real API, PostgreSQL approval, dispatch and r
    const before=graph.length;await db.query("update invoices set next_follow_up_at=clock_timestamp()-interval '1 minute' where id=$1",[id]);
    const result=await tick(id);assert.equal(result.results[0].status,'needs_re_review',JSON.stringify({result,errors:f.errors}));assert.equal(graph.length,before);assert.equal((await db.query('select metadata from invoices where id=$1',[id])).rows[0].metadata.reminder_review_reason,'scheduled_template_only');
   });
+  await t.test('concurrent or repeated expired preparation preserves the original hold reason and receipt',async()=>{
+   await inbound();const id=await invoice(),p=await preview(id);assert.equal((await approve(p.data)).code,200);await inbound(true);const before=graph.length;
+   const args={p_workspace_id:workspaceId,p_owner_id:ownerId,p_invoice_id:id};
+   const results=await Promise.all([f.supabase.rpc('owner_assistant_reminder_dispatch_preview',args),f.supabase.rpc('owner_assistant_reminder_dispatch_preview',args)]);
+   for(const result of results){assert.equal(result.error,null,JSON.stringify(f.errors));assert.equal(result.data.ok,false);assert.equal(result.data.reason,'undeliverable_window_expired');}
+   const row=(await db.query('select * from invoices where id=$1',[id])).rows[0];assert.equal(row.metadata.reminder_review_reason,'undeliverable_window_expired');assert.equal(row.metadata.approved_reminder_delivery.body,p.data.delivery.text);assert.equal(graph.length,before);
+  });
   await t.test('the full 4,000-character Unicode message limit is reviewed and sent without truncation',async()=>{
    await inbound();const id=await invoice(),text='漢'.repeat(4000),p=await preview(id,{text});assert.equal(p.code,200,JSON.stringify(p.data));assert.equal((await approve(p.data)).code,200);
    const result=await tick(id);assert.equal(result.results[0].status,'sent',JSON.stringify({result,errors:f.errors}));assert.equal(graph.at(-1).text.body,text);

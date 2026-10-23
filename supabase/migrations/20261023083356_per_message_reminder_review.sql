@@ -168,11 +168,23 @@ grant execute on function public.owner_assistant_reminder_status(uuid,uuid) to a
 create function app.evaluate_reviewed_reminder(p_owner_id uuid,p_workspace_id uuid,p_invoice_id uuid,p_claim_id uuid,p_snapshot jsonb default null,p_hash text default null,p_record boolean default false) returns jsonb
 language plpgsql security definer set search_path='' as $$
 declare i public.invoices%rowtype;s public.workspace_settings%rowtype;x public.customers%rowtype;r app.reminder_approvals%rowtype;
- d jsonb;actual jsonb;e jsonb;deadline timestamptz;outcome text;valid boolean;
+ d jsonb;actual jsonb;e jsonb;deadline timestamptz;outcome text;valid boolean;target_phone text;
 begin
- select * into i from public.invoices where workspace_id=p_workspace_id and id=p_invoice_id;
- select * into s from public.workspace_settings where workspace_id=p_workspace_id;
- select * into x from public.customers where workspace_id=p_workspace_id and id=i.customer_id;
+ -- Match the final reservation and STOP order even on a preflight hold:
+ -- phone -> settings -> customer -> invoice -> private approval/evaluation.
+ if not exists(select 1 from public.workspaces where id=p_workspace_id and owner_id=p_owner_id) then return '{"ok":false,"authorized":false,"reason":"delivery_form_review"}';end if;
+ select c.* into x from public.customers c join public.invoices v on v.workspace_id=c.workspace_id and v.customer_id=c.id
+ where v.workspace_id=p_workspace_id and v.id=p_invoice_id;
+ target_phone:=x.phone;
+ if target_phone is not null then perform pg_advisory_xact_lock(hashtextextended(target_phone,0));end if;
+ select * into s from public.workspace_settings where workspace_id=p_workspace_id for share;
+ select c.* into x from public.customers c where c.workspace_id=p_workspace_id
+ and c.id=(select customer_id from public.invoices where workspace_id=p_workspace_id and id=p_invoice_id) for share;
+ select * into i from public.invoices where workspace_id=p_workspace_id and id=p_invoice_id for update;
+ if x.phone is distinct from target_phone or x.id is distinct from i.customer_id then return '{"ok":false,"authorized":false,"reason":"delivery_form_review"}';end if;
+ if i.id is null or i.deleted_at is not null or i.followup_state not in ('approved','active','scheduled') then
+  return jsonb_build_object('ok',false,'authorized',false,'reason',coalesce(i.metadata->>'reminder_review_reason','delivery_form_review'));
+ end if;
  d:=i.metadata->'approved_reminder_delivery';
  select * into r from app.reminder_approvals where id::text=d->>'approvalId' and workspace_id=p_workspace_id and invoice_id=i.id and owner_id=p_owner_id;
  if r.id is null or r.delivery is distinct from d or not exists(select 1 from public.workspaces where id=p_workspace_id and owner_id=p_owner_id)

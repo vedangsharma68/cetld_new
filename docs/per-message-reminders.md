@@ -29,6 +29,8 @@ New version-2 receipts extend `metadata.approved_reminder_delivery`; existing ve
 
 Template identity follows #173's actual schema: **name, language, revision and ordered parameters**. It does not invent a separate template UUID or named-parameter schema from the prose contract. `owner_assistant_preview_reminder` and `owner_assistant_decide` retain their existing signatures; the optional `reviewedDelivery` inside the existing template JSON activates the extension. Legacy calls follow the original template gate.
 
+Preparation holds and final reservations use the same phone → settings → customer → invoice lock order. Repeated holds retain their original reason and receipt.
+
 Preparation and every final SQL reservation evaluate the same immutable receipt:
 
 | Approved artifact | Dispatch condition | Result |
