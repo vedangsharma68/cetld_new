@@ -1,3 +1,4 @@
+import {approveReviewedReminder} from './fixtures/reviewed-reminder.mjs';
 import test from 'node:test';
 import {applyNoFooterMigration} from './fixtures/no-footer-reminders.mjs';
 import assert from 'node:assert/strict';
@@ -49,6 +50,7 @@ async function setup(){
   async function invoice(number){
     const id=(await f.db.query("insert into invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,status,metadata) values($1,$2,$3,current_date-2,current_date-1,'USD',125,'sent','{\"invoice_direction\":\"receivable\"}') returning id",[workspaceId,customerId,number])).rows[0].id;
     await f.db.query("update invoices set metadata=metadata||jsonb_build_object('followup_state','approved','approved_reminder_text',E'Legacy reviewed draft\\n\\nFixture studio','approved_preferences_updated_at',(select updated_at from workspace_settings where workspace_id=$2)),next_follow_up_at=now()-interval '1 minute' where id=$1",[id,workspaceId]);
+    await approveReviewedReminder(f.db,{workspaceId,invoiceId:id});
     return id;
   }
   const invoiceId=await invoice('INV-001'),scope={ownerId,workspaceId,invoiceId};

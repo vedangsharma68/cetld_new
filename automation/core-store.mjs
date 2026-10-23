@@ -38,6 +38,9 @@ export class CoreAutomationStore extends SupabaseAutomationStore {
     const data=await this.request('invoices',{method:'PATCH',query,body:patch,prefer:'return=representation'});
     return data?.[0] ?? null;
   }
+  async requireReminderReview({ownerId,workspaceId,invoiceId,expectedVersion}) {
+    return this.request('rpc/owner_assistant_require_reminder_review',{method:'POST',body:{p_owner_id:ownerId,p_workspace_id:workspaceId,p_invoice_id:invoiceId,p_expected_version:expectedVersion}});
+  }
   async listDueInvoices({workspaceId,now,limit=25}) {
     const read=includeDeletedAt=>this.request('invoices',{query:{select:'id',workspace_id:`eq.${workspaceId}`,followup_state:'in.(approved,active,scheduled)',next_follow_up_at:`lte.${now}`,...(includeDeletedAt?{deleted_at:'is.null'}:{}),order:'next_follow_up_at.asc',limit}});
     return this.deletedAtCompatibility.read({withDeletedAt:()=>read(true),legacy:()=>read(false)});

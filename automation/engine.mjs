@@ -20,6 +20,13 @@ export class FollowUpEngine {
   async event(scope,type,payload={}) {
     await this.store.recordEvent({...scope,type,idempotencyKey:eventKey(scope,type,payload),payload});
   }
+  async needsDeliveryReview(scope,invoice,claim) {
+    await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'needs_re_review'});
+    if(this.store.requireReminderReview)await this.store.requireReminderReview({...scope,expectedVersion:version(invoice)});
+    else await this.store.updateInvoice({...scope,expectedVersion:version(invoice),followupState:'paused',nextFollowUpAt:null});
+    await this.event(scope,'needs_attention',{reason:'delivery_form_review',claimId:claim.id});
+    return {status:'needs_re_review',reason:'delivery_form_review'};
+  }
   async settingsFor(scope, invoice) {
     const owner = typeof this.store.getWorkspacePreferences === 'function' ? await this.store.getWorkspacePreferences(scope) : null;
     if (owner) return normalizeFollowUpPreferences({...owner.follow_up_preferences, businessName:owner.business_name, version:owner.updated_at}, owner.default_timezone);
@@ -67,7 +74,7 @@ export class FollowUpEngine {
     let body=Object.hasOwn(invoice,'total_amount')?invoice.metadata.approved_reminder_text:(settings.reminderMessage || reminderBody(invoice,settings));
     if(this.provider.prepareReminder){
       try{body=(await this.provider.prepareReminder({...scope,to,settings})).body;}
-      catch{await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'template_facts_unavailable'});return {status:'skipped',reason:'template_facts_unavailable'};}
+      catch(error){if(error?.code==='DELIVERY_REVIEW_REQUIRED')return this.needsDeliveryReview(scope,invoice,claim);await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'template_facts_unavailable'});return {status:'skipped',reason:'template_facts_unavailable'};}
     }
     // Persist intent BEFORE checking payment and obtaining final authorization.
     await this.store.recordMessage({...scope,direction:'outbound',kind:'reminder',status:'pending',idempotencyKey:key,payload:{to,body,claimId:claim.id}});
@@ -131,6 +138,7 @@ export class FollowUpEngine {
     let result;
     try { result=await this.provider.sendReminder({workspaceId,invoiceId,customerId:invoice.customer_id || invoice.customer_contact_id || invoiceId,to,body,idempotencyKey:key}); }
     catch { result={status:'unknown'}; }
+    if(result?.status==='blocked'&&result.reason==='needs_re_review')return this.needsDeliveryReview(scope,invoice,claim);
     if (result?.status !== 'accepted' || !result.providerMessageId) {
       const unknown=result?.status !== 'failed';
       await this.store.markDeliveryFailed({...scope,claimId:claim.id,token:authorization.token,unknown,error:unknown?'delivery_uncertain':'provider_rejected'});

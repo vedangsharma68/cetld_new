@@ -146,10 +146,19 @@ export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallba
     return q;
   };
 
+  Object.defineProperty(tables,'owner_assistant_turns',{value:[],enumerable:false});
   const rpc = async (name,args={}) => {
     rpcCalls.push({name,args:clone(args)});
     const ws=OWNER_CHAT_SCOPE.workspaceId;
     if (args.p_workspace_id != null && args.p_workspace_id !== ws) return {data:{ok:false,code:'OWNER_REQUIRED',reason:'unbound'}};
+    if(name==='owner_assistant_append'){
+      if(args.p_owner_id!==OWNER_CHAT_SCOPE.ownerId)return {error:{code:'DENIED'}};
+      const turns=tables.owner_assistant_turns;
+      if(!turns.some(t=>t.event_key===args.p_event_key))turns.push({id:turns.length+1,event_key:args.p_event_key,workspace_id:ws,owner_id:args.p_owner_id,channel:args.p_channel,role:args.p_role,content:args.p_content,created_at:new Date().toISOString()});
+      return {data:{id:turns.length}};
+    }
+    if(name==='owner_assistant_history')return {data:tables.owner_assistant_turns.slice(-20)};
+    if(name==='owner_assistant_pending')return {data:null};
     if (name === 'whatsapp_load_pending_action_state') {
       const action=currentPending(args);
       return {data:{generation:pendingGeneration,id:action?.id??null,version:action?.version??null,action:clone(action?.action??null)}};

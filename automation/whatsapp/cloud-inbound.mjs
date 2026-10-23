@@ -478,7 +478,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       let response;
       try{
         response = event.media_error&&!owner ? MEDIA_FETCH_FAILED_REPLY : await handle({ workspaceId: binding.workspaceId, customerId: binding.customerId, ownerId:binding.ownerId,
-        phone: event.sender_phone, message: event.message_text,
+        phone: event.sender_phone, message: event.message_text, messageType:event.message_type,
         ...(event.message_type === 'contacts' ? {contactCard: JSON.parse(event.message_text)} : {}), messageId: event.provider_message_id, media,
         ...(owner&&typeof interactionId==='string'&&Buffer.byteLength(interactionId,'utf8')<=MAX_INTERACTION_ID_LENGTH
           ?{interactionId}:{}),

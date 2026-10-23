@@ -4,10 +4,21 @@ import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL,
 import {authorizeAIWorkspace} from './store.mjs';
 import {extractInvoice} from './extraction.mjs';
 import {answerWorkspaceQuestion, shouldLoadAccountingConnection} from './assistant.mjs';
-import {saveAssistantInvoice, updateAssistantInvoice, retryAssistantInvoiceSync} from './invoice-ops.mjs';
+import {saveAssistantInvoice, retryAssistantInvoiceSync} from './invoice-ops.mjs';
 import {createAccountingTools} from './accounting-tools.mjs';
-import {createAccountingActionToken, verifyAccountingActionToken} from './accounting-actions.mjs';
+import {createAccountingActionToken} from './accounting-actions.mjs';
 import {createGeminiDiagnostic} from './diagnostic.mjs';
+import {createOwnerAssistantActions,ownerActionDecision} from './owner-actions.mjs';
+import {confirmAssistantAction,invoiceConfirmationAnswer} from './confirm-action.mjs';
+import {randomUUID} from 'node:crypto';
+
+async function invoiceAccounting({env,fetchImpl,accountingFactory}) {
+ try{
+  if(accountingFactory)return await accountingFactory({env,fetchImpl});
+  if(env.SUPABASE_SERVICE_ROLE_KEY&&env.ACCOUNTING_TOKEN_ENCRYPTION_KEY){const {createAccountingRuntime}=await import('../automation/runtime.mjs');return createAccountingRuntime({env,fetchImpl:deadlineFetch(fetchImpl,40_000)});}
+ }catch{}
+ return null;
+}
 
 export function createAIHandler({env = process.env, fetchImpl = fetch, authorize = authorizeAIWorkspace, providerFactory = options => new AIProvider(options), verify = verifyModel, clock = () => new Date(), accountingFactory, logger = console, diagnosticRunner = createGeminiDiagnostic({fetchImpl}), invoiceConnectionLookup} = {}) {
   return async function handler(req, res) {
@@ -15,8 +26,8 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
     res.setHeader('X-Content-Type-Options', 'nosniff');
     try {
       const action = req.query?.action;
-      if (!['models', 'settings', 'diagnostic', 'extract', 'assistant', 'save-invoice', 'retry-invoice-sync', 'invoice-sync-status', 'confirm-accounting-action'].includes(action)) throw new APIError(404, 'NOT_FOUND');
-      const methods = ['models','invoice-sync-status'].includes(action) ? ['GET'] : action === 'settings' ? ['GET', 'PUT'] : ['POST'];
+      if (!['models', 'settings', 'diagnostic', 'extract', 'assistant', 'assistant-history', 'save-invoice', 'retry-invoice-sync', 'invoice-sync-status', 'confirm-accounting-action', 'cancel-assistant-action'].includes(action)) throw new APIError(404, 'NOT_FOUND');
+      const methods = ['models','invoice-sync-status','assistant-history'].includes(action) ? ['GET'] : action === 'settings' ? ['GET', 'PUT'] : ['POST'];
       if (!methods.includes(req.method)) { res.setHeader('Allow', methods.join(', ')); throw new APIError(405, 'METHOD_NOT_ALLOWED'); }
       if (action === 'models') {
         const checks = await Promise.all(VERIFIED_MODELS.map(async id => {
@@ -31,12 +42,24 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         : action === 'diagnostic' ? ['workspaceId']
         : action === 'extract' ? ['workspaceId', 'fileId', 'file']
         : action === 'assistant' ? ['workspaceId', 'message', 'history']
-        : action === 'save-invoice' ? ['workspaceId', 'confirmed', 'idempotencyKey', 'invoice']
-        : action === 'confirm-accounting-action' ? ['workspaceId', 'confirmed', 'confirmationToken']
+        : action === 'save-invoice' ? ['workspaceId', 'confirmed', 'idempotencyKey', 'invoice', 'conversationSource']
+        : ['confirm-accounting-action','cancel-assistant-action'].includes(action) ? ['workspaceId', 'confirmed', 'confirmationToken']
         : ['workspaceId', 'invoiceId', 'idempotencyKey'];
       const body = req.method === 'GET' ? {} : requestBody(req, allowed, action === 'extract' ? 4400000 : 32768);
       const workspaceId = uuid(req.method === 'GET' ? req.query.workspaceId : body.workspaceId);
       const store = await authorize(req, workspaceId, {env, fetchImpl});
+      const conversation=store.role==='owner'?store.ownerConversation:null;
+      if(action==='assistant-history'){
+        if(!conversation)throw new APIError(403,'OWNER_REQUIRED');
+        const pending=await conversation.pending();
+        const turns=await conversation.read();
+        let proposal=null;
+        if(pending){
+          const secret=env.AI_ACCOUNTING_CONFIRMATION_SECRET||env.ACCOUNTING_TOKEN_ENCRYPTION_KEY||env.SUPABASE_SERVICE_ROLE_KEY;
+          proposal=pending.action.confirmationToken?{type:pending.action.type,proposalId:pending.id,payload:pending.action.payload,invoice:pending.action.invoice,status:'pending',confirmationToken:pending.action.confirmationToken}:{type:pending.action.type,proposalId:pending.id,payload:{proposalId:pending.id},status:'pending',confirmationToken:createAccountingActionToken({action:pending.action.type,payload:{proposalId:pending.id},userId:store.userId,workspaceId:store.workspaceId,secret,now:clock().getTime()})};
+        }
+        return res.status(200).json({turns,pending:proposal,pendingSummary:pending?.action?.summary||null});
+      }
       if (action === 'invoice-sync-status') {
         if (invoiceConnectionLookup) return res.status(200).json({connected:Boolean(await invoiceConnectionLookup({workspaceId,env,fetchImpl}))});
         if (!env.SUPABASE_SERVICE_ROLE_KEY) return res.status(200).json({connected:false});
@@ -50,35 +73,26 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         if (result?.error) throw new APIError(result.status, result.error);
         return res.status(200).json(result);
       }
-      if (action === 'save-invoice' || action === 'retry-invoice-sync' || action === 'confirm-accounting-action') {
-        let accounting = null;
-        try {
-          // The caller store carries a user bearer token and must never be used
-          // to resolve accounting connections or encrypted credentials.
-          if (accountingFactory) accounting = await accountingFactory({env, fetchImpl});
-          else if (env.SUPABASE_SERVICE_ROLE_KEY && env.ACCOUNTING_TOKEN_ENCRYPTION_KEY) {
-            const {createAccountingRuntime} = await import('../automation/runtime.mjs');
-            accounting = createAccountingRuntime({env, fetchImpl:deadlineFetch(fetchImpl,40_000)});
-          }
-        } catch {
-          // Saving to cetld must remain available when bookkeeping is unavailable.
-          accounting = null;
-        }
+      if (action === 'save-invoice' || action === 'retry-invoice-sync' || ['confirm-accounting-action','cancel-assistant-action'].includes(action)) {
+        const accounting=await invoiceAccounting({env,fetchImpl,accountingFactory});
         if (action === 'save-invoice') {
+          if(body.invoice?.alreadyPaid===true&&store.role!=='owner')throw new APIError(403,'OWNER_REQUIRED');
+          if(body.conversationSource!==undefined&&body.conversationSource!=='assistant')throw new APIError(400,'INVALID_INPUT');
+          if(body.conversationSource==='assistant'){if(!conversation)throw new APIError(403,'OWNER_REQUIRED');await conversation.read();}
           const result = await saveAssistantInvoice({store, invoice: body.invoice, confirmed: body.confirmed, idempotencyKey: body.idempotencyKey, accounting});
           if (result.needsInput) return res.status(422).json({error: 'MISSING_DUE_DATE', question: result.question});
+          if(body.conversationSource==='assistant'){
+            const saved=result.invoice;
+            await conversation.append({key:`upload:${body.idempotencyKey}:user`,role:'user',content:`Save the reviewed invoice ${saved.invoiceNumber} for ${body.invoice.clientName}: ${saved.currency} ${saved.total}, due ${saved.dueDate}.`});
+            await conversation.append({key:`upload:${body.idempotencyKey}:assistant`,role:'assistant',content:`Saved the reviewed invoice ${saved.invoiceNumber}${body.invoice.alreadyPaid?' as paid':''}.`});
+          }
           return res.status(200).json(result);
         }
-        if (action === 'confirm-accounting-action') {
-          if (body.confirmed !== true) throw new APIError(409, 'CONFIRMATION_REQUIRED');
-          const secret = env.AI_ACCOUNTING_CONFIRMATION_SECRET || env.ACCOUNTING_TOKEN_ENCRYPTION_KEY || env.SUPABASE_SERVICE_ROLE_KEY;
-          const action = verifyAccountingActionToken(body.confirmationToken, {userId:store.userId,workspaceId:store.workspaceId,secret,now:clock().getTime()});
-          if (action.action === 'create_invoice') {
-            const result = await saveAssistantInvoice({store,invoice:action.payload.invoice,confirmed:true,idempotencyKey:action.payload.idempotencyKey,accounting});
-            if (result.needsInput) return res.status(422).json({error:'MISSING_DUE_DATE',question:result.question});
-            return res.status(200).json(result);
-          }
-          return res.status(200).json(await updateAssistantInvoice({store,...action.payload,confirmed:true}));
+        if (['confirm-accounting-action','cancel-assistant-action'].includes(action)) {
+          if ((action==='confirm-accounting-action'&&body.confirmed!==true)||(action==='cancel-assistant-action'&&body.confirmed!==false))throw new APIError(409,'CONFIRMATION_REQUIRED');
+          const result=await confirmAssistantAction({store,confirmationToken:body.confirmationToken,confirmed:body.confirmed,env,clock,accounting});
+          if(result.needsInput)return res.status(422).json({error:'MISSING_DUE_DATE',question:result.question});
+          return res.status(200).json(result);
         }
         if (typeof body.idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{12,100}$/.test(body.idempotencyKey)) throw new APIError(400, 'INVALID_IDEMPOTENCY_KEY');
         return res.status(200).json(await retryAssistantInvoiceSync({store, invoiceId: body.invoiceId, accounting}));
@@ -124,15 +138,42 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
           if (status.status === 'connected') accounting = createAccountingTools({integration, userId: store.userId, workspaceId: store.workspaceId, provider: 'zoho_books'});
         } catch { accounting = null; }
       }
-      const result = await answerWorkspaceQuestion({provider, store, message: body.message, history: body.history, clock, accounting});
+      // Owner history is server authoritative. A failed/missing migration blocks
+      // the turn before planning or writes; browser history is never a fallback.
+      if(typeof body.message!=='string'||!body.message.trim()||body.message.length>4000)throw new APIError(400,'INVALID_CONVERSATION');
+      const rows=conversation?await conversation.read():null;
+      const history=rows?rows.map(({role,content})=>({role,content})):body.history;
+      const turnId=randomUUID();
+      if(conversation)await conversation.append({key:`web:${turnId}:user`,role:'user',content:body.message});
+      const decision=ownerActionDecision(body.message);
+      const activeProposal=conversation&&decision!==null?await conversation.pending():null;
+      const invoiceProposal=activeProposal?.action?.confirmationToken?activeProposal.action:conversation&&decision!==null?rows.findLast(turn=>turn.pending_action&&['create_invoice','update_invoice'].includes(turn.pending_action.type)&&(!turn.pending_action.status||turn.pending_action.status==='pending'))?.pending_action:null;
+      if(invoiceProposal&&(!activeProposal||activeProposal.action.confirmationToken)){
+        const saved=await confirmAssistantAction({store,confirmationToken:invoiceProposal.confirmationToken,confirmed:decision,env,clock,accounting:await invoiceAccounting({env,fetchImpl,accountingFactory})});
+        const answer=saved.needsInput?saved.question:invoiceConfirmationAnswer(saved);
+        await conversation.append({key:`web:${turnId}:assistant`,role:'assistant',content:answer});
+        return res.status(200).json({answer,pendingAction:null});
+      }
+      const ownerActions=conversation?createOwnerAssistantActions({store,conversation,clock}):null;
+      let result = await answerWorkspaceQuestion({provider, store, message: body.message, history, clock, accounting,ownerMode:Boolean(conversation),ownerActions});
       if (result.pendingAction) {
         const type = result.pendingAction.type;
-        const action = type === 'create_invoice' ? 'create_invoice' : type === 'update_invoice' ? 'update_invoice' : null;
+        const action = ['create_invoice','update_invoice','owner_reminder','owner_payment','owner_correction','owner_schedule'].includes(type)?type:null;
         if (!action) throw new APIError(500, 'INVALID_ACCOUNTING_ACTION');
+        const legacy=conversation&&['create_invoice','update_invoice'].includes(type);
+        const proposalId=legacy?randomUUID():null;
+        if(legacy&&await conversation.pending())result={answer:'Finish or cancel the pending action before preparing another change.',pendingAction:null};
+        if(result.pendingAction){
+        if(legacy)result.pendingAction={...result.pendingAction,proposalId,payload:{...result.pendingAction.payload,proposalId}};
         const secret = env.AI_ACCOUNTING_CONFIRMATION_SECRET || env.ACCOUNTING_TOKEN_ENCRYPTION_KEY || env.SUPABASE_SERVICE_ROLE_KEY;
         const confirmationToken = createAccountingActionToken({action,payload:result.pendingAction.payload,userId:store.userId,workspaceId:store.workspaceId,secret,now:clock().getTime()});
-        result.pendingAction = {...result.pendingAction,confirmationToken};
+        result.pendingAction = {...result.pendingAction,confirmationToken,expiresAt:new Date(clock().getTime()+10*60_000).toISOString()};
+        if(legacy){const saved=await conversation.propose({id:proposalId,...result.pendingAction,summary:result.answer,instruction:body.message});if(!saved?.id)result={answer:'Finish or cancel the pending WhatsApp action before preparing another change.',pendingAction:null};}
+        }
+
       }
+      if(typeof result.answer==='string')result.answer=result.answer.replace(/\bworkspace\b/gi,'business');
+      if(conversation)await conversation.append({key:`web:${turnId}:assistant`,role:'assistant',content:result.answer.slice(0,4000),pendingAction:result.pendingAction||null});
       return res.status(200).json(result);
     } catch (error) {
       if (req.query?.action === 'extract' && error?.code === 'INVALID_OUTPUT') return res.status(502).json({error:'INVOICE_EXTRACTION_UNAVAILABLE',message:'The invoice could not be read safely. Please retry or enter its details manually.'});

@@ -9,7 +9,7 @@ import {buildInvoiceReminderParameters} from './reminder-parameters.mjs';
 const TYPE='owner_reminder_approval';
 const MESSAGES={
   AMBIGUOUS:'More than one invoice matches. Which invoice number should I use?',
-  NOT_FOUND:'I could not find that invoice in your workspace.',
+  NOT_FOUND:'I could not find that invoice in your business.',
   DENIED:'The verified owner binding is unavailable. Reconnect your owner WhatsApp number in Settings, then request a fresh preview. Nothing was approved or sent.',
   PENDING:'Another owner action is pending. Confirm or cancel it first.',
   STALE:'The invoice, customer or reminder preferences changed after the preview. Request a fresh preview.',
@@ -40,6 +40,15 @@ export const ownerReminderFailure=code=>({ok:false,completed:false,code:MESSAGES
   message:MESSAGES[code]||'Reminder approval is temporarily unavailable. Nothing was approved or queued.'});
 const unwrap=result=>{if(result?.error)throw result.error;return result?.data;};
 
+export function prepareOwnerReminderContent({invoice,settings,customer}) {
+  const entry=selectInvoiceReminderTemplate(settings.follow_up_preferences,customer.reminder_tone??null);
+  const parameters=entry.parameterCount===3?[settings.business_name,invoice.invoice_number,customer.name]:buildInvoiceReminderParameters({invoice,settings,customer});
+  const rendered=buildReminderTemplate(entry,parameters);
+  return {invoiceId:invoice.id,preview:rendered.body,approvalText:brandedReminder(rendered.body,settings.business_name),
+    template:{name:entry.name,language:entry.language,revision:entry.revision,parameters:rendered.template.components[0].parameters.map(p=>p.text)},
+    snapshot:{invoiceVersion:String(invoice.automation_version),invoiceUpdatedAt:invoice.updated_at,settingsUpdatedAt:settings.updated_at,customer}};
+}
+
 // A bounded shortcut for common requests. Other phrasing uses the same model
 // tool contract. Only prepares a preview; never interprets a request as a YES.
 export function ownerReminderRequest(message){
@@ -63,7 +72,7 @@ export function createOwnerReminderRuntime({supabase,scope,message='',messageId,
     confirmation=result.requiresConfirmation===true;
     if(confirmation){
       if(typeof result.preview!=='string'||!result.preview)return refuse('UNAVAILABLE');
-      reply=`Reminder preview for ${result.invoiceNumber}:\n\n${result.preview}\n\n${result.sendNow?'Confirm to approve and queue this reminder for the next scheduler tick. Delivery still follows your WhatsApp settings.':'Confirm to approve this reminder draft. Delivery follows your WhatsApp settings.'} Reply yes to confirm, or cancel.`;
+      reply=`Reminder preview for ${result.invoiceNumber}:\nDelivery form: approved WhatsApp template.\n\n${result.preview}\n\n${result.sendNow?'Confirm to approve and queue this reminder for the next scheduler tick. Delivery still follows your WhatsApp settings.':'Confirm to approve this reminder draft. Delivery follows your WhatsApp settings.'} Reply yes to confirm, or cancel.`;
     }else if(result.completed){
       reply=result.action==='pending.cancelled'?'Canceled the reminder approval. Nothing was queued.':result.sendNow
         ?`Approved and queued the reminder for ${result.invoiceNumber}. The next scheduler tick will recheck all delivery requirements. It has not been sent yet.`
@@ -142,16 +151,12 @@ export function createOwnerReminderRuntime({supabase,scope,message='',messageId,
         }
         if(!settings?.business_name?.trim())return refuse('business_name_required');
         if(invoice.status!=='sent'||invoice.deleted_at||invoice.metadata?.invoice_direction!=='receivable'||!invoice.due_date||Number(invoice.total_amount)<=Number(invoice.amount_paid))return refuse('ineligible_invoice');
-        let entry,rendered;
+        let draft;
         try{
-          entry=selectInvoiceReminderTemplate(settings.follow_up_preferences,customer.reminder_tone??null);
-          const parameters=entry.parameterCount===3?[settings.business_name,invoice.invoice_number,customer.name]:buildInvoiceReminderParameters({invoice,settings,customer});
-          rendered=buildReminderTemplate(entry,parameters);
+          draft=prepareOwnerReminderContent({invoice,settings,customer});
         }catch{return refuse('template_unavailable');}
         return await rpc({p_action:'prepare',p_invoice_id:invoice.id,p_send_now:params.operation==='sendReminderNow',
-          p_preview:rendered.body,p_approval_text:brandedReminder(rendered.body,settings.business_name),
-          p_template:{name:entry.name,language:entry.language,revision:entry.revision,parameters:rendered.template.components[0].parameters.map(p=>p.text)},
-          p_snapshot:{invoiceVersion:String(invoice.automation_version),invoiceUpdatedAt:invoice.updated_at,settingsUpdatedAt:settings.updated_at,customer}},ctx);
+          p_preview:draft.preview,p_approval_text:draft.approvalText,p_template:draft.template,p_snapshot:draft.snapshot},ctx);
       }catch{return refuse('UNAVAILABLE');}
     },
   };

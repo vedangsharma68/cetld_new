@@ -70,7 +70,7 @@ test('short acknowledgements, including ok then, are answered without planner or
     });
     assert.equal(calls, 0, `${message} should be answered without the model`);
     assert.match(result.answer, /(?:okay|alright|welcome|here if you need)/i, `${message} should get a natural conversational reply`);
-    assert.equal(result.evidence.source, 'Cetld workspace');
+    assert.equal(result.evidence.source, 'Cetld business');
     assert.deepEqual(result.evidence.records, []);
   }
 });
@@ -349,7 +349,7 @@ test('evidence returns safe invoice references, freshness, and completeness with
   }};
   const result=await answerWorkspaceQuestion({provider:plannedProvider('getOverdueInvoices'),store:scoped,message:'Which invoice is overdue?',clock:fixedClock});
   assert.deepEqual(result.evidence,{
-    source:'Cetld workspace',
+    source:'Cetld business',
     asOf:'2026-09-25T09:30:00.000Z',
     complete:true,
     truncated:false,

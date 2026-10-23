@@ -27,10 +27,28 @@ export function verifiedOwnerRows(tables,phone) {
 }
 
 export function installVerifiedOwnerRpc(supabase,getTables,{expectedPhone=null}={}) {
+  const sharedTurns=[];
   const prior=typeof supabase.rpc==='function'?supabase.rpc.bind(supabase):null;
   const calls=supabase.rpcCalls||(supabase.rpcCalls=[]);
   supabase.rpc=async(name,args={})=>{
     calls.push({name,args:structuredClone(args)});
+    if(name==='owner_assistant_append'){
+      const turns=getTables().owner_assistant_turns||sharedTurns;
+      if(!turns.some(t=>t.event_key===args.p_event_key))turns.push({id:turns.length+1,event_key:args.p_event_key,workspace_id:args.p_workspace_id,owner_id:args.p_owner_id,channel:args.p_channel,role:args.p_role,content:args.p_content,created_at:new Date().toISOString(),source_message_id:args.p_channel==='whatsapp'&&args.p_role==='user'?args.p_event_key.slice(3,-5):null});
+      return {data:{id:turns.length},error:null};
+    }
+    if(name==='owner_assistant_pending')return {data:null,error:null};
+    if(name==='owner_assistant_history'){
+      const turns=getTables().owner_assistant_turns||sharedTurns;
+      // Mirror the real owner-only whatsapp_messages synchronization trigger.
+      for(const row of getTables().whatsapp_messages||[]){
+        if(row.workspace_id!==args.p_workspace_id||row.audience!=='owner'||String(row.idempotency_key||'').startsWith('ack:')||!row.body)continue;
+        const role=row.direction==='inbound'?'user':'assistant';
+        const key=role==='user'&&row.provider_message_id?'wa:'+row.provider_message_id+':user':String(row.idempotency_key||'').startsWith('reply:')?'wa:'+row.idempotency_key.slice(6)+':assistant':'wa-message:'+row.id;
+        if(!turns.some(t=>t.event_key===key||t.role===role&&t.content===row.body))turns.push({id:turns.length+1,event_key:key,role,content:row.body,created_at:row.created_at,source_message_id:row.provider_message_id,channel:'whatsapp',workspace_id:args.p_workspace_id,owner_id:args.p_owner_id});
+      }
+      return {data:turns.filter(t=>t.workspace_id===args.p_workspace_id&&(!t.owner_id||t.owner_id===args.p_owner_id)).slice(-20),error:null};
+    }
     if(name==='whatsapp_resolve_verified_owner'){
       if(expectedPhone&&args.p_phone!==expectedPhone)throw new Error('owner RPC phone scope mismatch');
       return {data:verifiedOwnerRows(getTables(),args.p_phone),error:null};

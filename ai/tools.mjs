@@ -97,7 +97,7 @@ function withinDateBounds(value, { lower, upper }, timestamp = false) {
 }
 
 // Parse database decimal strings to integer cents. BigInt keeps aggregation exact.
-function cents(value, label) {
+export function cents(value, label = "amount") {
   const text = String(value);
   const match = /^(\d{1,16})(?:\.(\d{1,2}))?$/.exec(text);
   if (!match) throw new TypeError(`${label} is not a valid non-negative two-decimal amount`);

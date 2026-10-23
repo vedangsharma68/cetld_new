@@ -1,3 +1,5 @@
+import {brandedReminder} from '../preferences.mjs';
+import {reminderDeliveryForm,matchesReminderDelivery} from './reminder-approval.mjs';
 import {getSendEligibility} from './consent.mjs';
 import {reminderFingerprint} from './reminder-fingerprint.mjs';
 import {APPROVED_REMINDER_WABA,selectReminderTemplate,selectInvoiceReminderTemplate,buildReminderTemplate} from './reminder-templates.mjs';
@@ -37,9 +39,11 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
       :buildInvoiceReminderParameters({invoice,settings,customer:eligibility.customer});
     const rendered=buildReminderTemplate(entry,parameters);
     if(testGate)await testGate.verifyFacts({invoice,settings,entry});
-    return {invoice,settings,eligibility,entry,parameters,...rendered};
+    const delivery=reminderDeliveryForm({entry,parameters,body:rendered.body});
+    if(!matchesReminderDelivery(invoice.metadata?.approved_reminder_delivery,delivery)||invoice.metadata?.approved_reminder_text!==brandedReminder(rendered.body,settings.business_name))throw Object.assign(new Error('The outgoing words and delivery form need review.'),{code:'DELIVERY_REVIEW_REQUIRED'});
+    return {invoice,settings,eligibility,entry,parameters,delivery,...rendered};
   }
-  return {async prepareReminder(input){if(!enabled())throw Error('Reminder disabled');const result=await facts(input);return {body:result.body};},
+  return {async prepareReminder(input){if(!enabled())throw Error('Reminder disabled');const result=await facts(input);return {body:result.body,delivery:result.delivery};},
     async sendReminder(input={}){
       if(!enabled())return blocked('disabled');
       if(!allowed(input.to))return blocked('test_allowlist');
@@ -52,7 +56,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
         if(f.eligibility.customer.id!==input.customerId||f.body!==input.body)return blocked('reviewed_facts_changed');
         const snapshot={invoiceId:input.invoiceId,customerId:input.customerId,phone:input.to,body:f.body,
           invoiceVersion:f.invoice.automation_version,invoiceUpdatedAt:f.invoice.updated_at,preferencesUpdatedAt:f.settings.updated_at,
-          consentId:f.eligibility.consent.id,consentCreatedAt:f.eligibility.consent.created_at,
+          delivery:f.delivery,consentId:f.eligibility.consent.id,consentCreatedAt:f.eligibility.consent.created_at,
           template:{name:f.entry.name,language:f.entry.language,body:f.entry.body,revision:f.entry.revision,
             wabaId:env.WHATSAPP_WABA_ID,phoneNumberId:env.WHATSAPP_PHONE_NUMBER_ID,parameters:f.parameters}};
         if(f.entry.parameterCount===5)snapshot.defaultDraft=buildDefaultInvoiceReminderDraft({invoice:f.invoice,settings:f.settings,customer:f.eligibility.customer});
@@ -63,9 +67,10 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
           p_owner_id:ownerId,p_workspace_id:workspaceId,p_claim_id:claimId,p_snapshot:snapshot,p_snapshot_hash:hash});
         if(result.error)return blocked('atomic_gate_unavailable');
         const receipt=Array.isArray(result.data)?result.data[0]:result.data;
+        if(receipt?.authorized!==true&&receipt?.reason==='needs_re_review')return blocked('needs_re_review');
         if(receipt?.authorized!==true||receipt.snapshot_hash!==hash||! /^[a-f0-9]{64}$/.test(receipt.callback_token||''))return blocked('atomic_gate_denied');
         callbackToken=receipt.callback_token;payload.biz_opaque_callback_data=callbackToken;
-      }catch{return blocked('eligibility_unavailable');}
+      }catch(error){return blocked(error?.code==='DELIVERY_REVIEW_REQUIRED'?'needs_re_review':'eligibility_unavailable');}
       // No asynchronous operation between the final atomic reservation and POST.
       if(testGate&&!testGate.isOpen())return blocked('scheduled_owner_test_window_closed');
       try{

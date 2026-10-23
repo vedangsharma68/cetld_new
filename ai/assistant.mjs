@@ -220,7 +220,7 @@ function evidenceFor(source, asOf) {
   }
   const numbers = [...new Set(candidates)].slice(0,100);
   return {
-    source: source?.tool === 'getZohoBooksData' ? 'Zoho Books' : 'Cetld workspace',
+    source: source?.tool === 'getZohoBooksData' ? 'Zoho Books' : 'Cetld business',
     asOf,
     complete,
     truncated,
@@ -233,7 +233,7 @@ function withEvidence(result, source) {
 }
 const UUID_PATTERN = /\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/ig;
 
-function redactInternalIds(value) {
+export function redactInternalIds(value) {
   return String(value ?? '').replace(UUID_PATTERN, '[internal reference]');
 }
 
@@ -669,8 +669,9 @@ async function liveZohoInvoice(accounting, target) {
   return {invoice: {invoiceNumber:row.number, customerName:row.customerName, currency:row.currency, total, paid, outstanding, dueDate:row.dueDate, status:row.status, paidState:row.amountMinor > 0 && row.balanceMinor === 0 ? 'fully paid' : row.paidMinor > 0 ? 'partially paid' : 'unpaid'}};
 }
 
-export async function answerWorkspaceQuestion({provider, store, message, history = [], clock = () => new Date(), accounting = null, ownerMode = false}) {
+export async function answerWorkspaceQuestion({provider, store, message, history = [], clock = () => new Date(), accounting = null, ownerMode = false, ownerActions = null}) {
   if (typeof message !== 'string' || !message.trim() || message.length > 4000 || !Array.isArray(history) || history.length > 20 || history.some(x => !x || !['user', 'assistant'].includes(x.role) || typeof x.content !== 'string' || x.content.length > 4000 || Object.keys(x).some(k => !['role', 'content'].includes(k)))) throw new APIError(400, 'INVALID_CONVERSATION');
+  if(ownerActions){const handled=await ownerActions.handle(message);if(handled)return handled;}
   if (isConversationRecallQuestion(message)) return withEvidence({answer:conversationRecallAnswer(history),asOf:clock().toISOString(),timezone:'UTC',model:null,usedFallback:false,readOnly:true},{tool:'none',data:{complete:true,truncated:false}});
   const identity = identityAnswer(message);
   if (identity) return withEvidence({answer: identity, asOf: clock().toISOString(), timezone: 'UTC', model: null, usedFallback: false, readOnly: true}, {tool:'none',data:{complete:true,truncated:false}});
@@ -685,6 +686,7 @@ export async function answerWorkspaceQuestion({provider, store, message, history
   const tools = createAssistantTools({store, clock, accounting, timezone});
   const deterministicWrite = deterministicWriteProposal(message, dateClock);
   if (deterministicWrite) {
+    if(ownerActions&&deterministicWrite.name==='updateInvoice'){const proposal=await ownerActions.invoiceUpdate(deterministicWrite.args,message);if(proposal)return proposal;}
     const proposal = await prepareProposal({...deterministicWrite,tools,clock});
     return {answer:redactInternalIds(proposal.answer),pendingAction:proposal.pendingAction,asOf:clock().toISOString(),timezone,model:null,usedFallback:false,readOnly:true};
   }
@@ -746,7 +748,7 @@ export async function answerWorkspaceQuestion({provider, store, message, history
     const source = {tool:name,label:LABELS[name],data:await tools.execute(name,{})};
     return withEvidence({answer:/\bhow many\b/i.test(message) ? factualFallback([source],message) : emptyAnswer(source) || factualFallback([source],message),asOf:clock().toISOString(),timezone,model:null,usedFallback:false,readOnly:true},source);
   }
-  const allowedTools = writeIntent ? [...tools.definitions, createProposalTool, updateProposalTool] : tools.definitions;
+  const allowedTools = [...(writeIntent ? [...tools.definitions, createProposalTool, updateProposalTool] : tools.definitions),...(ownerActions?[ownerActions.definition]:[])];
   let plan;
   try { plan = await provider.generate({
     messages: [
@@ -767,7 +769,7 @@ export async function answerWorkspaceQuestion({provider, store, message, history
   const sources = [];
   for (const call of plan.toolCalls) {
     const name = call?.function?.name;
-    if (typeof name !== 'string' || (!Object.hasOwn(LABELS, name) && !(writeIntent && ['createInvoice','updateInvoice'].includes(name)))) {
+    if (typeof name !== 'string' || (!Object.hasOwn(LABELS, name) && !(writeIntent && ['createInvoice','updateInvoice'].includes(name)) && !(ownerActions&&name==='ownerAction'))) {
       return plannerFailureResult(message,clock,writeIntent,provider,plan,'invalid_tool_name');
     }
     let args;
@@ -776,7 +778,9 @@ export async function answerWorkspaceQuestion({provider, store, message, history
       args = JSON.parse(call.function.arguments);
       if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error();
     } catch { return plannerFailureResult(message,clock,writeIntent,provider,plan,'invalid_tool_arguments'); }
+    if(ownerActions&&name==='ownerAction')return ownerActions.execute(args,message);
     if (name === 'createInvoice' || name === 'updateInvoice') {
+      if(ownerActions&&name==='updateInvoice'){const proposal=await ownerActions.invoiceUpdate(args,message);if(proposal)return proposal;}
       const proposal = await prepareProposal({name,args,tools,clock});
       return {answer:redactInternalIds(proposal.answer),pendingAction:proposal.pendingAction,asOf:clock().toISOString(),timezone,model:plan.model,usedFallback:plan.usedFallback,readOnly:true};
     }

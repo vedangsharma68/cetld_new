@@ -1,3 +1,4 @@
+import {approveReviewedReminder} from './fixtures/reviewed-reminder.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -8,7 +9,7 @@ import {createAutomationRuntime} from '../automation/runtime.mjs';
 import {createWhatsAppProcessHandler} from '../api/whatsapp-process.js';
 import {createReminderCronHandler} from '../automation/reminder-cron.mjs';
 import {createScheduledOwnerTestGate,scheduledOwnerTestMode,SCHEDULED_OWNER_TEST as fixed} from '../automation/scheduled-owner-test.mjs';
-import {REMINDER_TEMPLATES} from '../automation/whatsapp/reminder-templates.mjs';
+import {REMINDER_TEMPLATES,selectReminderTemplate} from '../automation/whatsapp/reminder-templates.mjs';
 import {runWorkerOnce} from '../automation/worker.mjs';
 import {handleAutomationRequest} from '../automation/routes.mjs';
 
@@ -84,6 +85,7 @@ async function setup({transport='accepted',footer='Reply STOP to opt out',clock=
     async function invoice(id,workspaceId,customer){
       await f.db.query("insert into invoices(id,workspace_id,customer_id,invoice_number,notes,issue_date,due_date,currency,total_amount,status,metadata) values($1,$2,$3,$4,$5,current_date-2,current_date-1,'USD',1,'sent','{\"invoice_direction\":\"receivable\"}')",[id,workspaceId,customer,fixed.sourceNumber,fixed.note]);
       await f.db.query("update invoices set metadata=metadata||jsonb_build_object('followup_state','approved','approved_reminder_text',E'Legacy reviewed draft\n\nFixture studio','approved_preferences_updated_at',(select updated_at from workspace_settings where workspace_id=$2)),next_follow_up_at=now()-interval '1 minute' where id=$1",[id,workspaceId]);
+      await approveReviewedReminder(f.db,{workspaceId,invoiceId:id,entry:selectReminderTemplate({tone:'professional'})});
     }
     await invoice(invoiceId,fixed.workspaceId,customerId);
     const otherId=randomUUID(),foreignId=randomUUID();

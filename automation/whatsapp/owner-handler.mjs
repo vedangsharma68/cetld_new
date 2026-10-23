@@ -22,6 +22,8 @@ import {createProviderHealthStore} from '../../ai/provider-health.mjs';
 import {ownerButtonClaimIssue,invoiceCorrectionFallback} from './owner-grounding.mjs';
 import {requestedOwnerInvoiceTotalChange,invoiceTotalCorrectionValues} from './invoice-corrections.mjs';
 import {invoiceBalanceFields} from '../../invoice/business-fields.mjs';
+import {createOwnerConversation,readSharedOwnerHistory} from '../../ai/owner-conversation.mjs';
+import {ownerActionDecision,ownerActionFailure} from '../../ai/owner-actions.mjs';
 
 function totalCorrectionReply(message,result){
   const answer=invoiceCorrectionFallback(message,[result]),row=result?.record;
@@ -48,16 +50,6 @@ async function timedContextRead(logger,query,operation){
   try{return await operation();}
   catch(error){outcome='error';throw error;}
   finally{try{logger?.info?.('WhatsApp owner context read',{query,queryCount:1,durationMs:Date.now()-startedAt,outcome});}catch{}}
-}
-async function permanentHistory({supabase,workspaceId,phone}){
-  const result=await supabase.from('whatsapp_messages').select('direction,body,status,created_at,id,provider_message_id,idempotency_key').eq('workspace_id',workspaceId)
-    .eq('phone',phone).eq('audience','owner').in('status',['received','accepted','sent','delivered','read'])
-    .order('created_at',{ascending:false}).order('id',{ascending:false}).limit(16);
-  if(result?.error)throw result.error;
-  // Delivery acknowledgements are transport state, not conversational turns.
-  // Overfetch once so they cannot crowd John out of the eight-turn history.
-  return (result?.data||[]).filter(row=>!String(row.idempotency_key||'').startsWith('ack:')).slice(0,8).reverse().map(row=>({role:row.direction==='inbound'?'user':'assistant',content:row.body,
-    createdAt:row.created_at||null,providerMessageId:row.direction==='inbound'?row.provider_message_id:null}));
 }
 async function readOwnerSourceMedia({supabase,providerMessageId,phone}){
   if(typeof providerMessageId!=='string'||!providerMessageId)return null;
@@ -86,7 +78,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
   ownerStoreFactory=scope=>createOwnerScopedStore({supabase,...scope,authorize:scope.authorize||(()=>authorize(scope))}),
   invoiceStoreFactory=scope=>createWhatsAppInvoiceStore({supabase,...scope,audience:'owner',authorize:scope.authorize||(()=>authorize(scope))}),
   pendingActionStoreFactory=createWhatsAppPendingActionStore,
-  historyReader=permanentHistory,
+  historyReader=readSharedOwnerHistory,
   agentFactory=runOwnerAgent,
   toolsFactory=createOwnerWorkspaceTools,
   lifecycleFactory=rpc=>createInvoiceLifecycleService({rpc}),
@@ -181,7 +173,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     };
     const loadHistory=async()=>{
       try{
-        let history=await timedContextRead(logger,'conversation_history',()=>historyReader({supabase,workspaceId,phone,customerId:null,audience:'owner'}));
+        let history=await timedContextRead(logger,'conversation_history',()=>historyReader({supabase,workspaceId,ownerId,phone,customerId:null,audience:'owner'}));
         // The inbound worker records this received message before invoking us.
         // Do not repeat the current turn when durable history already ends in it.
         if(history.at(-1)?.role==='user'&&history.at(-1)?.content===message)history=history.slice(0,-1);
@@ -226,6 +218,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     }
 
     const {history,available:historyAvailable}=historyState;
+    if(historyReader===readSharedOwnerHistory&&!historyAvailable)return {answer:'Your business conversation is temporarily unavailable. Try again shortly. No action was taken.'};
     const {lifecycle,lifecyclePending,available:lifecycleAvailable}=lifecycleState;
     ownerStore=ownerStoreState;
     const menuEditValues=!scope.interactionId&&!media&&!mediaError&&!scope.checkpoint?ownerMenuInvoiceEdit(message):null;
@@ -251,7 +244,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     const invoiceStore=scopeInput=>invoiceStoreFactory({...scope,...scopeInput,ownerId,ownerPhone:phone,messageId,message,audience:'owner',authorize:reauthorize});
     let tools,toolSetupIssue=null;
     onProgress('tools');
-    try{tools=toolsFactory({supabase,botPreferences,timezone,interactiveAvailable:Boolean(env.WHATSAPP_APP_SECRET||env.CRON_SECRET),scope:{...scope,workspaceId,ownerId,phone},ownerStore,pending,pendingAtStart,pendingInitialState,
+    try{tools=toolsFactory({supabase,botPreferences,timezone,ownerConversation:scope.ownerConversation,interactiveAvailable:Boolean(env.WHATSAPP_APP_SECRET||env.CRON_SECRET),scope:{...scope,workspaceId,ownerId,phone},ownerStore,pending,pendingAtStart,pendingInitialState,
       lifecyclePending,invoiceStoreFactory:invoiceStore,settingsStore:createOwnerSettingsStore(supabase),config,signal,deadlineAt,ownerHistory:history,
       sourceMediaReader:input=>readOwnerSourceMedia({supabase,...input}),
       configurationAvailable:settingsAvailable,configurationSource,historyAvailable,ownerStoreAvailable,lifecycleAvailable,
@@ -541,12 +534,35 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
               agentDiagnostics:{rounds:0,toolRounds:0,cacheHits:0,safetyRejects:[]}};
           }catch{logger?.warn?.('WhatsApp owner reply receipt lookup failed',{code:'OWNER_REPLY_STORE_FAILED'});}
         }
+        const conversation=historyReader===readSharedOwnerHistory?createOwnerConversation({rpc:(name,args)=>supabase.rpc(name,args),workspaceId:scope.workspaceId,ownerId:scope.ownerId,channel:'whatsapp'}):null;
+        if(conversation){
+          // Persist before processing. Missing schema/storage blocks all owner
+          // work; customer handlers never construct this owner repository.
+          await conversation.append({key:`wa:${scope.messageId}:user`,role:'user',content:String(scope.message||`[${scope.messageType||(scope.media?.mimeType==='application/pdf'?'document':'image')} attachment]`).slice(0,4000)});
+          const choice=ownerActionDecision(scope.message);
+          if(choice!==null){
+            const pending=await conversation.pending();
+            if(pending){
+              const native=dataOrThrow(await supabase.from('whatsapp_pending_actions').select('id').eq('workspace_id',scope.workspaceId).eq('customer_id',scope.customerId).eq('phone',scope.phone).is('consumed_at',null).limit(1));
+              if(!native?.length){
+              const decided=choice&&['create_invoice','update_invoice'].includes(pending.action?.type)
+                ?{answer:'Your invoice proposal is saved. Open the Assistant on the web to review and confirm it.'}
+                :await conversation.decide(pending.id,choice,{phone:scope.phone,messageId:scope.messageId,message:scope.message});
+              const answer=ownerActionFailure(decided);
+              await conversation.append({key:`wa:${scope.messageId}:assistant`,role:'assistant',content:answer});
+              return {answer};
+              }
+            }
+          }
+        }
         const basic=!scope.interactionId&&!scope.media&&!scope.mediaError&&!scope.checkpoint
           ?standaloneOwnerGreeting(scope.message):null;
         const result=basic?{answer:basic,agentDiagnostics:{rounds:0,toolRounds:0,cacheHits:0,safetyRejects:[]}}
-          :await processTurn(boundedScope,tools=>{activeTools=tools;},()=>{},authorizeRequest);
+          :await processTurn({...boundedScope,ownerConversation:conversation},tools=>{activeTools=tools;},()=>{},authorizeRequest);
         if(result?.answer)result.answer=ownerFailureGuidance(result.answer,{code:result.plannerFailure?.code,
           writeAttempted:activeTools?.getWriteAttempted?.()===true});
+        if(result?.answer)result.answer=result.answer.replace(/\bworkspace\b/gi,'business');
+        if(conversation&&result?.answer&&!result?.deferred)await conversation.append({key:`wa:${scope.messageId}:assistant`,role:'assistant',content:result.answer.slice(0,4000)});
         if(result?.checkpoint)latestCheckpoint=result.checkpoint;
         if(replyStore&&result?.answer&&!result?.deferred&&await authorizeRequest(boundedScope)){
           try{return await replyStore.save(boundedScope,result);}
