@@ -38,6 +38,7 @@
       {"key":"Referrer-Policy","value":"no-referrer"},
       {"key":"Permissions-Policy","value":"camera=(), microphone=(), geolocation=()"},
       {"key":"Content-Security-Policy","value":"default-src 'self'; script-src 'self' https://esm.sh; style-src 'self'; img-src 'self' data: https://cdn.simpleicons.org; connect-src 'self' https://mbprssoufdelbszsawwu.supabase.co wss://mbprssoufdelbszsawwu.supabase.co https://esm.sh; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"}
-    ]}
+    ]},
+    {"source":"/(.*\\.(?:js|mjs|css|html)|app/|app-version.json)", "headers":[{"key":"Cache-Control","value":"no-cache, max-age=0, must-revalidate"}]}
   ]
 }
