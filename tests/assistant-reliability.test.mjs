@@ -180,6 +180,42 @@ test('conversation recall with no preceding user message says so and ignores ass
   }
 });
 
+test('cross-channel recall quotes only matching owner speech before preparing historical actions',async()=>{
+  const ownerHistory=[
+    {role:'user',channel:'whatsapp',content:'My test marker is FALCON-7391. I said INV-1048 was paid USD 900.'},
+    {role:'user',channel:'whatsapp',content:'Set the reminder schedule to every 7 days.'},
+    {role:'user',channel:'web',content:'The web marker is EAGLE-4820.'},
+    {role:'assistant',channel:'whatsapp',content:'An invented marker HAWK-1234.'},
+  ];
+  const history=ownerHistory.map(({role,content})=>({role,content}));
+  const never=()=>{throw Error('Recall must not read records, prepare an action or call the model');};
+  for(const message of ['What have I told you on WhatsApp about a test marker?','Recall my earlier marker from WhatsApp.','What was my test marker from WhatsApp?','What did I tell you on WhatsApp a few minutes ago about a test marker? Quote the marker.']){
+    const result=await answerWorkspaceQuestion({provider:{generate:never},store:{query:never},ownerMode:true,ownerHistory,history,message,ownerActions:{handle:never}});
+    assert.match(result.answer,/“My test marker is FALCON-7391\. I said INV-1048 was paid USD 900\.”/);
+    assert.doesNotMatch(result.answer,/EAGLE-4820|HAWK-1234/);
+  }
+  const schedule=await answerWorkspaceQuestion({provider:{generate:never},store:{query:never},ownerMode:true,ownerHistory,history,message:'What did I tell you on WhatsApp about the reminder schedule?',ownerActions:{handle:never}});
+  assert.match(schedule.answer,/“Set the reminder schedule to every 7 days\.”/);
+  const absent=await answerWorkspaceQuestion({provider:{generate:never},store:{query:never},ownerMode:true,ownerHistory:[],history:[],message:'What did I tell you on WhatsApp about a test marker?'});
+  assert.match(absent.answer,/don't have an earlier WhatsApp message/);
+  const latest=await answerWorkspaceQuestion({provider:{generate:never},store:{query:never},ownerMode:true,ownerHistory,history,message:'Can you quote my last WhatsApp message?'});
+  assert.match(latest.answer,/WhatsApp message was: “Set the reminder schedule to every 7 days\.”/);
+});
+
+test('current payment, balance and delivery questions still require tools rather than transcript quotations',async()=>{
+  let reads=0;
+  const freshStore={query:async(...args)=>{reads++;return store.query(...args);}};
+  const provider={generate:async()=>({content:'INV-1048 is fully paid USD 999.',finishReason:'STOP',model:'fixture-model'})};
+  const history=[{role:'user',content:'I paid USD 999 for INV-1048 and sent it to John.'}];
+  for(const message of ['What did I pay today?','What did I owe John?','What did I send to John today?','What did I send via WhatsApp to John today?','What did I send to my customer on WhatsApp?']){
+    const before=reads;
+    const result=await answerWorkspaceQuestion({provider,store:freshStore,message,history,ownerMode:true});
+    assert.doesNotMatch(result.answer,/USD 999|message was|Your latest question/);
+    assert.ok(reads>before,'current data must be checked instead of trusting a historical payment claim');
+    assert.match(result.answer,/INR 84600\.00 outstanding.*unpaid/);
+  }
+});
+
 test('deterministic invoice dashboard keeps currencies separate and paid balances explicit', async () => {
   const eurCustomer = '33333333-3333-4333-8333-333333333333';
   const rows = [

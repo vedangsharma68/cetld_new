@@ -28,9 +28,10 @@ test('public landing page contains crawlable business information in static HTML
   assert.match(home, /href="\/terms"/);
 });
 
-test('privacy and terms pages are static and carry contact details', () => {
+test('privacy and terms keep static contact content with only the auth callback forwarder', () => {
   for (const page of [privacy, terms]) {
-    assert.doesNotMatch(page, /<script\b/i);
+    assert.match(page, /<script type="module" src="\/auth-redirect\.js"><\/script>/);
+    assert.doesNotMatch(page.replace('<script type="module" src="/auth-redirect.js"></script>', ''), /<script\b/i);
     assert.match(page, /vedangsharma52@gmail\.com/);
     assert.match(page, /Mahindra Luminare Tower C/);
   }

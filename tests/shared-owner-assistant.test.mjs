@@ -41,9 +41,25 @@ test('shared owner context and dashboard commands use real authenticated stores 
   await db.query("update invoices set invoice_number='INV-001' where id=$1",[invoiceId]);
   await db.query("update workspace_settings set default_timezone='UTC',follow_up_preferences=$2 where workspace_id=$1",[workspaceId,{contactStart:'00:00',contactEnd:'23:59',allowedWeekdays:[0,1,2,3,4,5,6],maxReminders:3,cadenceDays:3}]);
   const env={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_PUBLISHABLE_KEY:'public-fixture-key',AI_ACCOUNTING_CONFIRMATION_SECRET:'a'.repeat(32)};
-  let actor=ownerId,planned=0,invalidHistory=false;
+  let actor=ownerId,planned=0,invalidHistory=false,recallFixture=false,recallModelCalls=0;
   const fetchImpl=async(raw,init)=>{const url=new URL(raw);if(invalidHistory&&url.pathname.endsWith('/rpc/owner_assistant_history'))return Response.json(null);if(url.pathname==='/auth/v1/user')return Response.json({id:actor});if(url.searchParams.has('select'))url.searchParams.set('select',url.searchParams.get('select').replaceAll('::text',''));return f.fetchImpl(url,init);};
-  const provider={async generate(){planned++;throw Error('No model needed for bounded commands');}};
+  const provider={async generate(request){
+   if(recallFixture){
+    recallModelCalls++;
+    const current=request.messages.filter(turn=>turn.role==='user').at(-1)?.content||'';
+    if(/what did i tell you on web/i.test(current)){
+     const source=request.messages.findLast(turn=>turn.role==='user'&&turn.content.startsWith('For this test, my web marker is '));
+     assert.ok(source,'the real WhatsApp owner agent must receive the preceding web turn');
+     const marker=source.content.match(/EAGLE-[A-Za-z0-9-]+/)?.[0];assert.ok(marker);
+     return {content:`Your test marker was ${marker}.`,finishReason:'STOP',model:'fixture-model'};
+    }
+    // The web finance planner needs one read tool for a marker-setting message;
+    // the marker is persisted by the real route before that unrelated planning.
+    if(request.toolChoice==='required')return {toolCalls:[{id:'fixture-read',function:{name:'getInvoices',arguments:'{}'}}],model:'fixture-model'};
+    return {content:'Noted.',finishReason:'STOP',model:'fixture-model'};
+   }
+   planned++;throw Error('No model needed for bounded commands');
+  }};
   const handler=createAIHandler({env,fetchImpl,providerFactory:()=>provider,logger});
   async function api(action,body={},method='POST'){
    await asUser(actor);const res=response();await handler({method,headers:{authorization:'Bearer fixture-user-token'},query:{action,workspaceId},body:{workspaceId,...body}},res);return res;
@@ -54,7 +70,7 @@ test('shared owner context and dashboard commands use real authenticated stores 
   const shared=()=>createOwnerConversation({rpc:(name,args)=>f.supabase.rpc(name,args),workspaceId,ownerId,channel:'whatsapp'});
   const wa=async(message,agentFactory=async()=>({answer:'WhatsApp context received.'}))=>{
    await service();const messageId=randomUUID();await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[messageId,phone,message]);
-   return createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test'},providerFactory:()=>provider,agentFactory,logger,replyStore:null})({workspaceId,ownerId,customerId:ownerCustomer,phone,messageId,message});
+   return createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test'},providerFactory:()=>provider,...(agentFactory?{agentFactory}:{}),logger,replyStore:null})({workspaceId,ownerId,customerId:ownerCustomer,phone,messageId,message});
   };
   await t.test('web → WhatsApp → web uses the same persisted thread, ignoring forged browser history',async()=>{
    assert.equal((await ask('hello')).code,200);
@@ -70,6 +86,27 @@ test('shared owner context and dashboard commands use real authenticated stores 
    assert.deepEqual(await otherThread.read(),[]);await otherThread.append({key:'other-business-user',role:'user',content:'OTHER BUSINESS PRIVATE'});
    assert.ok((await shared().read()).every(x=>!x.content.includes('OTHER BUSINESS PRIVATE')));
 
+  });
+  await t.test('opposite-channel marker recall surfaces persisted words through the real web and WhatsApp agents',async()=>{
+   recallFixture=true;
+   try{
+    const whatsappMarker='FALCON-'+randomUUID().slice(0,8),webMarker='EAGLE-'+randomUUID().slice(0,8);
+    assert.equal((await wa(`For this test, my WhatsApp marker is ${whatsappMarker}.`,null)).answer,'Noted.');
+    await ask('hello'); // A later web turn must not hide the WhatsApp turn.
+    const beforeRecall=recallModelCalls;
+    for(const question of ['What did I tell you on WhatsApp a few minutes ago about a test marker? Quote the marker.','Can you quote the test marker I sent on WhatsApp earlier?']){
+     const reply=await ask(question);assert.equal(reply.code,200,JSON.stringify(reply.data));
+     assert.ok(reply.data.answer.includes(whatsappMarker));assert.match(reply.data.answer,/WhatsApp message was: “For this test/);
+     assert.doesNotMatch(reply.data.answer,/INV-001|FORGED|USD 100/);assert.equal(reply.data.readOnly,true);
+    }
+    assert.equal(recallModelCalls,beforeRecall,'web recall must not be forced into invoice planning');
+    assert.equal((await ask(`For this test, my web marker is ${webMarker}.`)).code,200);
+    const reply=await wa('What did I tell you on web a few minutes ago about a test marker? Quote the marker.',null);
+    assert.ok(reply.answer.includes(webMarker),JSON.stringify(reply));assert.equal(reply.plannerFailure,undefined);
+    await service();const stored=await shared().read();
+    assert.ok(stored.some(turn=>turn.channel==='whatsapp'&&turn.role==='user'&&turn.content.includes(whatsappMarker)));
+    assert.ok(stored.some(turn=>turn.channel==='web'&&turn.role==='user'&&turn.content.includes(webMarker)));
+   }finally{recallFixture=false;}
   });
   await t.test('reload preserves the signed invoice proposal and confirmation is idempotent',async()=>{
    const r=await ask('change invoice INV-001 due date to 2026-11-01');assert.equal(r.code,200,JSON.stringify(r.data));assert.equal(r.data.pendingAction.type,'owner_correction');

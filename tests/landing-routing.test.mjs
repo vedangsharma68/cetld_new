@@ -41,6 +41,16 @@ test('invalid or unverifiable cookies still receive the public landing page', as
   assert.equal(response.headers.get('x-middleware-next'), '1');
 });
 
+test('signed-in root redirects preserve auth callback code and flow identity', async t => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {globalThis.fetch = originalFetch;});
+  globalThis.fetch = async () => new Response('{}', {status: 200});
+  const response = await landingAuthRedirect(new Request('https://cetld.com/?code=one-time&sb_flow_id=flow', {
+    headers: {cookie: `${LANDING_SESSION_COOKIE}=account-a-token`},
+  }));
+  assert.equal(response.headers.get('location'), 'https://cetld.com/app/?code=one-time&sb_flow_id=flow');
+});
+
 test('browser auth lifecycle writes and clears the landing session cookie', () => {
   const target = {cookie: ''};
   syncLandingSessionCookie({access_token: 'one.two.three', expires_at: Math.ceil(Date.now() / 1000) + 3600}, target);
