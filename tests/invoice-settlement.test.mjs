@@ -101,6 +101,7 @@ before(async () => {
   ))).rows[0].id;
   await withOwner(() => db.exec(deferredIntegrityMigrations[1]));
   await withOwner(async () => db.exec(await readFile(new URL('../supabase/migrations/20260929100000_consistent_invoice_numbers.sql', import.meta.url), 'utf8')));
+  await withOwner(async () => db.exec(await readFile(new URL('../supabase/migrations/20260929110000_workspace_invoice_number_inference.sql', import.meta.url), 'utf8')));
   // Earlier migrations are replayed only to seed legacy numeric fixtures. The
   // tests must still execute the final, direction-guarded payment RPC.
   await withOwner(() => db.exec(finalPaymentDefinition));

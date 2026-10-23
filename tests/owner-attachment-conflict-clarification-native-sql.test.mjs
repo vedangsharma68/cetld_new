@@ -129,7 +129,7 @@ for(const installedLineEndings of ['LF','CRLF'])test(`native Gemini owner clarif
    const blocked=await safety.execute('ingestInvoiceAttachment',{});assert.equal(blocked.ok,false);assert.equal(blocked.code,'INVALID');assert.match(blocked.message,/Tell me explicitly if you want to save|later message/);
    assert.deepEqual(await review(),proposal);
   }
-  const savedReply=await turn('confirm-source','yes');assert.match(savedReply.answer,/Saved invoice INV-2026-0001/);
+  const savedReply=await turn('confirm-source','yes');assert.match(savedReply.answer,/Saved invoice INV3337/);
   const saved=(await db.query('select * from invoices where workspace_id=$1',[workspaceId])).rows;assert.equal(saved.length,1);assert.equal(Number(saved[0].total_amount),93.50);assert.equal(Number(saved[0].amount_paid),0);assert.equal(saved[0].currency,'USD');assert.equal(saved[0].metadata.printed_invoice_number,'INV3337');assert.equal(saved[0].metadata.invoice_direction,'receivable');
   const files=(await db.query('select * from invoice_files where workspace_id=$1',[workspaceId])).rows;assert.equal(files.length,1);
   const stored=await supabase.storage.from('invoice-files').download(files[0].storage_path);assert.equal(stored.error,null);assert.deepEqual(Buffer.from(await stored.data.arrayBuffer()),bytes);

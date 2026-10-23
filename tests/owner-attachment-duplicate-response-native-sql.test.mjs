@@ -60,11 +60,11 @@ async function fixture({badDuplicateReply=false,storeWrap=store=>store}={}){
 
 for(const badDuplicateReply of [false,true])test(`native default owner duplicate ${badDuplicateReply?'bypasses a provider poised to invent success':'reports the verified rejection'} without saving or changing the original`,async()=>{
  const f=await fixture({badDuplicateReply});try{
-  assert.match((await f.upload('original')).answer,/Saved invoice INV-2026-0001/);
+  assert.match((await f.upload('original')).answer,/Saved invoice SB-10442/);
   const before=(await f.db.query('select to_jsonb(i) value from invoices i where workspace_id=$1',[f.scope.workspaceId])).rows[0].value;
-  assert.equal(before.metadata.printed_invoice_number,'SB-10442');assert.notEqual(before.invoice_number,'SB-10442');
+  assert.equal(before.metadata.printed_invoice_number,'SB-10442');assert.equal(before.invoice_number,'SB-10442');
   const duplicate=await f.upload('duplicate');
-  assert.equal(duplicate.plannerFailure,undefined,JSON.stringify(duplicate));assert.match(duplicate.answer,/already logged/);assert.match(duplicate.answer,/INV-2026-0001/);assert.match(duplicate.answer,/SB-10442/);assert.match(duplicate.answer,/No new invoice was saved/);assert.doesNotMatch(duplicate.answer,/Saved invoice|INV-2026-9999|reply yes|may have saved/i);
+  assert.equal(duplicate.plannerFailure,undefined,JSON.stringify(duplicate));assert.match(duplicate.answer,/already logged/);assert.match(duplicate.answer,/SB-10442/);assert.match(duplicate.answer,/SB-10442/);assert.match(duplicate.answer,/No new invoice was saved/);assert.doesNotMatch(duplicate.answer,/Saved invoice|INV-2026-9999|reply yes|may have saved/i);
   assert.equal(duplicate.fixtureProviderCalls,0,'the guarded duplicate result supplies the reply before provider planning');
   assert.equal(f.falseSuccessDrafts,0,'the provider never receives a duplicate result to turn into an invented success');
   const result=f.results.findLast(value=>value.code==='DUPLICATE_INVOICE');assert.equal(result.ok,false);assert.equal(result.completed,undefined);assert.equal(result.invoiceCreated,false);assert.equal(result.outcome,'duplicate_rejected');assert.equal(result.existingInvoice.invoiceNumber,before.invoice_number);
@@ -115,7 +115,7 @@ test('an unknown write result keeps reconciliation safety and cannot become a du
 test('lost insert acknowledgement reconciles the current save receipt rather than reporting an old-source duplicate',async()=>{
  let lost=false;
  const f=await fixture({storeWrap:store=>({...store,async createAssistantInvoice(input){const saved=await store.createAssistantInvoice(input);if(!lost){lost=true;throw Error('isolated lost insert acknowledgement');}return saved;}})});try{
-  const reply=await f.upload('raced');assert.match(reply.answer,/Saved invoice INV-2026-0001/);assert.equal(reply.plannerFailure,undefined);assert.equal(f.results.some(value=>value.code==='DUPLICATE_INVOICE'),false);
+  const reply=await f.upload('raced');assert.match(reply.answer,/Saved invoice SB-10442/);assert.equal(reply.plannerFailure,undefined);assert.equal(f.results.some(value=>value.code==='DUPLICATE_INVOICE'),false);
   assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,1);assert.equal((await f.db.query('select count(*)::int n from invoice_files')).rows[0].n,1);assert.equal((await f.db.query('select count(*)::int n from payments')).rows[0].n,0);assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });

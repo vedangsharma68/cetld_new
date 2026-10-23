@@ -79,14 +79,14 @@ for(const [caption,mimeType,declined=false] of captions)test(`default native att
       assert.equal((await db.query("select count(*)::int n from whatsapp_messages where workspace_id=$1 and audience='customer'",[workspaceId])).rows[0].n,0);
       assert.deepEqual(f.errors,[]);return;
     }
-    assert.match(reply.answer,/Saved invoice INV-2026-0001/);
+    assert.ok(reply.answer.includes('Saved invoice '+(mimeType==='application/pdf'?'INV-R-1048':'PRINTED-118')));
     assert.equal(firstContract.choice,'required');assert.deepEqual(firstContract.tools.map(t=>t.function.name),['workspaceData']);
     assert.deepEqual(firstContract.tools[0].function.parameters.properties.operation.enum,['saveAttachment']);
     assert.equal(results[0]?.completed,true,JSON.stringify(results));
     assert.equal(logs.filter(row=>row.label==='WhatsApp owner tool call'&&row.data.validationCode==='INVALID_FIELDS').length,0);
     const invoice=(await db.query('select * from invoices where workspace_id=$1',[workspaceId])).rows;
     assert.equal(invoice.length,1);assert.equal(Number(invoice[0].total_amount),118);assert.equal(Number(invoice[0].amount_paid),0);
-    assert.notEqual(invoice[0].invoice_number,'INVENTED');assert.equal(invoice[0].metadata.printed_invoice_number,mimeType==='application/pdf'?'INV-R-1048':'PRINTED-118');
+    assert.equal(invoice[0].invoice_number,mimeType==='application/pdf'?'INV-R-1048':'PRINTED-118');assert.equal(invoice[0].metadata.printed_invoice_number,mimeType==='application/pdf'?'INV-R-1048':'PRINTED-118');
     assert.equal((await db.query('select count(*)::int n from invoice_files where workspace_id=$1',[workspaceId])).rows[0].n,1);
     assert.equal((await db.query("select count(*)::int n from whatsapp_pending_actions where workspace_id=$1 and action->>'sourceMessageId'=$2 and action->>'stage'='saved'",[workspaceId,messageId])).rows[0].n,1);
     assert.equal((await db.query('select count(*)::int n from payments where workspace_id=$1',[workspaceId])).rows[0].n,0);

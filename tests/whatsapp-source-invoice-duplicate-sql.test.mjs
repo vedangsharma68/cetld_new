@@ -38,7 +38,7 @@ async function fixture(){
 test('fresh upload save keys cannot create another invoice for the same actual debtor and printed number',async()=>{
   const f=await fixture();try{
     const first=await f.save('wa_fresh_message_first');
-    assert.equal(first.saved,true);assert.notEqual(first.invoice.invoiceNumber,invoice.invoiceNumber);
+    assert.equal(first.saved,true);assert.equal(first.invoice.invoiceNumber,invoice.invoiceNumber);
     await f.db.query('insert into payments(workspace_id,invoice_id,amount,idempotency_key) values($1,$2,40,$3)',[f.ws,first.invoice.id,'fixture_payment_original']);
     const before=(await f.db.query('select to_jsonb(i) value from invoices i where id=$1',[first.invoice.id])).rows[0].value;
     const writes=f.requests.filter(request=>request.method==='POST').length;
@@ -52,17 +52,17 @@ test('fresh upload save keys cannot create another invoice for the same actual d
   }finally{await f.close();}
 });
 
-test('duplicate matching remains scoped to workspace, actual customer and source number; AUTO saves remain independent',async()=>{
+test('owner numbers are reserved across customers within a business; customer source identity and AUTO saves remain scoped',async()=>{
   const f=await fixture();try{
     const first=await f.save('wa_scoped_message_first');
-    await f.save('wa_other_debtor_message',{...invoice,clientName:'Different debtor'});
-    const foreignStore=createWhatsAppInvoiceStore({supabase:f.supabase,workspaceId:f.otherWs,customerId:f.foreignCustomer});
+    await assert.rejects(f.save('wa_other_debtor_message',{...invoice,clientName:'Different debtor'}),{code:'INVOICE_ALREADY_EXISTS'});
+    const foreignStore=createWhatsAppInvoiceStore({supabase:f.supabase,workspaceId:f.otherWs,customerId:f.foreignCustomer,audience:'owner',authorize:async()=>true});
     await f.save('wa_other_workspace_message',invoice,foreignStore);
     await f.save('wa_other_number_message',{...invoice,invoiceNumber:'PRINTED/18'});
-    await f.save('wa_number_matches_internal',{...invoice,invoiceNumber:first.invoice.invoiceNumber});
+    await assert.rejects(f.save('wa_number_matches_internal',{...invoice,invoiceNumber:first.invoice.invoiceNumber}),{code:'INVOICE_ALREADY_EXISTS'});
     await f.save('wa_auto_message_first',{...invoice,invoiceNumber:'AUTO'});
     await f.save('wa_auto_message_second',{...invoice,invoiceNumber:'AUTO'});
-    assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,7);
+    assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,5);
     await assert.rejects(f.ownerStore.createAssistantInvoice({customerId:f.foreignCustomer,invoice:{...invoice,idempotencyKey:'wa_forged_customer_message'}}),/customer scope violation/);
     const customerStore=createWhatsAppInvoiceStore({supabase:f.supabase,workspaceId:f.ws,customerId:f.customer});
     await assert.rejects(f.save('wa_customer_reupload_message',invoice,customerStore),{code:'INVOICE_ALREADY_EXISTS'});
@@ -130,7 +130,11 @@ test('restoring a softdeleted source invoice refuses another active upload witho
   const f=await fixture();try{
     const original=await f.save('wa_deleted_original_source');
     await f.remove(original.invoice.id);
-    const fresh=await f.save('wa_deleted_source_reuploaded');
+    await assert.rejects(f.save('wa_deleted_owner_number_reserved'),{code:'INVOICE_ALREADY_EXISTS'});
+    // Customer uploads retain their separate source-number semantics. Exercise
+    // restoration against a legacy source duplicate without reusing an owner number.
+    const customerStore=createWhatsAppInvoiceStore({supabase:f.supabase,workspaceId:f.ws,customerId:f.customer});
+    const fresh=await f.save('wa_deleted_source_reuploaded',invoice,customerStore);
     assert.notEqual(fresh.invoice.id,original.invoice.id);
     const before=(await f.db.query('select to_jsonb(i) value from invoices i order by id')).rows;
     await assert.rejects(f.lifecycle('undo',{invoiceId:original.invoice.id,idempotencyKey:'dashboard_duplicate_source_undo'}),

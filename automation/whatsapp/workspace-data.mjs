@@ -713,7 +713,7 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
     }
     const internal=[];
     if(table==='invoices')internal.push('id','invoice_number','updated_at','status','total_amount','amount_paid');
-    if(table==='invoices'&&(ownerInvoiceReadAnalysis(message)||ownerInvoiceReadIntent(message)?.paymentHistory||/\b(?:payments?\s+(?:history|records)|history\s+of\s+payments?)\b/i.test(message)))internal.push('currency','metadata');
+    if(table==='invoices'&&(ownerInvoiceReadAnalysis(message)||ownerInvoiceReadIntent(message)?.balance||ownerInvoiceReadIntent(message)?.paymentHistory||/\b(?:payments?\s+(?:history|records)|history\s+of\s+payments?)\b/i.test(message)))internal.push('currency','metadata');
     if(table==='customers')internal.push('id','name','updated_at','metadata');
     if(['payments','invoice_files'].includes(table))internal.push('invoice_id');
     if(table==='payments')internal.push('id','workspace_id','amount');
@@ -781,6 +781,29 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
         requestedInvoiceMatched,invoice:{invoice_number:rows[0].invoice_number,currency:rows[0].currency,total_amount:rows[0].total_amount,amount_paid:rows[0].amount_paid,...invoiceBalanceFields(rows[0])}};
       await ctx.assertAuthorized();ctx.assertLive();
     }
+    let outstandingTotals;
+    if(table==='invoices'&&ownerInvoiceReadIntent(message)?.balance&&!ownerInvoiceReadAnalysis(message)&&params.offset===0&&!truncated){
+      const groups=new Map();
+      for(const row of rows){
+        if(row.metadata?.invoice_direction==='payable'||['void','cancelled'].includes(row.status))continue;
+        const total=Number(row.total_amount),paid=Number(row.amount_paid??0);
+        if(!/^[A-Z]{3}$/.test(row.currency||'')||!Number.isFinite(total)||!Number.isFinite(paid))return safeError({code:'UNAVAILABLE'});
+        const cents=(groups.get(row.currency)||0)+Math.max(Math.round(total*100)-Math.round(paid*100),0);
+        if(!Number.isSafeInteger(cents))return safeError({code:'UNAVAILABLE'});
+        groups.set(row.currency,cents);
+      }
+      outstandingTotals=[...groups].sort(([a],[b])=>a.localeCompare(b)).map(([currency,cents])=>({currency,outstanding_amount:(cents/100).toFixed(2)}));
+      if(!paymentHistory){
+        const history=rows.length?await read({operation:'read',table:'payments',columns:['invoice_number','amount','reversed_amount','net_amount','paid_at'],
+          filters:[{column:'invoice_id',operator:'in',value:rows.map(row=>row.id)}],limit:MAX_LIMIT,offset:0,order:null},ctx,{verifiedHistory:true})
+          :{ok:true,rows:[],truncated:false};
+        if(history.ok!==true||history.truncated!==false)return safeError({code:'UNAVAILABLE'});
+        paymentHistory={...history,operation:'read',table:'payments',readOnly:true};
+      }
+      const current=rows.length?await findRelatedRows('invoices','id',rows.map(row=>row.id),'id,updated_at',ctx):[];
+      if(current.length!==rows.length||rows.some(row=>!row.updated_at||!current.some(value=>value.id===row.id&&value.updated_at===row.updated_at)))return safeError({code:'STALE'});
+      await ctx.assertAuthorized();ctx.assertLive();
+    }
     let invoiceReadAnalysis;
     const analysis=table==='invoices'?ownerInvoiceReadAnalysis(message):null;
     if(analysis){
@@ -792,7 +815,9 @@ export function createWorkspaceDataTool({supabase,scope,executeSafetyOperation,g
       await ctx.assertAuthorized();ctx.assertLive();
     }
     return sanitise({ok:true,rows:output.slice(0,params.limit),truncated,
+      ...(table==='payments'?{complete:params.offset===0&&!truncated}:{}),
       ...(invoiceReadAnalysis?{invoiceReadAnalysis}:{}),
+      ...(outstandingTotals?{outstandingTotals}:{}),
       ...(paymentHistory?{paymentHistory}:{}),
       ...(truncated?{nextOffset:params.offset+params.limit}:{})},scope);
   };

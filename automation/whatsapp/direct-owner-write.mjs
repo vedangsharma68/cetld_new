@@ -343,6 +343,10 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
         if(!record||record.workspace_id!==workspaceId||record.id!==entityId)return failure('WRITE_UNCONFIRMED');
       }else if(!record)return failure('WRITE_UNCONFIRMED');
       if(record.workspace_id!==workspaceId)return failure('WRITE_UNCONFIRMED');
+      // Fail closed on an older database that still replaces an explicit
+      // owner number. The write may have happened; never report it as correct.
+      if(operation==='invoice.create'&&typeof payload.invoice_number==='string'&&payload.invoice_number.trim()!=='AUTO'
+        &&record.invoice_number!==payload.invoice_number.trim())return failure('WRITE_UNCONFIRMED');
       let correctionEvidence=null;
       if(correction){try{correctionEvidence=await verifyCorrectionAudit({supabase,workspaceId,ownerId,record,outcome});if(!correctionEvidence)return failure('WRITE_UNCONFIRMED');}catch{return failure('WRITE_UNCONFIRMED');}}
       if(entityType==='pending'){

@@ -34,15 +34,22 @@ test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, wit
       'QA-EDGE-002 नया invoice 🧾🔥 for QA Emoji Customer ₹1,200 due kal, please check',
       'new invoice QA-REPRO-001, QA Repro Customer, Rs 1,500, due 25 Oct',
       'new invoice QA-REPRO-002 for QA Repro Customer, Rs 1,500, due 25 Oct',
-      'new invoice QA-MEDIA-001 for QA Media Customer, Rs 1,500, due 30 Oct',
+      'new invoice QA-RETEST-001 for QA Media Customer, Rs 1,500, due 30 Oct',
     ].entries()){
       const reply=await turn(`qa-native-${index}`,message);
       assert.match(reply.answer,/Created invoice/);
       const saved=(await db.query('select result from whatsapp_direct_write_receipts where provider_message_id=$1',[`qa-native-${index}`])).rows[0].result;
       assert.equal(saved.ok,true);assert.equal(Number(saved.record.total_amount),[2500,1200,1500,1500,1500][index]);
       assert.equal(saved.record.due_date,index===1?'2026-10-19':index===4?'2026-10-30':'2026-10-25');
-      assert.equal(saved.record.metadata.source_invoice_number,['QA-VERIFY-001','QA-EDGE-002','QA-REPRO-001','QA-REPRO-002','QA-MEDIA-001'][index]);
+      assert.equal(saved.record.invoice_number,['QA-VERIFY-001','QA-EDGE-002','QA-REPRO-001','QA-REPRO-002','QA-RETEST-001'][index]);
+      assert.equal(saved.record.metadata.source_invoice_number,['QA-VERIFY-001','QA-EDGE-002','QA-REPRO-001','QA-REPRO-002','QA-RETEST-001'][index]);
       assert.equal(saved.record.status,'draft');
+      const persisted=(await db.query('select i.*,c.name customer_name from invoices i join customers c on c.id=i.customer_id and c.workspace_id=i.workspace_id where i.id=$1',[saved.record.id])).rows[0];
+      assert.equal(persisted.invoice_number,saved.record.invoice_number);
+      assert.equal(persisted.workspace_id,workspaceId);assert.equal(persisted.customer_id,saved.record.customer_id);
+      assert.equal(persisted.customer_name,['QA Text Customer','QA Emoji Customer','QA Repro Customer','QA Repro Customer','QA Media Customer'][index]);
+      assert.equal(persisted.currency,'INR');assert.equal(Number(persisted.total_amount),Number(saved.record.total_amount));
+      assert.equal(new Date(persisted.due_date).toISOString().slice(0,10),saved.record.due_date);
       const calls=providerCalls;
       const replay=await handler({workspaceId,ownerId,customerId,phone,messageId:`qa-native-${index}`,message});
       assert.equal(replay.replayed,true);assert.equal(replay.answer,reply.answer);assert.equal(providerCalls,calls);
@@ -54,9 +61,13 @@ test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, wit
     assert.ok(sameCustomer.every(row=>row.status==='draft'));
     const duplicate=await turn('qa-native-duplicate','New invoice QA-EDGE-002 for QA Emoji Customer, amount Rs 1,200, due 25 October 2026');
     assert.match(duplicate.answer,/already exists/);
-    const repeated=await turn('qa-native-media-repeated','new invoice QA-MEDIA-001 for QA Media Customer, Rs 1,500, due 30 Oct');
+    const repeated=await turn('qa-native-media-repeated','new invoice QA-RETEST-001 for QA Media Customer, Rs 1,500, due 30 Oct');
     assert.match(repeated.answer,/already exists/);
-    assert.equal((await db.query("select count(*)::int n from invoices where metadata->>'source_invoice_number'='QA-MEDIA-001'")).rows[0].n,1);
+    const otherCustomerDuplicate=await turn('qa-native-duplicate-other-customer','new invoice QA-RETEST-001 for Different Customer, Rs 1,500, due 30 Oct');
+    assert.match(otherCustomerDuplicate.answer,/already exists/);
+    assert.equal((await db.query("select count(*)::int n from invoices where invoice_number='QA-RETEST-001'")).rows[0].n,1);
+    assert.equal((await db.query("select count(*)::int n from customers where name='Different Customer'")).rows[0].n,0);
+    assert.equal((await db.query("select count(*)::int n from invoices where metadata->>'source_invoice_number'='QA-RETEST-001'")).rows[0].n,1);
     const beforeTypo=(await db.query('select count(*)::int n from invoices')).rows[0].n;
     const typo=await turn('qa-native-name-confirmation','new invoice QA-TYPO-001 for QA Mdeia Customer, Rs 1,500, due 30 Oct');
     assert.match(typo.answer,/Did you mean QA Media Customer\? Reply with the full name/);
@@ -104,9 +115,15 @@ test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, wit
     const pending=(await db.query("select action from whatsapp_pending_actions where workspace_id=$1 and consumed_at is null",[workspaceId])).rows[0].action;
     assert.equal(pending.type,'owner_invoice_create');assert.equal(pending.invoice.invoiceNumber,'QA-CONFIRM-001');
     const confirmed=await confirmedTurn('qa-native-confirm-yes','yes');assert.match(confirmed.answer,/Created invoice/);
+    assert.equal((await db.query("select invoice_number from invoices where metadata->>'assistant_idempotency_key'=$1",[pending.idempotencyKey])).rows[0].invoice_number,'QA-CONFIRM-001');
     assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,8);
     const replayed=await confirming({workspaceId,ownerId,customerId,phone,messageId:'qa-native-confirm-yes',message:'yes'});
     assert.equal(replayed.replayed,true);assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,8);
+    const autoProposal=await confirmedTurn('qa-native-confirm-auto','new invoice for QA Auto Customer, Rs 1,500, due 30 Oct');
+    assert.match(autoProposal.answer,/Reply yes/);
+    await confirmedTurn('qa-native-confirm-auto-yes','yes');
+    const automatic=(await db.query("select invoice_number from invoices where metadata->>'client_name'='QA Auto Customer'")).rows[0];
+    assert.ok(automatic);assert.notEqual(automatic.invoice_number,'AUTO');assert.doesNotMatch(automatic.invoice_number,/^AUTO-/);
   }finally{await db.close();}
 });
 
@@ -146,6 +163,7 @@ test('unnumbered owner invoice retries reuse only an exact scoped instruction an
     const lost=await turn(first,'unnumbered-lost-ack',message);
     assert.match(lost.answer,/couldn’t check if the invoice was created/);assert.doesNotMatch(lost.answer,/Created invoice/);
     assert.equal(await count(first),1);
+    assert.match((await db.query('select invoice_number from invoices where workspace_id=$1',[first.workspaceId])).rows[0].invoice_number,/^INV-2026-\d{4}$/);
     const retry=await turn(first,'unnumbered-new-id',message);
     assert.match(retry.answer,/Created invoice/);assert.equal(await count(first),1);
     assert.match((await turn(first,'unnumbered-repeated',message)).answer,/Created invoice/);assert.equal(await count(first),1);

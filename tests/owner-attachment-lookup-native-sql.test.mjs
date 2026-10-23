@@ -91,7 +91,7 @@ async function fixture(){
     const proposal=await savedReview();assert.equal(proposal.action.stage,'proposal',JSON.stringify({fixed,proposal,errors:f.errors}));
     assert.equal(proposal.action.invoice.invoiceNumber,'INV-3337');assert.equal(proposal.action.invoice.direction,'receivable');
     assert.equal(proposal.action.invoice.currency,'USD');assert.equal(proposal.action.invoice.total,93.5);assert.equal(proposal.action.invoice.clientPhone,null);
-    const saved=await turn('pdf-confirm','yes');assert.match(saved.answer,/Saved invoice INV-2026-0001/,JSON.stringify(saved));
+    const saved=await turn('pdf-confirm','yes');assert.match(saved.answer,/Saved invoice INV-3337/,JSON.stringify(saved));
     const review=await savedReview();assert.equal(review.action.stage,'saved');
     const state=await snapshot();assert.equal(state.invoices.length,1);assert.equal(state.files.length,1);assert.equal(state.payments.length,0);
     assert.equal(state.customerOutbound,0);
@@ -112,7 +112,7 @@ test('attachment duplicate question uses exact read-only source match and preser
     const extractionStart=f.calls.extractions.length,plannerStart=f.calls.planner.length;
     const reply=await f.turn('event265-duplicate-question',duplicateQuestion,{mediaBytes:f.imageBytes});
     assert.match(reply.answer,/already logged/i,JSON.stringify(reply));
-    assert.match(reply.answer,/INV-2026-0001/);assert.match(reply.answer,/INV-3337/);assert.match(reply.answer,/No changes were made/i);
+    assert.match(reply.answer,/INV-3337/);assert.match(reply.answer,/No changes were made/i);
     assert.equal(f.calls.executions.slice(executionStart).filter(item=>item.args.operation==='checkAttachment').length,1);
     assert.deepEqual(f.calls.executions.slice(executionStart).map(item=>item.args),[{operation:'checkAttachment'}]);
     assert.equal(f.calls.extractions.length-extractionStart,1,'analyze only this image to identify its source invoice');
@@ -165,7 +165,7 @@ test('a current payment proposal and saved review history survive the read-only 
     const pending=createWhatsAppPendingActionStore({supabase:f.supabase});
     const state=await pending.loadPendingActionState(f.scope);
     assert.ok(state);
-    const action={type:'owner_invoice_payment',invoiceId:f.state.invoices[0].id,invoiceNumber:'INV-2026-0001',
+    const action={type:'owner_invoice_payment',invoiceId:f.state.invoices[0].id,invoiceNumber:'INV-3337',
       expectedUpdatedAt:f.state.invoices[0].updated_at,changes:{amount:10,currency:'USD'},sourceMessageId:'payment-proposal-source',
       requestedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+600_000).toISOString()};
     const stored=await pending.storePendingAction({...f.scope,action,source:'whatsapp',expectedState:state});

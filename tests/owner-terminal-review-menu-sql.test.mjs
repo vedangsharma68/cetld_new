@@ -68,5 +68,5 @@ test('zero invoice paid balance cannot establish absence of historical payments'
     'There is no payment history for invoice INV-1.','The payment history is empty for INV-1.','No payments are in the history for INV-1.'])
     assert.ok(['fresh_database_read_required','unverified_action_result'].includes(ownerGroundingIssue(answer,evidence,'Show invoice INV-1')),answer);
   assert.equal(ownerGroundingIssue('Invoice INV-1 currently has a paid balance of USD 0.',evidence,'Show invoice INV-1'),null);
-  assert.equal(ownerGroundingIssue('No payments made this month.',[{ok:true,readOnly:true,table:'payments',rows:[]}],'Show payments this month'),null);
+  assert.equal(ownerGroundingIssue('No payments made this month.',[{ok:true,readOnly:true,table:'payments',rows:[],truncated:false,complete:true}],'Show payments this month'),null);
 });
