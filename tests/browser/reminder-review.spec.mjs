@@ -2,6 +2,7 @@ import {test,expect} from '@playwright/test';
 import {createServer} from 'node:http';
 import {readFile} from 'node:fs/promises';
 import path from 'node:path';
+import {REMINDER_TEMPLATES,buildReminderTemplate} from '../../automation/whatsapp/reminder-templates.mjs';
 import {createReminderReviewNetwork} from '../fixtures/reminder-review-network.mjs';
 let fixture,server,origin;
 test.beforeAll(async()=>{
@@ -30,7 +31,7 @@ test.beforeAll(async()=>{
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin=`http://127.0.0.1:${server.address().port}`;
 });
 test.afterAll(async()=>{await new Promise(resolve=>server.close(resolve));await fixture.close()});
-for(const width of [320,360,520,800,1280,1920,3840])test(`live review API and SQL approval at ${width}px`,async({page},info)=>{
+for(const width of [320,360,390,520,800,1280,1920,3840])test(`live review API and SQL approval at ${width}px`,async({page},info)=>{
  const data=JSON.parse(JSON.stringify(await fixture.seed()));
  await page.setViewportSize({width,height:900});await page.emulateMedia({reducedMotion:'reduce'});
  await page.route('https://esm.sh/**',r=>r.fulfill({contentType:'text/javascript',body:'export function createClient(){throw Error("Offline fixture login")}'}));
@@ -38,7 +39,7 @@ for(const width of [320,360,520,800,1280,1920,3840])test(`live review API and SQ
  await page.addScriptTag({url:origin+'/fixture-supabase.js'});await page.evaluate(data=>__reviewTest.enter(data),data);
  await page.locator('[data-action="draft"]').click();
  const form=page.locator('#draft-form');await form.locator('[name=tone]').selectOption('firm');await expect(form.locator('[name=message]')).toHaveValue(/expected payment date/);
- await form.locator('[name=sendNow]').selectOption('true');const text='My exact edited reminder — no regenerated words.';await form.locator('[name=message]').fill(text);
+ await form.locator('[name=sendNow]').selectOption('true');const text='My exact edited reminder — no regenerated words.\n\nBrowser business';await form.locator('[name=message]').fill(text);
  const fallback=width===320||width===800||width===3840;if(fallback)await form.locator('[name=approveFallback]').check();
  await form.locator('[data-preview-reminder]').click();await expect(form.locator('[data-delivery-preview]')).toContainText('Will send as your message');await expect(form.locator('[data-delivery-preview] blockquote').first()).toHaveText(text);
  if(fallback){await expect(form.locator('[data-delivery-preview]')).toContainText('approved fallback template cetld_invoice_details_firm_v1');await expect(form.locator('[data-delivery-preview] blockquote')).toHaveCount(2)}
@@ -47,6 +48,7 @@ for(const width of [320,360,520,800,1280,1920,3840])test(`live review API and SQ
  for(const button of await form.locator('.dialog-foot button').all()){await button.scrollIntoViewIfNeeded();await button.click({trial:true});}
  await page.screenshot({path:info.outputPath('reviewed-delivery.png'),animations:'disabled'});
  await form.locator('[data-approve-reminder]').click();await expect(page.locator('dialog')).not.toBeVisible();
+ const stored=(await fixture.db.query('select metadata from invoices where id=$1',[data.invoice.id])).rows[0].metadata;expect(stored.approved_reminder_text).toBe(text);expect(stored.approved_reminder_delivery.body).toBe(text);
  await expect(page.locator('.approved-delivery-summary')).toContainText(text);if(fallback)await expect(page.locator('.approved-delivery-summary')).toContainText('Approved fallback: cetld_invoice_details_firm_v1');
  await page.screenshot({path:info.outputPath('queued-approval.png'),fullPage:true,animations:'disabled'});
  if(fallback)await fixture.expireWindow();const before=fixture.graph.length;const tick=await fixture.tick();const result=tick.results.find(x=>x.invoiceId===data.invoice.id);expect(result?.status,JSON.stringify({tick,errors:fixture.errors})).toBe('sent');
@@ -63,10 +65,14 @@ test('scheduled approval reviews a tone-selected template and retains the custom
  const data=await enterReview(page),form=page.locator('#draft-form');await expect(form.locator('[name=approveFallback]')).toBeDisabled();
  await form.locator('[name=tone]').selectOption('gentle');const custom='Custom dashboard draft, not approved template wording';await form.locator('[name=message]').fill(custom);
  await form.locator('[data-preview-reminder]').click();const preview=form.locator('[data-delivery-preview]');await expect(preview).toContainText('Will send as approved template: cetld_invoice_details_relaxed_v1');await expect(preview).toContainText('Cetld’s scheduled reminders');await expect(preview).toContainText('cannot be delivered as-is');
+ const words=await preview.locator('blockquote').innerText();expect(words).toContain('Browser business');
+ await expect(form.locator('[data-approve-reminder]')).toBeDisabled();
  await form.locator('[data-delivery-ack]').check();await form.locator('[data-approve-reminder]').click();await expect(page.locator('dialog')).not.toBeVisible();
  await expect(page.locator('.approved-delivery-summary')).toContainText('cetld_invoice_details_relaxed_v1');
- const row=(await fixture.db.query('select * from invoices where id=$1',[data.invoice.id])).rows[0];expect(row.metadata.reminder_draft_text).toBe(custom);
+ const row=(await fixture.db.query('select * from invoices where id=$1',[data.invoice.id])).rows[0];expect(row.metadata.reminder_draft_text).toBe(custom);expect(row.metadata.approved_reminder_text).toBe(words);expect(row.metadata.approved_reminder_delivery.body).toBe(words);
  await fixture.service();await fixture.db.query("update invoices set next_follow_up_at=clock_timestamp()-interval '1 minute' where id=$1",[data.invoice.id]);await fixture.expireWindow();const before=fixture.graph.length;const tick=await fixture.tick();expect(tick.results.find(x=>x.invoiceId===data.invoice.id).status).toBe('sent');expect(fixture.graph.length).toBe(before+1);expect(fixture.graph.at(-1).template.name).toBe('cetld_invoice_details_relaxed_v1');
+ const sent=fixture.graph.at(-1),entry=REMINDER_TEMPLATES.find(entry=>entry.name===sent.template.name);
+ expect(buildReminderTemplate(entry,sent.template.components[0].parameters.map(parameter=>parameter.text)).body).toBe(words);
  await page.screenshot({path:info.outputPath('scheduled-template.png'),fullPage:true});
 });
 test('expired free-form approval remains visible for re-review with the exact held words',async({page},info)=>{

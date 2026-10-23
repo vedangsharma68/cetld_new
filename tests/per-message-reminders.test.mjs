@@ -76,6 +76,7 @@ test('per-message review binds the real API, PostgreSQL approval, dispatch and r
    const blocked=await preview(await invoice());assert.equal(blocked.code,409);assert.equal(blocked.data.error,'PENDING');
    await asUser();assert.equal((await f.supabase.rpc('owner_assistant_decide',{p_workspace_id:workspaceId,p_owner_id:ownerId,p_id:proposal.id,p_confirmed:false})).data.ok,true);
   });
+  await service();await db.exec(await readFile(new URL('../supabase/migrations/20261023164251_exact_reminder_approval_artifact.sql',import.meta.url),'utf8'));
   await t.test('2a: scheduled reminders use the selected tone template even inside the service window',async()=>{
    await inbound();const id=await invoice(),p=await preview(id,{sendNow:false,tone:'firm'});assert.equal(p.code,200,JSON.stringify({data:p.data,errors:f.errors}));assert.equal(p.data.delivery.form,'template');assert.equal(p.data.delivery.templateName,'cetld_invoice_details_firm_v1');
    const a=await approve(p.data);assert.equal(a.code,200,JSON.stringify({data:a.data,errors:f.errors}));await service();await db.query("update invoices set next_follow_up_at=clock_timestamp()-interval '1 minute' where id=$1",[id]);
