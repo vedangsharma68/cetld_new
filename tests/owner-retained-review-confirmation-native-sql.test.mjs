@@ -52,7 +52,7 @@ async function fixture({throwAfterConfirm=false,mutateBeforeConfirm=null}={}){
    if(!tool)return Response.json({choices:[{finish_reason:'tool_calls',message:{content:'',tool_calls:[{id:'event257-generic-create',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'create',table:'invoices',values:{invoice_number:'INVENTED',customer_name:'Invented customer',total_amount:1,currency:'USD',status:'unpaid'}})}}]}}]});
    const result=JSON.parse(tool.content);
    const completed=result.completed===true;
-   return Response.json({choices:[{finish_reason:'stop',message:{content:completed?'Saved invoice INV-2026-0001 for Test Business, USD 93.50.':
+   return Response.json({choices:[{finish_reason:'stop',message:{content:completed?'Saved invoice INV-3337 for Test Business, USD 93.50.':
     result.requiresLaterConfirmation?'Invoice INV-3337 for Test Business, USD 93.50. Reply yes to save it. Nothing was saved.':
     result.message||'Nothing was saved.'}}]});
   }});
@@ -95,7 +95,7 @@ test('event257 retained PDF proposal uses the guarded confirmation writer after 
  const f=await fixture();try{
   const executionStart=f.executions.length,providerStart=f.providerCalls.length;
   const savedReply=await f.turn('pdf-confirm','yes');
-  assert.match(savedReply.answer,/Saved invoice INV-2026-0001/);
+  assert.match(savedReply.answer,/Saved invoice INV-3337/);
   const confirmCalls=f.executions.slice(executionStart).filter(({args})=>args.operation==='confirm');
   assert.ok(confirmCalls.length===1,JSON.stringify({savedReply,executions:f.executions.slice(executionStart),providerCalls:f.providerCalls.slice(providerStart)}));
   assert.equal(f.executions.slice(executionStart).some(({args})=>args.operation==='create'),false);

@@ -808,7 +808,7 @@ test('direct owner invoice writes are message-bound, scoped, idempotent, and rev
     const created=await write(db,{workspaceId,providerMessageId:'wa-direct-create-001',quote,operation:'invoice.create',payload});
     assert.equal(created.ok,true,JSON.stringify(created));
     assert.equal(created.entityType,'invoice');
-    assert.match(created.record.invoice_number,/^INV-2026-[0-9]{4,}$/);
+    assert.equal(created.record.invoice_number,'INV-DIRECT-001');
     assert.equal(created.record.metadata.printed_invoice_number,'INV-DIRECT-001');
     assert.equal(created.record.total_amount,'125.50');
     const persistedCreated=(await db.query(`select i.id,i.total_amount::text as total_amount,c.name as customer_name

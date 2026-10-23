@@ -62,7 +62,7 @@ async function fixture({oldSql=false,transform=null,currency='AUD',currencyEvide
     readQuestion?{operation:'pending'}:{operation:'create',table:'invoices',values:{amount:93.5,currency:'USD',issue_date:'2016-01-25',due_date:'2016-01-31',subtotal:85,tax:8.5,total_amount:93.5,line_items:[],unsupported:'synthetic invalid field'}})}}]}}]});
    const result=JSON.parse(tool.content);
    if(readQuestion)return Response.json({choices:[{finish_reason:'stop',message:{content:`The retained invoice currency is ${result.invoice.currency}. It remains in review. Nothing was saved.`}}]});
-   return Response.json({choices:[{finish_reason:'stop',message:{content:result.completed?'Saved invoice INV-2026-0001 for Test Business, USD 93.50.':result.message||'I could not log this invoice. Nothing was saved.'}}]});
+   return Response.json({choices:[{finish_reason:'stop',message:{content:result.completed?'Saved invoice INV-3337 for Test Business, USD 93.50.':result.message||'I could not log this invoice. Nothing was saved.'}}]});
   }});
  const persist=async(id,message,media=false)=>{
   await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status,media_ref) values($1,'fixture',$2,$3,$4,'processing',$5)",[id,phone,media?'document':'text',message,media?id:null]);
@@ -93,7 +93,7 @@ test('event254 PDF wording takes real scoped review path before Cloudflare and s
   assert.match(reply.answer,/INV-3337/);assert.match(reply.answer,/Test Business/);assert.match(reply.answer,/USD 93\.50/);assert.match(reply.answer,/reply yes/i);assert.match(reply.answer,/Nothing was saved/);
   assert.deepEqual(await f.ledger(),before);
   const replay=await f.handler({...f.scope,messageId:'pdf-correction',message:clarification});assert.equal(replay.replayed,true);assert.deepEqual(await f.review(),proposal);assert.equal(f.calls.length,callCount);
-  const saved=await f.turn('pdf-confirm','yes');assert.match(saved.answer,/Saved invoice INV-2026-0001/);
+  const saved=await f.turn('pdf-confirm','yes');assert.match(saved.answer,/Saved invoice INV-3337/);
   const ledger=await f.ledger();assert.equal(ledger.invoices.length,1);const invoice=ledger.invoices[0];
   assert.equal(Number(invoice.total_amount),93.5);assert.equal(Number(invoice.amount_paid),0);assert.equal(invoice.currency,'USD');assert.equal(invoice.status,'draft');
   assert.equal(invoice.metadata.printed_invoice_number,'INV-3337');assert.equal(invoice.metadata.followup_state,'draft');assert.equal(invoice.metadata.next_follow_up_at,null);

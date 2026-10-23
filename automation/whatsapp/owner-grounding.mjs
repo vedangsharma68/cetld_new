@@ -83,22 +83,43 @@ function actionMatches(clause, result) {
   if(/\b(?:updated|changed|corrected|update|change)\b/i.test(clause))return /updat|change|confirmed|reopened/.test(action);
   return true;
 }
+// Keep currency attached to amounts and sum balances per invoice before
+// grouping. A USD amount cannot substantiate the same number of rupees.
 function numericEvidence(results) {
-  const values=new Set();
-  const add=value=>{if((typeof value==='number'||typeof value==='string'&&/^-?\d[\d,]*(?:\.\d+)?$/.test(value))&&Number.isFinite(Number(String(value).replaceAll(',',''))))values.add(Number(String(value).replaceAll(',','')).toFixed(2));};
-  const visit=value=>{
+  const values=new Map();
+  const number=value=>(typeof value==='number'||typeof value==='string'&&/^-?\d[\d,]*(?:\.\d+)?$/.test(value))
+    &&Number.isFinite(Number(String(value).replaceAll(',','')))?Number(String(value).replaceAll(',','')):null;
+  const add=(value,currency)=>{
+    const amount=number(value);if(amount===null)return;
+    const key=currency||'';if(!values.has(key))values.set(key,new Set());
+    values.get(key).add(amount.toFixed(2));
+  };
+  const moneyField=/amount|total|balance|paid|remaining|outstanding|overpayment|subtotal|tax|discount|price|payment$/i;
+  const visit=(value,inheritedCurrency='',field='')=>{
     if(Array.isArray(value)){
-      const sums={};
-      for(const row of value){visit(row);if(row&&typeof row==='object')for(const [key,amount] of Object.entries(row))if(/amount|total|balance|paid|remaining/i.test(key)&&Number.isFinite(Number(amount)))sums[key]=(sums[key]||0)+Number(amount);}
-      for(const sum of Object.values(sums))add(sum);
-      if(sums.total_amount!==undefined)add(sums.total_amount-(sums.amount_paid||0));
+      const groups=new Map();
+      for(const row of value){
+        visit(row,inheritedCurrency,field);
+        if(!row||typeof row!=='object'||Array.isArray(row))continue;
+        const currency=row.currency||inheritedCurrency,sums=groups.get(currency)||{};
+        for(const [key,raw] of Object.entries(row)){
+          const amount=number(raw);
+          if(moneyField.test(key)&&amount!==null)sums[key]=(sums[key]||0)+amount;
+        }
+        const total=number(row.total_amount),paid=row.amount_paid==null?0:number(row.amount_paid);
+        if(total!==null&&paid!==null)sums.computedOutstanding=(sums.computedOutstanding||0)+Math.max(total-paid,0);
+        groups.set(currency,sums);
+      }
+      for(const [currency,sums]of groups)for(const sum of Object.values(sums))add(sum,currency);
     }else if(value&&typeof value==='object'){
-      for(const item of Object.values(value))visit(item);
-      if(value.total_amount!==undefined&&Number.isFinite(Number(value.total_amount)))add(Number(value.total_amount)-Number(value.amount_paid||0));
-    }else add(value);
+      const currency=value.currency||inheritedCurrency;
+      for(const [key,item]of Object.entries(value))visit(item,currency,key);
+      const total=number(value.total_amount),paid=value.amount_paid==null?0:number(value.amount_paid);
+      if(total!==null&&paid!==null)add(Math.max(total-paid,0),currency);
+    }else if(moneyField.test(field))add(value,inheritedCurrency);
   };
   for(const result of results)visit(result);
-  return values;
+  return {has:(amount,currency)=>values.get(currency)?.has(amount)||values.size===1&&values.get('')?.has(amount)};
 }
 export function completedOwnerResult(result){
   return result?.ok===true && result?.proposal!==true && result?.requiresConfirmation!==true
@@ -209,15 +230,21 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
   const success=results.filter(r=>r.ok!==false);
   // amount_paid is the current net allocation. A full reversal can make it
   // zero while the immutable original receipt still exists.
-  const zeroInvoiceBalance=success.some(result=>result.table==='invoices'&&result.readOnly===true
-    &&Array.isArray(result.rows)&&result.rows.some(row=>row.amount_paid!==null&&row.amount_paid!==undefined&&Number(row.amount_paid)===0));
-  const absentPaymentHistory=/\b(?:no payments?\b[^.!?\n]{0,35}\b(?:made|received|recorded|history)|no (?:payment history|payment records?)\b|payment (?:history|records?)\b[^.!?\n]{0,20}\b(?:empty|absent)|never (?:been )?paid)\b/i.test(text);
-  const knownPaymentHistory=success.some(result=>result.readOnly===true&&result.paymentHistory?.ok===true
-    &&result.paymentHistory.readOnly===true&&result.paymentHistory.rows?.length>0);
-  if((zeroInvoiceBalance||knownPaymentHistory)&&absentPaymentHistory)return 'fresh_database_read_required';
+  const absentPaymentHistory=/\b(?:no payments?\b[^.!?\n]{0,35}\b(?:made|received|recorded|history)|no (?:payment history|payment records?)\b|payment (?:history|records?)\b[^.!?\n]{0,20}\b(?:empty|absent)|never (?:been )?paid)\b/i.test(text.replace(NO_RESULT,''));
+  const histories=success.filter(result=>result.readOnly===true).flatMap(result=>[
+    ...(result.table==='payments'?[result]:[]),...(result.paymentHistory?.ok===true&&result.paymentHistory.readOnly===true?[result.paymentHistory]:[])]);
+  const knownPaymentHistory=histories.some(history=>history.rows?.length>0);
+  const verifiedEmptyHistory=histories.some(history=>history.truncated===false&&history.complete!==false
+    &&Array.isArray(history.rows)&&history.rows.length===0);
+  if(absentPaymentHistory&&(knownPaymentHistory||!verifiedEmptyHistory))return 'fresh_database_read_required';
   const numbers=numericEvidence(success);
-  const amounts=[...text.matchAll(/(?:[$€£₹]|\b(?:USD|INR|EUR|GBP|CHF|AED|SGD|AUD|CAD))\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(?:USD|INR|EUR|GBP|CHF|AED|SGD|AUD|CAD)\b/gi)];
-  if(amounts.some(match=>!numbers.has(Number((match[1]||match[2]).replaceAll(',','')).toFixed(2))))return 'fresh_database_read_required';
+  const amounts=[...text.matchAll(/([$€£₹]|\b(?:Rs\.?|USD|INR|EUR|GBP|CHF|AED|SGD|AUD|CAD))\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(USD|INR|EUR|GBP|CHF|AED|SGD|AUD|CAD)\b/gi)];
+  const currencies={'$':'USD','€':'EUR','£':'GBP','₹':'INR',RS:'INR','RS.':'INR'};
+  if(amounts.some(match=>{
+    const label=(match[1]||match[4]).toUpperCase(),amount=Number((match[2]||match[3]).replaceAll(',','')).toFixed(2);
+    const candidates=label==='$'?['USD','CAD','AUD','SGD']:[currencies[label]||label];
+    return !candidates.some(currency=>numbers.has(amount,currency));
+  }))return 'fresh_database_read_required';
   const source=JSON.stringify(results)+String(message||'');
   const ids=[...text.matchAll(/\bINV[-/][A-Z0-9][A-Z0-9/-]*/gi)].map(m=>m[0]);
   const attachmentNotSaved=results.some(result=>result?.ok===false&&result?.review&&result?.outcome==='not_saved');
@@ -236,7 +263,7 @@ export function ownerGroundingIssue(reply,results=[],message='',capabilities={})
   // Conversation history can resolve a reference, but cannot prove current data.
   if(ids.some(id=>!source.toLowerCase().includes(id.toLowerCase()))
     &&!(/\b(?:which|clarify|mean|could not|couldn't|cannot|can't|unable|not found|no matching)\b/i.test(text)))return 'fresh_database_read_required';
-  if(/(?:[$€£₹]\s*\d|\b(?:USD|INR|EUR|GBP|CHF)\s*[\d,]|[\d,]+(?:\.\d+)?\s*(?:USD|INR|EUR|GBP|CHF)\b)/i.test(text)
+  if(amounts.length
     &&!success.some(r=>r.readOnly===true||r.rows||r.invoices||completedOwnerResult(r)||r.proposal||r.requiresConfirmation||r.analysisOnly||r.fields||r.invoice||r.invoiceNumber||r.review||r.details))return 'fresh_database_read_required';
   return null;
 }

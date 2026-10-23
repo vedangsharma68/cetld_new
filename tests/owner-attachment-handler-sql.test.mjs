@@ -105,7 +105,7 @@ for(const existingCustomer of [false,true])test(`real owner review confirmation 
     assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,0);
     const reply=await f.textTurn('review-phone-confirm','yes');
     assert.equal(reply.plannerFailure,undefined,JSON.stringify({reply,errors:f.errors,results:f.results}));
-    assert.match(reply.answer,/Saved invoice INV-2026-0001/,JSON.stringify({reply,errors:f.errors,results:f.results}));
+    assert.match(reply.answer,/Saved invoice INV-2026-0720/,JSON.stringify({reply,errors:f.errors,results:f.results}));
     const customers=(await f.db.query("select id,phone from customers where workspace_id=$1 and name='Fixture customer'",[f.scope.workspaceId])).rows;
     assert.equal(customers.length,1);assert.equal(customers[0].phone,normalized);
     if(existingCustomer)assert.equal(customers[0].id,customerId);
@@ -196,7 +196,7 @@ for(const caption of ['log this','please save it','record the attached'])test(`c
   try{
     const {reply}=await f.turn('attachment-current-caption');
     assert.equal(reply.plannerFailure,undefined,JSON.stringify(reply));
-    assert.match(reply.answer,/Saved invoice INV-2026-0001/);
+    assert.match(reply.answer,/Saved invoice INV-2026-0720/);
     assert.equal(f.extractions,1);
     assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,1);
     assert.equal((await f.db.query('select count(*)::int n from invoice_files')).rows[0].n,1);
@@ -235,7 +235,7 @@ test('actual extraction wire and default owner toolset retain contradictory amou
 for(const mimeType of ['image/jpeg','application/pdf'])test(`real owner handler and SQL log ${mimeType}, persist source and replay once with missing-phone follow-up`,async()=>{
   const f=await fixture();try{
     const first=await f.turn('fixture-attachment',mimeType);
-    assert.match(first.reply.answer,/Saved invoice INV-2026-0001/,JSON.stringify({reply:first.reply,errors:f.errors,results:f.results}));
+    assert.match(first.reply.answer,/Saved invoice INV-2026-0720/,JSON.stringify({reply:first.reply,errors:f.errors,results:f.results}));
     assert.equal(f.results[0].completed,true);assert.equal(f.results[0].invoiceFileAttached,true);
     const rows=(await f.db.query('select * from invoices where workspace_id=$1',[f.scope.workspaceId])).rows;
     assert.equal(rows.length,1);assert.equal(Number(rows[0].total_amount),6190);assert.equal(rows[0].currency,'USD');

@@ -1121,7 +1121,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
           &&!OWNER_DIRECTION_EVIDENCE.test(directionEvidence))
           return {ok:false,code:'INVALID',message:'Tell me explicitly that your business issued this invoice.'};
         const turnHash=sourceTurnHash({workspaceId:scope.workspaceId,phone:scope.phone,messageId:messageId||scope.messageId||'',purpose:'create-invoice'});
-        const invoice = {invoiceNumber:String(raw.invoiceNumber||`AUTO-${turnHash.slice(0,12).toUpperCase()}`),
+        const invoice = {invoiceNumber:String(raw.invoiceNumber||'AUTO'),
           clientName:raw.clientName.trim(),clientEmail:raw.clientEmail||null,clientPhone:raw.clientPhone||null,clientPhoneRaw:null,
           invoiceDate:raw.invoiceDate,dueDate:raw.dueDate,currency:raw.currency,total:raw.total,subtotal:raw.subtotal??null,tax:raw.tax??null,
           outstanding:raw.total,notes:raw.notes||null,lineItems:[],alreadyPaid:false,direction:'receivable'};

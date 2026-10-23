@@ -88,7 +88,7 @@ for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF'
     if(!tool){contracts.push(body.tools);return native([{functionCall:{name:'workspaceData',args:confirming?{operation:'confirm'}:
      {operation:'create',table:'invoices',values:{invoice_number:'INVENTED',customer_name:'Invented customer',total_amount:1,currency:'USD',status:'unpaid'}}},thoughtSignature:'fixture-native-signature'}]);}
     results.push(tool.response);
-    return native([{text:tool.response.completed?'Saved invoice INV-2026-0001 for Test Business, USD 93.50.':
+    return native([{text:tool.response.completed?'Saved invoice INV-3337 for Test Business, USD 93.50.':
      tool.response.requiresLaterConfirmation?'Invoice INV-3337 for Test Business, USD 93.50. Reply yes to save it, or cancel.':
      'The sample invoice cannot be logged due to missing currency and customer name.'}]);
    }});
@@ -187,7 +187,7 @@ for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF'
     sourceMediaReader:async()=>({bytes,mimeType:'image/jpeg'}),message:text,messageId:id,logger:{error(){}}});
    const rejected=await safety.execute('ingestInvoiceAttachment',{});assert.equal(rejected.ok,false);assert.equal(rejected.code,'INVALID');assert.match(rejected.message,/Tell me explicitly if you want to save|later message/);assert.deepEqual(await review(),proposal);
   }
-  const savedReply=await turn('confirm-source','yes');assert.match(savedReply.answer,/Saved invoice INV-2026-0001/);
+  const savedReply=await turn('confirm-source','yes');assert.match(savedReply.answer,/Saved invoice INV-3337/);
   const saved=(await db.query('select * from invoices where workspace_id=$1',[workspaceId])).rows;assert.equal(saved.length,1);
   assert.equal(Number(saved[0].total_amount),93.5);assert.equal(Number(saved[0].amount_paid),0);assert.equal(saved[0].currency,'USD');assert.equal(saved[0].status,'draft');
   assert.equal(saved[0].metadata.printed_invoice_number,'INV-3337');assert.equal(saved[0].metadata.invoice_direction,'receivable');assert.equal(saved[0].metadata.followup_state,'draft');

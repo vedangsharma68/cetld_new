@@ -54,7 +54,7 @@ test('failed extraction is closed safely and a fresh JPEG retries through the re
     assert.equal(failedAction.action.failureCode,'EXTRACTION_UNAVAILABLE');
 
     const retried=await turn('fresh-retry-source');
-    assert.match(retried.reply.answer,/Saved invoice INV-2026-0001/,JSON.stringify({reply:retried.reply,extractionCalls,errors:f.errors,toolResults}));
+    assert.match(retried.reply.answer,/Saved invoice SAFE-RETRY-118/,JSON.stringify({reply:retried.reply,extractionCalls,errors:f.errors,toolResults}));
     assert.equal(extractionCalls,2);
     const invoices=(await db.query('select * from invoices where workspace_id=$1',[workspaceId])).rows;
     assert.equal(invoices.length,1);assert.equal(Number(invoices[0].total_amount),118);assert.equal(invoices[0].currency,'USD');

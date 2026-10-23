@@ -102,9 +102,8 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, a
         throw new TypeError('invalid trusted invoice number audit');
       const printedNumber = reviewNumberAudit?.originalExtractedNumber ?? invoice.invoiceNumber;
       if(typeof printedNumber==='string'&&printedNumber.trim()&&printedNumber!=='AUTO'){
-        // The numbering trigger generates a fresh internal number for each new
-        // save key, so the upsert conflict alone cannot detect a reuploaded
-        // source invoice. Never reuse or overwrite that invoice's financial state.
+        // Check source identity before saving: a repeated upload must never
+        // reuse or overwrite the original invoice's financial state.
         for(const column of ['metadata->>printed_invoice_number','metadata->>source_invoice_number','invoice_number']){
           const existing=await activeInvoiceRows(includeDeletedAt=>{
             let query=scoped('invoices').select('id').eq('workspace_id',workspaceId)
@@ -124,13 +123,17 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, a
         metadata: {assistant_idempotency_key: invoice.idempotencyKey, invoice_direction: invoice.direction || 'receivable',
           bookkeeping_sync_status: 'pending', followup_state: 'draft', next_follow_up_at: null,
           subtotal: invoice.subtotal, tax: invoice.tax, outstanding_amount: invoice.total,
+          ...(owner&&invoice.invoiceNumber!=='AUTO'?{source_owner_invoice_number:invoice.invoiceNumber}:{}),
           client_name: invoice.clientName, printed_invoice_number: reviewNumberAudit?.originalExtractedNumber ?? (invoice.invoiceNumber === 'AUTO' ? null : invoice.invoiceNumber),
           ...(reviewNumberAudit?{invoice_number_override_audit:reviewNumberAudit}:{}),
           debtor_phone: invoice.clientPhone || null, client_phone: invoice.clientPhone || null,
           client_phone_raw: invoice.clientPhoneRaw || null, client_email: invoice.clientEmail || null,
           line_items: invoice.lineItems || []}}, {onConflict: 'workspace_id,invoice_number', ignoreDuplicates: true}).select('*');
       if(result?.error?.code==='23505'&&result.error.message==='source invoice already exists for customer')return null;
-      return rows(result)[0] || null;
+      const saved=rows(result)[0]||null;
+      if(owner&&saved&&invoice.invoiceNumber!=='AUTO'&&saved.invoice_number!==invoice.invoiceNumber)
+        throw Object.assign(new Error('Owner invoice number was not preserved'),{code:'WRITE_UNCONFIRMED'});
+      return saved;
     },
     async saveDebtorPhone({invoiceId, phone, assumedConsentAt}) {
       phone=normalizeOwnerPhone(phone);
