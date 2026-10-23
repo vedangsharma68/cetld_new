@@ -115,7 +115,7 @@ async function reviewFixture(page,kind='service'){
   await boot(page);
   await page.evaluate(async kind=>{
     const ui=await import('/reminder-review-ui.mjs');
-    const dialog=document.querySelector('dialog');dialog.className='';dialog.innerHTML='<div class="dialog-head"><h2 id="dialog-title">Review reminder delivery</h2><button class="btn" data-action="close">Close</button></div>'+ui.reminderReviewForm({text:'Please pay invoice 123.',tone:'firm',customer:'Customer',number:'123'});dialog.showModal();
+    const dialog=document.querySelector('dialog');dialog.className='';dialog.innerHTML='<div class="dialog-head"><h2 id="dialog-title">Review reminder delivery</h2><button class="btn" data-action="close">Close</button></div>'+ui.reminderReviewForm({text:'Please pay invoice 123.',tone:'firm',customer:'Customer',number:'123',sendNow:true});dialog.showModal();
     globalThis.reviewRequests=[];globalThis.savedDraft=null;globalThis.approvedResult=null;
     ui.mountReminderReview(document.querySelector('#draft-form'),{
       requestPreview:async input=>{reviewRequests.push(input);return {eligible:true,approvalToken:'bound-token',expiresAt:new Date(Date.now()+60000).toISOString(),delivery:kind==='blocked'?null:kind==='template'?{form:'template',text:'The approved firm template words.',templateName:'cetld_invoice_details_firm_v1'}:{form:'service',text:input.text,windowExpiresAt:new Date(Date.now()+120000).toISOString(),windowClosedPolicy:'hold'}}},
@@ -131,7 +131,7 @@ for(const width of [360,800,1280])test(`reminder exact-word approval at ${width}
   await expect(approve).toBeDisabled();await page.locator('[data-delivery-ack]').check();await expect(approve).toBeEnabled();
   await page.locator('[name=message]').fill('My new exact words.');await expect(approve).toBeDisabled();await expect(page.locator('[data-delivery-preview]')).toContainText('needs updating');
   await page.getByRole('button',{name:'Preview delivery',exact:true}).click();await page.locator('[data-delivery-ack]').check();await approve.click();
-  expect(await page.evaluate(()=>approvedResult)).toEqual({text:'My new exact words.',tone:'firm',approvalToken:'bound-token',windowClosedPolicy:'hold'});
+  expect(await page.evaluate(()=>approvedResult)).toEqual({text:'My new exact words.',tone:'firm',sendNow:true,approveFallback:false,approvalToken:'bound-token',windowClosedPolicy:'hold'});
   await page.screenshot({path:info.outputPath('service-approval.png')});
 });
 test('template delivery requires an explicit replacement choice, and errors never unlock approval',async({page})=>{

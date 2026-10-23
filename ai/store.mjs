@@ -46,7 +46,7 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
     workspaceId, userId, role,
     ownerConversation: createOwnerConversation({workspaceId,ownerId:userId,rpc:async(name,args)=>({data:await request(`/rest/v1/rpc/${name}`,{method:'POST',body:JSON.stringify(args)})})}),
     async ownerAssistantRPC(name,args={}) {
-      if(role!=='owner'||!['owner_assistant_preview_reminder','owner_assistant_resolve_token','owner_assistant_claim_token'].includes(name))throw new APIError(403,'OWNER_REQUIRED');
+      if(role!=='owner'||!['owner_assistant_preview_reminder','owner_assistant_reminder_window','owner_assistant_reminder_status','owner_assistant_resolve_token','owner_assistant_claim_token'].includes(name))throw new APIError(403,'OWNER_REQUIRED');
       return request(`/rest/v1/rpc/${name}`,{method:'POST',body:JSON.stringify({...args,p_workspace_id:workspaceId,p_owner_id:userId})});
     },
     async getOwnerAssistantSettings() {

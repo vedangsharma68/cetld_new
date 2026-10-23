@@ -1,3 +1,4 @@
+import {previewReminderReview,approveReminderReview} from './reminder-review.mjs';
 import {deadlineFetch} from '../automation/invoice-sync.mjs';
 import {APIError, object, requestBody, sendError, uuid} from './http.mjs';
 import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL, OPENROUTER_FREE_MODEL, VERIFIED_MODELS, isFallbackModelId, isPrimaryModelId, verifyModel} from './provider.mjs';
@@ -26,8 +27,8 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
     res.setHeader('X-Content-Type-Options', 'nosniff');
     try {
       const action = req.query?.action;
-      if (!['models', 'settings', 'diagnostic', 'extract', 'assistant', 'assistant-history', 'save-invoice', 'retry-invoice-sync', 'invoice-sync-status', 'confirm-accounting-action', 'cancel-assistant-action'].includes(action)) throw new APIError(404, 'NOT_FOUND');
-      const methods = ['models','invoice-sync-status','assistant-history'].includes(action) ? ['GET'] : action === 'settings' ? ['GET', 'PUT'] : ['POST'];
+      if (!['models', 'settings', 'diagnostic', 'extract', 'assistant', 'assistant-history', 'preview-reminder', 'approve-reminder', 'reminder-approvals', 'save-invoice', 'retry-invoice-sync', 'invoice-sync-status', 'confirm-accounting-action', 'cancel-assistant-action'].includes(action)) throw new APIError(404, 'NOT_FOUND');
+      const methods = ['models','invoice-sync-status','assistant-history','reminder-approvals'].includes(action) ? ['GET'] : action === 'settings' ? ['GET', 'PUT'] : ['POST'];
       if (!methods.includes(req.method)) { res.setHeader('Allow', methods.join(', ')); throw new APIError(405, 'METHOD_NOT_ALLOWED'); }
       if (action === 'models') {
         const checks = await Promise.all(VERIFIED_MODELS.map(async id => {
@@ -38,17 +39,22 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         const available = [...new Set(checks.filter(Boolean))];
         return res.status(200).json({models: available.filter(isPrimaryModelId), fallbackModels: available.filter(isFallbackModelId), extractionModels: available.filter(id => id === DEFAULT_EXTRACTION_MODEL), openRouterFallback: available.includes(OPENROUTER_FREE_MODEL)});
       }
-      const allowed = action === 'settings' ? ['workspaceId', 'primary_model', 'fallback_model']
+      const allowed = action==='preview-reminder'?['workspaceId','invoiceId','text','tone','sendNow','approveFallback']
+        : action==='approve-reminder'?['workspaceId','approvalToken','reviewPayload','confirmed']
+        : action === 'settings' ? ['workspaceId', 'primary_model', 'fallback_model']
         : action === 'diagnostic' ? ['workspaceId']
         : action === 'extract' ? ['workspaceId', 'fileId', 'file']
         : action === 'assistant' ? ['workspaceId', 'message', 'history']
         : action === 'save-invoice' ? ['workspaceId', 'confirmed', 'idempotencyKey', 'invoice', 'conversationSource']
         : ['confirm-accounting-action','cancel-assistant-action'].includes(action) ? ['workspaceId', 'confirmed', 'confirmationToken']
         : ['workspaceId', 'invoiceId', 'idempotencyKey'];
-      const body = req.method === 'GET' ? {} : requestBody(req, allowed, action === 'extract' ? 4400000 : 32768);
+      const body = req.method === 'GET' ? {} : requestBody(req, allowed, action === 'extract' ? 4400000 : action==='approve-reminder'?131072:32768);
       const workspaceId = uuid(req.method === 'GET' ? req.query.workspaceId : body.workspaceId);
       const store = await authorize(req, workspaceId, {env, fetchImpl});
       const conversation=store.role==='owner'?store.ownerConversation:null;
+      if(action==='preview-reminder')return res.status(200).json(await previewReminderReview({store,body,env,clock}));
+      if(action==='approve-reminder')return res.status(200).json(await approveReminderReview({store,body,env,clock}));
+      if(action==='reminder-approvals')return res.status(200).json({approvals:await store.ownerAssistantRPC('owner_assistant_reminder_status')});
       if(action==='assistant-history'){
         if(!conversation)throw new APIError(403,'OWNER_REQUIRED');
         const pending=await conversation.pending();

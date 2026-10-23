@@ -23,18 +23,14 @@ Screenshots for every page and drawer size are recorded under `test-results/`. T
 
 Already-open tabs running code from before this change cannot run a checker they never loaded. Refresh them once after the first deployment. Subsequent deployments are detected by the new checker.
 
-## Reminder approval integration dependency
+## Integrated reminder approval
 
-`reminder-review-ui.mjs` provides the frontend review form and an isolated, browser-tested controller. After rebasing onto #173, Conversations and invoice drawers display the exact `approved_reminder_delivery` receipt body/name, with a re-review notice for pending reminders without a complete receipt. Editable draft text is never substituted in this pending-delivery preview.
+The invoice drawer and Conversations open the production review form. The owner edits per-message text and tone, chooses scheduled follow-up or a one-off send, previews the actual outgoing words/form, and explicitly acknowledges that artifact before approval. Changing text, tone, timing or fallback choice invalidates the preview. Tone changes generate the actual proposed draft; replacing edited text requires confirmation.
 
-The editor’s production transport is **not connected yet**. Main at #173 exposes template-only reminder proposals through Assistant; its route schema does not accept custom text/tone overrides, and `reminderDeliveryForm` and the SQL approval gate require templates. The custom service-message/tone preview and approval contract still needs to be supplied before the existing draft/approval flow can be replaced safely.
+Scheduled reminders use approved templates under **cetld product policy**, including inside the customer service window. A one-off reminder can send the exact edited text within WhatsApp’s 24-hour customer service window. Outside that window the preview offers the tone-matched approved template and explains that custom wording cannot send as-is. Custom wording remains in the dashboard draft.
 
-The controller's normalized interface expects:
+For a service message, the default expiry policy is hold for re-review. An optional named fallback must be selected before preview; the screen then shows both exact bodies and requires acknowledgement of both. Conversations and invoice drawers show the immutable approved receipt, fallback choice and visible expiry reason. They never substitute a later editable draft in the pending-delivery preview.
 
-- Preview input: `{text, tone}` for the current invoice/business/account.
-- Preview result: `{eligible, approvalToken, expiresAt, delivery}`.
-- Service delivery: `{form: 'service', text, windowExpiresAt, windowClosedPolicy: 'hold'}`. The words must equal the edited message. Expiry and hold policy must be server-confirmed.
-- Template delivery: `{form: 'template', text, templateName}`. The name must match the approved template for the selected tone. The actual expanded words are shown, with an explicit replacement acknowledgement when they differ from the edit.
-- Approval must atomically bind the token to the actor, invoice version, text, tone, delivery form and hold policy, return `{approved: true}`, and persist the reviewed form and words for the queued view.
+The browser suite also sends real HTTP requests through `ai/routes.mjs`, the real Supabase SDK and isolated PostgreSQL. It approves through the normal dashboard buttons at 320, 360, 520, 800, 1280, 1920 and 3840px, reads back the stored receipt, and checks the captured Graph request. Separate checks exercise scheduled-template replacement and the visible window-expired hold. Auth is supplied by the fixture; no live login or production customer send is certified.
 
-The selected policy is **hold for re-review if the service window closes**. There is no automatic template fallback. A draft edit, tone change, expired preview, unconfirmed delivery form or backend error disables approval. Existing consent, invoice eligibility, owner permissions and send authorization remain server responsibilities and must not be bypassed by an adapter. Production editor/approval wiring remains blocked on that backend contract; fixture tests of this component are not a claim of integrated delivery.
+See [the API, preservation mapping, dispatch checks and rollout instructions](per-message-reminders.md).
