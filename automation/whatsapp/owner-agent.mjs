@@ -1471,7 +1471,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
       const action=pendingAtStart?.action;
       if(/[?]|^\s*(?:what|which|why|how|did|does|is|are|(?:please )?(?:show|view|list|read|display|tell me)|i (?:want to know|wonder)|can you (?:check|show|tell|explain))\b/i.test(message))return null;
       if(pendingAtStart?.consumed_at||action?.type!=='invoice_review_draft'||action.stage!=='incomplete'
-        ||!action.validationIssues?.length&&!ownerRequestsInvoiceAttachment(message)
+        ||!action.validationIssues?.length&&!ownerRequestsRetainedInvoiceSave(message)
         ||!(/\b(?:save|log|record|add)\b|\bpaid\s+(?:stamp|marking|watermark)\b|\bcurrency\s+is\b/i.test(message)))return null;
       return invoiceReviewClarification(action);
     },
