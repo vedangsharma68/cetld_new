@@ -549,6 +549,18 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'){document.querySelec
 $('#dialog').addEventListener('close',()=>{cancelReminderProofReview();dialogOpener?.focus?.()});
 $('#dialog').addEventListener('click',e=>{if(e.target===$('#dialog')){const r=e.target.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom){if(state.pendingInvoiceDeletion){void cancelPendingInvoiceDeletion();return}e.target.close()}}});
 function setupAmbientChrome(){const layer=document.querySelector('.liquid-chrome');if(!layer)return;const pointer=matchMedia('(pointer: fine) and (min-width: 801px)'),reduced=matchMedia('(prefers-reduced-motion: reduce)');let frame=0,lastX=0,lastY=0,pointerAnimation=null;const apply=()=>{frame=0;pointerAnimation?.cancel();pointerAnimation=layer.animate({transform:`translate3d(${lastX}px,${lastY}px,0)`},{duration:1400,fill:'forwards',easing:'cubic-bezier(.2,.7,.2,1)'})};window.addEventListener('pointermove',event=>{if(!pointer.matches||reduced.matches||document.hidden)return;lastX=(event.clientX/window.innerWidth-.5)*10;lastY=(event.clientY/window.innerHeight-.5)*8;if(!frame)frame=requestAnimationFrame(apply)},{passive:true});document.addEventListener('visibilitychange',()=>{layer.classList.toggle('ambient-paused',document.hidden);if(document.hidden){if(frame)cancelAnimationFrame(frame);frame=0;pointerAnimation?.pause()}else pointerAnimation?.play()});layer.classList.toggle('ambient-paused',document.hidden)}
+function setupAssistantLauncherVisibility(){
+ const mobile=matchMedia('(max-width: 800px)'),nearTop=64;
+ let previousY=window.scrollY,idleTimer;
+ const reset=()=>{previousY=window.scrollY;clearTimeout(idleTimer);document.body.classList.remove('assistant-fab-hidden')};
+ window.addEventListener('scroll',()=>{
+  const y=Math.max(0,Math.min(window.scrollY,document.documentElement.scrollHeight-window.innerHeight));
+  if(mobile.matches&&y!==previousY)document.body.classList.toggle('assistant-fab-hidden',y>previousY);
+  previousY=y;clearTimeout(idleTimer);
+  if(mobile.matches&&y<=nearTop)idleTimer=setTimeout(()=>document.body.classList.remove('assistant-fab-hidden'),160);
+ },{passive:true});
+ mobile.addEventListener('change',reset);
+}
 let authSync=Promise.resolve();
 function authShell(){document.body.className='auth-loading';$('#app').innerHTML=`<main class="auth-skeleton" aria-label="Loading your business" aria-busy="true"><aside class="auth-skeleton-sidebar"><span></span><span></span><span></span><span></span></aside><section class="auth-skeleton-main"><div class="auth-skeleton-header"></div><div class="auth-skeleton-cards"><div></div><div></div><div></div></div><div class="auth-skeleton-panel"></div></section></main>`}
 // Keep the loaded Settings profile when auth events refresh the same user's session.
@@ -712,6 +724,7 @@ document.addEventListener('click', event => {
 });
 
 setupAmbientChrome();
+setupAssistantLauncherVisibility();
 watchAppVersion();
 init();
 

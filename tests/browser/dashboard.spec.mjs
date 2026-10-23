@@ -37,6 +37,69 @@ async function layout(page){
   }).map(e=>e.className||e.tagName).slice(0,10));
   expect(overflow).toEqual([]);
 }
+for(const [width,height] of [[390,844],[768,1024]])for(const theme of ['light','dark'])test(`Assistant launcher clears navigation and content at ${width}x${height} in ${theme}`,async({page},info)=>{
+  await page.setViewportSize({width,height});await boot(page);
+  await page.evaluate(()=>scrollTo({top:0,behavior:'instant'}));
+  await page.evaluate(theme=>document.documentElement.classList.toggle('dark',theme==='dark'),theme);
+  const fab=page.locator('.assistant-fab');
+  await expect(fab).toBeVisible();
+  const target=await fab.boundingBox();expect(target.width).toBeGreaterThanOrEqual(44);expect(target.height).toBeGreaterThanOrEqual(44);
+  await layout(page);
+  await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+  await expect(page.locator('.nav-scrim')).toHaveClass(/open/);await expect(fab).toBeHidden();
+  await page.screenshot({path:info.outputPath('navigation.png')});
+  await page.keyboard.press('Escape');await expect(fab).toBeVisible();
+  // Put the reported Live badge where the fixed launcher would cover it.
+  await page.locator('.collections-pulse .live-label').evaluate(e=>scrollTo({top:Math.max(120,e.getBoundingClientRect().top+scrollY-innerHeight+100),behavior:'instant'}));
+  await expect.poll(()=>page.evaluate(()=>scrollY)).toBeGreaterThan(64);await expect(fab).toBeHidden();
+  await page.screenshot({path:info.outputPath('scroll-down.png')});
+  await page.evaluate(()=>scrollBy({top:-80,behavior:'instant'}));await expect(fab).toBeVisible();
+  // A rerender must preserve the scroll visibility state.
+  await page.evaluate(()=>scrollBy({top:120,behavior:'instant'}));await expect(fab).toBeHidden();
+  await page.evaluate(()=>__ui.render());await expect(fab).toBeHidden();
+  await page.evaluate(()=>scrollTo({top:20,behavior:'instant'}));await expect(fab).toBeVisible();
+  await page.evaluate(()=>scrollTo({top:40,behavior:'instant'}));
+  await expect(fab).toBeHidden();await expect(fab).toBeVisible();
+  await expect(fab).toHaveCSS('transition-duration','0s');
+  await page.emulateMedia({reducedMotion:'no-preference'});await expect(fab).toHaveCSS('transition-duration','0.16s');
+  await page.emulateMedia({reducedMotion:'reduce'});
+  for(const update of [false,true]){
+    if(update)await page.evaluate(()=>{const bar=document.createElement('div');bar.className='app-update';bar.textContent='A new version is ready';document.body.append(bar)});
+    if(update)await expect(fab).toHaveCSS('bottom','100px');
+    await page.evaluate(()=>scrollTo({top:document.documentElement.scrollHeight,behavior:'instant'}));await expect(fab).toBeHidden();
+    await page.evaluate(()=>scrollBy({top:-1,behavior:'instant'}));await expect(fab).toBeVisible();
+    const clearance=await page.evaluate(()=>{
+      const fab=document.querySelector('.assistant-fab'),content=document.querySelector('.content'),footer=document.querySelector('.app-footer');
+      return {padding:parseFloat(getComputedStyle(content).paddingBottom),footprint:fab.getBoundingClientRect().height+parseFloat(getComputedStyle(fab).bottom),footerBottom:footer.getBoundingClientRect().bottom,lastCardBottom:document.querySelector('.page').getBoundingClientRect().bottom,fabTop:fab.getBoundingClientRect().top};
+    });
+    expect(clearance.padding).toBeGreaterThanOrEqual(clearance.footprint);
+    expect(clearance.footerBottom).toBeLessThan(clearance.fabTop);expect(clearance.lastCardBottom).toBeLessThan(clearance.fabTop);
+    await layout(page);await page.screenshot({path:info.outputPath(update?'footer-update.png':'footer.png')});
+  }
+});
+test('Assistant launcher preserves desktop placement and overlay stacking',async({page})=>{
+  await page.setViewportSize({width:1280,height:900});await boot(page);
+  const fab=page.locator('.assistant-fab');await expect(fab).toHaveCSS('bottom','22px');await expect(fab).toHaveCSS('right','22px');
+  await page.evaluate(()=>scrollTo({top:300,behavior:'instant'}));await expect(fab).toBeVisible();
+  await page.evaluate(()=>document.querySelector('.nav-scrim').classList.add('open'));await expect(fab).toBeHidden();
+  await page.evaluate(()=>document.querySelector('.nav-scrim').classList.remove('open'));
+  for(const [className,zIndex] of [['show',100],['invoice-ledger-drop-overlay is-visible',90],['app-update',50]]){
+    const result=await page.evaluate(({className,zIndex})=>{
+      const overlay=document.createElement('div');overlay.className=className;if(zIndex===100)overlay.id='toast';document.body.append(overlay);
+      const fab=document.querySelector('.assistant-fab'),r=fab.getBoundingClientRect();
+      Object.assign(overlay.style,{position:'fixed',inset:'auto',left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px',transform:'none',pointerEvents:'auto'});
+      const stack=document.elementsFromPoint(r.left+r.width/2,r.top+r.height/2),overlayIndex=stack.indexOf(overlay),fabIndex=stack.indexOf(fab);
+      const result={overlayZ:Number(getComputedStyle(overlay).zIndex),fabZ:Number(getComputedStyle(fab).zIndex),above:overlayIndex>=0&&fabIndex>overlayIndex};
+      overlay.remove();return result;
+    },{className,zIndex});
+    expect(result.overlayZ).toBe(zIndex);expect(result.fabZ).toBe(42);expect(result.above).toBe(true);
+  }
+  await page.evaluate(()=>__ui.detail(__ui.state.invoices[0].id));
+  await expect(page.locator('dialog')).toBeVisible();
+  expect(await fab.evaluate(e=>{const r=e.getBoundingClientRect();return !!document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)?.closest('dialog')})).toBe(true);
+  await page.keyboard.press('Escape');
+  await page.setViewportSize({width:801,height:900});await expect(fab).toHaveCSS('bottom','22px');await expect(fab).toBeVisible();
+});
 for(const width of widths)test(`all pages render and navigate at ${width}px`,async({page},info)=>{
   test.setTimeout(120000);
   await page.setViewportSize({width,height:900});const errors=[];page.on('pageerror',e=>errors.push(e.message));await boot(page);

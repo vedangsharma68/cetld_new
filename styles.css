@@ -877,3 +877,15 @@ dialog::backdrop{background:#0c251d73;backdrop-filter:blur(4px)}
   .auth-brand-tagline{font-size:.9rem}
 }
 @media(prefers-reduced-motion:reduce){.stat,.nav button,.assistant-suggestions button{transition:none}}
+
+/* Keep the launcher clear of mobile navigation and scrolling content. */
+body:has(.nav-scrim.open) .assistant-fab{display:none}
+@media(max-width:800px){
+  body{--assistant-fab-bottom:max(22px,env(safe-area-inset-bottom))}
+  body:has(.app-update){--assistant-fab-bottom:100px}
+  .content{padding-bottom:calc(48px + var(--assistant-fab-bottom) + 16px)}
+  .assistant-fab{bottom:var(--assistant-fab-bottom);transition:opacity .16s ease}
+  body.assistant-fab-hidden .assistant-fab{opacity:0;visibility:hidden;pointer-events:none}
+}
+@media(max-width:600px){body{--assistant-fab-bottom:max(76px,calc(env(safe-area-inset-bottom) + 14px))}}
+@media(prefers-reduced-motion:reduce){.assistant-fab{transition:none}}
