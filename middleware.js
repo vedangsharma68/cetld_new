@@ -24,7 +24,7 @@ export default async function landingAuthRedirect(request) {
     const response = await fetch(`${supabase.url}/auth/v1/user`, {
       headers: {apikey: supabase.key, authorization: `Bearer ${accessToken}`},
     });
-    if (response.ok) return Response.redirect(new URL('/app/', request.url), 307);
+    if (response.ok) return Response.redirect(new URL('/app/' + new URL(request.url).search, request.url), 307);
   } catch {
     // Authentication outages must not hide the public, crawler-readable page.
   }
