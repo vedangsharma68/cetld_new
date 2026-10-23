@@ -22,6 +22,21 @@ const reason=/\b(?:out of juice|still has invoices|waiting for (?:a decision|app
 const nextStep=/(?:^|[.!?;\n,]|\b(?:please|then|you can|so)\s+)\s*(?:try(?=\s*:)|try (?:again|a |an? )|retry|send|reply|ask|check|review|verify|choose|specify|provide|confirm|cancel|open|use|tap|wait)\b/i;
 const technical=/\b(?:PGRST\d+|SQLSTATE|ECONN\w+|ETIMEDOUT|[A-Z]+_[A-Z_]+)\b|\((?:UNAVAILABLE|INVALID|DENIED|STALE|EXPIRED|AMBIGUOUS|UNKNOWN)\)/;
 const opaque=/^(?:sorry[,!.]?\s*)?(?:something went wrong|that (?:didn['’]t|did not) work|an? error occurred|error|request failed|i (?:could not|couldn['’]t|cannot|can['’]t) (?:do|finish|complete|apply|process|save)(?: (?:that|this|it|the request|that request|this request|right now))*)[.!]?(?:\s*(?:please )?try again(?: shortly| later)?[.!]?)?$/i;
+
+export function ownerProviderBusyReply({writeAttempted=false,proposalOnly=false,verifiedNoBusinessChange=false,attemptedOperation=null}={}) {
+  if(proposalOnly)return 'The preview was saved; no business change was applied. Ask me to review it, or cancel it.';
+  const completedChange=attemptedOperation?.completed===true
+    &&!['read','describe','pending','getAIProviderConfiguration'].includes(attemptedOperation.operation)
+    &&attemptedOperation.toolName!=='getAIProviderConfiguration';
+  if((writeAttempted||completedChange)&&!verifiedNoBusinessChange)return 'I’m temporarily busy. I couldn’t verify whether the change completed. Check cetld before retrying.';
+  return 'I’m temporarily busy. Nothing was changed. Try again shortly.';
+}
+
+export function ownerInvoiceCreationFailureReply({writeAttempted=false}={}) {
+  return writeAttempted
+    ?'Invoice processing failed. I couldn’t verify whether it was saved. Check cetld before retrying.'
+    :'Invoice processing failed. I couldn’t complete the invoice. Nothing was changed. Try again shortly.';
+}
 export function ownerFailureGuidance(reply,{code=null,failed=false,writeAttempted=false}={}) {
   const text=String(reply||'').trim();
   if(code==='NAME_CONFIRMATION_REQUIRED')return text;

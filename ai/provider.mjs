@@ -498,6 +498,7 @@ export class AIProvider {
     let lastError;
     let consideredLegs=0;
     let quotaLegs=0;
+    let rateLimitedLegs=0;
     const quotaProviders=new Set();
     for (const model of candidates) {
       assertActive(options.signal, options.deadlineAt);
@@ -507,24 +508,36 @@ export class AIProvider {
         if (attempt.skipped) {
           if (attempt.reason === 'quota_exceeded') {
             quotaLegs++;
+            rateLimitedLegs++;
             quotaProviders.add(this.#providerName(model));
-          }
+          } else consideredLegs--;
           continue;
         }
         return attempt.result;
       }
       catch (error) {
+        // A candidate without credentials is not an available provider leg.
+        // Do not let it erase an actual quota failure from the usable legs.
+        if(error instanceof AIError&&error.code==='API_KEY_MISSING'){
+          consideredLegs--;
+          lastError ||= error;
+          continue;
+        }
         lastError = error;
-        if(error instanceof AIError&&error.status===429&&error.providerReason==='quota_exceeded'){
-          quotaLegs++;
-          quotaProviders.add(this.#providerName(model));
+        if(error instanceof AIError&&error.status===429){
+          rateLimitedLegs++;
+          if(error.providerReason==='quota_exceeded'){
+            quotaLegs++;
+            quotaProviders.add(this.#providerName(model));
+          }
         }
         if (!fallbackEligible(error)) throw error;
       }
     }
-    if(consideredLegs>0&&quotaLegs===consideredLegs){
+    if(consideredLegs>0&&rateLimitedLegs===consideredLegs){
       throw Object.assign(new AIError('RATE_LIMITED',429),{
-        providerReason:'quota_exceeded',quotaExhausted:true,quotaProviders:[...quotaProviders],
+        rateLimitExhausted:true,
+        ...(quotaLegs===consideredLegs?{providerReason:'quota_exceeded',quotaExhausted:true,quotaProviders:[...quotaProviders]}:{}),
       });
     }
     throw lastError || new AIError('PROVIDER_UNAVAILABLE', 503);
@@ -591,6 +604,7 @@ export class AIProvider {
       let lastError = error;
       let consideredLegs = 0;
       let quotaLegs = 0;
+      let rateLimitedLegs = 0;
       const quotaProviders = new Set();
       for (const fallbackModel of this.#candidates().slice(1)) {
         consideredLegs++;
@@ -602,23 +616,32 @@ export class AIProvider {
           if (attempt.skipped) {
             if (attempt.reason === 'quota_exceeded') {
               quotaLegs++;
+              rateLimitedLegs++;
               quotaProviders.add(this.#providerName(fallbackModel));
-            }
+            } else consideredLegs--;
             continue;
           }
           return decode(attempt.result);
         } catch (fallbackError) {
+          if (fallbackError instanceof AIError && fallbackError.code === 'API_KEY_MISSING') {
+            consideredLegs--;
+            continue;
+          }
           lastError = fallbackError;
-          if (fallbackError instanceof AIError && fallbackError.status === 429 && fallbackError.providerReason === 'quota_exceeded') {
-            quotaLegs++;
-            quotaProviders.add(this.#providerName(fallbackModel));
+          if (fallbackError instanceof AIError && fallbackError.status === 429) {
+            rateLimitedLegs++;
+            if (fallbackError.providerReason === 'quota_exceeded') {
+              quotaLegs++;
+              quotaProviders.add(this.#providerName(fallbackModel));
+            }
           }
           if (!fallbackEligible(fallbackError)) throw fallbackError;
         }
       }
-      if (consideredLegs > 0 && quotaLegs === consideredLegs) {
+      if (consideredLegs > 0 && rateLimitedLegs === consideredLegs) {
         throw Object.assign(new AIError('RATE_LIMITED', 429), {
-          providerReason: 'quota_exceeded', quotaExhausted: true, quotaProviders: [...quotaProviders],
+          rateLimitExhausted: true,
+          ...(quotaLegs === consideredLegs ? {providerReason: 'quota_exceeded', quotaExhausted: true, quotaProviders: [...quotaProviders]} : {}),
         });
       }
       throw lastError;
@@ -681,6 +704,11 @@ export class AIProvider {
       }
       catch (error) {
         lastError = error;
+        // Yield a rate-limited leg to the existing configured safety chain
+        // before spending the owner's bounded reply budget retrying it. Keep
+        // the established transient retry for a genuinely single-model setup.
+        if(error instanceof AIError&&error.code==='RATE_LIMITED'
+          &&this.#candidates().some(candidate=>candidate!==model&&this.#hasCredential(candidate)))throw error;
         if (!retryable(error) || attempt + 1 >= this.maxAttempts) throw error;
         const delay = Math.min(this.retryDelayMs * (2 ** attempt), remainingMs(options.deadlineAt, Infinity));
         if (delay <= 0) throw new AIError('TIMEOUT', 504);
@@ -706,6 +734,12 @@ export class AIProvider {
 
   #providerName(model) {
     return isCfModel(model) ? 'cloudflare' : isZenModelId(model) ? 'opencode-zen' : model === OPENROUTER_FREE_MODEL ? 'openrouter' : 'google';
+  }
+
+  #hasCredential(model) {
+    return isCfModel(model)?Boolean(this.#cfAccountId&&this.#cfApiToken)
+      :isZenModelId(model)?Boolean(this.#zenApiKey)
+        :model===OPENROUTER_FREE_MODEL?Boolean(this.#openRouterApiKey):Boolean(this.#geminiApiKey);
   }
 
   async #request(model, messages, options, usedFallback) {

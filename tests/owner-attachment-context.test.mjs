@@ -54,6 +54,36 @@ function fixture(){
 }
 const call=args=>({toolCalls:[{id:'fixture-call',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(args)}}],model:'fixture'});
 
+test('a photo alone is analysis only and each explicit later save reuses its retained fields without a planner',async()=>{
+  for(const message of ['log this invoice','save it','add it','Can you save it?','yea, they are fine; log this invoice','Log this invoice, do not send customer reminders']){
+    const f=fixture(),provider={async generate(){assert.fail('The planner must not reconstruct a complete retained invoice');}};
+    const analyzed=await runOwnerAgent({tools:f.tools('',f.sourceId,{bytes:f.sourceBytes,mimeType:'application/pdf'}),message:'',clock,provider,
+      attachmentDescriptor:{available:true,mimeType:'application/pdf'}});
+    assert.match(analyzed.answer,/Nothing was saved/);assert.equal(f.saved,0);assert.equal(f.files,0);
+    assert.equal(f.current.action.stage,'proposal');
+    const original=clone(f.current.action.invoice);
+    const saved=await runOwnerAgent({tools:f.tools(message,'fixture-explicit-save'),message,clock,provider});
+    assert.match(saved.answer,/Saved invoice INV-17 for Rob & Joe Traders, USD 662.75/);
+    assert.equal(saved.boundedReviewDecisionReply,true);assert.equal(f.saved,1);assert.equal(f.files,1);assert.equal(f.extractions,1);
+    assert.equal(f.persisted.total_amount,original.total);assert.equal(f.persisted.currency,original.currency);
+    assert.deepEqual(f.persisted.metadata.line_items,original.lineItems);assert.equal(f.current.action.stage,'saved');
+  }
+});
+
+test('questions, declined saves and conditional or deferred saves cannot authorize a retained attachment',async()=>{
+  for(const message of ['Should I log this invoice?','Save this invoice tomorrow','Save this invoice if it is valid',
+    "Don't save it",'What do you mean by log this invoice?','Log this invoice on Monday','Save this invoice at 5']){
+    const f=fixture();
+    await f.tools('',f.sourceId,{bytes:f.sourceBytes,mimeType:'application/pdf'}).execute('workspaceData',{operation:'analyzeAttachment'});
+    let calls=0;
+    const result=await runOwnerAgent({tools:f.tools(message,'fixture-not-permission'),message,clock,
+      provider:{async generate(){calls++;return calls===1?call({operation:'saveAttachment'}):{model:'fixture',content:'No invoice was saved.'};}}});
+    assert.ok(calls>0,'the deterministic branch must not turn discussion into a save');
+    assert.equal(f.saved,0);assert.equal(f.files,0);assert.equal(f.extractions,1);assert.equal(f.current.action.stage,'proposal');
+    assert.doesNotMatch(result.answer,/Saved invoice/);
+  }
+});
+
 test('attachment analysis survives whole conversation followups and saves once with original fields and source',async()=>{
   const f=fixture();
   async function turn(message,id,operation=null,media=null){

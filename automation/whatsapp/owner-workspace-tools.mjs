@@ -92,6 +92,7 @@ export function createOwnerWorkspaceTools(options = {}) {
     // Server-selected amount proposals still use this adapter's full scope,
     // capability and pending-action checks, followed by a later confirmation.
     supportsBoundedPaymentProposal:true,
+    supportsBoundedInvoiceCreation:true,
     supportsBoundedInvoiceTotalCorrection:true,
     supportsAttachmentDuplicateLookup:true,
     supportsInvoiceReadAnalysis:true,

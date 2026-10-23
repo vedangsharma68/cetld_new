@@ -67,8 +67,11 @@ function isSettledPaidInvoice(record){
   const total=minorUnits(record?.total_amount);
   return record?.status==='paid'&&paid!==null&&total!==null&&paid>=total;
 }
-function stableKey({workspaceId,ownerId,phone,providerMessageId,operation,targetId}){
-  const digest=createHash('sha256').update(JSON.stringify([workspaceId,ownerId,phone,providerMessageId,operation,targetId??null])).digest('hex');
+function stableKey({workspaceId,ownerId,phone,providerMessageId,operation,targetId,invoiceInstruction}){
+  const identity=invoiceInstruction
+    ?[workspaceId,ownerId,phone,operation,'exact-invoice-instruction',invoiceInstruction.quote,canonical(invoiceInstruction.payload)]
+    :[workspaceId,ownerId,phone,providerMessageId,operation,targetId??null];
+  const digest=createHash('sha256').update(JSON.stringify(identity)).digest('hex');
   return `ownerwrite_${digest.slice(0,48)}`;
 }
 function validAuthorization(input){
@@ -134,6 +137,34 @@ async function verifyCorrectionAudit({supabase,workspaceId,ownerId,record,outcom
 export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnabled=false}={}){
   if(!supabase?.rpc||!supabase?.from)throw new TypeError('Service-role Supabase client required');
   return Object.freeze({
+    async lookupRepeatedInvoiceCreation({workspaceId,ownerId,phone,quote,payload}={}){
+      if(!validUuid(workspaceId)||!validUuid(ownerId)||!validPhone(phone)||typeof quote!=='string'||!quote||quote.length>1200
+        ||!payload||typeof payload!=='object'||Array.isArray(payload)||Object.hasOwn(payload,'invoice_number'))return failure('INVALID');
+      let receipts;
+      try{
+        const result=await supabase.from('whatsapp_direct_write_receipts')
+          .select('workspace_id,owner_id,phone,provider_message_id,request,result')
+          .eq('workspace_id',workspaceId).eq('owner_id',ownerId).eq('phone',phone)
+          .eq('request->>operation','invoice.create').eq('request->>authorizationKind','instruction')
+          .eq('request->>authorizationQuote',quote).order('created_at',{ascending:false}).limit(100);
+        if(result?.error||!Array.isArray(result?.data))return failure('DATABASE_UNAVAILABLE');
+        receipts=result.data;
+      }catch{return failure('DATABASE_UNAVAILABLE');}
+      const expected=JSON.stringify(canonical(payload));
+      for(const receipt of receipts){
+        if(receipt.workspace_id!==workspaceId||receipt.owner_id!==ownerId||receipt.phone!==phone)return failure('DENIED');
+        const request=receipt.request;
+        if(request?.operation!=='invoice.create'||request.authorizationKind!=='instruction'||request.authorizationQuote!==quote
+          ||JSON.stringify(canonical(request.payload))!==expected)continue;
+        // A committed receipt proves this exact instruction, including its
+        // calendar dates, already ran. Verify its live invoice before reusing it.
+        if(receipt.result?.ok!==true||receipt.result.action!=='invoice.created'||receipt.result.entityType!=='invoice')return failure('WRITE_UNCONFIRMED');
+        const completed=await this.lookupCompleted({workspaceId,ownerId,phone,providerMessageId:receipt.provider_message_id});
+        if(!completed?.ok||!completed.completed||completed.record?.deleted_at!==null)return failure('WRITE_UNCONFIRMED');
+        return completed;
+      }
+      return failure(receipts.length>=100?'WRITE_UNCONFIRMED':'NO_RECEIPT');
+    },
     async lookupCompleted({workspaceId,ownerId,phone,providerMessageId}={}){
       if(!validUuid(workspaceId)||!validUuid(ownerId)||!validPhone(phone)
         ||typeof providerMessageId!=='string'||providerMessageId.length<1||providerMessageId.length>256)return failure('INVALID');
@@ -215,7 +246,7 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
     },
     async apply(input={}){
       const {workspaceId,ownerId,phone,providerMessageId,interactionId=null,authorization,operation,
-        targetId=null,expectedUpdatedAt=null,payload={}}=input;
+        targetId=null,expectedUpdatedAt=null,payload={},deduplicateInvoiceInstruction=false}=input;
       if(!validUuid(workspaceId)||!validUuid(ownerId)||!validPhone(phone)
         ||typeof providerMessageId!=='string'||providerMessageId.length<1||providerMessageId.length>256
         ||!OPERATIONS.has(operation)||!validAuthorization({...input,interactionId,operation})
@@ -231,7 +262,26 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
       }
       if(authorization.kind==='button'&&authorization.decision==='cancel'&&operation!=='pending.decide')return failure('INVALID');
 
-      const idempotencyKey=stableKey({workspaceId,ownerId,phone,providerMessageId,operation,targetId});
+      const repeatInvoice=deduplicateInvoiceInstruction===true&&operation==='invoice.create'&&authorization.kind==='instruction'
+        &&!Object.hasOwn(payload,'invoice_number');
+      if(repeatInvoice){
+        // Receipt reuse must retain the RPC's proof that this current inbound
+        // event contains the authorized owner's exact instruction.
+        let event;
+        try{
+          const result=await supabase.from('whatsapp_inbound_events').select('provider_message_id,sender_phone,message_text,status')
+            .eq('provider_message_id',providerMessageId).eq('sender_phone',phone).maybeSingle();
+          if(result?.error)return failure('DATABASE_UNAVAILABLE');
+          event=result?.data;
+        }catch{return failure('DATABASE_UNAVAILABLE');}
+        if(event?.provider_message_id!==providerMessageId||event.sender_phone!==phone||event.message_text!==authorization.quote
+          ||!['processing','done'].includes(event.status))return failure('INVALID_AUTHORIZATION');
+        if(event.status!=='processing')return failure('NO_PENDING_ACTION');
+        const previous=await this.lookupRepeatedInvoiceCreation({workspaceId,ownerId,phone,quote:authorization.quote,payload});
+        if(previous.code!=='NO_RECEIPT')return previous;
+      }
+      const idempotencyKey=stableKey({workspaceId,ownerId,phone,providerMessageId,operation,targetId,
+        ...(repeatInvoice?{invoiceInstruction:{quote:authorization.quote,payload}}:{})});
       const correction=invoiceCorrectionsEnabled&&operation==='invoice.update'&&!Object.hasOwn(payload,'status');
       let correctionValues;
       if(correction){try{correctionValues=validateInvoiceCorrection(payload);}catch{return failure('INVALID');}}
@@ -255,6 +305,10 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
       }catch{return failure(correction?'WRITE_UNCONFIRMED':'DATABASE_UNAVAILABLE');}
       if(result?.error)return failure(correction?'WRITE_UNCONFIRMED':'DATABASE_UNAVAILABLE');
       const outcome=valueOf(result);
+      if(repeatInvoice&&outcome?.ok!==true&&['INVOICE_EXISTS','REPLAY_MISMATCH'].includes(outcome?.code)){
+        const previous=await this.lookupRepeatedInvoiceCreation({workspaceId,ownerId,phone,quote:authorization.quote,payload});
+        if(previous.code!=='NO_RECEIPT')return previous;
+      }
       if(outcome?.ok!==true&&outcome?.code==='INVOICE_EXISTS'&&operation==='invoice.create'){
         // The SQL routine's broad uniqueness handler also covers customer
         // failures. Keep its source pinned for payment capabilities and verify

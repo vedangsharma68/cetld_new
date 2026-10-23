@@ -44,6 +44,41 @@ test('invoice creation checks scoped persisted evidence before reporting a dupli
   }
 });
 
+test('exact unnumbered instruction replay still requires the current persisted inbound authorization',async()=>{
+  const quote='new invoice for Retry Customer, Rs 1,500, due 30 Oct';
+  for(const scenario of ['missing','wrong-id','wrong-phone','wrong-text','not-processing','done']){
+    let receiptReads=0,rpcCalls=0;
+    const event=scenario==='missing'?null:{provider_message_id:scenario==='wrong-id'?'another-event':'current-event',
+      sender_phone:scenario==='wrong-phone'?'+919871367099':phone,message_text:scenario==='wrong-text'?'different instruction':quote,
+      status:scenario==='done'?'done':scenario==='not-processing'?'queued':'processing'};
+    const client={async rpc(){rpcCalls++;throw Error('An unverified event must not write');},from(table){
+      if(table!=='whatsapp_inbound_events')receiptReads++;
+      const q={select(){return q;},eq(){return q;},async maybeSingle(){return {data:event,error:null};}};return q;
+    }};
+    const result=await createDirectOwnerWriteAdapter({supabase:client}).apply({workspaceId,ownerId,phone,providerMessageId:'current-event',
+      authorization:{kind:'instruction',quote},operation:'invoice.create',deduplicateInvoiceInstruction:true,
+      payload:{customer_name:'Retry Customer',total_amount:1500,currency:'INR',issue_date:'2026-10-18',due_date:'2026-10-30'}});
+    assert.equal(result.ok,false,scenario);assert.equal(result.code,scenario==='done'?'NO_PENDING_ACTION':'INVALID_AUTHORIZATION',scenario);
+    assert.equal(rpcCalls,0);assert.equal(receiptReads,0,'No old receipt can authorize the current event');
+  }
+});
+
+test('an exact prior invoice receipt cannot acknowledge a missing or deleted persisted invoice',async()=>{
+  const quote='new invoice for Retry Customer, Rs 1,500, due 30 Oct';
+  const payload={customer_name:'Retry Customer',total_amount:1500,currency:'INR',issue_date:'2026-10-18',due_date:'2026-10-30'};
+  const receipt={workspace_id:workspaceId,owner_id:ownerId,phone,provider_message_id:'previous-event',
+    request:{operation:'invoice.create',authorizationKind:'instruction',authorizationQuote:quote,payload},
+    result:{ok:true,action:'invoice.created',entityType:'invoice',entityId,updatedAt}};
+  for(const record of [null,{id:entityId,workspace_id:workspaceId,deleted_at:updatedAt,updated_at:updatedAt}]){
+    const client={async rpc(){throw Error('Read-only verification does not write');},from(table){
+      const q={select(){return q;},eq(){return q;},order(){return q;},async limit(){return {data:[receipt],error:null};},
+        async maybeSingle(){return {data:table==='invoices'?record:receipt,error:null};}};return q;
+    }};
+    const result=await createDirectOwnerWriteAdapter({supabase:client}).lookupRepeatedInvoiceCreation({workspaceId,ownerId,phone,quote,payload});
+    assert.equal(result.ok,false);assert.equal(result.code,'WRITE_UNCONFIRMED');
+  }
+});
+
 function supabaseFixture({rpcValue,record,readError}={}){
   const calls=[];
   return {

@@ -73,7 +73,8 @@ export function createOwnerDirectRuntime({supabase,scope,message,messageId,autho
       return adapter.apply({workspaceId:scope.workspaceId,ownerId:scope.ownerId,phone:scope.phone,
         providerMessageId:messageId,authorization:{kind:'instruction',quote:String(message||'')},
         operation:TABLE_TYPES[table]+'.'+operation,targetId:row?.id||(table.startsWith('workspace_')?scope.workspaceId:null),
-        expectedUpdatedAt:row?.updated_at||null,payload});
+        expectedUpdatedAt:row?.updated_at||null,payload,
+        deduplicateInvoiceInstruction:ctx.parsedOwnerInvoiceCreate===true&&table==='invoices'&&operation==='create'&&!Object.hasOwn(payload,'invoice_number')});
     },
     async decideButton({interactionId,decision,pending}){
       if(!await authorize(scope))return {ok:false,code:'DENIED'};
