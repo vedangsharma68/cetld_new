@@ -264,12 +264,13 @@ test('real provider can repair a malformed generic business create before the si
         assert.equal(writes,0);assert(wire.tools?.length);
         assert(wire.messages.some(row=>row.role==='tool'&&JSON.parse(row.content).validationCode==='INVALID_FIELDS'));
         content=JSON.stringify({name:'workspaceData',parameters:{operation:'create',table:'business_records',values}});
-      }else{assert.equal(writes,1);assert.deepEqual(saved,values);content='Created CETLD QA 20261004 1442 with check_note temporary assistant test, check_count 1 and qa_status active.';}
+      }else assert.fail('A committed business record must not request model-written confirmation');
       return {ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({choices:[{message:{content},finish_reason:'stop'}]})};
     }});
   const result=await runOwnerAgent({provider,message,tools:workspaceTools});
-  assert.equal(result.plannerFailure,undefined);assert.match(result.answer,/Created CETLD QA/);
-  assert.equal(calls,3);assert.equal(writes,1);
+  assert.equal(result.plannerFailure,undefined);
+  assert.equal(result.answer,`Created business record.\nName: ${saved.name}\nCategory: ${saved.record_type}\nCustom fields: ${JSON.stringify(saved.custom_fields)}`);
+  assert.equal(calls,2);assert.equal(writes,1);
 });
 
 test('record target validation and filter aliases never dispatch missing, broad or foreign targets',async()=>{

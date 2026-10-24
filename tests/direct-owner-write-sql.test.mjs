@@ -520,12 +520,13 @@ test('real provider, catalog, resolver and PostgreSQL repair a targeted update a
         else if(calls===3){assert.equal(dispatches,0);assert.equal(wire.response_format.type,'json_schema');assert(wire.response_format.json_schema.schema.required.includes('filters'));
           assert(wire.messages.some(row=>row.content.includes('TARGET_REQUIRED')&&row.content.includes('validationShape')));
           content=JSON.stringify({operation:'update',table:'business_records',filters:[{column:'name',operator:'eq',value:name}],values:{custom_fields:{check_count:2,qa_status:'archived'}}});}
-        else{assert.equal(dispatches,1);content='Updated '+name+': check_count is 2 and qa_status is archived.';}
+        else assert.fail('A committed update must not request model-written confirmation');
         return {ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({choices:[{message:{content},finish_reason:'stop'}]})};
       }});
     const result=await runOwnerAgent({provider,message,tools,history:[{role:'assistant',content:JSON.stringify(read.rows)}]});
-    assert.equal(result.plannerFailure,undefined);assert.match(result.answer,/check_count is 2/);assert.equal(calls,4);assert.equal(dispatches,1);
+    assert.equal(result.plannerFailure,undefined);assert.equal(calls,3);assert.equal(dispatches,1);
     const persisted=(await db.query('select to_jsonb(b) as row from public.business_records b where workspace_id=$1 and id=$2',[workspaceId,created.entityId])).rows[0].row;
+    assert.equal(result.answer,`Updated business record.\nName: ${persisted.name}\nCategory: ${persisted.record_type}\nCustom fields: ${JSON.stringify(persisted.custom_fields)}`);
     assert.deepEqual(persisted.custom_fields,{check_note:'temporary assistant test',check_count:2,qa_status:'archived'});
     assert.equal((await db.query('select count(*)::int as n from public.business_records where workspace_id=$1 and name=$2',[workspaceId,name])).rows[0].n,1);
     assert.equal((await tools.lookupCompleted()).replayed,true);assert.equal(dispatches,1);

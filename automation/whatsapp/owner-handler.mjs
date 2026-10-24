@@ -464,7 +464,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     }
     if(!response?.plannerFailure&&tools.getReplyRequirement?.()?.buttonsAvailable&&!buttons.length)
       return {answer:'The change is waiting for approval, but I could not create its button. Nothing was changed.',plannerFailure:{code:'OWNER_CHOICES_UNAVAILABLE'}};
-    let answer=tools.getConsentReply?.()||phoneCorrectionReply||tools.getPhoneFailureReply?.()||tools.getReminderReply?.()||normalizeOwnerServiceReplyText(response?.answer||'');
+    let answer=tools.getConsentReply?.()||phoneCorrectionReply||tools.getPhoneFailureReply?.()||tools.getReminderReply?.()
+      ||(response?.deterministicWriteReply?response.answer:normalizeOwnerServiceReplyText(response?.answer||''));
     const signature=normalizeOwnerServiceReplyText(botPreferences.serviceReplySignature);
     if(answer&&signature&&!answer.endsWith(signature))answer+='\n\n'+signature;
     if(ownerButtonClaimIssue(answer,{buttonsAvailable:buttons.length>0}))return {

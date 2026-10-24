@@ -11,6 +11,7 @@ import {internalToolEnvelope} from '../../ai/tool-calls.mjs';
 import {internalOwnerReplyIssue} from './owner-reply-safety.mjs';
 import {ownerFailureGuidance,ownerProviderBusyReply} from './owner-failure-replies.mjs';
 import {ownerGroundingIssue,ownerEvidence,completedOwnerResult,invoiceCorrectionFallback} from './owner-grounding.mjs';
+import {ownerWriteConfirmation} from './owner-write-confirmation.mjs';
 import {ownerCalendar,resolveWorkspaceRecord} from './workspace-records.mjs';
 import {createHash} from 'node:crypto';
 import {createAssistantTools} from '../../ai/tools.mjs';
@@ -2024,6 +2025,10 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     finalAnswer=async({prompt='Give one concise final answer using completed tool results only. Answer the owner directly. Explain failed lookups honestly; proposed changes await confirmation. Do not use tools.',repairLimit=1}={})=>{
       checkpointPhase='final';await saveCheckpoint();
       const requirement=replyRequirement();
+      // Verified row values must never pass through model prose after commit.
+      // This also handles recovered receipts and resumed final checkpoints.
+      const writeConfirmation=ownerWriteConfirmation(ownerEvidence(transcript).at(-1));
+      if(writeConfirmation)return resultFor(writeConfirmation,{deterministicWriteReply:true});
       // Reminder preparation already has a server-rendered preview or a
       // specific refusal. A second model pass cannot improve those facts and
       // previously hid them behind reply-repair failures.
