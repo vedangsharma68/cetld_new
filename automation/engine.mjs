@@ -74,7 +74,15 @@ export class FollowUpEngine {
     let body=Object.hasOwn(invoice,'total_amount')?invoice.metadata.approved_reminder_text:(settings.reminderMessage || reminderBody(invoice,settings));
     if(this.provider.prepareReminder){
       try{body=(await this.provider.prepareReminder({...scope,to,settings})).body;}
-      catch(error){if(error?.code==='DELIVERY_REVIEW_REQUIRED')return this.needsDeliveryReview(scope,invoice,claim);await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'template_facts_unavailable'});return {status:'skipped',reason:'template_facts_unavailable'};}
+      catch(error){
+        if(['test_invoice_template_blocked','test_invoice_marker_required'].includes(error?.code)){
+          await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:error.code});
+          return {status:'blocked',reason:error.code};
+        }
+        if(error?.code==='DELIVERY_REVIEW_REQUIRED')return this.needsDeliveryReview(scope,invoice,claim);
+        await this.store.markDeliveryFailed({...scope,claimId:claim.id,unknown:false,error:'template_facts_unavailable'});
+        return {status:'skipped',reason:'template_facts_unavailable'};
+      }
     }
     // Persist intent BEFORE checking payment and obtaining final authorization.
     await this.store.recordMessage({...scope,direction:'outbound',kind:'reminder',status:'pending',idempotencyKey:key,payload:{to,body,claimId:claim.id}});

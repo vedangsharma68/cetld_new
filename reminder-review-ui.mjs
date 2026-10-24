@@ -1,3 +1,5 @@
+import {isTestInvoice} from './automation/test-invoice.mjs';
+import {TEST_TEMPLATE_BLOCK_MESSAGE,TEST_MARKER_MESSAGE,hasVisibleTestMarker,testInvoiceReminderDraft} from './automation/whatsapp/test-reminder-policy.mjs';
 import {buildInvoiceReminderParameters} from './automation/whatsapp/reminder-parameters.mjs';
 import {REMINDER_TONES,selectInvoiceReminderTemplate,buildReminderTemplate} from './automation/whatsapp/reminder-templates.mjs';
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -5,23 +7,28 @@ const reviewTime=(value,timezone='Asia/Kolkata')=>new Date(value).toLocaleString
 const label=tone=>tone[0].toUpperCase()+tone.slice(1);
 
 // Transport-independent view: all window/eligibility facts and approval tokens come from the server.
-export function reminderReviewForm({text,tone='professional',customer,number,sendNow=false}) {
-  return `<form id="draft-form"><div class="dialog-body reminder-review-body"><p>${escape(customer)} · ${escape(number)}</p>
+export function reminderReviewForm({text,tone='professional',customer,number,sendNow=false,testInvoice=false}) {
+  return `<form id="draft-form" data-test-invoice="${testInvoice}"><div class="dialog-body reminder-review-body"><p>${escape(customer)} · ${escape(number)}</p>
+    ${testInvoice?`<p class="notice" role="status">${escape(TEST_TEMPLATE_BLOCK_MESSAGE)}</p>`:''}
     <label class="field">Delivery timing<select name="sendNow"><option value="false" ${!sendNow?'selected':''}>Scheduled follow-up</option><option value="true" ${sendNow?'selected':''}>Send once now</option></select></label>
     <label class="field">Tone for this reminder<select name="tone">${REMINDER_TONES.map(t=>`<option value="${t}" ${t===tone?'selected':''}>${label(t)}</option>`).join('')}</select></label>
     <label class="field">Your message<textarea name="message" rows="7" maxlength="4000" required>${escape(text)}</textarea></label>
     <p class="settings-hint">Cetld uses approved templates for scheduled reminders. For a one-off send, your edited message can send within the customer’s 24-hour service window. Saving a draft resets approval.</p>
-    <label class="delivery-acknowledgement"><input type="checkbox" name="approveFallback"><span>For a one-off message, allow the named template below if the service window closes. Both versions must be reviewed before approval.</span></label>
+    <label class="delivery-acknowledgement"><input type="checkbox" name="approveFallback" ${testInvoice?'disabled':''}><span>${testInvoice?'Template fallback is blocked for test invoices. If the verified service window closes, hold for re-review.':'For a one-off message, allow the named template below if the service window closes. Both versions must be reviewed before approval.'}</span></label>
     <button class="btn" type="button" data-preview-reminder>Preview delivery</button>
     <section class="reminder-delivery-preview" aria-live="polite" aria-atomic="true" data-delivery-preview><p>Preview delivery to check the actual outgoing words and form before approval.</p></section>
     <div class="error hidden" data-error role="alert"></div>
     </div><div class="dialog-foot"><button class="btn" type="button" data-action="close">Cancel</button><button class="btn" type="submit">Save draft</button><button class="btn primary" type="button" data-approve-reminder disabled>Approve reviewed delivery</button></div></form>`;
 }
 
-export function validateDeliveryPreview(preview,{text,tone,sendNow,approveFallback},now=Date.now()) {
+export function validateDeliveryPreview(preview,{text,tone,sendNow,approveFallback,testInvoice=false},now=Date.now()) {
   if(!preview||preview.eligible!==true)throw Error(preview?.reason||'This reminder is not eligible for approval.');
   if(typeof preview.approvalToken!=='string'||!preview.approvalToken||!Number.isFinite(Date.parse(preview.expiresAt))||Date.parse(preview.expiresAt)<=now)throw Error('The delivery preview expired. Preview it again.');
   const d=preview.delivery;
+  if(testInvoice){
+    if(d?.form!=='service'||d.fallback)throw Error(TEST_TEMPLATE_BLOCK_MESSAGE);
+    if(!hasVisibleTestMarker(d.text))throw Error(TEST_MARKER_MESSAGE);
+  }
   if(!d||!['service','template'].includes(d.form)||typeof d.text!=='string'||!d.text.trim()||d.text.length>4000)throw Error('The server did not confirm the outgoing words and form.');
   if(d.form==='service'&&((preview.sendNow===false||sendNow===false)||d.text!==text||!['hold','template_fallback'].includes(d.windowClosedPolicy)||!Number.isFinite(Date.parse(d.windowExpiresAt))||Date.parse(d.windowExpiresAt)<=now))throw Error('The server must confirm your exact message and its window-expiry policy. Scheduled reminders require approved templates under cetld’s delivery rules.');
   if(d.form==='service'&&d.windowClosedPolicy==='template_fallback'&&(!d.fallback||d.fallback.form!=='template'||d.fallback.templateName!==selectInvoiceReminderTemplate({tone},tone).name||typeof d.fallback.text!=='string'||!d.fallback.text.trim()))throw Error('The named fallback and its exact words need confirmation.');
@@ -50,7 +57,7 @@ export function mountReminderReview(form,{requestPreview,approve,onSaveDraft,onA
   const current=()=>form.isConnected&&isCurrent();
   const showError=e=>{error.textContent=e.message||'Reminder review is unavailable.';error.classList.remove('hidden')};
   const reset=()=>{revision++;preview=null;controller?.abort();clearTimeout(timer);approveButton.disabled=true;error.classList.add('hidden');output.innerHTML='<p>Delivery preview needs updating. Preview again before approval.</p>'};
-  const lock=value=>{busy=value;previewButton.disabled=value;form.querySelector('[type=submit]').disabled=value;form.elements.message.disabled=value;form.elements.tone.disabled=value;form.elements.sendNow.disabled=value;form.elements.approveFallback.disabled=value||form.elements.sendNow.value!=='true';approveButton.disabled=value||!preview||!output.querySelector('[data-delivery-ack]')?.checked};
+  const lock=value=>{busy=value;previewButton.disabled=value;form.querySelector('[type=submit]').disabled=value;form.elements.message.disabled=value;form.elements.tone.disabled=value;form.elements.sendNow.disabled=value;form.elements.approveFallback.disabled=value||form.dataset.testInvoice==='true'||form.elements.sendNow.value!=='true';approveButton.disabled=value||!preview||!output.querySelector('[data-delivery-ack]')?.checked};
   form.addEventListener('input',event=>{if(event.target.matches('[name="message"],[name="tone"],[name="sendNow"],[name="approveFallback"]'))reset()});
   form.addEventListener('change',event=>{if(event.target.matches('[name="tone"]')){reset();if(makeToneDraft){try{if(form.elements.message.value===lastDraft||confirmReplace('Replace your edited message with the selected tone’s draft?')){lastDraft=makeToneDraft(form.elements.tone.value);form.elements.message.value=lastDraft;lastTone=form.elements.tone.value}else form.elements.tone.value=lastTone}catch(e){showError(e)}}}if(event.target.matches('[name="sendNow"],[name="approveFallback"]')){if(form.elements.sendNow.value!=='true')form.elements.approveFallback.checked=false;reset();lock(false);}if(event.target.matches('[data-delivery-ack]'))approveButton.disabled=busy||!preview||!event.target.checked});
   previewButton.addEventListener('click',async()=>{
@@ -58,7 +65,7 @@ export function mountReminderReview(form,{requestPreview,approve,onSaveDraft,onA
     if(!input.text||!REMINDER_TONES.includes(input.tone)){showError(Error('Write a message and choose its tone.'));return}
     const attempt=revision;controller=new AbortController();lock(true);output.textContent='Checking delivery eligibility…';
     try{
-      const result=validateDeliveryPreview(await requestPreview(input,{signal:controller.signal}),input,now());
+      const result=validateDeliveryPreview(await requestPreview(input,{signal:controller.signal}),{...input,testInvoice:form.dataset.testInvoice==='true'},now());
       if(!current()||attempt!==revision)return;
       preview=result;output.innerHTML=deliveryPreviewView(result,{...input,timezone});
       const expires=Math.min(Date.parse(result.expiresAt),result.delivery.form==='service'?Date.parse(result.delivery.windowExpiresAt):Infinity);
@@ -70,7 +77,7 @@ export function mountReminderReview(form,{requestPreview,approve,onSaveDraft,onA
     if(busy||!current()||!preview||!output.querySelector('[data-delivery-ack]')?.checked)return;
     const input=values(),reviewed=preview;
     try{
-      validateDeliveryPreview(reviewed,input,now());lock(true);error.classList.add('hidden');
+      validateDeliveryPreview(reviewed,{...input,testInvoice:form.dataset.testInvoice==='true'},now());lock(true);error.classList.add('hidden');
       const result=await approve({approvalToken:reviewed.approvalToken,reviewPayload:reviewed.reviewPayload,...input,windowClosedPolicy:reviewed.delivery.windowClosedPolicy});
       if(!current())return;
       if(result?.approved!==true)throw Error('Approval was not confirmed. Refresh and review this reminder again.');
@@ -87,6 +94,7 @@ export function mountReminderReview(form,{requestPreview,approve,onSaveDraft,onA
 }
 
 export function reminderToneDraft({invoice,settings,customer},tone) {
+  if(isTestInvoice(invoice))return testInvoiceReminderDraft({invoice,settings,customer});
   const entry=selectInvoiceReminderTemplate({},tone);
   const body=buildReminderTemplate(entry,buildInvoiceReminderParameters({invoice,settings,customer})).body;
   // Editable draft copy can use natural grammar. The delivery preview always
@@ -103,6 +111,8 @@ export function approvedDeliverySummary(approval) {
 // The immutable server receipt is the authority, never the later editable draft.
 export function queuedReminderDeliveryView(invoice) {
   if(!invoice||['paid','void','cancelled'].includes(invoice.status))return '';
+  const storedDelivery=invoice.metadata?.approved_reminder_delivery??invoice.approved_reminder_delivery;
+  if(isTestInvoice(invoice)&&(storedDelivery?.type!=='freeform'||storedDelivery.fallback))return `<section class="approved-delivery-summary" role="status"><h3>Template delivery blocked</h3><p>${escape(TEST_TEMPLATE_BLOCK_MESSAGE)}</p></section>`;
   const reason=invoice.reminder_review_reason??invoice.metadata?.reminder_review_reason;
   const pending=['approved','active','scheduled'].includes(invoice.followup_state);
   const needsReview=['delivery_form_review','undeliverable_window_expired','scheduled_template_only'].includes(reason);

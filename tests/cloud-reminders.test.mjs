@@ -81,6 +81,8 @@ test('candidate JS adapter still refuses ineligible invoice facts before final a
     const input=await f.prepare(),invoice=await f.store.getInvoice(f.scope);
     const cases=[
       ...['paid','void','cancelled','draft'].map(status=>[status,{status},'invoice_not_remindable']),
+      ['test flag',{metadata:{...invoice.metadata,test_invoice:true}},'test_invoice_template_blocked'],
+      ['test number',{invoice_number:'CETLD-TEST-fixture-NO-PAYMENT-REQUIRED'},'test_invoice_template_blocked'],
       ['deleted',{deleted_at:new Date().toISOString()},'invoice_unavailable'],
       ['non-receivable',{metadata:{...invoice.metadata,invoice_direction:'payable'}},'invoice_not_remindable'],
       ['zero',{total_amount:0,amount_paid:0},'invoice_not_remindable'],

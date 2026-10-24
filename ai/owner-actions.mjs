@@ -90,7 +90,7 @@ export function createOwnerAssistantActions({store,conversation=store.ownerConve
     if(!customer?.phone)return result(ownerReminderFailure('missing_contact').message);
     // The SQL gate compares this exact customer projection against its locked row.
     const {id,name,phone,reminder_tone=null}=customer;
-    let payload;try{payload={...prepareOwnerReminderContent({invoice:i,settings:s,customer:{id,name,phone,reminder_tone}}),sendNow:args.operation==='sendReminderNow'};}catch{return result(ownerReminderFailure('template_unavailable').message);}
+    let payload;try{payload={...prepareOwnerReminderContent({invoice:i,settings:s,customer:{id,name,phone,reminder_tone}}),sendNow:args.operation==='sendReminderNow'};}catch(error){return result(ownerReminderFailure(error?.code==='test_invoice_template_blocked'?error.code:'template_unavailable').message);}
     const checked=await store.ownerAssistantRPC('owner_assistant_preview_reminder',{p_payload:payload});
     if(checked?.ok!==true)return result(ownerActionFailure(checked));
     return propose('owner_reminder',payload,`Reminder preview for ${i.invoice_number}:\nDelivery form: approved WhatsApp template.\n\n${payload.preview}\n\n${payload.sendNow?'Approval will queue this reminder for the scheduler. It has not been sent.':'Approval will save this reminder draft. It has not been sent.'}`,message);
