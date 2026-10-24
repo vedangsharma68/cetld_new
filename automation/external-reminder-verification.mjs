@@ -2,6 +2,20 @@ import {createAccountingRuntime} from './runtime.mjs';
 
 const text=value=>String(value??'').trim();
 export const hasExternalReminderLedger=i=>[i.external_provider,i.external_invoice_id,i.metadata?.accounting_provider,i.metadata?.bookkeeping_record_id].some(value=>text(value));
+// Preserve the existing sent-only gate for unlinked invoices.
+export const localReminderStatusPayable=i=>i.status==='sent'||i.status==='overdue'&&hasExternalReminderLedger(i);
+// Only concrete Zoho invoice states; unpaid is a search category, not accepted.
+// Zoho status vocabulary: https://www.zoho.com/books/api/v3/invoices/
+// https://www.zoho.com/us/books/kb/invoices/invoice-life-cycle.html
+const zohoPayableStatuses=new Set(['sent','viewed','overdue','partially_paid']);
+// Intuit's optional invoiceStatus schema (not EmailStatus):
+// https://github.com/intuit/QuickBooks-V3-PHP-SDK/blob/8bf471f08c39dffc4851f4d0714d43366a1ae857/src/Data/IPPInvoice.php
+const qboPayableStatuses=new Set(['DUE_VIEWED','DUE_NOT_SENT','DUE_SENT','OVERDUE_VIEWED','OVERDUE_NOT_SENT','OVERDUE_SENT','PARTIALLY_PAID']);
+export const remoteReminderStatusPayable=(provider,remote)=>provider==='zoho_books'?zohoPayableStatuses.has(remote?.status):
+  // QBO financial state is balance-derived, independent of the due date:
+  // https://blogs.intuit.com/2016/04/06/voiding-invoice-objects/
+  provider==='quickbooks'&&Number.isSafeInteger(remote?.balanceMinor)&&remote.balanceMinor>0
+    &&(!Object.hasOwn(remote,'invoiceStatus')||qboPayableStatuses.has(remote.invoiceStatus));
 const scale=currency=>['BHD','IQD','JOD','KWD','LYD','OMR','TND'].includes(currency)?1000:
   ['BIF','CLP','DJF','GNF','ISK','JPY','KMF','KRW','PYG','RWF','UGX','VND','VUV','XAF','XOF','XPF'].includes(currency)?1:100;
 const minor=(value,currency)=>{
@@ -29,8 +43,9 @@ export async function externalReminderRead({invoice,ownerId,workspaceId,accounti
       new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('External verification timed out'));},Math.min(5000,Math.max(1,timeoutMs)));}),
     ]);
     const currency=invoice.currency,total=minor(invoice.total_amount,currency),paid=minor(invoice.amount_paid,currency);
-    // Compare the provider adapter's financial status; unknown states fail closed.
-    if(remote?.externalId!==invoiceId||remote.currency!==currency||remote.status!==invoice.status||remote.status!=='sent'
+    // Each ledger qualifies its own payable state; their overdue clocks may differ.
+    if(!localReminderStatusPayable(invoice)||!remoteReminderStatusPayable(provider,remote)
+      ||remote?.externalId!==invoiceId||remote.currency!==currency
       ||!Number.isSafeInteger(remote.totalMinor)||!Number.isSafeInteger(remote.balanceMinor)||!Number.isSafeInteger(remote.paidMinor)
       ||remote.totalMinor!==total||remote.paidMinor!==paid||remote.balanceMinor!==total-paid||remote.balanceMinor<=0)throw Error('External invoice diverged');
     return {ownerId,workspaceId,invoiceId:invoice.id,provider,externalId:invoiceId,startedAt,

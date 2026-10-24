@@ -13,12 +13,48 @@ begin
    and e->>'externalId'=coalesce(nullif(btrim(i.external_invoice_id),''),nullif(btrim(i.metadata->>'bookkeeping_record_id'),''))
    and e->'linkage'=jsonb_build_array(i.external_provider,i.external_invoice_id,i.metadata->>'accounting_provider',i.metadata->>'bookkeeping_record_id')
    and e->>'invoiceVersion'=i.automation_version::text and (e->>'invoiceUpdatedAt')::timestamptz=i.updated_at
-   and e->>'status'=i.status::text and i.status='sent' and e->>'currency'=i.currency
+   and e->>'status'=i.status::text and i.status in ('sent','overdue') and e->>'currency'=i.currency
    and (e->>'total')::numeric=i.total_amount and (e->>'paid')::numeric=i.amount_paid and i.total_amount>i.amount_paid
    and (e->>'startedAt')::timestamptz between clock_timestamp()-interval '15 seconds' and clock_timestamp(),false);
 exception when others then return false;
 end $$;
 revoke all on function app.reminder_external_read_matches(public.invoices,uuid) from public,anon,authenticated,service_role;
+
+-- This scoped predicate keeps unlinked invoices' original sent-only behavior.
+create or replace function app.reminder_local_status_payable(i public.invoices) returns boolean
+language sql immutable set search_path='' as $$
+ select i.status='sent' or (i.status='overdue' and app.invoice_has_external_ledger(i));
+$$;
+revoke all on function app.reminder_local_status_payable(public.invoices) from public,anon,authenticated,service_role;
+
+-- Existing status-only patch points must agree with the evidence checker.
+-- Keep the rest of each body and its ACL exactly as installed, including the
+-- signed receipt's count/cadence/failure handling for an overdue linked invoice.
+do $status$
+declare target regprocedure; original text; updated text; old_acl aclitem[]; marker text; replacement text; expected integer;
+begin
+ for target in select p.oid::regprocedure from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+   where (n.nspname='public' and p.proname in ('whatsapp_owner_reminder','cetld_core_authorize_first_party_reminder','cetld_core_record_first_party_receipt'))
+     or (n.nspname='app' and p.proname in ('owner_assistant_reminder','owner_assistant_reminder_template_gate'))
+ loop
+  original:=pg_get_functiondef(target);select proacl into old_acl from pg_proc where oid=target;
+  if strpos(original,'app.reminder_local_status_payable(i)')>0 then continue;end if;
+  -- Shared-assistant installations delegate from the public WhatsApp RPC;
+  -- patch its private status gate, leaving the public wrapper untouched.
+  if (select proname from pg_proc where oid=target)='whatsapp_owner_reminder' and strpos(original,'app.owner_assistant_reminder(')>0 then continue;end if;
+  if (select proname from pg_proc where oid=target)='owner_assistant_reminder' and strpos(original,'return app.owner_assistant_reminder_template_gate(')>0 then continue;end if;
+  case (select proname from pg_proc where oid=target)
+   when 'owner_assistant_reminder_template_gate' then marker:='i.status::text<>''sent''';replacement:='not app.reminder_local_status_payable(i)';expected:=1;
+   when 'owner_assistant_reminder' then marker:='i.status::text<>''sent''';replacement:='not app.reminder_local_status_payable(i)';expected:=1;
+   when 'whatsapp_owner_reminder' then marker:='i.status::text<>''sent''';replacement:='not app.reminder_local_status_payable(i)';expected:=1;
+   when 'cetld_core_authorize_first_party_reminder' then marker:='i.status<>''sent''';replacement:='not app.reminder_local_status_payable(i)';expected:=1;
+   when 'cetld_core_record_first_party_receipt' then marker:='i.status=''sent''';replacement:='app.reminder_local_status_payable(i)';expected:=2;
+  end case;
+  if (length(original)-length(replace(original,marker,'')))/length(marker)<>expected then raise exception 'linked reminder payable-status patch point changed: %',target;end if;
+  updated:=replace(original,marker,replacement);execute updated;
+  if (select proacl from pg_proc where oid=target) is distinct from old_acl then raise exception 'reminder status ACL changed';end if;
+ end loop;
+end $status$;
 
 -- Patch only the external refusal. Payment audit and balance checks remain intact.
 -- The approved reminder feature is optional in historical fixture installations.

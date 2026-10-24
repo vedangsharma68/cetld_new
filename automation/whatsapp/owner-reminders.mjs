@@ -1,4 +1,4 @@
-import {reminderPaymentRpc} from '../external-reminder-verification.mjs';
+import {reminderPaymentRpc,localReminderStatusPayable} from '../external-reminder-verification.mjs';
 import {PHONE_FORMAT_GUIDANCE} from './owner-phone.mjs';
 import {ownerConsentFailure} from './owner-consent.mjs';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
@@ -164,7 +164,7 @@ export function createOwnerReminderRuntime({supabase,scope,message='',messageId,
           return result;
         }
         if(!settings?.business_name?.trim())return refuse('business_name_required');
-        if(invoice.status!=='sent'||invoice.deleted_at||invoice.metadata?.invoice_direction!=='receivable'||!invoice.due_date||Number(invoice.total_amount)<=Number(invoice.amount_paid))return refuse('ineligible_invoice');
+        if(!localReminderStatusPayable(invoice)||invoice.deleted_at||invoice.metadata?.invoice_direction!=='receivable'||!invoice.due_date||Number(invoice.total_amount)<=Number(invoice.amount_paid))return refuse('ineligible_invoice');
         let draft;
         try{
           draft=prepareOwnerReminderContent({invoice,settings,customer});

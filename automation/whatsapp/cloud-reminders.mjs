@@ -1,4 +1,4 @@
-import {reminderPaymentRpc} from '../external-reminder-verification.mjs';
+import {reminderPaymentRpc,localReminderStatusPayable} from '../external-reminder-verification.mjs';
 import {reminderDeliveryForm,matchesReminderDelivery} from './reminder-approval.mjs';
 import {reminderFingerprint} from './reminder-fingerprint.mjs';
 import {getSendEligibility} from './consent.mjs';
@@ -46,7 +46,7 @@ export function createFirstPartyReminderProvider({env=process.env,supabase,store
       const invoice=await store.getInvoice(scope),settings=await store.getWorkspacePreferences(scope);
       if(!invoice||invoice.deleted_at)return blocked('invoice_unavailable');
       if(invoice.customer_id!==input.customerId)return blocked('customer_changed');
-      if(invoice.status!=='sent'||invoice.metadata?.invoice_direction!=='receivable'||Number(invoice.amount_paid)>=Number(invoice.total_amount))return blocked('invoice_not_remindable');
+      if(!localReminderStatusPayable(invoice)||invoice.metadata?.invoice_direction!=='receivable'||Number(invoice.amount_paid)>=Number(invoice.total_amount))return blocked('invoice_not_remindable');
       if(!['approved','active','scheduled'].includes(invoice.followup_state))return blocked('paused_or_unreviewed');
       if(!settings?.business_name||new Date(invoice.metadata?.approved_preferences_updated_at).getTime()!==new Date(settings.updated_at).getTime())return blocked('stale_review');
       const eligibility=await getSendEligibility({supabase,workspaceId,phone:input.to});

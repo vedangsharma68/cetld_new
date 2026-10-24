@@ -1,4 +1,4 @@
-import {reminderPaymentRpc} from '../external-reminder-verification.mjs';
+import {reminderPaymentRpc,localReminderStatusPayable} from '../external-reminder-verification.mjs';
 import {brandedReminder} from '../preferences.mjs';
 import {reminderDeliveryForm,matchesReminderDelivery,hasPersistedLegacyReminderApproval} from './reminder-approval.mjs';
 import {getSendEligibility} from './consent.mjs';
@@ -41,7 +41,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
       getSendEligibility({supabase,workspaceId,phone:input.to,category:'invoice_updates'}),
     ]);
     if(!eligibility.allowed||!invoice||invoice.deleted_at||hasUnresolvedFollowUpException(invoice)||!settings||invoice.customer_id!==eligibility.customer.id
-      ||invoice.customerPhone!==input.to||invoice.status!=='sent'||invoice.metadata?.invoice_direction!=='receivable'
+      ||invoice.customerPhone!==input.to||!localReminderStatusPayable(invoice)||invoice.metadata?.invoice_direction!=='receivable'
       ||!invoice.due_date||Number(invoice.total_amount)<=Number(invoice.amount_paid)
       ||!['approved','active','scheduled'].includes(invoice.followup_state))throw Error('Reminder facts unavailable');
     const reviewed=invoice.metadata?.approved_reminder_delivery;

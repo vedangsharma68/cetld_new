@@ -410,7 +410,8 @@ export function createQuickBooksProvider({ sandbox = String(process.env.QUICKBOO
       // QBO EmailStatus describes delivery, not financial state. A persisted
       // Invoice is open while Balance > 0; voided invoices have zero amounts.
       const status = invoice.balanceMinor === 0 ? 'paid' : 'sent';
-      return { balanceMinor: invoice.balanceMinor, paidMinor: invoice.paidMinor, status, currency: invoice.currency, totalMinor: invoice.amountMinor, externalId: invoice.externalId };
+      return { balanceMinor: invoice.balanceMinor, paidMinor: invoice.paidMinor, status, currency: invoice.currency, totalMinor: invoice.amountMinor, externalId: invoice.externalId,
+        ...(Object.hasOwn(body.Invoice,'invoiceStatus')?{invoiceStatus:body.Invoice.invoiceStatus}:{}) };
     },
     async fetchCompanyInfo({ token, accountId }) {
       if (!accountId) throw new Error('QuickBooks company ID is required');
