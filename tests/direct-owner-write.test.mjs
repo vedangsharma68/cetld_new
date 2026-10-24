@@ -90,6 +90,8 @@ test('verified creation receipt exposes existing-invoice evidence without a writ
     request:{operation:'invoice.create',authorizationKind:'instruction',authorizationQuote:quote,payload},
     result:{ok:true,action:'invoice.created',entityType:'invoice',entityId,updatedAt}};
   const record={id:entityId,workspace_id:workspaceId,invoice_number:'INV-2026-6783',total_amount:'1500.00',currency:'INR',updated_at:updatedAt,deleted_at:null};
+  Object.assign(record,{customer_id:ownerId,issue_date:'2026-10-18',due_date:'2026-10-30',amount_paid:'0.00',status:'draft',notes:null,deleted_by:null,metadata:{}});
+  receipt.result.record=structuredClone(record);
   let writes=0;
   const client={async rpc(){writes++;throw Error('Receipt verification must not write');},from(table){
     const q={select(){return q},eq(){return q},order(){return q},async limit(){return {data:[receipt],error:null}},
@@ -98,6 +100,36 @@ test('verified creation receipt exposes existing-invoice evidence without a writ
   const replay=await createDirectOwnerWriteAdapter({supabase:client}).lookupRepeatedInvoiceCreation({workspaceId,ownerId,phone,quote,payload});
   assert.equal(replay.ok,true);assert.equal(replay.replayed,true);assert.equal(replay.completed,true);
   assert.deepEqual(replay.existingInvoice,{invoiceNumber:'INV-2026-6783'});assert.equal(writes,0);
+});
+
+test('creation replay compares saved content even when updated_at matches and fails closed without a snapshot',async()=>{
+  const saved={id:entityId,workspace_id:workspaceId,customer_id:ownerId,invoice_number:'INV-2026-6783',
+    issue_date:'2026-10-23',due_date:'2026-10-30',currency:'INR',total_amount:'1500.00',amount_paid:'0.00',
+    status:'draft',notes:null,deleted_at:null,deleted_by:null,metadata:{line_items:[],subtotal:1500},updated_at:updatedAt};
+  const result={ok:true,action:'invoice.created',entityType:'invoice',entityId,updatedAt,record:saved};
+  let receipt={workspace_id:workspaceId,owner_id:ownerId,phone,provider_message_id:'previous-event',result};
+  let live=structuredClone(saved);
+  const fixture=supabaseFixture({record:table=>table==='invoices'?live:receipt});
+  const adapter=createDirectOwnerWriteAdapter({supabase:fixture.client});
+  const lookup=()=>adapter.lookupCompleted({workspaceId,ownerId,phone,providerMessageId:'previous-event'});
+  assert.equal((await lookup()).ok,true);
+  for(const changes of [
+    {customer_id:entityId},{invoice_number:'CHANGED'},{issue_date:'2026-10-24'},{due_date:null},
+    {currency:'USD'},{total_amount:'1510.00'},{amount_paid:'100.00'},{status:'sent'},
+    {deleted_at:updatedAt},{deleted_by:ownerId},{notes:'changed'},{custom_fields:{project:'changed'}},
+    {metadata:{...saved.metadata,subtotal:1510}},{metadata:{...saved.metadata,line_items:[{amount:1500}]}}
+  ]){
+    live={...saved,...changes};
+    assert.equal((await lookup()).code,'WRITE_UNCONFIRMED',JSON.stringify(changes));
+  }
+  live={...saved,total_amount:1500,amount_paid:0,updated_at:'2026-10-24T01:48:14Z',metadata:{...saved.metadata,
+    bookkeeping_sync_status:'synced',bookkeeping_synced_at:'2026-10-24T01:48:14Z',bookkeeping_provider:'zoho_books',bookkeeping_record_id:'remote-6783'}};
+  assert.equal((await lookup()).ok,true,'sync metadata and numeric serialization preserve content');
+  for(const record of [undefined,{}, {...saved,customer_id:undefined}]){
+    receipt={...receipt,result:{...result,record}};
+    assert.equal((await lookup()).code,'WRITE_UNCONFIRMED','incomplete snapshots cannot verify content');
+  }
+  assert.equal(fixture.calls.some(call=>call.kind==='rpc'),false);
 });
 
 test('an exact prior invoice receipt cannot acknowledge a missing or deleted persisted invoice',async()=>{

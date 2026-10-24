@@ -119,6 +119,27 @@ function canonical(value){
   if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])]));
   return value;
 }
+function unchangedCreatedInvoice(outcome,record){
+  const saved=outcome.record;
+  if(!saved||typeof saved!=='object'||Array.isArray(saved))return false;
+  // Creation receipts retain the invoiced content. Sync bookkeeping may change
+  // updated_at and its own metadata, but cannot authorize different content.
+  const fields=['id','workspace_id','customer_id','invoice_number','issue_date','due_date','currency',
+    'total_amount','amount_paid','status','notes','deleted_at','deleted_by','metadata'];
+  if(fields.some(field=>!Object.hasOwn(saved,field)||!Object.hasOwn(record,field)))return false;
+  const content=row=>Object.fromEntries([...fields,'custom_fields'].map(field=>{
+    let value=row[field];
+    if(field==='total_amount'||field==='amount_paid')value=minorUnits(value)?.toString()??null;
+    if(field==='custom_fields')value=value??{};
+    if(field==='metadata'&&value&&typeof value==='object'&&!Array.isArray(value)){
+      value=Object.fromEntries(Object.entries(value).filter(([key])=>!key.startsWith('bookkeeping_sync_')
+        &&!['bookkeeping_synced_at','bookkeeping_provider','bookkeeping_record_id'].includes(key)));
+    }
+    return [field,value];
+  }));
+  if(['total_amount','amount_paid'].some(field=>minorUnits(saved[field])===null||minorUnits(record[field])===null))return false;
+  return JSON.stringify(canonical(content(saved)))===JSON.stringify(canonical(content(record)));
+}
 async function verifyCorrectionAudit({supabase,workspaceId,ownerId,record,outcome}){
   if(!validUuid(outcome?.correctionAuditId)||!record)return false;
   const result=await supabase.from('invoice_correction_audits').select('id,workspace_id,owner_id,invoice_id,values,before_snapshot,after_snapshot')
@@ -222,7 +243,9 @@ export function createDirectOwnerWriteAdapter({supabase,invoiceCorrectionsEnable
         record={id:record.id,workspace_id:record.workspace_id,actionType:record.action?.type||null,consumed_at:record.consumed_at};
       }else{
         if(!['settings','ai_settings'].includes(outcome.entityType)&&record.id!==outcome.entityId)return failure('WRITE_UNCONFIRMED');
-        if(outcome.updatedAt&&record.updated_at!==outcome.updatedAt)return failure('WRITE_UNCONFIRMED');
+        if(outcome.entityType==='invoice'&&outcome.action==='invoice.created'){
+          if(!unchangedCreatedInvoice(outcome,record))return failure('WRITE_UNCONFIRMED');
+        }else if(outcome.updatedAt&&record.updated_at!==outcome.updatedAt)return failure('WRITE_UNCONFIRMED');
         if(outcome.entityType==='invoice'&&outcome.action==='invoice.deleted'&&!record.deleted_at)return failure('WRITE_UNCONFIRMED');
         if(outcome.entityType==='invoice'&&outcome.action==='invoice.restored'&&record.deleted_at!==null)return failure('WRITE_UNCONFIRMED');
         if(outcome.entityType==='business_record'&&outcome.action==='business_record.deleted'&&!record.deleted_at)return failure('WRITE_UNCONFIRMED');
