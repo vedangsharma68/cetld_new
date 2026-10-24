@@ -172,6 +172,19 @@ test('unnumbered owner invoice retries reuse only an exact scoped instruction an
     assert.match((await turn(first,'unnumbered-repeated',message)).answer,/already exists/);assert.equal(await count(first),1);
     assert.deepEqual((await db.query('select * from invoices where workspace_id=$1 order by id',[first.workspaceId])).rows,beforeReplay);
     assert.equal(f.requests.slice(requestStart).filter(request=>/\/rpc\/whatsapp_apply_(?:direct_owner|owner_contact)_write$/.test(new URL(request.url).pathname)).length,0,'receipt reuse performs zero write RPCs');
+    const original=(await db.query("select result->>'entityId' id from whatsapp_direct_write_receipts where provider_message_id='unnumbered-lost-ack'")).rows[0].id;
+    const receiptBeforeSync=(await db.query("select result from whatsapp_direct_write_receipts where provider_message_id='unnumbered-lost-ack'")).rows[0].result;
+    await db.query(`update invoices set metadata=metadata||$2::jsonb where id=$1`,[original,JSON.stringify({
+      bookkeeping_sync_status:'synced',bookkeeping_sync_attempts:1,bookkeeping_sync_error:null,
+      bookkeeping_provider:'zoho_books',bookkeeping_record_id:'remote-6783',bookkeeping_synced_at:'2026-10-24T01:48:14.459282+00:00'})]);
+    const synced=(await db.query('select * from invoices where id=$1',[original])).rows[0];
+    assert.notEqual(synced.updated_at.toISOString(),new Date(receiptBeforeSync.updatedAt).toISOString());
+    const syncReplayStart=f.requests.length;
+    const syncRetry=await turn(first,'unnumbered-after-bookkeeping-sync',message);
+    assert.equal(syncRetry.answer,`Invoice ${synced.invoice_number} already exists. Total: INR 1500.00. No new invoice was created.`);
+    assert.equal(await count(first),1);
+    assert.deepEqual((await db.query('select * from invoices where id=$1',[original])).rows[0],synced);
+    assert.equal(f.requests.slice(syncReplayStart).filter(request=>/\/rpc\/whatsapp_apply_(?:direct_owner|owner_contact)_write$/.test(new URL(request.url).pathname)).length,0);
     const redelivery=await handler({...first,messageId:'unnumbered-new-id',message});
     assert.equal(redelivery.replayed,true);assert.equal(await count(first),1);
     const changed=await turn(first,'unnumbered-changed-facts',message.replace('1,500','1,510'));
@@ -196,8 +209,7 @@ test('unnumbered owner invoice retries reuse only an exact scoped instruction an
     // An old instruction cannot silently create another invoice after the
     // original row changes or disappears; its receipt must still verify.
     today='2026-10-18';
-    const original=(await db.query("select result->>'entityId' id from whatsapp_direct_write_receipts where provider_message_id='unnumbered-lost-ack'")).rows[0].id;
-    await db.query("update invoices set notes='changed after original save' where id=$1",[original]);
+    await db.query("update invoices set total_amount=1510 where id=$1",[original]);
     assert.match((await turn(first,'unnumbered-stale-receipt',message)).answer,/couldn’t check if the invoice was created/);
     assert.equal(await count(first),4);
     const current=(await db.query('select * from invoices where id=$1',[original])).rows[0];
