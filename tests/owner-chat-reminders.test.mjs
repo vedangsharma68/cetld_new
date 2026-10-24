@@ -90,6 +90,21 @@ test('owner reminder approval uses native pending confirmations and leaves deliv
    const auth=await supabase.rpc('cetld_core_authorize_delivery',{p_owner_id:ownerId,p_workspace_id:workspaceId,p_claim_id:claims.data[0].claim_id,p_preferences_version:s.updated_at});
    assert.equal(auth.data[0].authorized,false);await db.query('delete from whatsapp_suppressions where workspace_id=$1 and phone=$2',[workspaceId,recipient]);
   });
+  await t.test('unlinked overdue invoices can be previewed and queued after a fresh owner confirmation',async()=>{
+   const i=await invoice('INV-CHAT-OVERDUE');
+   assert.equal((await propose(i.invoice_number)).result.requiresConfirmation,true);
+   await db.query("update invoices set status='overdue' where id=$1",[i.id]);
+   assert.equal((await confirm()).result.ok,false,'the sent preview remains stale after the status edit');
+   if(await pending.loadPendingAction(scope))await cancel();
+   const before=await row(i.id);
+   assert.equal(before.external_provider,null);assert.equal(before.external_invoice_id,null);
+   const preview=await propose(i.invoice_number);
+   assert.equal(preview.result.requiresConfirmation,true,JSON.stringify({result:preview.result,errors:f.errors}));
+   assert.deepEqual(await row(i.id),before);
+   assert.equal((await confirm()).result.completed,true);
+   const saved=await row(i.id);assert.equal(saved.status,'overdue');assert.equal(saved.followup_state,'approved');
+   assert.ok(saved.next_follow_up_at);await noSends();
+  });
   await t.test('approve-only matches dashboard metadata and fact/preferences/name changes still revoke approval',async()=>{
    for(const change of ['preferences','facts','name']){
     const i=await invoice('INV-APPROVE-'+change);
@@ -222,7 +237,7 @@ test('owner reminder approval uses native pending confirmations and leaves deliv
    await db.query('update customers set phone=$2 where id=$1',[fresh.customer_id,'+12025550109']);
    assert.match((await remind()).answer,/agreed to WhatsApp reminders/);
    await db.query("insert into whatsapp_consents(workspace_id,customer_id,phone,source,consent_text_version,categories) values($1,$2,'+12025550109','inbound_message','fixture',array['invoice_updates'])",[workspaceId,fresh.customer_id]);
-   assert.match((await remind()).answer,/sent, unpaid receivable invoice/);
+   assert.match((await remind()).answer,/sent or overdue, unpaid receivable invoice/);
    await db.query("update invoices set status='sent' where id=$1",[fresh.id]);
    const before=await row(fresh.id),preview=await remind();
    assert.match(preview.answer,/Reminder preview/);assert.match(preview.answer,/Reply yes/);

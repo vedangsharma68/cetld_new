@@ -7,6 +7,7 @@ import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {CoreAutomationStore} from '../automation/core-store.mjs';
 import {createAutomationRuntime} from '../automation/runtime.mjs';
 import {createFirstPartyReminderProvider} from '../automation/whatsapp/cloud-reminders.mjs';
+import {localReminderStatusPayable} from '../automation/external-reminder-verification.mjs';
 
 const phone='+919871367051';
 const template={status:'APPROVED',category:'UTILITY',useCase:'first_party_invoice_reminder',name:'fixture_first_party_invoice_reminder',language:'en',
@@ -16,7 +17,7 @@ const env={NODE_ENV:'test',WHATSAPP_PROVIDER:'mock',SUPABASE_URL:'https://fixtur
   AUTOMATION_OUTBOUND_ENABLED:'true',WHATSAPP_OUTBOUND_ENABLED:'true',WHATSAPP_REMINDERS_ENABLED:'true',WHATSAPP_TEST_ALLOWLIST:phone,
   WHATSAPP_ACCESS_TOKEN:'isolated-graph-token',WHATSAPP_PHONE_NUMBER_ID:'123456',WHATSAPP_WABA_ID:'654321',WHATSAPP_GRAPH_API_VERSION:'v23.0'};
 
-async function setup({gate=true}={}) {
+async function setup({gate=true,invoiceStatus='sent'}={}) {
   const graph=[];let mode='accepted';
   const f=await createOfflineSqlNetwork({externalFetch:async(url,options)=>{
     assert.equal(url.origin,'https://graph.facebook.com');graph.push(JSON.parse(options.body));
@@ -35,12 +36,18 @@ async function setup({gate=true}={}) {
   const customerId=(await f.db.query("insert into customers(workspace_id,name,phone) values($1,'Fixture recipient',$2) returning id",[workspaceId,phone])).rows[0].id;
   await f.db.query("insert into whatsapp_consents(workspace_id,customer_id,phone,source,consent_text_version,categories) values($1,$2,$3,'inbound_message','fixture-v1',array['invoice_updates'])",[workspaceId,customerId,phone]);
   const invoice=(await f.db.query(`insert into invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,status,metadata)
-    values($1,$2,'FIXTURE',current_date-10,current_date-1,'USD',125,'sent','{"invoice_direction":"receivable"}') returning *`,[workspaceId,customerId])).rows[0];
+    values($1,$2,'FIXTURE',current_date-10,current_date-1,'USD',125,$3,'{"invoice_direction":"receivable"}') returning *`,[workspaceId,customerId,invoiceStatus])).rows[0];
   const body=template.body.replace(/\{\{([1-6])\}\}/g,(_,n)=>['Fixture studio','Fixture recipient',invoice.invoice_number,'125.00','USD',new Date(invoice.due_date).toISOString().slice(0,10)][Number(n)-1]);
   await f.db.query(`update invoices set metadata=metadata||jsonb_build_object('followup_state','approved','approved_reminder_text',$2::text,
     'approved_preferences_updated_at',(select updated_at from workspace_settings where workspace_id=$3)),next_follow_up_at=now()-interval '1 minute' where id=$1`,[invoice.id,body,workspaceId]);
   await f.db.query("update invoices set metadata=metadata||jsonb_build_object('approved_reminder_delivery',$2::jsonb) where id=$1",[invoice.id,reminderDeliveryForm({entry:template,parameters:['Fixture studio','Fixture recipient',invoice.invoice_number,'125.00','USD',new Date(invoice.due_date).toISOString().slice(0,10)],body})]);
-  if(gate)await f.db.exec(await readFile(new URL('./fixtures/proposed-reminder-gate.sql',import.meta.url),'utf8'));
+  if(gate){
+    await f.db.exec(await readFile(new URL('./fixtures/proposed-reminder-gate.sql',import.meta.url),'utf8'));
+    // The historical candidate gate is installed after the fixture migrations.
+    // Apply the real forward patches to that gate before testing dispatch.
+    for(const file of ['20261024094013_fresh_external_reminder_reads.sql','20261024124500_unlinked_overdue_reminder_eligibility.sql'])
+      await f.db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
+  }
   const scope={ownerId,workspaceId,invoiceId:invoice.id};
   const store=new CoreAutomationStore({url:env.SUPABASE_URL,key:env.SUPABASE_SERVICE_ROLE_KEY,fetchImpl:f.fetchImpl});
   const provider=options=>createFirstPartyReminderProvider({env,supabase:f.supabase,store,ownerId,workspaceId,templateSnapshot:template,fetchImpl:f.fetchImpl,...options});
@@ -52,6 +59,42 @@ async function setup({gate=true}={}) {
   }
   return {...f,scope,customerId,body,graph,store,provider,prepare,mode(value){mode=value}};
 }
+
+test('local payable statuses are sent and overdue for both linked and unlinked invoices',()=>{
+  for(const linkage of [{},{external_provider:'zoho_books',external_invoice_id:'remote-fixture'}])
+    for(const status of ['sent','overdue','paid','void','cancelled','draft','deleted',null,undefined])
+      assert.equal(localReminderStatusPayable({status,...linkage}),['sent','overdue'].includes(status),String(status));
+});
+
+test('unlinked overdue invoices dispatch through the candidate JS adapter and patched SQL gate',async()=>{
+  const f=await setup({invoiceStatus:'overdue'});try{
+    const invoice=await f.store.getInvoice(f.scope);
+    assert.equal(invoice.status,'overdue');assert.equal(invoice.external_provider,null);assert.equal(invoice.external_invoice_id,null);
+    assert.equal((await f.provider().sendReminder(await f.prepare())).status,'accepted',JSON.stringify(f.errors));
+    assert.equal(f.graph.length,1);
+    assert.equal((await f.store.getInvoice(f.scope)).status,'overdue');
+  }finally{await f.close();}
+});
+
+test('candidate JS adapter still refuses ineligible invoice facts before final authorization',async()=>{
+  const f=await setup({invoiceStatus:'overdue'});try{
+    const input=await f.prepare(),invoice=await f.store.getInvoice(f.scope);
+    const cases=[
+      ...['paid','void','cancelled','draft'].map(status=>[status,{status},'invoice_not_remindable']),
+      ['deleted',{deleted_at:new Date().toISOString()},'invoice_unavailable'],
+      ['non-receivable',{metadata:{...invoice.metadata,invoice_direction:'payable'}},'invoice_not_remindable'],
+      ['zero',{total_amount:0,amount_paid:0},'invoice_not_remindable'],
+      ['fully paid',{amount_paid:invoice.total_amount},'invoice_not_remindable'],
+    ];
+    for(const [label,patch,reason] of cases){
+      const store=Object.create(f.store);store.getInvoice=async()=>({...invoice,...patch});
+      const before=f.requests.length;
+      assert.deepEqual(await f.provider({store}).sendReminder(input),{status:'blocked',reason},label);
+      assert.ok(!f.requests.slice(before).some(r=>new URL(r.url).pathname.includes('/rpc/cetld_core_authorize_first_party_reminder')),label);
+    }
+    assert.equal(f.graph.length,0);
+  }finally{await f.close();}
+});
 
 test('unmodified deployed schema fails closed: missing final reminder gate never sends HTTP',async()=>{
   const f=await setup({gate:false});try{

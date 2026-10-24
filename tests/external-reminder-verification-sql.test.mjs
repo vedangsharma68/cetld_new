@@ -11,11 +11,13 @@ import {CoreAutomationStore} from '../automation/core-store.mjs';
 import {createAccountingIntegration} from '../automation/accounting/integration.mjs';
 import {createAccountingProviders} from '../automation/accounting/providers.mjs';
 import {externalReminderRead} from '../automation/external-reminder-verification.mjs';
+import {createApprovedReminderProvider} from '../automation/whatsapp/approved-reminders.mjs';
 
 const migration=()=>readFile(new URL('../supabase/migrations/20261024094013_fresh_external_reminder_reads.sql',import.meta.url),'utf8');
+const overdueMigration='20261024124500_unlinked_overdue_reminder_eligibility.sql';
 for(const fullReview of [false,true])test(`linked reminder live reads fail closed through executable SQL (full review: ${fullReview})`,async t=>{
  const sends=[];let remoteStatus='sent',qboStatus=undefined,remoteBalance=125,remoteTotal=125,unreachable=false,stalled=false,missingCredentials=false,reads=0;
- const f=await createOfflineSqlNetwork({excludeMigrations:['20261024094013_fresh_external_reminder_reads.sql'],externalFetch:async(url,options)=>{
+ const f=await createOfflineSqlNetwork({excludeMigrations:['20261024094013_fresh_external_reminder_reads.sql',overdueMigration],externalFetch:async(url,options)=>{
    assert.equal(url.origin,'https://graph.facebook.com');sends.push(JSON.parse(options.body));return Response.json({messages:[{id:'wamid.external.'+sends.length}]});
  }}),{db,supabase}=f;
  try{
@@ -37,6 +39,15 @@ for(const fullReview of [false,true])test(`linked reminder live reads fail close
     row.proname==='cetld_core_record_first_party_receipt'?
     row.definition.replaceAll("i.status='sent'",'app.reminder_local_status_payable(i)'):row.definition});
   assert.deepEqual((await protections()).rows,originalProtections.map(statusOnlyPatch),'original bodies and ACLs unchanged except the exact scoped status predicates');
+  const beforeOverdue=(await protections()).rows;
+  const businessProtections=()=>db.query(`select p.proname,pg_get_functiondef(p.oid) definition,p.proacl::text acl
+   from pg_proc p where p.proname in ('business_name_reminder_pause_count','invalidate_core_followup_approvals') order by p.proname`);
+  const beforeBusiness=(await businessProtections()).rows;
+  const helperAcl=(await db.query("select proacl::text acl from pg_proc where oid='app.reminder_local_status_payable(public.invoices)'::regprocedure")).rows[0];
+  await db.exec(await readFile(new URL('../supabase/migrations/'+overdueMigration,import.meta.url),'utf8'));
+  assert.deepEqual((await protections()).rows,beforeOverdue,'all installed queue/authorization/receipt wrappers and protected bodies/ACLs stay identical');
+  assert.deepEqual((await businessProtections()).rows,beforeBusiness.map(row=>({...row,definition:row.definition.replaceAll("status='sent'","status in ('sent','overdue')")})));
+  assert.deepEqual((await db.query("select proacl::text acl from pg_proc where oid='app.reminder_local_status_payable(public.invoices)'::regprocedure")).rows[0],helperAcl);
   const ownerId=randomUUID(),phone='+12025550107',recipient='+919871367051';
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
   await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
@@ -69,7 +80,10 @@ for(const fullReview of [false,true])test(`linked reminder live reads fail close
   const invoice=async(provider='zoho_books')=>{
    // Keep each case's target inside the scheduler's bounded batch even after
    // earlier cases deliberately quarantine their own claims. Fixture-only cleanup.
-   await db.query("update invoices set followup_state='paused',next_follow_up_at=null where workspace_id=$1",[workspaceId]);
+   await db.query("update invoices set followup_state='paused',next_follow_up_at=null where workspace_id=$1 and deleted_at is null",[workspaceId]);
+   // A refused confirmation remains pending until explicitly canceled. Isolate
+   // later cases from that separate pending-action guard.
+   await db.query('update whatsapp_pending_actions set consumed_at=now() where workspace_id=$1 and consumed_at is null',[workspaceId]);
    const remoteId='remote-'+randomUUID();return (await db.query(`insert into invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,status,external_provider,external_invoice_id,metadata)
    values($1,$2,$3,current_date-2,current_date-1,'USD',125,'sent',$4,$5,$6) returning *`,[workspaceId,customerId,'EXT-'+randomUUID().slice(0,6),provider==='tally'?null:provider,provider?remoteId:null,{invoice_direction:'receivable',...(provider?{accounting_provider:provider,bookkeeping_record_id:remoteId}:{})}])).rows[0];};
   let seq=0;
@@ -85,9 +99,81 @@ for(const fullReview of [false,true])test(`linked reminder live reads fail close
   };
   const resetRemote=()=>{remoteStatus='sent';qboStatus=undefined;remoteBalance=125;remoteTotal=125;unreachable=false;stalled=false;missingCredentials=false;connection.status='connected';};
   const check=async i=>(await db.query('select cetld_core_check_local_reminder_payment($1,$2,$3) value',[ownerId,workspaceId,i.id])).rows[0].value;
-  await t.test('unlinked behavior unchanged, no provider reads',async()=>{
-   const i=await invoice(null),before=reads;assert.equal((await prepare(i)).ok,true);assert.equal((await confirm()).completed,true);
+  for(const status of ['sent','overdue'])await t.test(`unlinked ${status} queues, revalidates approval and dispatches without provider reads`,async()=>{
+   let i=await invoice(null);i=(await db.query('update invoices set status=$2 where id=$1 returning *',[i.id,status])).rows[0];
+   const before=reads,count=sends.length;assert.equal((await prepare(i)).ok,true);assert.equal((await confirm()).completed,true);
    const result=await automation.tick(scope);assert.equal(result.results[0]?.status,'sent',JSON.stringify({result,errors:f.errors}));assert.equal(reads,before);
+   assert.equal(sends.length,count+1);
+   const saved=(await db.query('select * from invoices where id=$1',[i.id])).rows[0];
+   assert.equal(saved.status,status);assert.equal(saved.reminder_count,1);assert.ok(new Date(saved.next_follow_up_at)>new Date());
+  });
+  const mutate=async(i,scenario)=>{
+   if(scenario==='deleted'){
+    await db.exec('reset role;begin');
+    await db.query('insert into app.invoice_lifecycle_write_context(backend_pid,transaction_id,invoice_id) values(pg_backend_pid(),txid_current(),$1)',[i.id]);
+    await db.query('update invoices set deleted_at=now(),deleted_by=$2 where id=$1',[i.id,ownerId]);
+    await db.exec('delete from app.invoice_lifecycle_write_context;commit;set role service_role');
+   }else if(scenario==='non-receivable')await db.query("update invoices set metadata=jsonb_set(metadata,'{invoice_direction}','\"payable\"') where id=$1",[i.id]);
+   else if(scenario==='zero')await db.query('update invoices set total_amount=0 where id=$1',[i.id]);
+   else if(scenario==='fully-paid')await db.query('update invoices set amount_paid=total_amount where id=$1',[i.id]);
+   else await db.query('update invoices set status=$2 where id=$1',[i.id,scenario]);
+  };
+  for(const scenario of ['paid','void','cancelled','draft','deleted','non-receivable','zero','fully-paid'])
+   for(const stage of ['queue','approval','dispatch'])await t.test(`unlinked overdue still refuses ${scenario} at ${stage}`,async()=>{
+    let i=await invoice(null);i=(await db.query("update invoices set status='overdue' where id=$1 returning *",[i.id])).rows[0];
+    const before=reads,count=sends.length;
+    if(stage==='queue'){
+     await mutate(i,scenario);assert.notEqual((await prepare(i)).ok,true);
+    }else if(stage==='approval'){
+     assert.equal((await prepare(i)).ok,true);await mutate(i,scenario);assert.notEqual((await confirm()).completed,true);
+    }else{
+     assert.equal((await prepare(i)).ok,true);assert.equal((await confirm()).completed,true);
+     f.intercept(async url=>{if(url.pathname.endsWith('/rpc/cetld_core_authorize_first_party_reminder'))await mutate(i,scenario);});
+     try{await automation.tick(scope);}finally{f.intercept(null);}
+    }
+    assert.equal(sends.length,count);assert.equal(reads,before);
+   });
+  await t.test('a sent invoice edited overdue needs fresh approval, then signed receipts continue and can pause its chain',async()=>{
+   const i=await invoice(null),before=reads;
+   assert.equal((await prepare(i)).ok,true);assert.equal((await confirm()).completed,true);
+   assert.equal((await automation.tick(scope)).results.find(r=>r.invoiceId===i.id)?.status,'sent');
+   await db.query("update invoices set status='overdue' where id=$1",[i.id]);
+   const edited=(await db.query('select * from invoices where id=$1',[i.id])).rows[0];
+   assert.equal(edited.next_follow_up_at,null);assert.equal(edited.followup_state,'draft');
+   assert.equal(edited.metadata.approved_reminder_text,undefined);
+   const receipt=async(token,messageId,status)=>(await supabase.rpc('cetld_core_record_first_party_receipt',{
+    p_callback_token:token,p_waba_id:env.WHATSAPP_WABA_ID,p_phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID,
+    p_phone:recipient,p_message_id:messageId,p_status:status})).data;
+   // A delayed receipt for the pre-edit snapshot must not restore the old approval.
+   const previous=sends.at(-1);
+   assert.equal((await receipt(previous.biz_opaque_callback_data,'wamid.external.'+sends.length,'delivered')).ok,true);
+   assert.deepEqual((await db.query('select * from invoices where id=$1',[i.id])).rows[0],edited);
+   assert.equal((await prepare(edited)).ok,true);assert.equal((await confirm()).completed,true);
+   // Reserve/send without the engine's count write, so the signed receipt must
+   // exercise its own continuation predicate rather than reuse engine cadence.
+   const [claim]=await store.claimDueFollowups({...scope,now:new Date().toISOString(),limit:1});
+   assert.equal(claim.invoice_id??claim.invoiceId,i.id);
+   const settings=await store.getWorkspacePreferences(scope);
+   assert.equal((await store.authorizeDelivery({...scope,claimId:claim.id,preferencesVersion:settings.updated_at})).authorized,true);
+   const provider=createApprovedReminderProvider({env,supabase,store,...scope,fetchImpl:f.fetchImpl});
+   const input={workspaceId,invoiceId:i.id,customerId,to:recipient,idempotencyKey:`reminder:${workspaceId}:${claim.id}`};
+   input.body=(await provider.prepareReminder(input)).body;
+   const sent=await provider.sendReminder(input);assert.equal(sent.status,'accepted',JSON.stringify({sent,errors:f.errors}));
+   assert.equal((await receipt(sent.callbackToken,sent.providerMessageId,'delivered')).ok,true);
+   const continued=(await db.query('select * from invoices where id=$1',[i.id])).rows[0];
+   assert.equal(continued.status,'overdue');assert.equal(continued.reminder_count,2);
+   assert.ok(new Date(continued.next_follow_up_at)>new Date(),'signed overdue receipt advances cadence');
+   // A late signed failure applies to the exact reconciled overdue dispatch.
+   assert.equal((await receipt(sent.callbackToken,sent.providerMessageId,'failed')).ok,true);
+   // Delivered is conclusive and wins over failure. Test the failure branch on
+   // a separate accepted dispatch before any delivered/read receipt.
+   let failure=await invoice(null);failure=(await db.query("update invoices set status='overdue' where id=$1 returning *",[failure.id])).rows[0];
+   assert.equal((await prepare(failure)).ok,true);assert.equal((await confirm()).completed,true);
+   assert.equal((await automation.tick(scope)).results.find(r=>r.invoiceId===failure.id)?.status,'sent');
+   const last=sends.at(-1);assert.equal((await receipt(last.biz_opaque_callback_data,'wamid.external.'+sends.length,'failed')).ok,true);
+   const paused=(await db.query('select * from invoices where id=$1',[failure.id])).rows[0];
+   assert.equal(paused.status,'overdue');assert.equal(paused.followup_state,'paused');assert.equal(paused.next_follow_up_at,null);
+   assert.equal(reads,before);
   });
   for(const localStatus of ['sent','overdue'])for(const remoteState of ['sent','overdue','partially_paid'])
    await t.test(`Zoho concrete ${remoteState} with local ${localStatus} queues and dispatches`,async()=>{
@@ -113,9 +199,9 @@ for(const fullReview of [false,true])test(`linked reminder live reads fail close
     try{await automation.tick(scope);}finally{f.intercept(null);}
     assert.equal(sends.length,count);assert.equal(reads,before+2);
    });
-  await t.test('local draft refuses even with a payable provider; unlinked overdue stays unchanged',async()=>{
+  await t.test('terminal and draft statuses refuse linked and unlinked queue and dispatch',async()=>{
    resetRemote();
-   for(const [provider,status] of [['zoho_books','draft'],['zoho_books','paid'],['zoho_books','void'],['zoho_books','cancelled'],[null,'overdue']]){
+   for(const provider of ['zoho_books',null])for(const status of ['draft','paid','void','cancelled']){
     let i=await invoice(provider);i=(await db.query('update invoices set status=$2 where id=$1 returning *',[i.id,status])).rows[0];
     const before=reads;assert.equal((await prepare(i)).code,'ineligible_invoice');assert.equal(reads,before);
     await db.exec('reset role');await approveReviewedReminder(db,{workspaceId,invoiceId:i.id});await db.exec('set role service_role');

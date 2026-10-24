@@ -26,7 +26,7 @@ const MESSAGES={
   unbound:'The current customer phone does not match the reminder consent. Verify the customer and record consent for their current number.',
   suppressed:'This customer has stopped WhatsApp reminders. Ask them to opt back in before requesting another reminder.',
   globally_suppressed:'This phone has stopped WhatsApp messages. Ask the recipient to opt back in before requesting another reminder.',
-  ineligible_invoice:'Reminders require a sent, unpaid receivable invoice with a due date. Review the invoice status, balance and due date first.',
+  ineligible_invoice:'Reminders require a sent or overdue, unpaid receivable invoice with a due date. Review the invoice status, balance and due date first.',
   unresolved_exception:'Resolve the invoice follow-up exception before approving a reminder.',
   business_name_required:"Save your business name first - tell me the name and I'll store it.",
   reminder_limit:'This invoice has reached the maximum number of reminders. Review the reminder limit in Settings before requesting another.',
