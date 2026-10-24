@@ -38,7 +38,7 @@ test('four approved templates use en, three facts and Settings tone/button varia
   assert.throws(()=>buildReminderTemplate(REMINDER_TEMPLATES[0],['x','y','{{injected}}']),/Invalid/);
 });
 
-async function setup(preferences={},{approve=true}={}){
+async function setup(preferences={},{approve=true,invoiceStatus='sent'}={}){
   const graph=[];let uncertain=false;
   const f=await createOfflineSqlNetwork({externalFetch:async(url,options)=>{
     assert.equal(url.origin,'https://graph.facebook.com');assert.equal(options.method,'POST');
@@ -48,7 +48,9 @@ async function setup(preferences={},{approve=true}={}){
   try{await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060000_customer_reminder_tone.sql',import.meta.url),'utf8'));await f.db.exec(await readFile(new URL('../supabase/migrations/20261005070000_approved_whatsapp_reminders.sql',import.meta.url),'utf8'));await f.db.exec(await readFile(new URL('../supabase/migrations/20261018060100_invoice_details_templates.sql',import.meta.url),'utf8'));
     await applyNoFooterMigration(f.db,{approve});
     await f.db.exec(await readFile(new URL('../supabase/migrations/20261020105604_invoice_reminder_full_customer_name.sql',import.meta.url),'utf8'));
-    await f.db.exec(await readFile(new URL('../supabase/migrations/20261022221930_default_payment_reminder_draft.sql',import.meta.url),'utf8'));}catch(error){await f.close();throw error;}
+    await f.db.exec(await readFile(new URL('../supabase/migrations/20261022221930_default_payment_reminder_draft.sql',import.meta.url),'utf8'));
+    for(const file of ['20261024094013_fresh_external_reminder_reads.sql','20261024124500_unlinked_overdue_reminder_eligibility.sql'])
+      await f.db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));}catch(error){await f.close();throw error;}
   const ownerId=randomUUID(),foreignOwner=randomUUID();
   await f.db.query('insert into auth.users(id) values($1),($2)',[ownerId,foreignOwner]);
   async function workspace(actor){await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${actor}';set role authenticated`);
@@ -57,7 +59,7 @@ async function setup(preferences={},{approve=true}={}){
   await f.db.query("update workspace_settings set business_name='Fixture studio',default_timezone='UTC',follow_up_preferences=$2 where workspace_id=$1",[workspaceId,JSON.stringify({tone:'professional',firstReminderDays:0,cadenceDays:1,maxReminders:3,contactStart:'00:00',contactEnd:'23:59',allowedWeekdays:[0,1,2,3,4,5,6],...preferences})]);
   const customerId=(await f.db.query("insert into customers(workspace_id,name,phone) values($1,'Fixture customer',$2) returning id",[workspaceId,phone])).rows[0].id;
   await f.db.query("insert into whatsapp_consents(workspace_id,customer_id,phone,source,consent_text_version,categories) values($1,$2,$3,'inbound_message','fixture-v1',array['invoice_updates'])",[workspaceId,customerId,phone]);
-  const invoiceId=(await f.db.query("insert into invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,status,metadata) values($1,$2,'INV-001',current_date-2,current_date-1,'USD',125,'sent','{\"invoice_direction\":\"receivable\"}') returning id",[workspaceId,customerId])).rows[0].id;
+  const invoiceId=(await f.db.query("insert into invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,status,metadata) values($1,$2,'INV-001',current_date-2,current_date-1,'USD',125,$3,'{\"invoice_direction\":\"receivable\"}') returning id",[workspaceId,customerId,invoiceStatus])).rows[0].id;
   await f.db.query("update invoices set metadata=metadata||jsonb_build_object('followup_state','approved','approved_reminder_text',E'Legacy reviewed draft\n\nFixture studio','approved_preferences_updated_at',(select updated_at from workspace_settings where workspace_id=$2)),next_follow_up_at=now()-interval '1 minute' where id=$1",[invoiceId,workspaceId]);
   await approveReviewedReminder(f.db,{workspaceId,invoiceId});
   const scope={ownerId,workspaceId,invoiceId};
@@ -72,6 +74,44 @@ async function setup(preferences={},{approve=true}={}){
   }
   return {...f,scope,foreignOwner,foreignWs,customerId,configured,store,runtime,graph,callback,uncertain(){uncertain=true}};
 }
+
+test('unlinked overdue invoices dispatch through the approved JS provider and final SQL gate',async()=>{
+  const f=await setup({},{invoiceStatus:'overdue'});try{
+    const invoice=await f.store.getInvoice(f.scope);
+    assert.equal(invoice.status,'overdue');assert.equal(invoice.external_provider,null);assert.equal(invoice.external_invoice_id,null);
+    const result=await f.runtime.tick(f.scope);
+    assert.equal(result.results[0]?.status,'sent',JSON.stringify({result,errors:f.errors}));assert.equal(f.graph.length,1);
+    const saved=await f.store.getInvoice(f.scope);
+    assert.equal(saved.status,'overdue');assert.equal(saved.reminder_count,1);
+    assert.ok(new Date(saved.next_follow_up_at)>new Date(),'overdue invoices retain the follow-up chain');
+  }finally{await f.close();}
+});
+
+test('approved JS provider still refuses ineligible invoice facts before final authorization',async()=>{
+  const f=await setup({},{invoiceStatus:'overdue'});try{
+    const [claim]=await f.store.claimDueFollowups({...f.scope,now:new Date().toISOString(),limit:1});
+    const settings=await f.store.getWorkspacePreferences(f.scope);
+    assert.equal((await f.store.authorizeDelivery({...f.scope,claimId:claim.id,preferencesVersion:settings.updated_at})).authorized,true);
+    const provider=createApprovedReminderProvider({env:f.configured,supabase:f.supabase,store:f.store,...f.scope,fetchImpl:f.fetchImpl});
+    const input={...f.scope,customerId:f.customerId,to:phone,idempotencyKey:`reminder:${f.scope.workspaceId}:${claim.id}`};
+    input.body=(await provider.prepareReminder(input)).body;
+    const invoice=await f.store.getInvoice(f.scope);
+    for(const [label,patch] of [
+      ...['paid','void','cancelled','draft'].map(status=>[status,{status}]),
+      ['deleted',{deleted_at:new Date().toISOString()}],
+      ['non-receivable',{metadata:{...invoice.metadata,invoice_direction:'payable'}}],
+      ['zero',{total_amount:0,amount_paid:0}],
+      ['fully paid',{amount_paid:invoice.total_amount}],
+    ]){
+      const store=Object.create(f.store);store.getInvoice=async()=>({...invoice,...patch});
+      const guarded=createApprovedReminderProvider({env:f.configured,supabase:f.supabase,store,...f.scope,fetchImpl:f.fetchImpl});
+      const before=f.requests.length;
+      assert.deepEqual(await guarded.sendReminder(input),{status:'blocked',reason:'eligibility_unavailable'},label);
+      assert.ok(!f.requests.slice(before).some(r=>new URL(r.url).pathname.includes('/rpc/cetld_core_authorize_first_party_reminder')),label);
+    }
+    assert.equal(f.graph.length,0);
+  }finally{await f.close();}
+});
 
 test('real runtime + new forward SQL + signed webhook persist one five-parameter send and delivered receipt',async()=>{
   const f=await setup();try{

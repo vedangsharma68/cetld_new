@@ -5,8 +5,9 @@ import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 
 const migration='20261019090000_business_name_reminder_reapproval.sql';
-test('rename migration is repeatable without backfill; count and review transition are tenant scoped',async()=>{
- const f=await createOfflineSqlNetwork({excludeMigrations:[migration]});const {db}=f;
+const overdueMigration='20261024124500_unlinked_overdue_reminder_eligibility.sql';
+test('rename migration includes overdue approvals without backfill; count and review transition stay tenant scoped',async()=>{
+ const f=await createOfflineSqlNetwork({excludeMigrations:[migration,overdueMigration]});const {db}=f;
  try{
   const owner=randomUUID(),stranger=randomUUID();await db.query('insert into auth.users(id) values($1),($2)',[owner,stranger]);
   async function workspace(user,name){
@@ -26,16 +27,20 @@ test('rename migration is repeatable without backfill; count and review transiti
     await db.exec('delete from app.invoice_lifecycle_write_context;commit');
    }return row.id;
   }
-  const affected=[await invoice('QA-PAUSED'),await invoice('QA-APPROVED',{state:'approved',text:'Reviewed\n\nQA Studio'})];
+  const affected=[await invoice('QA-PAUSED'),await invoice('QA-APPROVED',{state:'approved',text:'Reviewed\n\nQA Studio'}),
+   await invoice('QA-OVERDUE-PAUSED',{status:'overdue'}),await invoice('QA-OVERDUE-APPROVED',{status:'overdue',state:'approved',text:'Reviewed\n\nQA Studio'})];
   const untouched=[await invoice('QA-EMPTY',{text:''}),await invoice('QA-WHITESPACE',{text:'   '}),await invoice('QA-NONE',{text:null}),
+   await invoice('QA-OVERDUE-EMPTY',{status:'overdue',text:''}),await invoice('QA-OVERDUE-DELETED',{status:'overdue',deleted:true}),
    await invoice('QA-DELETED',{deleted:true}),await invoice('QA-DRAFT',{status:'draft'}),await invoice('QA-PAID',{status:'paid'}),await invoice('QA-VOID',{status:'void'}),
-   await invoice('QA-FOREIGN',{workspaceId:foreign})];
+   await invoice('QA-CANCELLED',{status:'cancelled'}),await invoice('QA-FOREIGN',{workspaceId:foreign}),await invoice('QA-OVERDUE-FOREIGN',{workspaceId:foreign,status:'overdue'})];
   async function all(){return (await db.query('select * from invoices order by id')).rows}
   const before=await all(),sql=await readFile(new URL(`../supabase/migrations/${migration}`,import.meta.url),'utf8');
   await db.exec(sql);await db.exec(sql);assert.deepEqual(await all(),before);
+  const overdueSql=await readFile(new URL(`../supabase/migrations/${overdueMigration}`,import.meta.url),'utf8');
+  await db.exec(overdueSql);await db.exec(overdueSql);assert.deepEqual(await all(),before);
   await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${owner}';set role authenticated`);
   async function count(id){return (await db.query('select public.business_name_reminder_pause_count($1) n',[id])).rows[0].n}
-  assert.equal(await count(ws),2);assert.equal(await count(foreign),0);
+  assert.equal(await count(ws),affected.length);assert.equal(await count(foreign),0);
   await db.query("update workspace_settings set business_name='QA Studio' where workspace_id=$1",[ws]);
   assert.deepEqual(await all(),before.filter(row=>row.workspace_id===ws&&!row.deleted_at));
   await db.query("update workspace_settings set business_name='QA Renamed Studio' where workspace_id=$1",[ws]);
