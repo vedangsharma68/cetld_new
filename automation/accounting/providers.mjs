@@ -1,6 +1,7 @@
 import { providerFetch, jsonResponse, formBody } from './http.mjs';
 import { AccountingError, AccountingProviderError } from './errors.mjs';
 import { zohoCustomerPhone } from './zoho-phone.mjs';
+import {isTestInvoice} from '../test-invoice.mjs';
 
 const ZOHO_DEFAULT_ACCOUNTS = 'https://accounts.zoho.com';
 const ZOHO_DEFAULT_API = 'https://www.zohoapis.com';
@@ -279,6 +280,7 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       return invoice;
     },
     async updateInvoice({ token, accountId, invoiceId, invoice }) {
+      if (isTestInvoice(invoice)) throw new AccountingError('INVOICE_NOT_EXPORTABLE', 'Test invoices cannot be exported or linked to accounting');
       if (!accountId || !invoiceId || !invoice || typeof invoice !== 'object') throw new Error('Zoho Books organization, invoice ID and invoice updates are required');
       const payload = {};
       for (const [source, target] of [['dueDate', 'due_date'], ['invoiceDate', 'date'], ['invoiceNumber', 'invoice_number']]) {
@@ -298,6 +300,7 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       return this.fetchInvoice({ token, accountId, invoiceId });
     },
     async createInvoice({ token, accountId, invoice }) {
+      if (isTestInvoice(invoice)) throw new AccountingError('INVOICE_NOT_EXPORTABLE', 'Test invoices cannot be exported or linked to accounting');
       if (invoice?.direction==='payable') throw new AccountingError('ACCOUNTING_INVOICE_DIRECTION_UNSUPPORTED', 'Vendor bills cannot be exported as sales invoices');
       if (!invoice?.clientName?.trim()) throw new AccountingError('INVOICE_CUSTOMER_REQUIRED', 'An invoice customer is required');
       if (!accountId) throw new Error('Zoho Books organization ID is required');

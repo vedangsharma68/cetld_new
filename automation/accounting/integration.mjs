@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { TokenCipher, connectionAad } from './crypto.mjs';
 import { AccountingError, redactedError } from './errors.mjs';
 import { ACCOUNTING_PROVIDERS, createAccountingProviders, zohoRegionFromLocation } from './providers.mjs';
+import {isTestInvoice} from '../test-invoice.mjs';
 
 const DEFAULT_STATE_TTL = 10 * 60 * 1000;
 const EXPIRY_SKEW = 60 * 1000;
@@ -301,6 +302,14 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
   // never to a caller-scoped invoice store. No invoice attempt is dispatched here.
   async function prepareInvoiceSync({ userId, workspaceId, provider, invoice, invoiceId } = {}) {
     if (!invoice || typeof invoice !== 'object' || !invoiceId) throw new AccountingError('ACCOUNTING_INVOICE_REQUIRED', 'A saved invoice is required');
+    async function assertExportable() {
+      if (isTestInvoice(invoice)) throw new AccountingError('INVOICE_NOT_EXPORTABLE', 'Test invoices cannot be exported or linked to accounting');
+      if (store.getInvoiceExportState) {
+        const saved = await store.getInvoiceExportState(workspaceId, invoiceId);
+        if (!saved || saved.workspace_id !== workspaceId || saved.id !== invoiceId || saved.deleted_at || isTestInvoice(saved)) throw new AccountingError('INVOICE_NOT_EXPORTABLE', 'Invoice cannot be exported or linked to accounting');
+      }
+    }
+    await assertExportable();
     if (!provider) {
       for (const candidate of ACCOUNTING_PROVIDERS) {
         const row = await store.getConnection({userId: String(userId), workspaceId: String(workspaceId), provider: candidate});
@@ -321,6 +330,7 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     if (typeof adapter.createInvoice !== 'function') throw new AccountingError('ACCOUNTING_NOT_CONFIGURED', 'Accounting invoice creation is unavailable');
     const authorization = await accessToken(context);
     return async () => {
+      await assertExportable();
       try {
         const {result} = await withProviderRetry(context, ({token, connection}) => adapter.createInvoice({token, accountId: connection.providerAccountId, invoice: {...invoice, localInvoiceId: String(invoiceId)}}), authorization);
         if (!result?.externalId) throw new Error('Missing external invoice ID');
@@ -337,6 +347,7 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
   }
 
   async function updateInvoice({ userId, workspaceId, provider = 'zoho_books', invoiceId, invoice } = {}) {
+    if (isTestInvoice(invoice)) throw new AccountingError('INVOICE_NOT_EXPORTABLE', 'Test invoices cannot be exported or linked to accounting');
     const context = identity({ userId, workspaceId, provider });
     if (provider !== 'zoho_books' || !invoiceId || !invoice || typeof invoice !== 'object' || Array.isArray(invoice)) throw new AccountingError('ACCOUNTING_INVOICE_REQUIRED', 'A Zoho invoice ID and supported field updates are required');
     const connection = await store.getConnection(context);

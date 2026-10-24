@@ -51,8 +51,9 @@ function fixture({attempts=0}={}) {
     }
     const service=headers.get('authorization')===`Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`;
     if(service) {
-      assert.equal(url.pathname,'/rest/v1/invoices','service data access is limited to sync completion');
-      assert.equal(state.row.metadata.bookkeeping_sync_attempts,attempts+1);
+      assert.equal(url.pathname,'/rest/v1/invoices','service data access is limited to saved-row export authorization and sync completion');
+      if(url.searchParams.get('select')==='id,workspace_id,invoice_number,metadata,status,deleted_at') assert.equal(options.method,undefined,'export authorization only reads saved facts');
+      else assert.equal(state.row.metadata.bookkeeping_sync_attempts,attempts+1);
     } else assert.equal(headers.get('authorization'),authorization,'invoice data must retain caller RLS');
     assert.equal(headers.get('apikey'),service?env.SUPABASE_SERVICE_ROLE_KEY:env.SUPABASE_PUBLISHABLE_KEY);
     if(url.pathname==='/auth/v1/user')return Response.json({id:memberId});
@@ -98,6 +99,17 @@ test('drawer connection lookup uses service role and returns only a boolean afte
     const denied=fixture();denied.state.authorized=false;
     assert.equal((await denied.request(action)).code,403);
     assert.equal(denied.state.connectionReads,0);assert.equal(denied.state.providerCalls,0);assert.equal(denied.state.patches.length,0);
+  }
+});
+
+test('manual retry refuses test fixtures before connection lookup, provider work or metadata writes',async()=>{
+  for(const marker of [{test_invoice:true},{source_invoice_number:'CETLD-TEST-fixture-NO-PAYMENT-REQUIRED'}]) {
+    const f=fixture({attempts:5});
+    f.state.row.metadata={...f.state.row.metadata,...marker};
+    const res=await f.request();
+    assert.equal(res.code,409);assert.equal(res.body.error,'INVOICE_NOT_EXPORTABLE');
+    assert.equal(f.state.connectionReads,0);assert.equal(f.state.providerCalls,0);assert.equal(f.state.patches.length,0);
+    assert.equal(f.state.row.metadata.bookkeeping_sync_attempts,5);
   }
 });
 

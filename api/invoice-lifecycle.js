@@ -41,10 +41,12 @@ export default async function handler(req, res) {
   catch (error) {
     return send(res, {ok: false, code: error instanceof APIError ? 'INVALID_REQUEST' : 'INVALID_REQUEST'}, error?.status || 400);
   }
-  if (!['capabilities', 'pendingDelete', 'prepareDelete', 'confirmDelete', 'cancelDelete', 'undoDelete'].includes(body.action)
+  if (!['capabilities', 'pendingDelete', 'prepareDelete', 'confirmDelete', 'cancelDelete', 'undoDelete', 'createTestInvoice'].includes(body.action)
     || typeof body.workspaceId !== 'string' || !UUID_RE.test(body.workspaceId)) {
     return send(res, {ok: false, code: 'INVALID_REQUEST'}, 400);
   }
+  if (body.action === 'createTestInvoice' && (Object.keys(body).some(key => !['action','workspaceId','idempotencyKey'].includes(key))
+    || typeof body.idempotencyKey !== 'string' || !UUID_RE.test(body.idempotencyKey))) return send(res, {ok:false,code:'INVALID_REQUEST'},400);
 
   try {
     const env = {
@@ -54,6 +56,10 @@ export default async function handler(req, res) {
     };
     const store = await authorizeAIWorkspace(req, body.workspaceId, {env});
     if (store.role !== 'owner') return send(res, {ok: false, code: 'OWNER_REQUIRED'}, 403);
+    if (body.action === 'createTestInvoice') {
+      const row = await store.createTestInvoice(body.idempotencyKey);
+      return send(res, {ok:true,invoiceId:row.id,invoiceNumber:row.invoice_number,status:row.status});
+    }
     const rpc = createRestRpcAdapter({
       url: env.SUPABASE_URL,
       apiKey: env.SUPABASE_PUBLISHABLE_KEY,
@@ -91,6 +97,7 @@ export default async function handler(req, res) {
     return send(res, result);
   } catch (error) {
     if (error instanceof APIError) {
+      if (['TEST_RECIPIENT_REQUIRED','TEST_RECIPIENT_AMBIGUOUS'].includes(error.code)) return send(res,{ok:false,code:error.code},409);
       const status = error.status === 401 || error.status === 403 ? 403 : error.status === 400 ? 400 : 503;
       return send(res, {ok: false, code: status === 403 ? 'OWNER_REQUIRED' : status === 400 ? 'INVALID_REQUEST' : 'DATABASE_UNAVAILABLE'}, status);
     }

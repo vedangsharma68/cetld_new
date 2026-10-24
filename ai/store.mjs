@@ -29,6 +29,8 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
         && /\bdeleted_at\b/i.test([upstream?.message,upstream?.details,upstream?.hint].filter(Boolean).join(' '))) {
         throw new APIError(503, 'DELETED_AT_SCHEMA_MISSING');
       }
+      const invoiceGuardCodes = ['TEST_INVOICE_IMMUTABLE', 'TEST_INVOICE_CREATION_REQUIRED', 'INVOICE_NOT_EXPORTABLE', 'TEST_INVOICE_RECIPIENT_LOCKED', 'TEST_RECIPIENT_REQUIRED', 'TEST_RECIPIENT_AMBIGUOUS'];
+      if (['42501','23514','22023','P0001'].includes(upstream?.code) && invoiceGuardCodes.includes(upstream?.message)) throw new APIError(409, upstream.message);
       throw new APIError(res.status === 401 ? 401 : res.status === 403 ? 403 : 503, 'DATABASE_REQUEST_FAILED');
     }
     return readJSON(res);
@@ -44,6 +46,18 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
   }
   const store = {
     workspaceId, userId, role,
+    async createTestInvoice(requestId) {
+      if (role !== 'owner') throw new APIError(403, 'OWNER_REQUIRED');
+      const result = await request('/rest/v1/rpc/create_test_invoice', {method:'POST', body:JSON.stringify({p_workspace_id:workspaceId,p_request_id:uuid(requestId)})});
+      const rows = checkRows(Array.isArray(result) ? result : [result]);
+      const row = rows[0];
+      if (rows.length !== 1 || !row?.id || row.metadata?.test_invoice !== true
+        || !row.metadata?.source_invoice_number?.startsWith('CETLD-TEST-')
+        || !row.invoice_number?.startsWith('CETLD-TEST-') || !row.invoice_number.includes('NO-PAYMENT-REQUIRED')
+        || row.currency !== 'INR' || Number(row.total_amount) !== 1
+        || row.external_provider || row.external_invoice_id || row.metadata?.bookkeeping_record_id) throw new APIError(503, 'TEST_INVOICE_NOT_SAVED');
+      return row;
+    },
     ownerConversation: createOwnerConversation({workspaceId,ownerId:userId,rpc:async(name,args)=>({data:await request(`/rest/v1/rpc/${name}`,{method:'POST',body:JSON.stringify(args)})})}),
     async ownerAssistantRPC(name,args={}) {
       if(role!=='owner'||!['owner_assistant_preview_reminder','owner_assistant_reminder_window','owner_assistant_reminder_status','owner_assistant_resolve_token','owner_assistant_claim_token'].includes(name))throw new APIError(403,'OWNER_REQUIRED');

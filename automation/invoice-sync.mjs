@@ -1,5 +1,6 @@
 import {providerDiagnostics} from './accounting/errors.mjs';
 import {APIError} from '../ai/http.mjs';
+import {isTestInvoice} from './test-invoice.mjs';
 export function deadlineFetch(fetchImpl, timeoutMs) {
   const deadline = AbortSignal.timeout(timeoutMs);
   return (url, options={}) => fetchImpl(url,{...options,signal:options.signal?AbortSignal.any([deadline,options.signal]):deadline});
@@ -17,7 +18,7 @@ export function assertInvoiceSyncScope(store, row) {
 }
 export function syncEligibility(row, now = Date.now()) {
   const m = row.metadata || {};
-  if (row.deleted_at || ['void','cancelled'].includes(row.status) || m.invoice_direction === 'payable') return 'excluded';
+  if (isTestInvoice(row) || row.deleted_at || ['void','cancelled'].includes(row.status) || m.invoice_direction === 'payable') return 'excluded';
   if (row.external_invoice_id || m.bookkeeping_record_id || m.bookkeeping_sync_status === 'synced') return 'synced';
   if (Date.parse(m.bookkeeping_sync_next_at) > now) return 'waiting';
   if (attemptCount(m) >= MAX_SYNC_ATTEMPTS) return 'exhausted';
@@ -25,6 +26,7 @@ export function syncEligibility(row, now = Date.now()) {
 }
 export async function syncInvoiceRow({store, row, invoice, accounting, clock = () => new Date(), manualRetry = false}) {
   assertInvoiceSyncScope(store,row);
+  if (isTestInvoice(row) || isTestInvoice(invoice)) throw new APIError(409,'INVOICE_NOT_EXPORTABLE');
   const now = clock().getTime();
   let eligibility = invoice.direction==='payable' ? 'excluded' : syncEligibility(row, now);
   if (eligibility === 'exhausted' && manualRetry) eligibility = 'ready';
@@ -66,6 +68,7 @@ export async function syncInvoiceRow({store, row, invoice, accounting, clock = (
     return current;
   }
   function validateCurrent(current) {
+    if (isTestInvoice(current)) throw new APIError(409,'INVOICE_NOT_EXPORTABLE');
     if (!invoice.clientName?.trim()) throw new APIError(422,'INVOICE_CUSTOMER_REQUIRED');
     if (['void','cancelled'].includes(current.status) || current.metadata?.invoice_direction==='payable') throw new APIError(409,'INVOICE_NOT_EXPORTABLE');
     if (['customer_id','invoice_number','issue_date','due_date','currency'].some(key=>String(current[key]??'')!==String(claimed[key]??'')) || Number(current.total_amount)!==Number(claimed.total_amount)) throw new APIError(409,'INVOICE_CHANGED_DURING_SYNC');
