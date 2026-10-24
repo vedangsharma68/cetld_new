@@ -28,7 +28,7 @@ function fixture(){
     async findAssistantInvoice(){return persisted;},async findCustomer(){return {id:'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'};},
     async createAssistantInvoice({invoice,reviewNumberAudit}){saved++;if(omitAudit)reviewNumberAudit=null;persisted={id:'ffffffff-ffff-4fff-8fff-fffffffffff2',workspace_id:scope.workspaceId,
       invoice_number:invoice.invoiceNumber==='AUTO'?'INV-2026-0042':invoice.invoiceNumber,issue_date:invoice.invoiceDate,due_date:invoice.dueDate,currency:invoice.currency,total_amount:invoice.total,
-      amount_paid:0,status:'draft',metadata:{...(reviewNumberAudit?{printed_invoice_number:reviewNumberAudit.originalExtractedNumber,invoice_number_override_audit:clone(reviewNumberAudit)}:{}),assistant_idempotency_key:invoice.idempotencyKey,line_items:clone(invoice.lineItems),subtotal:invoice.subtotal,tax:invoice.tax}};return persisted;},
+      amount_paid:0,status:'draft',metadata:{client_name:invoice.clientName,...(reviewNumberAudit?{printed_invoice_number:reviewNumberAudit.originalExtractedNumber,invoice_number_override_audit:clone(reviewNumberAudit)}:{}),assistant_idempotency_key:invoice.idempotencyKey,line_items:clone(invoice.lineItems),subtotal:invoice.subtotal,tax:invoice.tax}};return persisted;},
     async updateAssistantInvoiceMetadata(_id,metadata){persisted.metadata={...persisted.metadata,...metadata};return persisted;},
     async keepInvoiceFile(input){files++;assert.deepEqual(input.bytes,sourceBytes);},
   };
@@ -63,8 +63,8 @@ test('a photo alone is analysis only and each explicit later save reuses its ret
     assert.equal(f.current.action.stage,'proposal');
     const original=clone(f.current.action.invoice);
     const saved=await runOwnerAgent({tools:f.tools(message,'fixture-explicit-save'),message,clock,provider});
-    assert.match(saved.answer,/Saved invoice INV-17 for Rob & Joe Traders, USD 662.75/);
-    assert.equal(saved.boundedReviewDecisionReply,true);assert.equal(f.saved,1);assert.equal(f.files,1);assert.equal(f.extractions,1);
+    assert.match(saved.answer,/Saved invoice INV-17.\nCustomer: Rob & Joe Traders\nTotal: USD 662.75/);
+    assert.equal(saved.deterministicWriteReply,true);assert.equal(f.saved,1);assert.equal(f.files,1);assert.equal(f.extractions,1);
     assert.equal(f.persisted.total_amount,original.total);assert.equal(f.persisted.currency,original.currency);
     assert.deepEqual(f.persisted.metadata.line_items,original.lineItems);assert.equal(f.current.action.stage,'saved');
   }

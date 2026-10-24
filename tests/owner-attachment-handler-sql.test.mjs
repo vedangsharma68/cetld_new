@@ -40,12 +40,12 @@ async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseRep
     },
     authorize:input=>{assert.ok(input?.workspaceId&&input?.ownerId&&input?.customerId&&input?.phone);
       return authorizeOwnerPhone({supabase:f.supabase,...input});},
-    toolsFactory:options=>createOwnerWorkspaceTools({...options,
+    toolsFactory:options=>{const tools=createOwnerWorkspaceTools({...options,
       attachmentIngestFactory:input=>createWhatsAppBoundMessageHandler({...input,extract:async request=>{
         extractions++;
         return extractionWire?extractInvoice({...request,imageExtractor:async()=>null,
           provider:{async generateStructured(call){return {data:call.validate({...structuredClone(extractionWire),...(call.schema.properties.imageContent?{imageContent:'single_invoice'}:{})}),model:'gemini-3.5-flash-lite'};}}}):structuredClone(extracted);
-      }})}),
+      }})});return {...tools,async execute(...args){const result=await tools.execute(...args);results.push(result);return result;}};},
     providerFactory:()=>nativeWire?new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,
       cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,logger:{info(){},warn(){},error(){}},
       fetchImpl:async(_url,input)=>{
@@ -58,7 +58,7 @@ async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseRep
           const confirming=wire.messages.some(item=>item.role==='user'&&item.content==='yes');
           message={content:'',tool_calls:[{id:'stale-context-log',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(confirming?{operation:'confirm'}:{operation:'create',table:'business_records',values:{record_type:'log',name:'Deleted duplicate invoice INV-OLD'}})}}]};
         }else{
-          const value=JSON.parse(result.content);results.push(value);
+          const value=JSON.parse(result.content);
           message={content:value.completed?`Saved invoice ${value.review?.invoice?.invoiceNumber||value.invoiceNumber} for Fixture customer, USD 6190.`:'The invoice could not be logged due to temporary unavailability.'};
         }
         return new Response(JSON.stringify({choices:[{message,finish_reason:message.tool_calls?'tool_calls':'stop'}]}),{status:200,headers:{'content-type':'application/json'}});
@@ -69,13 +69,22 @@ async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseRep
         return {model:'fixture',toolCalls:[{id:'fixture-save',type:'function',function:{name:'workspaceData',
           arguments:JSON.stringify({operation:'create',table:'invoices',values:{total_amount:1}})}}]};
       }
-      const value=JSON.parse(result.content);results.push(value);
+      const value=JSON.parse(result.content);
       return {model:'fixture',content:value.completed?`Saved invoice ${value.review.invoice.invoiceNumber} for Fixture customer, USD 6190.`:'I could not log the invoice because the processing failed.'};
     }})});
   async function turn(id,mimeType='image/jpeg'){
     const bytes=extractionWire?Buffer.from([255,216,255,0,0,0]):Buffer.from('isolated invoice source '+mimeType);
-    await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'123456',$2,$3,$4,'processing') on conflict(provider_message_id) do nothing",[id,phone,mimeType==='application/pdf'?'document':'image',caption]);
-    return {reply:await handler({...scope,message:caption,messageId:id,media:{bytes,mimeType,fileName:mimeType==='application/pdf'?'fixture.pdf':'fixture.jpg'}}),bytes};
+    await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status,media_ref) values($1,'123456',$2,$3,$4,'processing',$1) on conflict(provider_message_id) do nothing",[id,phone,mimeType==='application/pdf'?'document':'image',caption]);
+    await f.db.query('insert into whatsapp_inbound_media(provider_message_id,media_id,mime_type,bytes,size_bytes) values($1,$1,$2,$3,$4) on conflict(provider_message_id) do nothing',[id,mimeType,bytes,bytes.length]);
+    const before=(await f.db.query('select count(*)::int n from invoices')).rows[0].n;
+    let reply=await handler({...scope,message:caption,messageId:id,media:{bytes,mimeType,fileName:mimeType==='application/pdf'?'fixture.pdf':'fixture.jpg'}});
+    const review=await createWhatsAppPendingActionStore({supabase:f.supabase}).loadInvoiceReview(scope);
+    if(review?.action?.stage==='proposal'&&review.action.sourceMessageId===id){
+      assert.match(reply.answer,/Reply yes/);
+      assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,before,'caption cannot save');
+      reply=await textTurn(id+'-confirm','yes');
+    }
+    return {reply,bytes};
   }
   async function textTurn(id,message){
     await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'123456',$2,'text',$3,'processing')",[id,phone,message]);
@@ -236,7 +245,7 @@ for(const mimeType of ['image/jpeg','application/pdf'])test(`real owner handler 
   const f=await fixture();try{
     const first=await f.turn('fixture-attachment',mimeType);
     assert.match(first.reply.answer,/Saved invoice INV-2026-0720/,JSON.stringify({reply:first.reply,errors:f.errors,results:f.results}));
-    assert.equal(f.results[0].completed,true);assert.equal(f.results[0].invoiceFileAttached,true);
+    assert.equal(f.results.find(result=>result.completed)?.completed,true);assert.equal(f.results.find(result=>result.completed)?.invoiceFileAttached,true);
     const rows=(await f.db.query('select * from invoices where workspace_id=$1',[f.scope.workspaceId])).rows;
     assert.equal(rows.length,1);assert.equal(Number(rows[0].total_amount),6190);assert.equal(rows[0].currency,'USD');
     assert.equal(rows[0].metadata.printed_invoice_number,'INV-2026-0720');
@@ -271,7 +280,7 @@ test('owner attachment cannot create or read invoices for a forged conversation 
 test('committed invoice with lost insert acknowledgement is read back and completes once',async()=>{
   const f=await fixture({loseInsertAcknowledgement:true});try{
     const {reply}=await f.turn('interrupted-insert');
-    assert.match(reply.answer,/Saved invoice/);assert.equal(f.results[0].completed,true);
+    assert.match(reply.answer,/Saved invoice/);assert.equal(f.results.find(result=>result.completed)?.completed,true);
     assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,1);
     assert.equal((await f.db.query('select count(*)::int n from invoice_files')).rows[0].n,1);
     assert.equal(f.extractions,1);

@@ -5,6 +5,7 @@ import {createOfflineSqlNetwork} from './offline-sql-network.mjs';
 import {applyNoFooterMigration} from './no-footer-reminders.mjs';
 import {createWhatsAppInvoiceStore} from '../../automation/whatsapp/invoice-store.mjs';
 import {createWhatsAppPendingActionStore} from '../../automation/whatsapp/pending-actions.mjs';
+import {ownerWriteConfirmation} from '../../automation/whatsapp/owner-write-confirmation.mjs';
 import {createOwnerMessageHandler} from '../../automation/whatsapp/owner-handler.mjs';
 import {createOwnerWorkspaceTools} from '../../automation/whatsapp/owner-workspace-tools.mjs';
 import {createWhatsAppBoundMessageHandler} from '../../automation/whatsapp/assistant-handler.mjs';
@@ -44,10 +45,14 @@ export async function verifyOwnerContactRecovery(){
       assert.equal(result.code,'missing_contact');
       return {answer:"I couldn't send a reminder to John Smith."};
     }
+    if(message==='yes'){
+      const result=await tools.execute('workspaceData',{operation:'confirm'});
+      return {answer:ownerWriteConfirmation(result)};
+    }
     if(message==='log this invoice'){
       const result=await tools.execute('workspaceData',{operation:'saveAttachment'});
-      assert.equal(result.completed,true,JSON.stringify({result,errors:f.errors}));
-      return {answer:`Saved invoice ${result.review.invoice.invoiceNumber} for Printed Buyer.`};
+      assert.equal(result.outcome,'review_ready',JSON.stringify({result,errors:f.errors}));
+      return {answer:`Invoice ${result.review.invoice.invoiceNumber} for Printed Buyer: USD 100. Reply yes to save.`};
     }
     if(message==='it is 9818685252'||message==='John Smith number is 12345'){
       const result=await tools.execute('workspaceData',{operation:'update',table:'customers',filters:[{column:'name',operator:'eq',value:'John Smith'}],values:{phone:message==='it is 9818685252'?'9818685252':'12345'}});
@@ -174,7 +179,10 @@ export async function verifyOwnerContactRecovery(){
   // The printed E.164 contact must save before its review is marked complete.
   const printedReply=await turn('log this invoice',{media:{bytes:Buffer.from('isolated printed invoice source'),mimeType:'image/jpeg',fileName:'printed-phone.jpg'}});
   assert.equal(printedReply.plannerFailure,undefined,JSON.stringify({printedReply,errors:f.errors}));
-  assert.match(printedReply.answer,/Saved invoice/);assert.doesNotMatch(printedReply.answer,/couldn.t|could not|country code|WhatsApp number/i);
+  assert.match(printedReply.answer,/Reply yes/i);
+  assert.equal((await db.query("select count(*)::int n from invoices where workspace_id=$1 and metadata->>'client_name'='Printed Buyer'",[workspaceId])).rows[0].n,0);
+  const confirmedPrinted=await turn('yes');
+  assert.match(confirmedPrinted.answer,/Saved invoice/);assert.doesNotMatch(confirmedPrinted.answer,/couldn.t|could not|country code|WhatsApp number/i);
   const printedCustomer=(await db.query("select id,phone from customers where workspace_id=$1 and name='Printed Buyer'",[workspaceId])).rows;
   assert.equal(printedCustomer.length,1);assert.equal(printedCustomer[0].phone,'+14155550244');
   const printedInvoice=(await db.query("select metadata from invoices where workspace_id=$1 and customer_id=$2",[workspaceId,printedCustomer[0].id])).rows;

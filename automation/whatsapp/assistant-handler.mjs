@@ -8,7 +8,6 @@ import {extractInvoice, INVOICE_IMAGE_REPLIES} from '../../ai/extraction.mjs';
 import {createWhatsAppPendingActionStore} from './pending-actions.mjs';
 import {createWhatsAppInvoiceStore} from './invoice-store.mjs';
 import {validateAssistantInvoice} from '../../ai/invoice-ops.mjs';
-import {saveAssistantInvoice} from '../../ai/invoice-ops.mjs';
 import {createHash} from 'node:crypto';
 import {CURRENCY_SUPPORT_MESSAGE, isSupportedCurrency} from '../../currency-contract.mjs';
 import {deriveInvoiceDueDate, inferInvoiceCurrency, todayInKolkata} from '../../ai/invoice-photo-inference.mjs';
@@ -218,33 +217,13 @@ function approvedInvoice(value) {
   return invoice;
 }
 
-function proposalSummary(invoice) {
-  return `Invoice ${invoice.invoiceNumber} for ${invoice.clientName}: ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}${invoice.dueDate ? `, due ${invoice.dueDate}` : ''}. Save it? Reply yes.`;
-}
-
-function money(currency, amount) {
-  return new Intl.NumberFormat('en-US', {style: 'currency', currency, minimumFractionDigits: 2,
-    maximumFractionDigits: 2}).format(amount);
-}
-
-function loggedSummary(invoice, {currencySource, dueDateSource, assumptions, fileKept = true}) {
-  return [`Saved invoice ${invoice.invoiceNumber} for ${invoice.clientName}: ${money(invoice.currency, invoice.total)} ${invoice.currency}, due ${invoice.dueDate || 'not shown'}.`,
-    invoice.printedInvoiceNumber && invoice.printedInvoiceNumber !== invoice.invoiceNumber ? `Printed number: ${invoice.printedInvoiceNumber}.` : null,
-    `Issued ${invoice.invoiceDate}.`,
-    /assumed/i.test(currencySource) && !assumptions.includes(currencySource) ? `${currencySource}.` : null,
-    assumptions.length ? assumptions.join('; ') + '.' : null,
-    fileKept ? null : 'The original file wasn’t kept.',
-    'Send any corrections.'].filter(Boolean).join(' ');
+export function proposalSummary(invoice) {
+  return `Invoice ${invoice.invoiceNumber} for ${invoice.clientName}: ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}, due ${invoice.dueDate || 'not shown'}. Save it? Reply yes.`;
 }
 
 const PHONE_CANDIDATE = /\+[\d\s().-]{7,24}\d/;
 
-function phoneQuestion(client, raw) {
-  return raw ? `I see ${raw} on the invoice. Which country code?`
-    : `What's ${client}'s WhatsApp number? Include the country code, like +91...`;
-}
-
-async function persistContactQuestion(pending, scope, action) {
+export async function persistContactQuestion(pending, scope, action) {
   if (typeof pending.loadPendingActionState !== 'function' || typeof pending.storePendingAction !== 'function') return null;
   const expectedState = await pending.loadPendingActionState(scope);
   return pending.storePendingAction({...scope, action, source: 'whatsapp', expectedState});
@@ -284,7 +263,7 @@ export async function answerDebtorPhone({pending, storeFactory, scope, message, 
 export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl = fetch, supabase,
   providerFactory = options => new AIProvider(options), channelFactory = createWhatsAppAssistantChannel,
   extract = extractInvoice, pendingActionStoreFactory = createWhatsAppPendingActionStore,
-  invoiceStoreFactory = createWhatsAppInvoiceStore, saveInvoice = saveAssistantInvoice,
+  invoiceStoreFactory = createWhatsAppInvoiceStore,
   clock = () => new Date(), logger = console, authorizeScope, audience='customer'} = {}) {
   if (!supabase?.from) throw new TypeError('A server-side Supabase client is required');
 
@@ -426,69 +405,8 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         const proposed = await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone,
           fromStage: 'extracting', action: proposal});
         if (!proposed) return 'A newer photo replaced this review. Nothing from this photo was saved.';
-        const action = {...proposal, stage: 'saving'};
-        const claimed = await pending.transitionInvoiceReview({...proposed, workspaceId, customerId, phone,
-          fromStage: 'proposal', action});
-        if (!claimed) return 'A newer photo replaced this review. Nothing from this photo was saved.';
-        const key = `wa_invoice_${createHash('sha256').update(`${workspaceId}:${customerId}:${phone}:${token.id}`).digest('hex').slice(0, 32)}`;
-        try {
-          const store=await invoiceStoreFactory({supabase,workspaceId,customerId});
-          const save=()=>saveInvoice({store,invoice:validatedInvoice,confirmed:true,idempotencyKey:key,accounting:null,allowMissingDueDate:true});
-          let saved;
-          try{saved=await save();}
-          catch(saveError){
-            // A lost write acknowledgement is reconciled using the same key.
-            // Retry only after reading back the committed invoice.
-            if(!await store.findAssistantInvoice({idempotencyKey:key}))throw saveError;
-            saved=await save();
-          }
-          if (saved?.needsInput || !saved?.invoice) throw new TypeError('invoice save returned no invoice');
-          const savedInvoice = {...saved.invoice, clientName: saved.invoice.clientName || validatedInvoice.clientName,
-            printedInvoiceNumber: validatedInvoice.invoiceNumber === 'AUTO' ? null : validatedInvoice.invoiceNumber};
-          let fileKept = true;
-          try {
-            const invoiceStore = await invoiceStoreFactory({supabase, workspaceId, customerId});
-            await invoiceStore.keepInvoiceFile({invoiceId: savedInvoice.id, bytes: media.bytes,
-              fileName: media.fileName || (media.mimeType === 'application/pdf' ? 'invoice.pdf' : 'invoice-image'),
-              mimeType: media.mimeType, idempotencyKey: `${messageId || token.id}-${media.fileName || 'invoice'}`.replace(/[^a-zA-Z0-9._-]/g, '-')});
-          } catch (fileError) {
-            fileKept = false;
-            logger?.error?.('WhatsApp invoice file persistence failed', {workspaceId, invoiceId: savedInvoice.id,
-              message: String(fileError?.message || '').slice(0, 200)});
-          }
-          let debtorPhone = null;
-          try { debtorPhone = normalizeOwnerPhone(validatedInvoice.clientPhone); } catch {}
-          // Reviewed contact evidence is valid while the scoped review saves.
-          if (debtorPhone) await store.saveDebtorPhone({invoiceId: savedInvoice.id, phone: debtorPhone,
-            assumedConsentAt: clock().toISOString()});
-          const completed = await pending.transitionInvoiceReview({...claimed, workspaceId, customerId, phone,
-            fromStage: 'saving', action: {...action, stage: 'saved', invoice: savedInvoice}});
-          if (!completed) return 'The invoice was saved, but I couldn’t update its status here. Check cetld before retrying.';
-          const summary = loggedSummary(savedInvoice, {currencySource: currencyResult.source, dueDateSource: due.source, assumptions, fileKept});
-          if (!debtorPhone) {
-            const contactAction = {type: 'invoice_debtor_phone', stage: 'awaiting_phone', invoiceId: savedInvoice.id,
-              clientName: validatedInvoice.clientName, clientPhoneRaw: validatedInvoice.clientPhoneRaw || null};
-            await persistContactQuestion(pending, {workspaceId, customerId, phone}, contactAction);
-            return `${summary}\n\n${phoneQuestion(validatedInvoice.clientName, validatedInvoice.clientPhoneRaw)}`;
-          }
-          return summary;
-        } catch (saveError) {
-          let persisted=null,lookupCompleted=false;
-          try{
-            const store=await invoiceStoreFactory({supabase,workspaceId,customerId});
-            persisted=await store.findAssistantInvoice({idempotencyKey:key});lookupCompleted=true;
-          }catch{}
-          if(persisted||!lookupCompleted){
-            logger?.error?.('WhatsApp invoice save requires reconciliation',{workspaceId,code:'SAVE_UNVERIFIED'});
-            return 'The invoice may have saved, but I could not finish verifying it. Check its status before retrying.';
-          }
-          await pending.transitionInvoiceReview({...claimed, workspaceId, customerId, phone,
-            fromStage: 'saving', action: {...action, stage: 'failed',
-              failureCode:saveError?.code==='INVOICE_ALREADY_EXISTS'?'DUPLICATE_INVOICE':'SAVE_FAILED'}}).catch(() => null);
-          logger?.error?.('WhatsApp invoice save failed', {workspaceId, code: String(saveError?.code || saveError?.name || 'SAVE_FAILED').slice(0, 80)});
-          if(saveError?.code==='INVOICE_ALREADY_EXISTS')return 'This invoice is already logged for this customer. No duplicate was created.';
-          return `The invoice wasn’t saved because ${saveError?.code === 'UNSUPPORTED_CURRENCY' ? 'its currency is not supported' : 'cetld could not save it right now'}. Send the photo again to retry.`;
-        }
+        return proposalSummary(validatedInvoice);
+
       } catch (error) {
         const failureCode = Object.hasOwn(INVOICE_IMAGE_REPLIES, error?.code || '') ? error.code
           : extracted ? 'INVOICE_REVIEW_UNAVAILABLE' : 'EXTRACTION_UNAVAILABLE';

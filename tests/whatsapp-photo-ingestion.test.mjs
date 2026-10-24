@@ -8,6 +8,7 @@ import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
+import {proposalSummary} from '../automation/whatsapp/assistant-handler.mjs';
 import {createOwnerWorkspaceTools as createTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 import {AIProvider} from '../ai/provider.mjs';
@@ -99,6 +100,7 @@ async function fixture({bytes=sample,classification='single_invoice',caption='lo
       const {tools,message}=options;
       if(!message)return runOwnerAgent(options);
       const result=await tools.execute('workspaceData',{operation:message?'saveAttachment':'analyzeAttachment'});
+      if(result.outcome==='review_ready'&&result.review?.stage==='proposal')return {answer:proposalSummary(result.review.invoice)};
       return {answer:result.message||(result.analysisOnly?'I read the attached invoice. Nothing was saved.':'Invoice processing finished.')};
     }});
   const runtime=createInboundRuntime({supabase:f.supabase,env,fetchImpl,logger:quiet,onOwnerMessage:owner,
@@ -137,14 +139,16 @@ test('bundled sample JPEG is actually legible to the offline OCR engine',async()
   assert.ok(result.total.confidence<0.75,'offline OCR alone never authorizes a save');
 });
 
-test('sample JPEG traverses signed webhook, media storage, real OCR and owner invoice save',async()=>{
+test('sample JPEG traverses signed webhook, media storage and real OCR into review before save',async()=>{
   const f=await fixture();
   try{
     assert.equal(f.ocrCalls,1);assert.equal(f.vision.length,1);assert.equal(f.graph.length,1);
     assert.equal(f.toolResults[0].ok,true);
     const invoices=(await f.db.query('select total_amount,currency,metadata from invoices')).rows;
-    assert.equal(invoices.length,1);assert.equal(Number(invoices[0].total_amount),118);assert.equal(invoices[0].currency,'INR');
-    assert.equal((await f.db.query('select count(*)::int n from invoice_files')).rows[0].n,1);
+    assert.equal(invoices.length,0);
+    assert.match(f.answer,/Invoice QA-PHOTO-001 for QA Sample Buyer: INR 118, due 2026-11-17/);
+    assert.match(f.answer,/Reply yes/);
+    assert.equal((await f.db.query('select count(*)::int n from invoice_files')).rows[0].n,0);
     assert.equal((await f.db.query('select count(*)::int n from payments')).rows[0].n,0);
     const stored=(await f.db.query('select bytes from whatsapp_inbound_media')).rows[0].bytes;
     assert.deepEqual(Buffer.from(stored),sample);
@@ -207,8 +211,9 @@ test('image rejection replies survive real AIProvider validation and cannot save
         assert.equal(pending.stage,'canceled');assert.equal(pending.failureCode,code);
       }else{
         assert.equal(f.toolResults[0].ok,true);
-        assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,1);
-        assert.equal(Number((await f.db.query('select total_amount from invoices')).rows[0].total_amount),118);
+        assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,0);
+        assert.equal(f.toolResults[0].review.invoice.total,118);
+        assert.match(f.answer,/Reply yes/);
       }
     }finally{await f.close();}
   });
