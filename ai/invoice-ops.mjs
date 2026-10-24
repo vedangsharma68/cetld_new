@@ -1,5 +1,6 @@
 import {APIError, object, uuid} from './http.mjs';
 import {syncInvoiceRow,assertInvoiceSyncScope,syncEligibility} from '../automation/invoice-sync.mjs';
+import {isTestInvoice} from '../automation/test-invoice.mjs';
 import {AMOUNT_PRECISION_MESSAGE,CURRENCY_SUPPORT_MESSAGE,isSupportedCurrency} from '../currency-contract.mjs';
 
 const INPUT_FIELDS = ['invoiceNumber', 'clientName', 'clientEmail', 'clientPhone', 'clientPhoneRaw', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total', 'outstanding', 'currency', 'notes', 'alreadyPaid', 'direction', 'lineItems'];
@@ -51,6 +52,7 @@ export function validateAssistantInvoice(value) {
   const invoiceNumber = String(value.invoiceNumber || '').trim();
   const clientName = String(value.clientName || '').trim();
   if (!invoiceNumber || invoiceNumber.length > 100) throw new APIError(422, 'INVOICE_NUMBER_REQUIRED');
+  if (invoiceNumber.startsWith('CETLD-TEST-')) throw new APIError(409, 'TEST_INVOICE_CREATION_REQUIRED');
   if (!clientName || clientName.length > 255) throw new APIError(422, 'CLIENT_REQUIRED');
   if (!dateValue(value.invoiceDate)) throw new APIError(422, 'INVOICE_DATE_REQUIRED');
   const missingDueDate = value.dueDate === null || value.dueDate === undefined || value.dueDate === '';
@@ -129,6 +131,7 @@ export async function saveAssistantInvoice({store, invoice: input, confirmed, id
     }
   }
   assertInvoiceSyncScope(store,row);
+  if (isTestInvoice(row)) throw new APIError(409, 'INVOICE_NOT_EXPORTABLE');
   if (row.metadata?.bookkeeping_sync_status === 'synced' && row.metadata?.bookkeeping_record_id) return {saved: true, invoice: responseInvoice(row), sync: {status: 'synced', provider: row.metadata.bookkeeping_provider || null, externalId: row.metadata.bookkeeping_record_id, retryable: false}, idempotent};
   if (idempotent && store.getAssistantInvoice && store.query) return {...await retryAssistantInvoiceSync({store,invoiceId:row.id,accounting,manualRetry:false}),idempotent:true};
   invoice.invoiceNumber = row.invoice_number;
@@ -142,6 +145,7 @@ export async function retryAssistantInvoiceSync({store, invoiceId, accounting, c
   if (!row) throw new APIError(404, 'INVOICE_NOT_FOUND');
   assertInvoiceSyncScope(store,row);
   if (row.id!==id) throw new APIError(502,'WORKSPACE_SCOPE_VIOLATION');
+  if (isTestInvoice(row)) throw new APIError(409, 'INVOICE_NOT_EXPORTABLE');
   const metadata = row.metadata || {};
   if (metadata.bookkeeping_record_id && metadata.bookkeeping_sync_status === 'synced') return {saved: true, invoice: responseInvoice(row), sync: {status: 'synced', provider: metadata.bookkeeping_provider || null, externalId: metadata.bookkeeping_record_id, retryable: false}, idempotent: true};
   const eligibility=syncEligibility(row,clock?clock().getTime():Date.now());

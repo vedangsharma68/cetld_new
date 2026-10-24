@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { AccountingError } from './errors.mjs';
 import {isDeletedInvoice, isMissingDeletedAtColumn} from '../../invoice/deleted-at-compat.mjs';
 import {normalizeZohoPhone} from './zoho-phone.mjs';
+import {isTestInvoice} from '../test-invoice.mjs';
 
 function keyOf({ provider, userId, workspaceId }) {
   return `${provider}:${userId}:${workspaceId}`;
@@ -167,6 +168,12 @@ export class SupabaseAccountingStore {
     return (await this.request(`${this.table}?${params}`))?.[0] || null;
   }
 
+  // Export authorization reads the saved row, never caller-supplied metadata.
+  async getInvoiceExportState(workspaceId, invoiceId) {
+    const params = new URLSearchParams({workspace_id:`eq.${workspaceId}`,id:`eq.${invoiceId}`,select:'id,workspace_id,invoice_number,metadata,status,deleted_at',limit:'1'});
+    return (await this.request(`invoices?${params}`))?.[0] || null;
+  }
+
   async rpc(name, body) {
     return this.request(`rpc/${name}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   }
@@ -183,6 +190,7 @@ export class SupabaseAccountingStore {
   }
 
   async patchActiveInvoice(id, workspaceId, values, existing) {
+    if (isTestInvoice(existing) || isTestInvoice(values)) throw new AccountingError('INVOICE_NOT_EXPORTABLE', 'Test invoices cannot be exported or linked to accounting');
     const direction = existing?.metadata?.invoice_direction;
     const legacyIncoming = !direction && existing?.external_provider === values.external_provider && existing?.external_invoice_id === values.external_invoice_id;
     if (direction !== 'receivable' && !legacyIncoming) {
@@ -344,6 +352,7 @@ export class SupabaseAccountingStore {
       const paid = Math.min(total, Math.max(0, majorAmount(invoice.paidMinor, invoice.currency)));
       const normalizedStatus = Number(invoice.balanceMinor) === 0 ? 'paid' : invoice.status === 'void' || invoice.status === 'voided' ? 'void' : invoice.status === 'overdue' ? 'overdue' : invoice.status === 'draft' ? 'draft' : 'sent';
       const values = { workspace_id: workspaceId, customer_id: customerId, invoice_number: String(invoice.number).slice(0, 100), issue_date: invoice.invoiceDate, due_date: invoice.dueDate || null, currency: invoice.currency || 'INR', total_amount: total, amount_paid: paid, status: normalizedStatus, notes: invoice.raw?.notes || null, external_provider: provider, external_invoice_id: invoiceExternalId, last_synced_at: syncedAt, sync_status: 'synced', last_sync_error: null, metadata: { accounting_provider: provider, external_customer_id: externalCustomerId } };
+      if (isTestInvoice(values)) throw new AccountingError('INVOICE_NOT_EXPORTABLE', 'Test invoices cannot be exported or linked to accounting');
       const invoiceTargetFilters = {workspace_id: `eq.${workspaceId}`, external_provider: `eq.${provider}`, external_invoice_id: `eq.${invoiceExternalId}`};
       const existing = await this.findInvoiceForSync(invoiceTargetFilters, 'id,workspace_id,external_provider,external_invoice_id,invoice_number,metadata,updated_at');
       if (Array.isArray(existing) && existing[0]) {
@@ -360,6 +369,7 @@ export class SupabaseAccountingStore {
       }
       const sameNumber = await this.findInvoiceForSync({workspace_id: `eq.${workspaceId}`, invoice_number: `eq.${invoice.number}`}, 'id,external_provider,external_invoice_id,total_amount,customer_id,metadata,updated_at');
       if (Array.isArray(sameNumber) && sameNumber[0]) {
+        if (isTestInvoice(sameNumber[0])) throw new AccountingError('INVOICE_NOT_EXPORTABLE', 'Test invoices cannot be exported or linked to accounting');
         if (isDeletedInvoice(sameNumber[0])) {
           deletedInvoiceExternalIds.add(invoiceExternalId);
           continue;

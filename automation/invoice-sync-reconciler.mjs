@@ -24,7 +24,7 @@ export function createInvoiceReconcileStore({env=process.env,fetchImpl=fetch}={}
       for(let offset=0;offset<workspaceIds.length;offset+=100) {
         const rows=await db.request(`invoices?${new URLSearchParams({workspace_id:`in.(${workspaceIds.slice(offset,offset+100).join(',')})`,deleted_at:'is.null',external_invoice_id:'is.null',status:'not.in.(void,cancelled)',
           'metadata->>bookkeeping_record_id':'is.null',
-          and:'(or(metadata->>bookkeeping_sync_status.in.(pending,failed,not_configured),metadata->>bookkeeping_sync_status.is.null),or(metadata->>invoice_direction.neq.payable,metadata->>invoice_direction.is.null),or(metadata->>bookkeeping_sync_exhausted.is.null,metadata->>bookkeeping_sync_exhausted.neq.true))',
+          and:'(or(metadata->>test_invoice.is.null,metadata->>test_invoice.neq.true),or(metadata->>source_invoice_number.is.null,metadata->>source_invoice_number.not.like.CETLD-TEST-*),invoice_number.not.like.CETLD-TEST-*,or(metadata->>bookkeeping_sync_status.in.(pending,failed,not_configured),metadata->>bookkeeping_sync_status.is.null),or(metadata->>invoice_direction.neq.payable,metadata->>invoice_direction.is.null),or(metadata->>bookkeeping_sync_exhausted.is.null,metadata->>bookkeeping_sync_exhausted.neq.true))',
           or:`(metadata->>bookkeeping_sync_next_at.is.null,metadata->>bookkeeping_sync_next_at.lte.${now})`,select:'id,workspace_id,created_at',order:'created_at.asc,id.asc',limit:'25'})}`);
         candidates.push(...rows);
       }

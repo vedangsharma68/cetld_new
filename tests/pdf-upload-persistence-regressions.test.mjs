@@ -6,6 +6,7 @@ import {AIProvider,DEFAULT_EXTRACTION_FALLBACK_MODEL,DEFAULT_EXTRACTION_MODEL,DE
 import {extractInvoice} from '../ai/extraction.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
 import {invoiceWire} from './invoice-wire-fixture.mjs';
+import {createTestInvoiceUI} from '../invoice/test-mode-ui.mjs';
 
 const WORKSPACE_ID='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const SAMPLE_PDF=Buffer.from('%PDF-1.7\n1 0 obj <<>> endobj\n%%EOF\n');
@@ -341,7 +342,7 @@ test('New Invoice upload failure keeps the original attached and restores manual
     aiRequest:async(_action,options)=>{extractionTimeout=options.timeoutMs;throw Error('provider timeout');},
   });
   const renderForm=appFunction('function invoiceForm(id){','async function saveInvoice(e,x){',{
-    state,ingestFile,setIngestionState,escape:String,remaining:()=>0,button:()=>'<button></button>',currencyOptions:()=>'',
+    state,testInvoiceUI:createTestInvoiceUI({state}),ingestFile,setIngestionState,escape:String,remaining:()=>0,button:()=>'<button></button>',currencyOptions:()=>'',
     openDialog(){},saveInvoice(){},showError(){},
     $:selector=>selector==='#invoice-form'?form:null,
   });
