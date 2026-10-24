@@ -58,6 +58,7 @@ export async function writeReleaseManifest({outputPath='owner-chat-build.json'}=
   paths.push('automation/invoice-sync.mjs','automation/invoice-sync-store.mjs','automation/invoice-sync-reconciler.mjs','invoice/bookkeeping-client.mjs');
   paths.push('automation/whatsapp/owner-phone.mjs','supabase/migrations/20261022100000_owner_phone_contact_recovery.sql');
   paths.push('automation/whatsapp/owner-consent.mjs','supabase/migrations/20261022180000_owner_chat_record_consent.sql');
+  paths.push('automation/whatsapp/owner-write-confirmation.mjs');
   paths.push('automation/whatsapp/reminder-parameters.mjs','supabase/migrations/20261022221930_default_payment_reminder_draft.sql');
   paths.push('ai/confirm-action.mjs','ai/owner-conversation.mjs','ai/owner-actions.mjs','ai/personal-note.mjs','assistant-client.js','automation/whatsapp/reminder-approval.mjs','supabase/migrations/20261023061702_shared_owner_assistant.sql');
   paths.push('ai/reminder-review.mjs','reminder-review-ui.mjs','supabase/migrations/20261023083356_per_message_reminder_review.sql');
