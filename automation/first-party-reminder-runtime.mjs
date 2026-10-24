@@ -11,15 +11,14 @@ export function firstPartyReminderEnabled(env){
     &&['AUTOMATION_OUTBOUND_ENABLED','WHATSAPP_OUTBOUND_ENABLED','WHATSAPP_REMINDERS_ENABLED',
       'WHATSAPP_REMINDER_RECEIPTS_ENABLED','WHATSAPP_REMINDER_SCHEDULER_ENABLED'].every(key=>env[key]==='true');
 }
-export function createFirstPartyReminderRuntime({env=process.env,scope,store,supabase,fetchImpl=fetch,clock=()=>new Date()}={}){
+export function createFirstPartyReminderRuntime({env=process.env,scope,store,supabase,accounting,fetchImpl=fetch,clock=()=>new Date()}={}){
   const test=scheduledOwnerTestMode(env,clock());
   if(test.mode==='blocked'||(test.mode==='test'&&!scheduledOwnerTestScopeMatches(test,scope)))throw Error('Scheduled owner test unavailable');
   if(!firstPartyReminderEnabled(env))throw Error('First-party reminders disabled');
   let scopes;
   try{scopes=JSON.parse(env.AUTOMATION_WORKSPACES);}catch{throw Error('Reviewed reminder configuration unavailable');}
   if(!Array.isArray(scopes)||scopes.length>1000||!scopes.some(item=>item.ownerId===scope.ownerId&&item.workspaceId===scope.workspaceId))throw Error('Reminder scope unavailable');
-  // External accounting is deliberately unsupported by this candidate. All four
-  // external ledger markers are denied by the local checker AND final SQL gate.
+  // Keep the existing payment mode flag. Linked invoices additionally require live reads.
   if(env.WHATSAPP_REMINDER_PAYMENT_MODE!=='local_verified')throw Error('Reviewed payment verification unavailable');
   supabase ||= createClient(env.SUPABASE_URL,env.SUPABASE_SERVICE_ROLE_KEY,{
     auth:{persistSession:false,autoRefreshToken:false},global:{fetch:fetchImpl}});
@@ -27,8 +26,8 @@ export function createFirstPartyReminderRuntime({env=process.env,scope,store,sup
   if(!receiptStore.isEnabled())throw Error('Reminder receipt backend unavailable');
   const testGate=test.mode==='test'?createScheduledOwnerTestGate({test,env,supabase,store,fetchImpl,clock}):null;
   const provider=createDurableReminderProvider({receiptStore,provider:createApprovedReminderProvider({
-    env,supabase,store,ownerId:scope.ownerId,workspaceId:scope.workspaceId,fetchImpl,clock})});
-  return {provider,paymentChecker:createLocalReminderPaymentChecker({supabase,...scope}),testGate,async sweep(){
+    env,supabase,store,ownerId:scope.ownerId,workspaceId:scope.workspaceId,accounting,fetchImpl,clock})});
+  return {provider,paymentChecker:createLocalReminderPaymentChecker({supabase,...scope,accounting,env,fetchImpl}),testGate,async sweep(){
     if(testGate)return 0; // A test must not quarantine other invoices' leases.
     // Let PostgreSQL supply its current clock; never use worker-controlled time.
     const result=await supabase.rpc('cetld_core_quarantine_first_party_leases',{

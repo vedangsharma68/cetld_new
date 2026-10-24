@@ -259,15 +259,15 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       result.nextPage = body.page_context?.has_more_page ? Number(page) + 1 : null;
       return result;
     },
-    async fetchInvoiceBalance({ token, accountId, invoiceId }) {
+    async fetchInvoiceBalance({ token, accountId, invoiceId, signal, retryReads }) {
       if (!accountId || !invoiceId) throw new Error('Zoho Books organization and invoice IDs are required');
       const url = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices/${encodeURIComponent(invoiceId)}`);
       url.search = new URLSearchParams({ organization_id: accountId }).toString();
-      const response = await providerFetch(fetchImpl, 'zoho_books', url, { headers: { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' } });
+      const response = await providerFetch(fetchImpl, 'zoho_books', url, { signal, retryReads, headers: { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' } });
       const body = await jsonResponse(response, 'zoho_books');
       const invoice = normalizeZohoInvoice(body.invoice);
       if (!invoice || invoice.externalId !== String(invoiceId)) throw new Error('Zoho Books returned an invalid invoice balance');
-      return { balanceMinor: invoice.balanceMinor, currency: invoice.currency, totalMinor: invoice.amountMinor, externalId: invoice.externalId };
+      return { balanceMinor: invoice.balanceMinor, paidMinor: invoice.paidMinor, status: invoice.status, currency: invoice.currency, totalMinor: invoice.amountMinor, externalId: invoice.externalId };
     },
     async fetchInvoice({ token, accountId, invoiceId }) {
       if (!accountId || !invoiceId) throw new Error('Zoho Books organization and invoice IDs are required');
@@ -400,14 +400,17 @@ export function createQuickBooksProvider({ sandbox = String(process.env.QUICKBOO
     async fetchPayments({ token, accountId, page = 1, perPage = 1000 }) {
       return queryQbo(fetchImpl, token, accountId, 'Payment', normalizeQboPayment, apiRoot, page, perPage);
     },
-    async fetchInvoiceBalance({ token, accountId, invoiceId }) {
+    async fetchInvoiceBalance({ token, accountId, invoiceId, signal, retryReads }) {
       if (!accountId || !invoiceId) throw new Error('QuickBooks company and invoice IDs are required');
       const url = `${apiRoot}/v3/company/${encodeURIComponent(accountId)}/invoice/${encodeURIComponent(invoiceId)}?minorversion=75`;
-      const response = await providerFetch(fetchImpl, 'quickbooks', url, { headers: { Authorization: `Bearer ${token.accessToken}`, Accept: 'application/json' } });
+      const response = await providerFetch(fetchImpl, 'quickbooks', url, { signal, retryReads, headers: { Authorization: `Bearer ${token.accessToken}`, Accept: 'application/json' } });
       const body = await jsonResponse(response, 'quickbooks');
       const invoice = normalizeQboInvoice(body.Invoice);
       if (!invoice || invoice.externalId !== String(invoiceId)) throw new Error('QuickBooks returned an invalid invoice balance');
-      return { balanceMinor: invoice.balanceMinor, currency: invoice.currency, totalMinor: invoice.amountMinor, externalId: invoice.externalId };
+      // QBO EmailStatus describes delivery, not financial state. A persisted
+      // Invoice is open while Balance > 0; voided invoices have zero amounts.
+      const status = invoice.balanceMinor === 0 ? 'paid' : 'sent';
+      return { balanceMinor: invoice.balanceMinor, paidMinor: invoice.paidMinor, status, currency: invoice.currency, totalMinor: invoice.amountMinor, externalId: invoice.externalId };
     },
     async fetchCompanyInfo({ token, accountId }) {
       if (!accountId) throw new Error('QuickBooks company ID is required');

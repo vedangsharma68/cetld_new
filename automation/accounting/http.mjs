@@ -1,12 +1,12 @@
 import { AccountingProviderError, zohoResponseDiagnostics } from './errors.mjs';
 
-export async function providerFetch(fetchImpl, provider, url, options = {}) {
+export async function providerFetch(fetchImpl, provider, url, {retryReads = true, ...options} = {}) {
   // Retry only safe Zoho reads; writes and OAuth exchanges may already have succeeded.
-  const retries = provider === 'zoho_books' && ['GET', 'HEAD'].includes(String(options.method || 'GET').toUpperCase()) ? 2 : 0;
+  const retries = retryReads && provider === 'zoho_books' && ['GET', 'HEAD'].includes(String(options.method || 'GET').toUpperCase()) ? 2 : 0;
   let response;
   for (let attempt = 0; ; attempt++) {
     try {
-      response = await fetchImpl(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(15000) });
+      response = await fetchImpl(url, { ...options, redirect: 'error', signal: options.signal ? AbortSignal.any([options.signal,AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000) });
       break;
     } catch {
       if (attempt >= retries) throw new AccountingProviderError(provider, 502, 'network_error');

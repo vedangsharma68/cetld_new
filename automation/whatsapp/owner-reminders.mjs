@@ -1,3 +1,4 @@
+import {reminderPaymentRpc} from '../external-reminder-verification.mjs';
 import {PHONE_FORMAT_GUIDANCE} from './owner-phone.mjs';
 import {ownerConsentFailure} from './owner-consent.mjs';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
@@ -61,7 +62,7 @@ export function ownerReminderRequest(message){
     filters:[{column:/^(?:INV[-/]|[A-Z]+-\d)/i.test(target)?'invoice_number':'customer_name',operator:'eq',value:target}]};
 }
 
-export function createOwnerReminderRuntime({supabase,scope,message='',messageId,authorize}={}){
+export function createOwnerReminderRuntime({supabase,scope,message='',messageId,authorize,accounting,env=process.env,fetchImpl=fetch}={}){
   let reply=null,confirmation=false,customerName=null,contactWindow=null;
   const check=async ctx=>{ctx?.assertLive?.();if(!await authorize(scope))throw Error('owner required');await ctx?.assertAuthorized?.();ctx?.assertLive?.();};
   const refuse=code=>{confirmation=false;const result=ownerReminderFailure(code);if(customerName)result.message=result.message.replace(/This customer(?:'s)?/g,m=>customerName+(m.endsWith("'s")?"'s":''));
@@ -82,10 +83,23 @@ export function createOwnerReminderRuntime({supabase,scope,message='',messageId,
   };
   const rpc=async(args,ctx)=>{
     await check(ctx);
-    const result=unwrap(await supabase.rpc('whatsapp_owner_reminder',{
+    let invoice=null;
+    if(args.p_action==='prepare'||args.p_action==='confirm'){
+      let invoiceId=args.p_invoice_id;
+      if(!invoiceId){
+        const pending=unwrap(await supabase.from('whatsapp_pending_actions').select('action').eq('workspace_id',scope.workspaceId).eq('id',args.p_pending_id).maybeSingle());
+        invoiceId=pending?.action?.invoiceId;
+      }
+      // Let the original SQL preserve its refusal/replay semantics when the
+      // preflight cannot resolve a row. Without evidence it still blocks linkage.
+      if(invoiceId)invoice=unwrap(await supabase.from('invoices').select('*').eq('workspace_id',scope.workspaceId).eq('id',invoiceId).maybeSingle());
+    }
+    const rpcArgs={
       p_workspace_id:scope.workspaceId,p_owner_id:scope.ownerId,p_phone:scope.phone,
       p_message_id:messageId,p_user_message:String(message),...args,
-    }));
+    };
+    const result=unwrap(invoice?await reminderPaymentRpc({supabase,name:'whatsapp_owner_reminder',args:rpcArgs,invoice,
+      ownerId:scope.ownerId,workspaceId:scope.workspaceId,accounting,env,fetchImpl,beforeRpc:()=>check(ctx)}):await supabase.rpc('whatsapp_owner_reminder',rpcArgs));
     await check(ctx);return resultReply(result);
   };
   const decide=async({pending,decision,interactionId=null},ctx)=>{
