@@ -1,3 +1,5 @@
+import {isTestInvoice} from '../test-invoice.mjs';
+import {TEST_TEMPLATE_BLOCK_REASON} from './test-reminder-policy.mjs';
 import {reminderPaymentRpc,localReminderStatusPayable} from '../external-reminder-verification.mjs';
 import {reminderDeliveryForm,matchesReminderDelivery} from './reminder-approval.mjs';
 import {reminderFingerprint} from './reminder-fingerprint.mjs';
@@ -45,6 +47,7 @@ export function createFirstPartyReminderProvider({env=process.env,supabase,store
       const scope={ownerId,workspaceId,invoiceId:input.invoiceId};
       const invoice=await store.getInvoice(scope),settings=await store.getWorkspacePreferences(scope);
       if(!invoice||invoice.deleted_at)return blocked('invoice_unavailable');
+      if(isTestInvoice(invoice))return blocked(TEST_TEMPLATE_BLOCK_REASON);
       if(invoice.customer_id!==input.customerId)return blocked('customer_changed');
       if(!localReminderStatusPayable(invoice)||invoice.metadata?.invoice_direction!=='receivable'||Number(invoice.amount_paid)>=Number(invoice.total_amount))return blocked('invoice_not_remindable');
       if(!['approved','active','scheduled'].includes(invoice.followup_state))return blocked('paused_or_unreviewed');

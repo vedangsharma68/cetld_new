@@ -66,3 +66,11 @@ export function buildReminderTemplate(entry,parameters){
     {type:'body',parameters:parameters.map(text=>({type:'text',text}))},
   ]}};
 }
+
+/** @type {Readonly<{name: 'cetld_test_reminder_v1', language: 'en', body: string, parameterCount: 3}>} */
+// Draft definition only for separate owner submission to Meta. Not approved,
+// not in REMINDER_TEMPLATES, and never eligible for dispatch or auto-submission.
+export const TEST_REMINDER_TEMPLATE_DRAFT=Object.freeze({
+  name:'cetld_test_reminder_v1',language:'en',parameterCount:3,
+  body:"TEST — NO PAYMENT REQUIRED\nHi {{1}}, this is Cetld, an assistant for {{2}}. This is a test reminder for invoice {{3}}. No payment is required. Please disregard any nominal invoice balance or due date.",
+});

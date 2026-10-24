@@ -8,7 +8,6 @@ import {createAIHandler} from '../ai/routes.mjs';
 import {CoreAutomationStore} from '../automation/core-store.mjs';
 import {createAutomationRuntime} from '../automation/runtime.mjs';
 import {createApprovedReminderProvider} from '../automation/whatsapp/approved-reminders.mjs';
-import {REMINDER_TEMPLATES,buildReminderTemplate} from '../automation/whatsapp/reminder-templates.mjs';
 
 const phone='+919818685252';
 const freshReads='20261024094013_fresh_external_reminder_reads.sql';
@@ -48,7 +47,7 @@ async function setup(){
   const store=new CoreAutomationStore({url:env.SUPABASE_URL,key:'fixture-key',fetchImpl:f.fetchImpl});
   const accounting={reminderInvoiceState(){throw Error('Unlinked test invoice must not read a provider');},syncInvoice(){throw Error('Reminder must not export');}};
   const runtime=createAutomationRuntime({env,store,accounting,supabase:f.supabase,fetchImpl:f.fetchImpl});
-  const preview=id=>api('preview-reminder',{invoiceId:id,text:'Review this supported test invoice.',tone:'professional',sendNow:false,approveFallback:false});
+  const preview=id=>api('preview-reminder',{invoiceId:id,text:'TEST — NO PAYMENT REQUIRED\n\nReview this supported test invoice. No payment is required.',tone:'professional',sendNow:true,approveFallback:false});
   const approve=p=>api('approve-reminder',{approvalToken:p.approvalToken,reviewPayload:p.reviewPayload,confirmed:true});
   return {...f,graph,api,env,ownerId,otherOwner,workspaceId,customerId,store,service,asUser,preview,approve,
    actor(id){actor=id;},
@@ -58,6 +57,8 @@ async function setup(){
     await db.query('delete from whatsapp_suppressions where workspace_id=$1',[workspaceId]);
     await db.query('delete from whatsapp_global_suppressions where phone=$1',[phone]);
     await db.query("update whatsapp_consents set revoked_at=null,revoked_via=null,source='verbal',categories=array['invoice_updates'] where workspace_id=$1",[workspaceId]);
+    await db.query("delete from whatsapp_messages where workspace_id=$1 and direction='inbound'",[workspaceId]);
+    await db.query("insert into whatsapp_messages(workspace_id,customer_id,phone,direction,audience,body,kind,status,idempotency_key,created_at) values($1,$2,$3,'inbound','customer','Hello','text','received',$4,clock_timestamp()-interval '1 hour')",[workspaceId,customerId,phone,randomUUID()]);
     await asUser();
     const pending=(await f.supabase.rpc('owner_assistant_pending',{p_workspace_id:workspaceId,p_owner_id:ownerId})).data;
     if(pending)await f.supabase.rpc('owner_assistant_decide',{p_workspace_id:workspaceId,p_owner_id:ownerId,p_id:pending.id,p_confirmed:false});
@@ -67,15 +68,42 @@ async function setup(){
     return result.rows[0].invoice.id;
    },
    async approved(id){const p=await preview(id);assert.equal(p.code,200,JSON.stringify({data:p.data,errors:f.errors}));assert.equal((await approve(p.data)).code,200);return p.data;},
-   async tick(id){await service();await db.query("update invoices set next_follow_up_at=clock_timestamp()-interval '1 minute' where id=$1",[id]);return runtime.tick({ownerId,workspaceId});},
+   async tick(){await service();return runtime.tick({ownerId,workspaceId});},
   };
  }catch(error){await f.close();throw error;}
 }
 
-test('supported test invoices use the unchanged owner review and production reminder gates',async t=>{
+test('supported test invoices require honest one-off words and preserve production reminder gates',async t=>{
  const f=await setup(),{db}=f;
  try{
-  await t.test('real preview, explicit exact approval and dispatch send the visible test number to Pappa',async()=>{
+  await t.test('template review fails closed for scheduled, closed-window and fallback delivery',async()=>{
+   const id=await f.seed(),before=f.graph.length;
+   for(const options of [{sendNow:false},{sendNow:true,approveFallback:true}]){
+    const result=await f.api('preview-reminder',{invoiceId:id,text:'TEST — NO PAYMENT REQUIRED',tone:'professional',sendNow:true,approveFallback:false,...options});
+    assert.equal(result.code,409);assert.equal(result.data.error,'test_invoice_template_blocked');
+   }
+   await f.service();await db.query("update whatsapp_messages set created_at=clock_timestamp()-interval '25 hours' where workspace_id=$1 and direction='inbound'",[f.workspaceId]);
+   assert.equal((await f.preview(id)).data.error,'test_invoice_template_blocked');
+   assert.equal(f.graph.length,before);
+   assert.equal((await db.query('select followup_state from invoices where id=$1',[id])).rows[0].followup_state,'draft');
+  });
+  await t.test('TEST buried only in the invoice number cannot approve a one-off',async()=>{
+   const id=await f.seed();const row=(await db.query('select * from invoices where id=$1',[id])).rows[0];
+   const result=await f.api('preview-reminder',{invoiceId:id,text:`Invoice ${row.invoice_number} has a balance.`,tone:'professional',sendNow:true,approveFallback:false});
+   assert.equal(result.code,409);assert.equal(result.data.error,'test_invoice_marker_required');
+  });
+  await t.test('previously queued template is blocked at prepare and direct dispatch',async()=>{
+   const id=await f.seed();await f.approved(id);await f.service();
+   // Simulate an old template approval stored before this guard existed.
+   const original=await f.store.getInvoice({ownerId:f.ownerId,workspaceId:f.workspaceId,invoiceId:id});
+   const store=Object.create(f.store);store.getInvoice=async()=>({...original,metadata:{...original.metadata,approved_reminder_delivery:{type:'template'}}});
+   const provider=createApprovedReminderProvider({env:f.env,supabase:f.supabase,store,ownerId:f.ownerId,workspaceId:f.workspaceId,fetchImpl:f.fetchImpl});
+   const input={workspaceId:f.workspaceId,invoiceId:id,customerId:f.customerId,to:phone,body:'old words',idempotencyKey:`reminder:${f.workspaceId}:${randomUUID()}`};
+   await assert.rejects(provider.prepareReminder(input),{code:'test_invoice_template_blocked'});
+   assert.deepEqual(await provider.sendReminder(input),{status:'blocked',reason:'test_invoice_template_blocked'});
+   assert.equal(f.graph.length,0);
+  });
+  await t.test('verified inbound window, exact approval and dispatch send explicit TEST words to Pappa',async()=>{
    const id=await f.seed(),before=f.graph.length;
    const created=(await db.query('select * from invoices where id=$1',[id])).rows[0];
    assert.equal(created.metadata.test_invoice,true);assert.equal(created.followup_state,'draft');assert.equal(created.next_follow_up_at,null);
@@ -83,19 +111,16 @@ test('supported test invoices use the unchanged owner review and production remi
    assert.equal(created.customer_id,f.customerId);assert.equal(created.metadata.source_invoice_number,created.invoice_number);
    assert.match(created.invoice_number,/^CETLD-TEST-.*NO.PAYMENT.REQUIRED$/);
    const preview=await f.preview(id);assert.equal(preview.code,200,JSON.stringify(preview.data));
-   assert.equal(f.graph.length,before);assert.equal(preview.data.delivery.form,'template');
-   assert.match(preview.data.delivery.text,/Pappa/);assert.match(preview.data.delivery.text,/CETLD-TEST-.*NO.PAYMENT.REQUIRED/);assert.match(preview.data.delivery.text,/₹1/);
+   assert.equal(f.graph.length,before);assert.equal(preview.data.delivery.form,'service');
+   assert.match(preview.data.delivery.text,/^TEST — NO PAYMENT REQUIRED\n/);
    assert.equal((await f.api('approve-reminder',{approvalToken:preview.data.approvalToken,reviewPayload:preview.data.reviewPayload,confirmed:false})).data.error,'CONFIRMATION_REQUIRED');
    const changed=structuredClone(preview.data.reviewPayload);changed.payload.preview+=' Different words';
    assert.equal((await f.api('approve-reminder',{approvalToken:preview.data.approvalToken,reviewPayload:changed,confirmed:true})).data.error,'REMINDER_REVIEW_CHANGED');
    assert.equal((await f.approve(preview.data)).code,200);
    const result=await f.tick(id);assert.equal(result.results.find(row=>row.invoiceId===id)?.status,'sent',JSON.stringify({result,errors:f.errors}));
    assert.equal(f.graph.length,before+1);const sent=f.graph.at(-1);
-   assert.equal(sent.to,phone.slice(1));assert.equal(sent.type,'template');
-   const entry=REMINDER_TEMPLATES.find(item=>item.name===sent.template.name),parameters=sent.template.components[0].parameters.map(p=>p.text);
-   assert.deepEqual(parameters,preview.data.reviewPayload.payload.template.parameters);
-   assert.equal(parameters[0],'Pappa');assert.equal(parameters[2],created.invoice_number);assert.equal(parameters[3],'₹1');
-   assert.equal(buildReminderTemplate(entry,parameters).body,preview.data.delivery.text);
+   assert.equal(sent.to,phone.slice(1));assert.equal(sent.type,'text');
+   assert.equal(sent.text.body,preview.data.delivery.text);
    const saved=(await db.query('select * from invoices where id=$1',[id])).rows[0];
    assert.equal(saved.metadata.test_invoice,true);assert.equal(saved.external_invoice_id,null);assert.equal(saved.external_provider,null);
    assert.equal(saved.metadata.bookkeeping_record_id,undefined);assert.equal(Number(saved.amount_paid),0);
@@ -122,11 +147,12 @@ test('supported test invoices use the unchanged owner review and production remi
    const id=await f.seed();await f.approved(id);f.env.WHATSAPP_TEST_ALLOWLIST='+919871367051';
    const before=f.graph.length;await f.tick(id);assert.equal(f.graph.length,before);
   });
-  await t.test('approved template availability is still required',async()=>{
+  await t.test('one-off remains a text send when the demand template is unavailable',async()=>{
    const id=await f.seed();await f.approved(id);await f.service();await db.exec('begin');
    try{
     await db.query("update app.first_party_reminder_templates set approved=false where name='cetld_invoice_details_professional_v1'");
-    const before=f.graph.length;await f.tick(id);assert.equal(f.graph.length,before);
+    const before=f.graph.length;await f.tick(id);assert.equal(f.graph.length,before+1);
+    assert.equal(f.graph.at(-1).type,'text');assert.match(f.graph.at(-1).text.body,/^TEST — NO PAYMENT REQUIRED/);
    }finally{await db.exec('rollback');}
   });
   await t.test('stale invoice snapshots and foreign owners cannot approve',async()=>{
@@ -157,16 +183,13 @@ test('supported test invoices use the unchanged owner review and production remi
    }
    await f.tick(id);assert.equal(f.graph.length,before);
   });
-  await t.test('unlinked overdue test invoices use the ordinary preview, approval and dispatch gates',async()=>{
+  await t.test('unlinked overdue test invoices use the verified one-off delivery gates',async()=>{
    const id=await f.seed();await f.service();await db.query("update invoices set status='overdue' where id=$1",[id]);
    const before=f.graph.length,preview=await f.approved(id);assert.equal(f.graph.length,before);
    const result=await f.tick(id);assert.equal(result.results.find(row=>row.invoiceId===id)?.status,'sent',JSON.stringify({result,errors:f.errors}));
    assert.equal(f.graph.length,before+1);const sent=f.graph.at(-1);
-   assert.equal(sent.to,phone.slice(1));assert.equal(sent.type,'template');
-   const entry=REMINDER_TEMPLATES.find(item=>item.name===sent.template.name),parameters=sent.template.components[0].parameters.map(p=>p.text);
-   assert.deepEqual(parameters,preview.reviewPayload.payload.template.parameters);
-   assert.equal(parameters[0],'Pappa');assert.match(parameters[2],/^CETLD-TEST-.*NO.PAYMENT.REQUIRED$/);assert.equal(parameters[3],'₹1');
-   assert.equal(buildReminderTemplate(entry,parameters).body,preview.delivery.text);
+   assert.equal(sent.to,phone.slice(1));assert.equal(sent.type,'text');
+   assert.equal(sent.text.body,preview.delivery.text);
    const saved=(await db.query('select * from invoices where id=$1',[id])).rows[0];
    assert.equal(saved.metadata.test_invoice,true);assert.equal(saved.external_invoice_id,null);assert.equal(saved.external_provider,null);
   });
@@ -178,5 +201,43 @@ test('supported test invoices use the unchanged owner review and production remi
    const id=await f.seed();await f.approved(id);await f.service();await db.query("update invoices set metadata=metadata||'{\"followup_exception\":{\"type\":\"dispute\",\"note\":\"Fixture hold\"}}' where id=$1",[id]);
    const before=f.graph.length;await f.tick(id);assert.equal(f.graph.length,before);
   });
+ }finally{await f.close();}
+});
+
+test('test one-off dispatch holds on expired window and never substitutes a template',async()=>{
+ const f=await setup();try{
+  const id=await f.seed();await f.approved(id);await f.service();
+  await f.db.query("update whatsapp_messages set created_at=clock_timestamp()-interval '25 hours' where workspace_id=$1 and direction='inbound'",[f.workspaceId]);
+  await f.tick(id);assert.equal(f.graph.length,0);
+ }finally{await f.close();}
+});
+
+test('test one-off dispatch independently refuses missing TEST marker in a stored approval',async()=>{
+ const f=await setup();try{
+  const id=await f.seed();await f.approved(id);await f.service();
+  const original=await f.store.getInvoice({ownerId:f.ownerId,workspaceId:f.workspaceId,invoiceId:id});
+  const store=Object.create(f.store);store.getInvoice=async()=>({...original,metadata:{...original.metadata,approved_reminder_delivery:{type:'freeform',body:`Invoice ${original.invoice_number}`}}});
+  const provider=createApprovedReminderProvider({env:f.env,supabase:f.supabase,store,ownerId:f.ownerId,workspaceId:f.workspaceId,fetchImpl:f.fetchImpl});
+  assert.deepEqual(await provider.sendReminder({workspaceId:f.workspaceId,invoiceId:id,customerId:f.customerId,to:phone,body:'old',idempotencyKey:`reminder:${f.workspaceId}:${randomUUID()}`}),{status:'blocked',reason:'test_invoice_marker_required'});
+  assert.equal(f.graph.length,0);
+ }finally{await f.close();}
+});
+
+test('test one-off rechecks the service deadline after the atomic reservation, before HTTP',async()=>{
+ const f=await setup();try{
+  const id=await f.seed(),preview=await f.approved(id);await f.service();
+  const scope={ownerId:f.ownerId,workspaceId:f.workspaceId,invoiceId:id};
+  const [claim]=await f.store.claimDueFollowups({...scope,now:new Date().toISOString(),limit:1});
+  const authorization=await f.store.authorizeDelivery({...scope,claimId:claim.id,preferencesVersion:(await f.store.getWorkspacePreferences(scope)).updated_at});
+  assert.equal(authorization.authorized,true);
+  let now=Date.now(),reserved=false;
+  const delayed={from:(...args)=>f.supabase.from(...args),async rpc(name,args){
+   const result=await f.supabase.rpc(name,args);
+   if(name==='cetld_core_authorize_first_party_reminder'&&result.data?.authorized){reserved=true;now=Date.parse(result.data.windowDeadline)+1;}
+   return result;
+  }};
+  const provider=createApprovedReminderProvider({env:f.env,supabase:delayed,store:f.store,ownerId:f.ownerId,workspaceId:f.workspaceId,fetchImpl:f.fetchImpl,clock:()=>new Date(now)});
+  const result=await provider.sendReminder({...scope,customerId:f.customerId,to:phone,body:preview.delivery.text,idempotencyKey:`reminder:${f.workspaceId}:${claim.id}`});
+  assert.equal(reserved,true);assert.deepEqual(result,{status:'blocked',reason:'needs_re_review'});assert.equal(f.graph.length,0);
  }finally{await f.close();}
 });

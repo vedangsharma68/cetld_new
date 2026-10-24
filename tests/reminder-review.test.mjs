@@ -43,3 +43,38 @@ test('editable tone drafts avoid possessive apostrophes in business names',async
     }
   }
 });
+
+test('test invoice review shows the block, honest default and no approvable payment template',async()=>{
+  const {reminderToneDraft,queuedReminderDeliveryView}=await import('../reminder-review-ui.mjs');
+  const {REMINDER_TEMPLATES,TEST_REMINDER_TEMPLATE_DRAFT}=await import('../automation/whatsapp/reminder-templates.mjs');
+  const invoice={invoice_number:'CETLD-TEST-fixture-NO-PAYMENT-REQUIRED',metadata:{test_invoice:true},status:'sent',followup_state:'approved'};
+  const context={invoice,settings:{business_name:'Test business'},customer:{name:'Pappa'}};
+  for(const tone of ['gentle','relaxed','firm','professional']){
+    const text=reminderToneDraft(context,tone);
+    assert.match(text,/^TEST — NO PAYMENT REQUIRED\n/);
+    assert.doesNotMatch(text,/outstanding|please arrange payment|expected payment date/i);
+  }
+  const html=reminderReviewForm({text:reminderToneDraft(context,'firm'),testInvoice:true});
+  assert.match(html,/Template delivery is blocked/);
+  assert.match(html,/approved template cannot carry explicit TEST/);
+  assert.match(html,/name="approveFallback" disabled/);
+  assert.match(html,/data-approve-reminder disabled/);
+  const queued=queuedReminderDeliveryView({...invoice,metadata:{...invoice.metadata,approved_reminder_delivery:{type:'template',body:'Demand payment'}}});
+  assert.match(queued,/Template delivery blocked/);assert.doesNotMatch(queued,/Demand payment/);
+  const p={...service(),delivery:{form:'template',text:'Payment demand',templateName:'cetld_invoice_details_firm_v1'}};
+  assert.throws(()=>validateDeliveryPreview(p,{...input,testInvoice:true},now),/Template delivery is blocked/);
+  assert.throws(()=>validateDeliveryPreview(service(),{...input,testInvoice:true},now),/standalone TEST/);
+  assert.ok(!REMINDER_TEMPLATES.includes(TEST_REMINDER_TEMPLATE_DRAFT));
+  assert.match(TEST_REMINDER_TEMPLATE_DRAFT.body,/^TEST — NO PAYMENT REQUIRED\n/);
+});
+
+test('normal invoice tone drafts remain byte-identical to the existing approved render',async()=>{
+  const {reminderToneDraft}=await import('../reminder-review-ui.mjs');
+  const {selectInvoiceReminderTemplate,buildReminderTemplate}=await import('../automation/whatsapp/reminder-templates.mjs');
+  const {buildInvoiceReminderParameters}=await import('../automation/whatsapp/reminder-parameters.mjs');
+  const context={invoice:{invoice_number:'INV-1',total_amount:'1500.00',currency:'INR',due_date:'2026-10-30'},settings:{business_name:'Ordinary business'},customer:{name:'Customer'}};
+  for(const tone of ['gentle','relaxed','firm','professional']){
+    const before=buildReminderTemplate(selectInvoiceReminderTemplate({},tone),buildInvoiceReminderParameters(context)).body.replace("I'm Cetld, Ordinary business's assistant.","I'm Cetld, an assistant for Ordinary business.");
+    assert.equal(reminderToneDraft(context,tone),before);
+  }
+});

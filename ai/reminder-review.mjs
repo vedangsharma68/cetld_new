@@ -1,3 +1,4 @@
+import {assertTestReminderDelivery} from '../automation/whatsapp/test-reminder-policy.mjs';
 import {randomUUID} from 'node:crypto';
 import {APIError,object,uuid} from './http.mjs';
 import {createAccountingActionToken,verifyAccountingActionToken} from './accounting-actions.mjs';
@@ -35,6 +36,7 @@ export async function previewReminderReview({store,body,env,clock=()=>new Date()
  const service=sendNow&&open;
  const delivery={...(service?{type:'freeform',body:text}:{...template}),version:2,artifactVersion:1,tone,mode:sendNow?'immediate':'scheduled',
    windowExpiresAt:window?.windowExpiresAt??null,fallback:service&&approveFallback?template:null};
+ try{assertTestReminderDelivery(invoice,delivery);}catch(error){throw new APIError(409,error.code);}
  const payload={invoiceId,preview:delivery.body,approvalText:delivery.body,sendNow,
    template:{name:entry.name,language:entry.language,revision:entry.revision,parameters,templatePreview:rendered.body,dashboardDraft:text,reviewedDelivery:delivery},
    snapshot:{invoiceVersion:String(invoice.automation_version),invoiceUpdatedAt:invoice.updated_at,settingsUpdatedAt:settings.updated_at,customer:projection}};
@@ -60,6 +62,9 @@ export async function approveReminderReview({store,body,env,clock=()=>new Date()
  if(token.action!=='owner_reminder'||typeof token.payload.reviewHash!=='string'||!body.reviewPayload||reminderFingerprint(body.reviewPayload)!==token.payload.reviewHash)throw new APIError(409,'REMINDER_REVIEW_CHANGED');
  const {payload,summary}=body.reviewPayload;
  object(body.reviewPayload,['payload','summary']);
+ const invoice=(await store.query('invoices',{select:'*',filters:{id:`eq.${uuid(payload.invoiceId)}`},limit:1}))[0];
+ if(!invoice||invoice.deleted_at)throw new APIError(404,'INVOICE_NOT_FOUND');
+ try{assertTestReminderDelivery(invoice,payload.template?.reviewedDelivery);}catch(error){throw new APIError(409,error.code);}
  const id=uuid(token.payload.proposalId);
  await checkApprovalSlot(store,clock,id);
  const proposal=await store.ownerConversation.propose({id,type:'owner_reminder',payload,summary});

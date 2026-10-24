@@ -1,3 +1,4 @@
+import {assertTestReminderDelivery,TEST_TEMPLATE_BLOCK_MESSAGE} from './test-reminder-policy.mjs';
 import {reminderPaymentRpc,localReminderStatusPayable} from '../external-reminder-verification.mjs';
 import {PHONE_FORMAT_GUIDANCE} from './owner-phone.mjs';
 import {ownerConsentFailure} from './owner-consent.mjs';
@@ -9,6 +10,7 @@ import {buildInvoiceReminderParameters} from './reminder-parameters.mjs';
 
 const TYPE='owner_reminder_approval';
 const MESSAGES={
+  test_invoice_template_blocked:TEST_TEMPLATE_BLOCK_MESSAGE,
   AMBIGUOUS:'More than one invoice matches. Which invoice number should I use?',
   NOT_FOUND:'I could not find that invoice in your business.',
   DENIED:'The verified owner binding is unavailable. Reconnect your owner WhatsApp number in Settings, then request a fresh preview. Nothing was approved or sent.',
@@ -42,6 +44,7 @@ export const ownerReminderFailure=code=>({ok:false,completed:false,code:MESSAGES
 const unwrap=result=>{if(result?.error)throw result.error;return result?.data;};
 
 export function prepareOwnerReminderContent({invoice,settings,customer}) {
+  assertTestReminderDelivery(invoice,{type:'template'});
   const entry=selectInvoiceReminderTemplate(settings.follow_up_preferences,customer.reminder_tone??null);
   const parameters=entry.parameterCount===3?[settings.business_name,invoice.invoice_number,customer.name]:buildInvoiceReminderParameters({invoice,settings,customer});
   const rendered=buildReminderTemplate(entry,parameters);
@@ -168,7 +171,7 @@ export function createOwnerReminderRuntime({supabase,scope,message='',messageId,
         let draft;
         try{
           draft=prepareOwnerReminderContent({invoice,settings,customer});
-        }catch{return refuse('template_unavailable');}
+        }catch(error){return refuse(error?.code==='test_invoice_template_blocked'?error.code:'template_unavailable');}
         return await rpc({p_action:'prepare',p_invoice_id:invoice.id,p_send_now:params.operation==='sendReminderNow',
           p_preview:draft.preview,p_approval_text:draft.approvalText,p_template:draft.template,p_snapshot:draft.snapshot},ctx);
       }catch{return refuse('UNAVAILABLE');}

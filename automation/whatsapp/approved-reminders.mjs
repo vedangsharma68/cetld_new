@@ -1,3 +1,4 @@
+import {assertTestReminderDelivery,TEST_TEMPLATE_BLOCK_REASON} from './test-reminder-policy.mjs';
 import {reminderPaymentRpc,localReminderStatusPayable} from '../external-reminder-verification.mjs';
 import {brandedReminder} from '../preferences.mjs';
 import {reminderDeliveryForm,matchesReminderDelivery,hasPersistedLegacyReminderApproval} from './reminder-approval.mjs';
@@ -45,11 +46,13 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
       ||!invoice.due_date||Number(invoice.total_amount)<=Number(invoice.amount_paid)
       ||!['approved','active','scheduled'].includes(invoice.followup_state))throw Error('Reminder facts unavailable');
     const reviewed=invoice.metadata?.approved_reminder_delivery;
+    assertTestReminderDelivery(invoice,reviewed);
     if(reviewed?.version===2&&!testGate){
       const checked=await supabase.rpc('owner_assistant_reminder_dispatch_preview',{p_owner_id:ownerId,p_workspace_id:workspaceId,p_invoice_id:invoice.id});
       const evaluation=checked?.data;
       if(checked?.error||evaluation?.ok!==true)throw Object.assign(Error('The exact reminder delivery needs re-review.'),{code:'DELIVERY_REVIEW_REQUIRED',reason:evaluation?.reason});
       const delivery=evaluation.delivery;
+      assertTestReminderDelivery(invoice,delivery);
       const entry=delivery.type==='template'?REMINDER_TEMPLATES.find(t=>t.name===delivery.name&&t.language===delivery.language&&t.revision===delivery.revision):selectInvoiceReminderTemplate({},reviewed.tone);
       if(!entry)throw Object.assign(Error('The approved template is unavailable.'),{code:'DELIVERY_REVIEW_REQUIRED'});
       const parameters=entry.parameterCount===3?[settings.business_name,invoice.invoice_number,eligibility.customer.name]:buildInvoiceReminderParameters({invoice,settings,customer:eligibility.customer});
@@ -103,6 +106,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
           const permitted=d?.type==='freeform'&&approved.type==='freeform'&&receipt.deliveryForm==='freeform'&&d.body===approved.body
             ||d?.type==='template'&&(approved.type==='template'&&receipt.deliveryForm==='template'&&matchesReminderDelivery(approved,d)
               ||approved.type==='freeform'&&receipt.deliveryForm==='template_fallback'&&matchesReminderDelivery(approved.fallback,d));
+          assertTestReminderDelivery(f.invoice,d);
           const finalSnapshot={...snapshot,body:d?.body,delivery:d,deliveryForm:receipt.deliveryForm};
           if(!permitted||reminderFingerprint(finalSnapshot)!==receipt.snapshot_hash)return blocked('atomic_gate_denied');
           if(d.type==='freeform'){
@@ -117,7 +121,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
           }
         }else if(receipt.snapshot_hash!==hash)return blocked('atomic_gate_denied');
         callbackToken=receipt.callback_token;payload.biz_opaque_callback_data=callbackToken;
-      }catch(error){return blocked(error?.code==='DELIVERY_REVIEW_REQUIRED'?'needs_re_review':'eligibility_unavailable');}
+      }catch(error){if([TEST_TEMPLATE_BLOCK_REASON,'test_invoice_marker_required'].includes(error?.code))return blocked(error.code);return blocked(error?.code==='DELIVERY_REVIEW_REQUIRED'?'needs_re_review':'eligibility_unavailable');}
       // No asynchronous operation between the final atomic reservation and POST.
       if(serviceDeadline!==null&&serviceDeadline<=clock().getTime()){
         // No HTTP dispatch follows this branch. Persist the freshly evaluated
