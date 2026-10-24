@@ -11,6 +11,16 @@ const display=value=>value===null?'none':typeof value==='object'?JSON.stringify(
 
 export function ownerWriteConfirmation(result){
   if(result?.ok!==true||result.completed!==true||result.proposal===true||result.requiresConfirmation===true)return null;
+  if(result.entityType==='invoices'&&result.outcome==='saved'&&result.record){
+    const invoice=result.record;
+    const lines=[`Saved invoice ${invoice.invoiceNumber}.`,
+      `Customer: ${invoice.clientName||'Unknown customer'}`,
+      `Total: ${invoice.currency} ${Number(invoice.total).toFixed(2)}`,
+      `Due date: ${invoice.dueDate||'not shown'}`,
+      `Status: saved (${invoice.status||'unknown'})`];
+    if(result.needsDebtorPhone)lines.push(`What's ${invoice.clientName||'the customer'}'s WhatsApp number? Include the country code, like +91...`);
+    return lines.join('\n');
+  }
   const spec=ENTITIES[result.entityType],record=result.record;
   const action=spec?.actions.find(action=>result.action===`${result.entityType}.${action}`);
   if(!action||!record||typeof record!=='object'||Array.isArray(record))return null;

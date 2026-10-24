@@ -133,7 +133,7 @@ test('printed shipping and inconsistent sample0852 items cannot bypass strict in
   } finally { await f.close(); }
 });
 
-test('missing optional extraction facts and currency alone preserve inferred currency auto-save', async () => {
+test('missing optional extraction facts and currency alone retain inferred currency for owner review', async () => {
   const wire = invoiceWire({currency:null,currencyConfidence:0,lineItems:[],lineItemsConfidence:0,
     outstandingAmount:null,outstandingAmountConfidence:0});
   const extracted = validateInvoiceExtractionWireResponse(wire);
@@ -142,15 +142,16 @@ test('missing optional extraction facts and currency alone preserve inferred cur
   const f = await fixture(wire);
   try {
     const answer = await f.turn('inferred-currency-source');
-    assert.match(answer, /^Saved invoice/);
-    assert.match(answer, /assumed workspace default INR/);
-    const rows = (await f.db.query('select * from invoices')).rows;
-    assert.equal(rows.length, 1);
-    assert.equal(Number(rows[0].total_amount), 118);
-    assert.equal(rows[0].currency, 'INR');
-    assert.equal(rows[0].metadata.subtotal, 100);
-    assert.equal(rows[0].metadata.tax, 18);
-    assert.equal((await f.db.query('select count(*)::int n from invoice_files')).rows[0].n, 1);
+    assert.match(answer, /^Invoice PRINTED-118 for Fixture customer: INR 118/);
+    assert.match(answer,/Reply yes/);
+    const review=(await f.pending.loadInvoiceReview(f.scope)).action;
+    assert.equal(review.stage,'proposal');
+    assert.equal(review.invoice.total,118);
+    assert.equal(review.invoice.currency,'INR');
+    assert.equal(review.invoice.subtotal,100);
+    assert.equal(review.invoice.tax,18);
+    assert.ok(review.assumptions.some(value=>/assumed workspace default INR/.test(value)));
+    await f.assertNoInvoiceWrites();
     assert.deepEqual(f.errors, []);
   } finally { await f.close(); }
 });

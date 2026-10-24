@@ -211,7 +211,9 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     const {settings,available:settingsAvailable}=settingsState;
     const {pendingAtStart,pendingInitialState,available:pendingStateAvailable}=pendingState;
     pendingStoreAvailable=pendingStateAvailable;
-    if (scope.contactCard || (!scope.media && !scope.mediaError && pendingAtStart?.action?.type === 'invoice_debtor_phone')) {
+    // Resume the original operation before handling a phone follow-up it created.
+    // Its confirmation message is not a new answer to that follow-up.
+    if (!scope.checkpoint && (scope.contactCard || (!scope.media && !scope.mediaError && pendingAtStart?.action?.type === 'invoice_debtor_phone'))) {
       const answer = await answerDebtorPhone({pending, scope: {workspaceId, customerId: scope.customerId, phone},
         message, contactCard: scope.contactCard, clock, pendingRow: pendingAtStart,
         storeFactory: () => invoiceStoreFactory({...scope,ownerId,ownerPhone:phone,messageId,message,audience:'owner',

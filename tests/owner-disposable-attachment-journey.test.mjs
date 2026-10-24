@@ -54,6 +54,10 @@ test('failed extraction is closed safely and a fresh JPEG retries through the re
     assert.equal(failedAction.action.failureCode,'EXTRACTION_UNAVAILABLE');
 
     const retried=await turn('fresh-retry-source');
+    assert.match(retried.reply.answer,/Reply yes/);
+    assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,0);
+    await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values('retry-confirm','fixture',$1,'text','yes','processing')",[phone]);
+    retried.reply=await handler({...scope,messageId:'retry-confirm',message:'yes'});
     assert.match(retried.reply.answer,/Saved invoice SAFE-RETRY-118/,JSON.stringify({reply:retried.reply,extractionCalls,errors:f.errors,toolResults}));
     assert.equal(extractionCalls,2);
     const invoices=(await db.query('select * from invoices where workspace_id=$1',[workspaceId])).rows;

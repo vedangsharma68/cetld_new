@@ -99,7 +99,7 @@ test('expired proposal is refused and consumed', async () => {
   assert.equal(consumed, 1);
 });
 
-test('bound media extracts and immediately saves with a logged reply', async () => {
+test('bound media extracts and presents a review without saving', async () => {
   const saved = [];
   const providerOptions = [];
   const values = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
@@ -114,9 +114,9 @@ test('bound media extracts and immediately saves with a logged reply', async () 
     saveInvoice: async ({invoice}) => ({saved: true, invoice}), invoiceStoreFactory: () => ({}),
     extract: async () => ({...values, lineItems: {value: [], confidence: .99}})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/jpeg', fileName: 'invoice.jpg'}});
-  assert.match(answer, /^Saved invoice INV-7[\s\S]*INR/);
-  assert.doesNotMatch(answer, /reply yes/i);
-  assert.deepEqual(saved.map(item => item.action.stage), ['proposal', 'saving', 'saved']);
+  assert.match(answer, /^Invoice INV-7[\s\S]*INR/);
+  assert.match(answer, /reply yes/i);
+  assert.deepEqual(saved.map(item => item.action.stage), ['proposal']);
   assert.equal(providerOptions[0].primaryModel, CF_QWEN_MODEL, 'chat keeps the configured conversational model');
   assert.equal(providerOptions[1].primaryModel, 'gemini-3.5-flash-lite', 'media uses the vision extraction model');
   assert.equal(providerOptions[1].requestPurpose, 'extraction', 'media extraction uses its bounded provider policy');
@@ -141,8 +141,9 @@ test('production extraction advances an incomplete OCR draft to vision and propo
       parseOfflineInvoiceText('Subtotal 100.00\nTax 18.00\nTotal 118.00', {ocrConfidence: 95})})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([137,80,78,71,13,10,26,10,0]), mimeType: 'image/png'}});
   assert.equal(visionCalls, 1);
-  assert.equal(stored, 3);
-  assert.match(answer, /^Saved invoice INV-10/);
+  assert.equal(stored, 1);
+  assert.match(answer, /^Invoice INV-10/);
+  assert.match(answer,/Reply yes/);
 });
 
 test('incomplete media asks for missing facts and retains an incomplete review without a proposal', async () => {
@@ -183,7 +184,7 @@ test('Vercel traces OCR assets into both WhatsApp functions', async () => {
   }
 });
 
-test('photo save preserves printed identity and links the original file without making save depend on storage', async () => {
+test('photo review preserves printed identity and leaves file storage until confirmation', async () => {
   const transitions=[]; const files=[];
   const values=Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name=>[name,{value:({invoiceNumber:'INV-2026-0720',customerName:'Global Dynamics Inc.',invoiceDate:'2026-09-30',dueDate:'2026-10-30',subtotal:100,tax:0,total:100,outstandingAmount:100,currency:'USD',direction:'receivable'})[name]??null,confidence:.99}]));
@@ -193,8 +194,12 @@ test('photo save preserves printed identity and links the original file without 
     saveInvoice:async({invoice})=>({saved:true,invoice:{...invoice,id:'saved-invoice',invoiceNumber:'INV-2026-0001'}}),logger:{error(){}}});
   const media={bytes:Buffer.from([1,2,3]),mimeType:'image/jpeg',fileName:'real.jpg'};
   const kept=await make(async input=>files.push(input))({...scope,message:'',messageId:'wamid-photo',media});
-  assert.match(kept,/Printed number: INV-2026-0720/); assert.match(kept,/for Global Dynamics Inc\./);
-  assert.equal(files[0].invoiceId,'saved-invoice'); assert.deepEqual(files[0].bytes,media.bytes);
+  assert.match(kept,/Invoice INV-2026-0720/); assert.match(kept,/for Global Dynamics Inc\./);
+  assert.match(kept,/Reply yes/);
+  assert.equal(files.length,0);
+  assert.equal(transitions[0].action.stage,'proposal');
+  assert.equal(transitions[0].action.invoice.invoiceNumber,'INV-2026-0720');
   const notKept=await make(async()=>{throw Error('storage unavailable')})({...scope,message:'',messageId:'wamid-photo-2',media});
-  assert.match(notKept,/original file wasn’t kept/i);
+  assert.equal(notKept,kept);
+  assert.deepEqual(transitions.map(item=>item.action.stage),['proposal','proposal']);
 });

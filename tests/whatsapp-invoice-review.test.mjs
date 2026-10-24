@@ -161,7 +161,7 @@ test('CAS rejects wrong scope and stale photo/currency workers without resurrect
   assert.equal(state.row.action.stage, 'extracting');
 });
 
-test('currency-missing photo uses a default and auto-saves without confirmation', async () => {
+test('currency-missing caption intake reviews the assumed default without saving', async () => {
   let row = null, planner = 0, saves = 0;
   const pending = {async beginInvoiceReview() { row = {id: 12, version: 1, generation: 1,
     action: {type: 'invoice_review_draft', stage: 'extracting'}}; return structuredClone(row); },
@@ -188,14 +188,13 @@ test('currency-missing photo uses a default and auto-saves without confirmation'
     channelFactory: () => ({async ask() { planner++; return {answer: 'planner'}; }}),
     extract: async () => ({...fields, lineItems: {value: [], confidence: .99}})});
   const reply = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/png'}});
-  assert.match(reply, /^Saved invoice INV-50/);
-  assert.match(reply, /currency not shown; assumed workspace default INR/);
-  assert.doesNotMatch(reply, /reply yes/i);
-  assert.equal(row.action.stage, 'saved');
-  assert.equal(planner, 0); assert.equal(saves, 1);
+  assert.match(reply, /^Invoice INV-50 for Buyer: INR 100, due 2026-10-31/);
+  assert.match(reply, /reply yes/i);
+  assert.equal(row.action.stage, 'proposal');
+  assert.equal(planner, 0); assert.equal(saves, 0);
 });
 
-test('default handler, real invoice store auto-saves a photo exactly once', async () => {
+test('default handler shows a review before explicit confirmation saves once', async () => {
   const db = combinedSupabase();
   const fields = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-50',customerName:'Buyer',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:0,total:100,outstandingAmount:100,direction:'receivable'})[name] ?? null,
@@ -203,13 +202,13 @@ test('default handler, real invoice store auto-saves a photo exactly once', asyn
   const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase: db, providerFactory: () => ({}),
     extract: async () => ({...fields, lineItems: {value: [], confidence: .99}})});
   const logged = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/png'}});
-  assert.match(logged, /^Saved invoice INV-50/);
-  assert.doesNotMatch(logged, /reply yes/i);
+  assert.match(logged, /^Invoice INV-50/);
+  assert.match(logged, /reply yes/i);
   assert.equal(db.review.action.invoice.invoiceNumber, 'INV-50');
   assert.equal(db.review.action.invoice.currency, 'INR');
   assert.equal(Object.hasOwn(db.review.action.invoice, 'missingDueDate'), false);
-  assert.equal(db.invoices.length, 1);
-  assert.match(await handler({...scope, message: 'yes'}), /already saved/i);
+  assert.equal(db.invoices.length, 0);
+  assert.match(await handler({...scope, message: 'yes'}), /Saved invoice/i);
   assert.equal(db.invoices.length, 1);
   assert.equal(Object.hasOwn(db.review.action.invoice, 'missingDueDate'), false);
 
@@ -219,8 +218,8 @@ test('default handler, real invoice store auto-saves a photo exactly once', asyn
   complete.currency = {value: 'USD', confidence: .99};
   const completeHandler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase: completeDb, providerFactory: () => ({}),
     extract: async () => ({...complete, lineItems: {value: [], confidence: .99}})});
-  assert.match(await completeHandler({...scope, message: '', media: {bytes: Buffer.from([2]), mimeType: 'image/png'}}), /^Saved invoice INV-51/);
-  assert.equal(completeDb.invoices.length, 1);
+  assert.match(await completeHandler({...scope, message: '', media: {bytes: Buffer.from([2]), mimeType: 'image/png'}}), /^Invoice INV-51/);
+  assert.equal(completeDb.invoices.length, 0);
   assert.equal(Object.hasOwn(completeDb.review.action.invoice, 'missingDueDate'), false);
 });
 
@@ -379,7 +378,7 @@ function phoneInvoicePdf(phoneLine) {
 }
 
 for (const printed of ['WhatsApp: +14155550244', '', 'Phone: 4155550244']) {
-  test(`PDF ingest saves the printed debtor phone or asks once: ${printed || 'absent'}`, async () => {
+  test(`PDF intake retains the printed debtor phone for review: ${printed || 'absent'}`, async () => {
     const {extractInvoice} = await import('../ai/extraction.mjs');
     const db = combinedSupabase(), writes = [];
     const store = createWhatsAppInvoiceStore({supabase: db, ...scope});
@@ -390,23 +389,13 @@ for (const printed of ['WhatsApp: +14155550244', '', 'Phone: 4155550244']) {
       channelFactory: () => ({ask() { throw Error('must not plan'); }})});
     const reply = await handler({...scope, message: '', messageId: 'pdf-phone',
       media: {bytes: phoneInvoicePdf(printed), mimeType: 'application/pdf', fileName: 'phone.pdf'}});
-    assert.match(reply, /^Saved invoice PHONE-50/);
-    assert.equal(db.invoices.length, 1);
+    assert.match(reply, /^Invoice PHONE-50 for Buyer: USD 100, due 2026-10-31/);
+    assert.match(reply,/Reply yes/);
+    assert.equal(db.invoices.length, 0);
+    assert.equal(db.review.action.stage,'proposal');
     assert.equal(db.review.action.invoice.clientName, 'Buyer');
-    if (printed.includes('+')) {
-      assert.equal(writes.length, 1);
-      assert.equal(writes[0].phone, '+14155550244');
-      assert.ok(writes[0].assumedConsentAt);
-      assert.equal(db.invoices[0].metadata.debtor_phone, '+14155550244');
-      assert.doesNotMatch(reply, /WhatsApp number/);
-    } else {
-      assert.equal(writes.length, 0);
-      assert.equal((reply.match(/\?/g) || []).length, 1);
-      assert.match(reply, /country code/);
-      const pending = await createWhatsAppPendingActionStore({supabase: db}).loadPendingActionState(scope);
-      assert.equal(pending.action.type, 'invoice_debtor_phone');
-      assert.equal(pending.action.stage, 'awaiting_phone');
-    }
-    assert.equal(db.invoices[0].metadata.debtor_consent, undefined);
+    assert.equal(db.review.action.invoice.clientPhone,printed.includes('+')?'+14155550244':null);
+    assert.equal(writes.length,0);
+
   });
 }

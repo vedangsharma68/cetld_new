@@ -22,3 +22,12 @@ test('adjacent business record and settings receipts render deterministically',(
   assert.equal(ownerWriteConfirmation({ok:true,completed:true,entityType:'ai_settings',action:'ai_settings.updated',record:{primary_model:'exact-model',fallback_model:null}}),
     'Updated AI settings.\nPrimary model: exact-model\nFallback model: none');
 });
+
+test('invoice receipts render committed public facts and only ask for a missing debtor phone',()=>{
+  const result={ok:true,completed:true,entityType:'invoices',outcome:'saved',record:{invoiceNumber:'INV-48',clientName:'Buyer',
+    total:6190,currency:'USD',dueDate:'2026-11-24',status:'draft',id:'private-id',metadata:{secret:'private-metadata'}}};
+  assert.equal(ownerWriteConfirmation(result),'Saved invoice INV-48.\nCustomer: Buyer\nTotal: USD 6190.00\nDue date: 2026-11-24\nStatus: saved (draft)');
+  assert.match(ownerWriteConfirmation({...result,needsDebtorPhone:true}),/What's Buyer's WhatsApp number\? Include the country code/);
+  assert.doesNotMatch(ownerWriteConfirmation(result),/private|WhatsApp/);
+  assert.equal(ownerWriteConfirmation({...result,completed:false}),null);
+});
