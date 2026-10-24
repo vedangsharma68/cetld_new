@@ -1,3 +1,4 @@
+import {reminderPaymentRpc,localReminderStatusPayable} from '../external-reminder-verification.mjs';
 import {brandedReminder} from '../preferences.mjs';
 import {reminderDeliveryForm,matchesReminderDelivery,hasPersistedLegacyReminderApproval} from './reminder-approval.mjs';
 import {getSendEligibility} from './consent.mjs';
@@ -13,7 +14,7 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const QA=new Set(['+919871367051','+919818685252']);
 const blocked=reason=>({status:'blocked',reason});
 
-export function createApprovedReminderProvider({env=process.env,supabase,store,ownerId,workspaceId,fetchImpl=fetch,clock=()=>new Date()}={}){
+export function createApprovedReminderProvider({env=process.env,supabase,store,ownerId,workspaceId,accounting,fetchImpl=fetch,clock=()=>new Date()}={}){
   const test=scheduledOwnerTestMode(env,clock());
   const testGate=test.mode==='test'?createScheduledOwnerTestGate({test,env,supabase,store,fetchImpl,clock}):null;
   function enabled(){return ['WHATSAPP_REMINDERS_ENABLED','AUTOMATION_OUTBOUND_ENABLED','WHATSAPP_OUTBOUND_ENABLED'].every(k=>env[k]==='true')
@@ -40,7 +41,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
       getSendEligibility({supabase,workspaceId,phone:input.to,category:'invoice_updates'}),
     ]);
     if(!eligibility.allowed||!invoice||invoice.deleted_at||hasUnresolvedFollowUpException(invoice)||!settings||invoice.customer_id!==eligibility.customer.id
-      ||invoice.customerPhone!==input.to||invoice.status!=='sent'||invoice.metadata?.invoice_direction!=='receivable'
+      ||invoice.customerPhone!==input.to||!localReminderStatusPayable(invoice)||invoice.metadata?.invoice_direction!=='receivable'
       ||!invoice.due_date||Number(invoice.total_amount)<=Number(invoice.amount_paid)
       ||!['approved','active','scheduled'].includes(invoice.followup_state))throw Error('Reminder facts unavailable');
     const reviewed=invoice.metadata?.approved_reminder_delivery;
@@ -91,8 +92,8 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
         payload={messaging_product:'whatsapp',recipient_type:'individual',to:input.to.slice(1),...(f.delivery.type==='freeform'?{type:'text',text:{preview_url:false,body:f.body}}:{type:'template',template:f.template})};
         serviceDeadline=f.delivery.type==='freeform'?Date.parse(f.windowDeadline):null;
         if(testGate&&!await testGate.claimAttempt())return blocked('scheduled_owner_test_already_attempted');
-        const result=await supabase.rpc('cetld_core_authorize_first_party_reminder',{
-          p_owner_id:ownerId,p_workspace_id:workspaceId,p_claim_id:claimId,p_snapshot:snapshot,p_snapshot_hash:hash});
+        const result=await reminderPaymentRpc({supabase,name:'cetld_core_authorize_first_party_reminder',invoice:f.invoice,ownerId,workspaceId,accounting,env,fetchImpl,args:{
+          p_owner_id:ownerId,p_workspace_id:workspaceId,p_claim_id:claimId,p_snapshot:snapshot,p_snapshot_hash:hash}});
         if(result.error)return blocked('atomic_gate_unavailable');
         const receipt=Array.isArray(result.data)?result.data[0]:result.data;
         if(receipt?.authorized!==true&&receipt?.reason==='needs_re_review')return blocked('needs_re_review');

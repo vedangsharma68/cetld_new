@@ -286,6 +286,17 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     return { provider, invoiceId: String(invoiceId), balanceMinor: balance.balanceMinor, currency: balance.currency || null, amountMinor: balance.totalMinor ?? null };
   }
 
+  // Live single-invoice read only. Never imports snapshots or updates invoices.
+  async function reminderInvoiceState({userId, workspaceId, provider, invoiceId, signal} = {}) {
+    const context = identity({userId, workspaceId, provider});
+    const connection = await store.getConnection(context);
+    if (connection?.status !== 'connected' || !connection.providerAccountId || !invoiceId
+      || typeof providers[provider].fetchInvoiceBalance !== 'function') throw new Error('Authoritative invoice read unavailable');
+    const {token,connection:active} = await accessToken(context);
+    if (active.status !== 'connected' || active.providerAccountId !== connection.providerAccountId) throw new Error('Accounting connection changed');
+    return providers[provider].fetchInvoiceBalance({token, accountId: active.providerAccountId, invoiceId, signal, retryReads:false});
+  }
+
   // Connection selection and token preparation belong to this server runtime,
   // never to a caller-scoped invoice store. No invoice attempt is dispatched here.
   async function prepareInvoiceSync({ userId, workspaceId, provider, invoice, invoiceId } = {}) {
@@ -351,5 +362,5 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     }
   }
 
-  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, connectionStatus, selectOrganization, disconnect, readZohoData, sync, retrySync: sync, syncInvoicesAndPayments: sync, prepareInvoiceSync, syncInvoice, updateInvoice, latestInvoiceBalance });
+  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, connectionStatus, selectOrganization, disconnect, readZohoData, sync, retrySync: sync, syncInvoicesAndPayments: sync, prepareInvoiceSync, syncInvoice, updateInvoice, latestInvoiceBalance, reminderInvoiceState });
 }

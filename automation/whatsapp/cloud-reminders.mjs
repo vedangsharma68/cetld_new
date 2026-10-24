@@ -1,3 +1,4 @@
+import {reminderPaymentRpc,localReminderStatusPayable} from '../external-reminder-verification.mjs';
 import {reminderDeliveryForm,matchesReminderDelivery} from './reminder-approval.mjs';
 import {reminderFingerprint} from './reminder-fingerprint.mjs';
 import {getSendEligibility} from './consent.mjs';
@@ -12,7 +13,7 @@ const blocked=reason=>({status:'blocked',reason});
  * templateSnapshot and fixed owner/workspace are trusted server configuration,
  * never model arguments. No arbitrary text or recipient selection is exposed.
  */
-export function createFirstPartyReminderProvider({env=process.env,supabase,store,ownerId,workspaceId,templateSnapshot,fetchImpl=fetch}={}) {
+export function createFirstPartyReminderProvider({env=process.env,supabase,store,ownerId,workspaceId,templateSnapshot,accounting,fetchImpl=fetch}={}) {
   const template=templateSnapshot?structuredClone(templateSnapshot):null;
   const validTemplate=template?.status==='APPROVED'&&template.category==='UTILITY'
     &&template.useCase==='first_party_invoice_reminder'&&/^[a-z][a-z0-9_]{0,511}$/.test(template.name||'')
@@ -45,7 +46,7 @@ export function createFirstPartyReminderProvider({env=process.env,supabase,store
       const invoice=await store.getInvoice(scope),settings=await store.getWorkspacePreferences(scope);
       if(!invoice||invoice.deleted_at)return blocked('invoice_unavailable');
       if(invoice.customer_id!==input.customerId)return blocked('customer_changed');
-      if(invoice.status!=='sent'||invoice.metadata?.invoice_direction!=='receivable'||Number(invoice.amount_paid)>=Number(invoice.total_amount))return blocked('invoice_not_remindable');
+      if(!localReminderStatusPayable(invoice)||invoice.metadata?.invoice_direction!=='receivable'||Number(invoice.amount_paid)>=Number(invoice.total_amount))return blocked('invoice_not_remindable');
       if(!['approved','active','scheduled'].includes(invoice.followup_state))return blocked('paused_or_unreviewed');
       if(!settings?.business_name||new Date(invoice.metadata?.approved_preferences_updated_at).getTime()!==new Date(settings.updated_at).getTime())return blocked('stale_review');
       const eligibility=await getSendEligibility({supabase,workspaceId,phone:input.to});
@@ -74,8 +75,8 @@ export function createFirstPartyReminderProvider({env=process.env,supabase,store
       // Required future RPC: lock owner/workspace, claim, invoice, preferences,
       // customer, consent and suppression; validate this entire snapshot; reserve
       // one dispatch durably. Missing/failed gate never falls back to old SQL.
-      const gate=await supabase.rpc('cetld_core_authorize_first_party_reminder',{
-        p_owner_id:ownerId,p_workspace_id:workspaceId,p_claim_id:claimId,p_snapshot:snapshot,p_snapshot_hash:hash});
+      const gate=await reminderPaymentRpc({supabase,name:'cetld_core_authorize_first_party_reminder',invoice,ownerId,workspaceId,accounting,env,fetchImpl,args:{
+        p_owner_id:ownerId,p_workspace_id:workspaceId,p_claim_id:claimId,p_snapshot:snapshot,p_snapshot_hash:hash}});
       if(gate?.error)return blocked('atomic_gate_unavailable');
       const receipt=Array.isArray(gate.data)?gate.data[0]:gate.data;
       if(receipt?.authorized!==true)return blocked('atomic_gate_denied');

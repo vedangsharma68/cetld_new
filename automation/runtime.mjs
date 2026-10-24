@@ -97,7 +97,7 @@ export function createAutomationRuntime({env=process.env,fetchImpl=fetch,store,p
       let reminders;
       if(env.WHATSAPP_PROVIDER==='first_party_meta'){
         if(!firstPartyReminderEnabled(env))return {processed:0,results:[],disabled:true,summary:summary.enabled?{day:summary.day,counts:summary.counts}:null};
-        reminders=createFirstPartyReminderRuntime({env,scope,store,supabase,fetchImpl,clock});
+        reminders=createFirstPartyReminderRuntime({env,scope,store,supabase,accounting,fetchImpl,clock});
         if(test.mode==='test'){
           if(await reminders.testGate.consumed())return {processed:0,results:[],test:true,alreadyAttempted:true};
           await reminders.testGate.review();
