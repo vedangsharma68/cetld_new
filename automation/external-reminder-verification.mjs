@@ -4,10 +4,10 @@ const text=value=>String(value??'').trim();
 export const hasExternalReminderLedger=i=>[i.external_provider,i.external_invoice_id,i.metadata?.accounting_provider,i.metadata?.bookkeeping_record_id].some(value=>text(value));
 // Preserve the existing sent-only gate for unlinked invoices.
 export const localReminderStatusPayable=i=>i.status==='sent'||i.status==='overdue'&&hasExternalReminderLedger(i);
-// Only concrete Zoho invoice states; unpaid is a search category, not accepted.
+// Only sourced concrete Zoho invoice states; viewed/unpaid filters are not accepted.
 // Zoho status vocabulary: https://www.zoho.com/books/api/v3/invoices/
 // https://www.zoho.com/us/books/kb/invoices/invoice-life-cycle.html
-const zohoPayableStatuses=new Set(['sent','viewed','overdue','partially_paid']);
+const zohoPayableStatuses=new Set(['sent','overdue','partially_paid']);
 // Intuit's optional invoiceStatus schema (not EmailStatus):
 // https://github.com/intuit/QuickBooks-V3-PHP-SDK/blob/8bf471f08c39dffc4851f4d0714d43366a1ae857/src/Data/IPPInvoice.php
 const qboPayableStatuses=new Set(['DUE_VIEWED','DUE_NOT_SENT','DUE_SENT','OVERDUE_VIEWED','OVERDUE_NOT_SENT','OVERDUE_SENT','PARTIALLY_PAID']);

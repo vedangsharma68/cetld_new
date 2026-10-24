@@ -89,7 +89,7 @@ for(const fullReview of [false,true])test(`linked reminder live reads fail close
    const i=await invoice(null),before=reads;assert.equal((await prepare(i)).ok,true);assert.equal((await confirm()).completed,true);
    const result=await automation.tick(scope);assert.equal(result.results[0]?.status,'sent',JSON.stringify({result,errors:f.errors}));assert.equal(reads,before);
   });
-  for(const localStatus of ['sent','overdue'])for(const remoteState of ['sent','viewed','overdue','partially_paid'])
+  for(const localStatus of ['sent','overdue'])for(const remoteState of ['sent','overdue','partially_paid'])
    await t.test(`Zoho concrete ${remoteState} with local ${localStatus} queues and dispatches`,async()=>{
     resetRemote();remoteStatus=remoteState;const paid=remoteState==='partially_paid'?25:0;remoteBalance=125-paid;
     let i=await invoice();i=(await db.query('update invoices set status=$2,amount_paid=$3 where id=$1 returning *',[i.id,localStatus,paid])).rows[0];
@@ -103,7 +103,7 @@ for(const fullReview of [false,true])test(`linked reminder live reads fail close
     assert.equal(saved.status,localStatus);assert.equal(Number(saved.amount_paid),paid);assert.equal(saved.reminder_count,1);
     assert.ok(new Date(saved.next_follow_up_at)>new Date(),'overdue receipts advance cadence too');
    });
-  for(const remoteState of ['paid','void','voided','draft','unpaid','mystery','',null])
+  for(const remoteState of ['paid','void','voided','draft','viewed','unpaid','mystery','',null])
    await t.test(`Zoho ${JSON.stringify(remoteState)} refuses queue and final dispatch`,async()=>{
     resetRemote();const i=await invoice();remoteStatus=remoteState;
     assert.equal((await prepare(i)).code,'external_accounting_required');
