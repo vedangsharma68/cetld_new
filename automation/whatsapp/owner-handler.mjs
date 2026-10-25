@@ -151,8 +151,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
           if(!await authorizeTurn(scope))throw Object.assign(new Error(),{code:'UNAUTHORIZED'});
           assertActiveTurn();
           // The review RPC atomically retires expired/undated drafts and keeps
-          // saving reviews. The general pending read omits expires_at, so let
-          // the database decide, then refresh both inputs to proposal CAS.
+          // saving reviews. Let the database decide, then refresh both
+          // inputs to proposal CAS.
           await timedContextRead(logger,'invoice_review_expiration',()=>pending.loadInvoiceReview({workspaceId,customerId:scope.customerId,phone}));
           assertActiveTurn();
           snapshot=await readPendingSnapshot();
@@ -213,7 +213,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     pendingStoreAvailable=pendingStateAvailable;
     // Resume the original operation before handling a phone follow-up it created.
     // Its confirmation message is not a new answer to that follow-up.
-    if (!scope.checkpoint && (scope.contactCard || (!scope.media && !scope.mediaError && pendingAtStart?.action?.type === 'invoice_debtor_phone'))) {
+    if (!scope.interactionId && !scope.checkpoint && (scope.contactCard || (!scope.media && !scope.mediaError && pendingAtStart?.action?.type === 'invoice_debtor_phone'))) {
       const answer = await answerDebtorPhone({pending, scope: {workspaceId, customerId: scope.customerId, phone},
         message, contactCard: scope.contactCard, clock, pendingRow: pendingAtStart,
         storeFactory: () => invoiceStoreFactory({...scope,ownerId,ownerPhone:phone,messageId,message,audience:'owner',

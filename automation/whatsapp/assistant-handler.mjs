@@ -13,7 +13,7 @@ import {CURRENCY_SUPPORT_MESSAGE, isSupportedCurrency} from '../../currency-cont
 import {deriveInvoiceDueDate, inferInvoiceCurrency, todayInKolkata} from '../../ai/invoice-photo-inference.mjs';
 import {classifyIntent} from './intent.mjs';
 
-const requiredInvoiceFields = ['invoiceNumber','customerName','invoiceDate','dueDate','total','currency','direction'];
+const requiredInvoiceFields = ['invoiceNumber','customerName','invoiceDate','total','currency','direction'];
 const fieldLabels = {invoiceNumber: 'invoice number', customerName: 'customer name', invoiceDate: 'invoice date',
   dueDate: 'due date', total: 'total', currency: 'explicit currency code (for example INR or USD)',
   direction: 'confirmation that your business issued the invoice'};
@@ -78,12 +78,12 @@ function invoiceProposal(extracted) {
   if (requiredInvoiceFields.some(name => extracted?.[name]?.value == null || extracted[name].confidence < 0.75)
     || extracted.direction.value !== 'receivable') return null;
   return {invoiceNumber: extracted.invoiceNumber.value, clientName: extracted.customerName.value,
-    clientEmail: extracted.clientEmail.value, clientPhone: extracted.clientPhone.value,
-    clientPhoneRaw: extracted.clientPhoneRaw.value,
-    invoiceDate: extracted.invoiceDate.value, dueDate: extracted.dueDate.value,
-    subtotal: extracted.subtotal.value, tax: extracted.tax.value, total: extracted.total.value,
-    outstanding: extracted.outstandingAmount.value ?? extracted.total.value, currency: extracted.currency.value,
-    notes: extracted.notes.value, alreadyPaid: false, direction: 'receivable', lineItems: extracted.lineItems.value};
+    clientEmail: extracted.clientEmail?.value ?? null, clientPhone: extracted.clientPhone?.value ?? null,
+    clientPhoneRaw: extracted.clientPhoneRaw?.value ?? null,
+    invoiceDate: extracted.invoiceDate.value, dueDate: extracted.dueDate?.confidence >= .75 ? extracted.dueDate.value : null,
+    subtotal: extracted.subtotal?.value ?? null, tax: extracted.tax?.value ?? null, total: extracted.total.value,
+    outstanding: extracted.outstandingAmount?.value ?? extracted.total.value, currency: extracted.currency.value,
+    notes: extracted.notes?.value ?? null, alreadyPaid: false, direction: 'receivable', lineItems: extracted.lineItems?.value || []};
 }
 
 function missingFields(extracted) {
@@ -96,7 +96,7 @@ export function reviewDraft(extracted, sourceMessageId = null) {
     invoiceNumber: extracted?.invoiceNumber?.value ?? null, clientName: extracted?.customerName?.value ?? null,
     clientEmail: extracted?.clientEmail?.value ?? null, clientPhone: extracted?.clientPhone?.value ?? null,
     clientPhoneRaw: extracted?.clientPhoneRaw?.value ?? null,
-    invoiceDate: extracted?.invoiceDate?.value ?? null, dueDate: extracted?.dueDate?.value ?? null,
+    invoiceDate: extracted?.invoiceDate?.value ?? null, dueDate: extracted?.dueDate?.confidence >= .75 ? extracted.dueDate.value : null,
     subtotal: extracted?.subtotal?.value ?? null, tax: extracted?.tax?.value ?? null,
     total: extracted?.total?.value ?? null,
     outstanding: extracted?.outstandingAmount?.value ?? extracted?.total?.value ?? null,
@@ -109,6 +109,7 @@ export function reviewDraft(extracted, sourceMessageId = null) {
   return {type: 'invoice_review_draft', stage: 'incomplete', invoice,
     ...(extracted?.paymentStatus?.value ? {paymentEvidence: {status: extracted.paymentStatus.value,
       text: extracted.paymentStatusEvidence?.value ?? null, confidence: extracted.paymentStatus.confidence}} : {}),
+    validationIssues: extractionValidationIssues(extracted),
     missingFields: missingFields(extracted), currencySource: hasPhotoCurrency?'photo':null,sourceMessageId};
 }
 
@@ -217,8 +218,8 @@ function approvedInvoice(value) {
   return invoice;
 }
 
-export function proposalSummary(invoice) {
-  return `Invoice ${invoice.invoiceNumber} for ${invoice.clientName}: ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}, due ${invoice.dueDate || 'not shown'}. Save it? Reply yes.`;
+export function proposalSummary(invoice, {buttonsAvailable = false, continued = false} = {}) {
+  return `Invoice ${invoice.invoiceNumber} for ${invoice.clientName}: ${invoice.currency} ${continued ? invoice.total.toFixed(2) : invoice.total.toLocaleString('en-IN')}, due ${invoice.dueDate || 'not shown'}. Save it? ${buttonsAvailable ? 'Tap Confirm or Cancel.' : 'Reply yes to confirm, or no to cancel.'}${continued ? ' Nothing was saved.' : ''}`;
 }
 
 const PHONE_CANDIDATE = /\+[\d\s().-]{7,24}\d/;
@@ -337,7 +338,10 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         const invoiceDate = extracted?.invoiceDate?.value && extracted.invoiceDate.confidence >= 0.75
           ? extracted.invoiceDate.value : todayInKolkata(clock());
         if (invoiceDate !== extracted?.invoiceDate?.value) assumptions.push('invoice date was not shown, so today in Asia/Kolkata was used');
-        const due = deriveInvoiceDueDate(invoiceDate,
+        const due = audience === 'owner'
+          ? {dueDate: extracted?.dueDate?.confidence >= .75 ? extracted.dueDate.value : null,
+            source: extracted?.dueDate?.value && extracted.dueDate.confidence >= .75 ? 'printed' : 'not shown'}
+          : deriveInvoiceDueDate(invoiceDate,
           extracted?.dueDate?.confidence >= 0.75 ? extracted.dueDate.value : null,
           extracted?.paymentTerms?.value || extracted?.notes?.value || '');
         if (due.source.startsWith('derived')) assumptions.push(`due date ${due.source}`);
@@ -345,7 +349,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         if (audience !== 'owner' && (extracted?.direction?.value !== 'receivable' || extracted.direction.confidence < 0.75)) {
           assumptions.push('direction assumed to be an invoice you issued');
         }
-        const invoice = {invoiceNumber: extracted?.invoiceNumber?.value || 'AUTO', clientName: extracted?.customerName?.value ?? null,
+        const invoice = {invoiceNumber: extracted?.invoiceNumber?.value || null, clientName: extracted?.customerName?.value ?? null,
           clientEmail: extracted?.clientEmail?.value ?? null, clientPhone: extracted?.clientPhone?.value ?? null,
           clientPhoneRaw: extracted?.clientPhoneRaw?.value ?? null,
           invoiceDate, dueDate: due.dueDate, subtotal: extracted?.subtotal?.value ?? null,
@@ -357,7 +361,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         try { invoice.clientPhone = normalizeOwnerPhone(invoice.clientPhone); }
         catch { invoice.clientPhone = null; }
         const validationIssues = extractionValidationIssues(extracted);
-        const missing = ['customerName', 'total'].filter(field => extracted?.[field]?.value == null
+        const missing = ['invoiceNumber', 'customerName', 'total'].filter(field => extracted?.[field]?.value == null
           || extracted[field].confidence < 0.75 || field === 'total' && extracted[field].value <= 0);
         let validatedInvoice;
         try { validatedInvoice = approvedInvoice(invoice); }

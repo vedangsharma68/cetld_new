@@ -31,7 +31,7 @@ export function createOwnerReplyStore({supabase,clock=()=>new Date(),env=process
     const ref=normalizeOwnerActionRef(reference);
     if(!ref)return [];
     try{
-      const action=data(await supabase.from('whatsapp_pending_actions').select('id,version,workspace_id,phone,action,consumed_at')
+      const action=data(await supabase.from('whatsapp_pending_actions').select('id,version,workspace_id,phone,action,consumed_at,expires_at')
         .eq('workspace_id',scope.workspaceId).eq('phone',scope.phone).eq('id',ref.pendingId)
         .eq('version',ref.pendingVersion).is('consumed_at',null).maybeSingle());
       if(!action||action.workspace_id!==scope.workspaceId||action.phone!==scope.phone

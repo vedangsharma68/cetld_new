@@ -8,7 +8,7 @@ const PHONE = /^\+[1-9]\d{6,14}$/;
 const BUTTON_ACTION_TYPES = new Set([
   'owner_invoice_delete_proposal', 'owner_workspace_data_change', 'owner_invoice_create',
   'owner_settings_update', 'owner_invoice_update', 'owner_invoice_payment',
-  'owner_invoice_reopen','owner_reminder_approval',
+  'owner_invoice_reopen','owner_reminder_approval','invoice_review_draft',
 ]);
 const TRANSIENT_ACTION_FIELDS = new Set(['createdAt', 'requestedAt', 'sourceMessageId', 'requestMessageId']);
 
@@ -36,7 +36,7 @@ function normalizedScope(scope) {
 }
 
 function normalizedPendingAction(record) {
-  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+  if (!record || typeof record !== 'object' || Array.isArray(record) || record.consumed_at) return null;
   const pendingId = record.id;
   const version = Number(record.version);
   const action = record.action && typeof record.action === 'object' && !Array.isArray(record.action)
@@ -46,6 +46,7 @@ function normalizedPendingAction(record) {
   if ((typeof pendingId !== 'string' && typeof pendingId !== 'number') || !String(pendingId).trim()
       || String(pendingId).length > 128 || !Number.isSafeInteger(version) || version < 1
       || !action || !BUTTON_ACTION_TYPES.has(action.type)
+      || action.type === 'invoice_review_draft' && (action.stage !== 'proposal' || action.missingFields?.length || action.validationIssues?.length)
       || !Number.isFinite(expiresAtMs)) return null;
   const fingerprintInput = {
     id: String(pendingId),

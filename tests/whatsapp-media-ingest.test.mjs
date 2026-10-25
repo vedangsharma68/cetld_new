@@ -168,11 +168,12 @@ test('incomplete media asks for missing facts and retains an incomplete review w
       parseOfflineInvoiceText('Subtotal 100.00\nTotal 100.00', {ocrConfidence: 92})})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([137,80,78,71,13,10,26,10,0]),
     mimeType: 'image/png', fileName: 'unclear.png'}});
-  assert.match(answer, /confirm the customer name, total.*Nothing was saved/i);
+  assert.match(answer, /confirm the invoice number, customer name, total.*Nothing was saved/i);
   assert.equal(visionCalls, 1);
   assert.equal(stored, 1);
   assert.equal(retained.stage,'incomplete');
-  assert.deepEqual(retained.missingFields,['customerName','total']);
+  assert.deepEqual(retained.missingFields,['invoiceNumber','customerName','total']);
+  assert.equal(retained.invoice.invoiceNumber,null);
 });
 
 test('Vercel traces OCR assets into both WhatsApp functions', async () => {

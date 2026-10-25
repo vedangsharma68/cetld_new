@@ -249,7 +249,7 @@ for(const mimeType of ['image/jpeg','application/pdf'])test(`real owner handler 
     const rows=(await f.db.query('select * from invoices where workspace_id=$1',[f.scope.workspaceId])).rows;
     assert.equal(rows.length,1);assert.equal(Number(rows[0].total_amount),6190);assert.equal(rows[0].currency,'USD');
     assert.equal(rows[0].metadata.printed_invoice_number,'INV-2026-0720');
-    assert.equal(rows[0].issue_date.toISOString().slice(0,10),'2026-07-20');assert.equal(rows[0].due_date.toISOString().slice(0,10),'2026-08-19');
+    assert.equal(rows[0].issue_date.toISOString().slice(0,10),'2026-07-20');assert.equal(rows[0].due_date,null,'Absent printed due date remains unknown even with Net 30 notes');
     assert.equal(rows[0].metadata.line_items[0].amount,6190);assert.equal(rows[0].metadata.bookkeeping_sync_status,'not_configured');
     const pending=createWhatsAppPendingActionStore({supabase:f.supabase});
     assert.equal((await pending.loadPendingAction(f.scope)).action.type,'invoice_debtor_phone');

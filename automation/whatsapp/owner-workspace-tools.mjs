@@ -119,10 +119,10 @@ export function createOwnerWorkspaceTools(options = {}) {
           &&(pendingWasRead||tool.getReplyRequirement?.()?.confirmationText||safety.getReplyRequirement()?.confirmationText||reminders.requiresConfirmation())){
           try{
             const action=await options.pending?.loadPendingAction?.({...options.scope});
-            // Reopening and reminder approvals accept signed decisions even
-            // in direct mode; reminders always require a later confirmation.
+            // Attachment reviews, reopening and reminder approvals always
+            // require a later decision, including in direct mode.
             const buttonsAllowed=options.botPreferences?.confirmationMode==='buttons'
-              ||['owner_invoice_reopen','owner_reminder_approval'].includes(action?.action?.type);
+              ||['owner_invoice_reopen','owner_reminder_approval','invoice_review_draft'].includes(action?.action?.type);
             if(buttonsAllowed&&(!reminders.requiresConfirmation()||Array.from(reminders.getReply()||'').length<=1024)&&createOwnerActionButtons({scope:options.scope,action,env:options.env,clock:options.clock}).length)buttonAction=action;
           }catch{}
         }
@@ -145,15 +145,12 @@ export function createOwnerWorkspaceTools(options = {}) {
     getReplyRequirement() {
       if(accountingBlocked)return null;
       const requirement=reminders.requiresConfirmation()?{confirmationText:'yes',requiresCancel:true,requiresReplyCue:true}:tool.getReplyRequirement?.()||safety.getReplyRequirement();
-      const operation=tool.getAttemptedOperation?.()?.operation;
-      const attachmentReview=['saveAttachment','reviewAttachment'].includes(operation)
-        ||(['pending','confirm'].includes(operation)&&options.pendingAtStart?.action?.type==='invoice_review_draft');
-      return buttonAction&&!attachmentReview?{...requirement,maxLength:Math.min(requirement?.maxLength||900,900),confirmationText:null,requiresCancel:false,requiresReplyCue:false,buttonsAvailable:true}:requirement;
+      return buttonAction?{...requirement,maxLength:Math.min(requirement?.maxLength||900,900),confirmationText:null,requiresCancel:false,requiresReplyCue:false,buttonsAvailable:true}:requirement;
     },
     getReminderReply:()=>reminders.getReply(),
     getConsentReply:()=>consent.getReply(),
     getPhoneFailureReply:()=>phoneFailureReply,
-    decideButton:async input=>sanitizeWorkspaceToolResult(trackAccountingBlock(await (input?.pending?.action?.type==='owner_reminder_approval'?reminders.decide(input):input?.pending?.action?.type==='owner_invoice_reopen'?reopening.decide(input):direct.decideButton(input))),options.scope),
+    decideButton:async input=>sanitizeWorkspaceToolResult(trackAccountingBlock(await (input?.pending?.action?.type==='invoice_review_draft'?safety.decideReviewButton(input):input?.pending?.action?.type==='owner_reminder_approval'?reminders.decide(input):input?.pending?.action?.type==='owner_invoice_reopen'?reopening.decide(input):direct.decideButton(input))),options.scope),
     lookupCompleted:async()=>sanitizeWorkspaceToolResult(await reminders.lookupCompleted()||await direct.lookupCompleted(),options.scope),
     async getPendingActionForButtons(){if(accountingBlocked)return null;return options.pending?.loadPendingAction?.({...options.scope});},
   };

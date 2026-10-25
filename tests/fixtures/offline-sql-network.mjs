@@ -52,6 +52,9 @@ export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[
   // Historical migration fixtures intentionally omit that predecessor.
   if(excludeMigrations.includes('20261009015001_owner_payment_factual_instruction.sql'))
     excludeMigrations=[...excludeMigrations,'20261009202000_owner_payment_bookkeeping_instruction.sql'];
+  // A historical review body must not receive patches for its later replacement.
+  if(excludeMigrations.includes('20261009040005_invoice_review_general_inferred_currency_correction.sql'))
+    excludeMigrations=[...excludeMigrations,'20261025170000_invoice_review_unknown_due_date.sql'];
   const db=await createFixtureDatabase(excludeMigrations),requests=[],errors=[],objects=new Map();let interceptor=null;
 
   async function fetchImpl(input,options={}){
