@@ -21,6 +21,51 @@ function lastMoneyCents(line) {
   return matches.length ? asCents(matches.at(-1)[0]) : null;
 }
 
+/** Identity extraction must not depend on recognizing the entire item table. */
+export function printedInvoiceNumber(text) {
+  const matches = [...String(text || '').matchAll(/\binvoice\s*(?:number|no\.?|#)\s*[:#]?\s*([A-Z0-9][A-Z0-9_./-]{0,99})(?=\s|$)/gi)]
+    .map(match => match[1]);
+  const numbers = [...new Set(matches.filter(number => !isPlaceholderInvoiceNumber(number)))];
+  return numbers.length === 1 ? numbers[0] : null;
+}
+
+export function isPlaceholderInvoiceNumber(value) {
+  return /^(?:auto|not|n\/?a|none|null|unknown|not[ _-]?(?:shown|available|applicable)|tbd|pending|-)$/i.test(String(value || '').trim());
+}
+
+// Freight tables often itemize charges beneath a shipment without repeating
+// the serial number or quantity. G.Total is the row amount, including fuel and
+// other component columns; component columns must never become separate items.
+function parseChargeTable(lines, headerIndex) {
+  const items = [];
+  let description = '';
+  for (const line of lines.slice(headerIndex + 1)) {
+    if (/^(?:BANK\s+DETAILS|NON[- ]?TAXABLE|TAXABLE|SUB\s*TOTAL|[ICS]?GST|ROUNDED?\s*OFF|BILL\s+AMOUNT|TOTAL|TERMS)\b/i.test(line)) break;
+    if (!line) continue;
+    const match = line.match(/^(.*?)\s*((?:\d[\d,]*\.\d{2}\s+){2,}\d[\d,]*\.\d{2})\s*$/);
+    if (!match) { description = clean(`${description} ${line}`); continue; }
+    const prefix = clean(match[1]);
+    // An unlabelled numeric totals row is an aggregate, not another charge.
+    if (!prefix && !description) continue;
+    const amounts = match[2].trim().split(/\s+/).map(asCents);
+    const amount = amounts.at(-1);
+    // Leading weight/quantity columns may precede Amount. Select the suffix
+    // whose components reconcile; do not infer or fill a missing amount.
+    const components = amounts.slice(0, -1);
+    let sum = 0, reconciled = false;
+    for (let i = components.length - 1; i >= 0; i--) {
+      sum += components[i];
+      if (i < components.length - 1 && sum === amount) { reconciled = true; break; }
+    }
+    if (!reconciled) return null;
+    const label = clean(`${description} ${prefix}`);
+    if (!label || label.length > 500) return null;
+    items.push({description: label, quantity: null, unitPrice: null, amount: amount / 100, confidence: .99});
+    description = '';
+  }
+  return !description && items.length && items.length <= 100 ? items : null;
+}
+
 function wrapped(value, confidence = 0.99) {
   return { value, confidence: value === null ? 0 : confidence };
 }
@@ -226,25 +271,26 @@ function notesValue(lines) {
 
 function totals(lines) {
   let subtotal = null; let tax = null; let charges = 0; let hasCharges = false; let discounts = 0;
-  let total = null; let totalRank = -1; let outstanding = null;
+  let total = null; let totalRank = -1; let outstanding = null; let rounding = null;
   for (const line of lines) {
     const amount = lastMoneyCents(line);
     if (amount === null) continue;
-    if (/^\s*(?:SUB\s*TOTAL|SUBTOTAL)\b/i.test(line)) subtotal = amount;
-    else if (/^\s*(?:SALES\s+TAX|(?:STATE|LOCAL)\s+TAX|TAX|VAT|GST|HST)\b/i.test(line)) tax = (tax ?? 0) + amount;
+    if (/^\s*(?:SUB\s*TOTAL|SUBTOTAL|TAXABLE)\b/i.test(line)) subtotal = amount;
+    else if (/^\s*(?:SALES\s+TAX|(?:STATE|LOCAL)\s+TAX|TAX|VAT|[ICS]?GST|HST)\b/i.test(line)) tax = (tax ?? 0) + amount;
     else if (/^\s*(?:SHIPPING|HANDLING|FREIGHT|DELIVERY|SERVICE\s+FEE|SURCHARGE|OTHER\s+CHARGES)\b/i.test(line)) { charges += amount; hasCharges = true; }
+    else if (/^\s*ROUNDED?\s*OFF\b/i.test(line)) rounding = Math.abs(amount);
     else if (/^\s*(?:DISCOUNT|COUPON)\b/i.test(line)) discounts += Math.abs(amount);
 
     let rank = -1;
     if (/^\s*(?:AMOUNT|BALANCE|REMAINING)\s+DUE\b/i.test(line)) rank = 1;
-    else if (/^\s*(?:GRAND\s+TOTAL|INVOICE\s+TOTAL)\b/i.test(line)) rank = 4;
+    else if (/^\s*(?:GRAND\s+TOTAL|INVOICE\s+TOTAL|BILL\s+AMOUNT)\b/i.test(line)) rank = 4;
     else if (/^\s*TOTAL\s+DUE\b/i.test(line)) rank = 2;
     else if (/^\s*TOTAL\b/i.test(line)) rank = 3;
     if (rank >= 0 && rank >= totalRank) { total = amount; totalRank = rank; }
     if (/^\s*(?:AMOUNT|BALANCE|REMAINING)\s+DUE\b|^\s*TOTAL\s+DUE\b/i.test(line)) outstanding = amount;
   }
   if (total === null) return null;
-  return { subtotal, tax, charges, hasCharges, discounts, total, outstanding };
+  return { subtotal, tax, charges, hasCharges, discounts, total, outstanding, rounding };
 }
 
 /** Recognize explicit status lines only, including selectable-text watermarks. */
@@ -263,9 +309,11 @@ export function parsePrintedInvoicePaymentStatus(text) {
 }
 
 function findCurrency(lines) {
-  const explicit = lines.map((line) => line.match(/\bCURRENCY\s*[:=]?\s*(INR|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF)\b/i)?.[1]).find(Boolean)
+  const labeled = lines.map(line => line.match(/\bCURRENCY\s*[:=]?\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase()).find(Boolean);
+  if (labeled) return SUPPORTED_CURRENCIES.has(labeled) ? labeled : null;
+  const explicit = lines.map((line) => line.match(/(?:\bCURRENCY\s*[:=]?\s*|\()(INR|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF)\b/i)?.[1]).find(Boolean)
     ?? lines.map((line) => line.match(/(?:^|\s)(INR|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF)\s*\d[\d,.]*|\d[\d,.]*\s*(INR|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF)(?:\s|$)/i)).find(Boolean);
-  if (!explicit) return null;
+  if (!explicit) return lines.some(line => /₹/.test(line)) ? 'INR' : null;
   const code = typeof explicit === 'string' ? explicit : explicit[1] ?? explicit[2];
   return SUPPORTED_CURRENCIES.has(code.toUpperCase()) ? code.toUpperCase() : null;
 }
@@ -293,7 +341,10 @@ export function parsePdfInvoiceText(text, { businessName = '' } = {}) {
   const headerIndex = lines.findIndex((line) => /\b(?:QUANTITY|QTY)\b/i.test(line)
     && /\bDESCRIPTION\b/i.test(line) && /\b(?:UNIT\s+PRICE|PRICE)\b/i.test(line)
     && /\b(?:TOTAL|AMOUNT)\b/i.test(line));
-  const parsedTotals = totals(lines);
+  const chargeHeaderIndex = lines.findIndex(line => /\bAMOUNT\b/i.test(line) && /\bG\.?\s*TOTAL\b/i.test(line));
+  const summaryIndex = chargeHeaderIndex < 0 ? -1 : lines.findIndex((line, index) => index > chargeHeaderIndex
+    && /^(?:BANK\s+DETAILS|NON[- ]?TAXABLE|TAXABLE|SUB\s*TOTAL)\b/i.test(line));
+  const parsedTotals = totals(summaryIndex >= 0 ? lines.slice(summaryIndex) : lines);
   if (!parsedTotals) return null;
   // Trial invoices often have no item table. Only accept an explicitly printed
   // zero invoice total here; a paid invoice's zero balance is not its total.
@@ -302,21 +353,32 @@ export function parsePdfInvoiceText(text, { businessName = '' } = {}) {
     && (parsedTotals.tax === null || parsedTotals.tax === 0)
     && lines.some(line => /^\s*(?:(?:GRAND|INVOICE)\s+)?TOTAL\b/i.test(line) && lastMoneyCents(line) === 0)
     && lines.some(line => /^\s*INVOICE\s*(?:NUMBER|NO\.?|#)\s*[:#-]?\s*\S+/i.test(line));
-  if (headerIndex < 0 && !zeroTrial) return null;
-  const lineItems = headerIndex < 0 ? [] : parseLineItems(lines, headerIndex);
+  if (headerIndex < 0 && chargeHeaderIndex < 0 && !zeroTrial) return null;
+  const lineItems = chargeHeaderIndex >= 0 ? parseChargeTable(lines, chargeHeaderIndex) : headerIndex < 0 ? [] : parseLineItems(lines, headerIndex);
   if (!lineItems || parsedTotals.subtotal === null && !zeroTrial) return null;
   const lineSum = lineItems.reduce((sum, item) => sum + Math.round(item.amount * 100), 0);
   if (lineSum !== (parsedTotals.subtotal ?? 0)) return null;
   const expectedTotal = (parsedTotals.subtotal ?? 0) + (parsedTotals.tax ?? 0) + parsedTotals.charges - parsedTotals.discounts;
-  if (Math.abs(expectedTotal - parsedTotals.total) > 100) return null;
+  const difference = Math.abs(expectedTotal - parsedTotals.total);
+  // Unsigned 'Rounded off' amounts may be added or deducted. The printed
+  // magnitude must explain the difference exactly, without a balancing item.
+  if (parsedTotals.rounding !== null ? difference !== parsedTotals.rounding : difference > 100) return null;
 
-  const buyerBlock = partyBlock(lines, /^\s*(?:(?:BILL|SOLD|INVOICE)\s+TO|CUSTOMER|CLIENT|TO)\s*:?\s*(.*)$/i);
+  let buyerBlock = partyBlock(lines, /^\s*(?:(?:BILL|SOLD|INVOICE)\s+TO|CUSTOMER|CLIENT|TO)\s*:?\s*(.*)$/i);
+  if (!buyerBlock.length && chargeHeaderIndex >= 0) {
+    const accountIndex = lines.findIndex(line => /^A\/?C\s*CODE\s*:/i.test(line));
+    if (accountIndex > 0) buyerBlock = [lines[accountIndex - 1]];
+  }
   const sellerBlock = partyBlock(lines, /^\s*(?:FROM|BILL\s+FROM|SOLD\s+BY|ISSUED\s+BY|SELLER|SUPPLIER|VENDOR)\s*:?\s*(.*)$/i);
+  if (!sellerBlock.length && chargeHeaderIndex >= 0) {
+    const issuer = lines.find(line => /^FOR\s+\S/i.test(line));
+    if (issuer) sellerBlock.push(clean(issuer.replace(/^FOR\s+/i, '')));
+  }
   const clientPhone = explicitPhone(buyerBlock);
   const clientPhoneRaw = clientPhone ? null : explicitPhoneRaw(buyerBlock);
   const clientEmail = explicitEmail(buyerBlock);
 
-  const invoiceNumber = labeledText(lines, /^\s*INVOICE\s*(?:NUMBER|NO\.?|#)\s*[:#-]?\s*(.+)$/i);
+  const invoiceNumber = printedInvoiceNumber(text);
   const invoiceDateText = labeledText(lines, /^\s*(?:INVOICE\s+)?DATE\s*[:#-]?\s*(.+)$/i);
   const dueDateText = labeledText(lines, /^\s*(?:DUE\s+DATE|PAYMENT\s+DUE|DUE\s+BY)\s*[:#-]?\s*(.+)$/i);
   const extraCharges = lines.filter((line) => /^\s*(?:SHIPPING|HANDLING|FREIGHT|DELIVERY|SERVICE\s+FEE|SURCHARGE|OTHER\s+CHARGES)\b/i.test(line))

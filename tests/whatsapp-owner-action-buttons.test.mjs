@@ -65,7 +65,7 @@ test('owner action buttons fail closed without scope, secret, or proposal expiry
   assert.ok(maxPhone.length === 2 && maxPhone.every(button => Buffer.byteLength(button.id,'utf8') <= 256));
 });
 
-test('owner buttons use the durable expires_at column and reject action types the SQL executor cannot handle', () => {
+test('owner buttons use durable expires_at and support only confirmable invoice reviews', () => {
   const durableExpiry={...action,action:{...action.action}};
   delete durableExpiry.action.expiresAt;
   durableExpiry.expires_at='2026-10-03T12:10:00.000Z';
@@ -73,5 +73,12 @@ test('owner buttons use the durable expires_at column and reject action types th
   assert.equal(verifyOwnerActionButton({id:confirm.id,scope,action:durableExpiry,env,clock}).valid,true);
 
   const invoiceReview={...durableExpiry,action:{...durableExpiry.action,type:'invoice_review_draft',stage:'proposal'}};
-  assert.deepEqual(createOwnerActionButtons({scope,action:invoiceReview,env,clock}),[]);
+  const reviewButtons=createOwnerActionButtons({scope,action:invoiceReview,env,clock});
+  assert.deepEqual(reviewButtons.map(button=>button.title),['Confirm','Cancel']);
+  for(const stage of ['incomplete','extracting','saving','saved','canceled','failed']) {
+    const changed={...invoiceReview,action:{...invoiceReview.action,stage}};
+    assert.deepEqual(createOwnerActionButtons({scope,action:changed,env,clock}),[]);
+    assert.equal(verifyOwnerActionButton({id:reviewButtons[0].id,scope,action:changed,env,clock}).valid,false);
+  }
+  assert.equal(verifyOwnerActionButton({id:reviewButtons[0].id,scope,action:{...invoiceReview,consumed_at:clock().toISOString()},env,clock}).valid,false);
 });

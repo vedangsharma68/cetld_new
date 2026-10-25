@@ -86,7 +86,7 @@ export function validateAssistantInvoice(value) {
   const alreadyPaid = value.alreadyPaid === true;
   if (alreadyPaid && outstanding !== null && outstanding !== 0) throw new APIError(422, 'PAID_INVOICE_HAS_OUTSTANDING_BALANCE');
   if (!alreadyPaid && outstanding !== null && outstanding !== total) throw new APIError(422, 'PARTIAL_BALANCE_REQUIRES_PAYMENT_RECORD');
-  return {invoiceNumber, clientName, clientEmail: email || null, clientPhone: phone || null, clientPhoneRaw: phoneRaw || null, invoiceDate: value.invoiceDate, dueDate: value.dueDate, subtotal, tax, total, outstanding: alreadyPaid ? 0 : total, currency, notes, lineItems: items, alreadyPaid, direction: value.direction, missingDueDate};
+  return {invoiceNumber, clientName, clientEmail: email || null, clientPhone: phone || null, clientPhoneRaw: phoneRaw || null, invoiceDate: value.invoiceDate, dueDate: missingDueDate ? null : value.dueDate, subtotal, tax, total, outstanding: alreadyPaid ? 0 : total, currency, notes, lineItems: items, alreadyPaid, direction: value.direction, missingDueDate};
 }
 
 function responseInvoice(row) {

@@ -920,13 +920,15 @@ test('review continuation cannot invent facts or overwrite fields already extrac
   assert.equal(pending.current,null);
 });
 
-test('a due-date-only review created from extracted invoice facts retains photo currency provenance',async()=>{
+test('unknown due date is optional and legacy due-date reviews retain photo currency provenance',async()=>{
   for (const legacyProvenance of [false,true]) {
   const extracted={invoiceNumber:{value:'INV-79',confidence:.99},customerName:{value:'Acme Ltd',confidence:.99},
     invoiceDate:{value:'2026-10-01',confidence:.99},dueDate:{value:null,confidence:0},total:{value:1250,confidence:.99},
     currency:{value:'INR',confidence:.99},direction:{value:'receivable',confidence:.99}};
   const action=reviewDraft(extracted,'wamid.review-photo-79');
-  assert.deepEqual(action.missingFields,['dueDate']);assert.equal(action.currencySource,'photo');
+  assert.deepEqual(action.missingFields,[]);assert.equal(action.invoice.dueDate,null);assert.equal(action.currencySource,'photo');
+  // Simulate an already-persisted review from before due date became optional.
+  action.missingFields=['dueDate'];
   if(legacyProvenance)action.currencySource=null;
   let current={id:84,version:2,created_at:'2026-10-02T07:00:00.000Z',action,consumed_at:null};
   const pending={async loadInvoiceReview(){return structuredClone(current);},async transitionInvoiceReview({id,version,fromStage,action}){

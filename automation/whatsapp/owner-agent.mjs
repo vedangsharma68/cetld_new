@@ -26,6 +26,8 @@ import {createOwnerSettingsStore, describeSettingsChange} from './owner-settings
 import {createWhatsAppBoundMessageHandler,reviewDraft,invoiceReviewClarification,proposalSummary,persistContactQuestion} from './assistant-handler.mjs';
 import {extractInvoice, INVOICE_IMAGE_REPLIES} from '../../ai/extraction.mjs';
 import {invoiceReviewUnpaidResolution} from './invoice-review-payment-resolution.mjs';
+import {verifyOwnerActionButton} from './owner-action-buttons.mjs';
+import {isPlaceholderInvoiceNumber} from '../../ai/pdf-invoice-parser.mjs';
 import {isSupportedCurrency} from '../../currency-contract.mjs';
 
 const YES = /^\s*(?:yes|y|ok|okay|confirm|confirmed|do it|go ahead|proceed|approve)\s*[.!]?\s*$/i;
@@ -227,6 +229,34 @@ function ownerDirectionEvidence(message) {
     (OWNER_DIRECTION_EVIDENCE.test(clause)||receivable.test(clause))
     && !/\b(?:not|never|don't|didn't|no|maybe|perhaps|might|could|would|if|whether|will|later|tomorrow|next)\b/u.test(clause));
 }
+function ownerSaysNoDueDate(message) {
+  const text = String(message || '').trim();
+  if (/[?"“”`]|\b(?:maybe|perhaps|might|if|whether|invent|assume|guess)\b/i.test(text)) return false;
+  return /\bno\s+due\s+date\b|\bdue\s+date\s+(?:is\s+)?(?:not\s+(?:shown|printed|specified)|unknown|absent)\b/i.test(text)
+    && !/\b(?:not|never)\s+(?:true\s+that\s+)?(?:there\s+is\s+)?no\s+due\s+date\b/i.test(text);
+}
+
+function reviewIdentityFacts(message, missing) {
+  const values = {};
+  const text = String(message || '').trim();
+  if (/[?"“”`]|\b(?:maybe|perhaps|might|if|whether|lookup|find|search|show|check)\b/i.test(text)) return values;
+  if (missing.includes('invoiceNumber')) {
+    const labeled = text.match(/\binvoice\s*(?:number|no\.?|#)\s*(?:is|:|=)?\s*([A-Z0-9][A-Z0-9_./-]{0,99})(?=\s|[,;.!]|$)/i)?.[1];
+    const terse = text.match(/^([A-Z0-9][A-Z0-9_./-]{0,99})(?=\s*[,;]|$)/i)?.[1];
+    const number = (labeled || terse)?.replace(/\.$/, '');
+    if (number && !isPlaceholderInvoiceNumber(number) && !/\b(?:not|never|wrong)\b/i.test(text.split(/[.;]/)[0])) values.invoice_number = number;
+  }
+  if (missing.includes('dueDate')) {
+    if (ownerSaysNoDueDate(text)) values.due_date = null;
+    else {
+      const clause = text.match(/\bdue\s*(?:date)?\s*(?:is|:|=|on)?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/.-]\d{1,2}[/.-]\d{4})\b/i)?.[0];
+      const dates = clause ? [...mentionedDates(clause)] : [];
+      if (dates.length === 1) values.due_date = dates[0];
+    }
+  }
+  return values;
+}
+
 function ownerFactEvidence(field,value,candidates) {
   for(const candidate of candidates){
     if(!candidate?.messageId||typeof candidate.content!=='string')continue;
@@ -234,6 +264,7 @@ function ownerFactEvidence(field,value,candidates) {
     if(field==='currency')supported=ownerCurrencyEvidence(candidate.content,value);
     else if(field==='direction')supported=value==='receivable'&&ownerDirectionEvidence(candidate.content);
     else if(field==='total')supported=mentionsAmount(candidate.content,value);
+    else if(field==='dueDate'&&value===null)supported=ownerSaysNoDueDate(candidate.content);
     else if(field==='invoiceDate'||field==='dueDate')supported=dateIsValid(value)&&mentionedDates(candidate.content).has(value);
     else if(field==='invoiceNumber'||field==='customerName')supported=typeof value==='string'&&mentionsWholePhrase(candidate.content,value);
     if(supported)return {value,sourceMessageId:candidate.messageId};
@@ -444,6 +475,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
   let servedModel = null;
   let replyRequirement=null;
   let writeAttempted=false;
+  let verifiedReviewDecision=null;
   let ownerCreateSettingsReceiptLookup=null;
   const initialStatePromise=pendingInitialState!==undefined?Promise.resolve(pendingInitialState)
     :pendingStoreAvailable&&typeof pending?.loadPendingActionState==='function'
@@ -483,8 +515,8 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     return {invoice:found.invoices[0]};
   };
   const expiry = () => new Date(clock().getTime() + 10 * 60_000).toISOString();
-  const canConfirm = () => ownerIsConfirmation(message);
-  const canCancel = () => CANCEL.test(message);
+  const canConfirm = () => verifiedReviewDecision==='confirm'||ownerIsConfirmation(message);
+  const canCancel = () => verifiedReviewDecision==='cancel'||CANCEL.test(message);
   const setDeletionReplyRequirement = action => {
     replyRequirement={confirmationText:action.requiresExactConfirmation?`DELETE ${action.invoiceNumber}`:'yes',requiresCancel:true,requiresReplyCue:true,
       requiredFacts:{invoiceNumber:action.invoiceNumber,customerName:action.customerName||'Unknown customer',totalAmount:action.totalAmount,
@@ -722,11 +754,11 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         if(amountCents(value)===null)return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
         value=Number(value);
       }else if(field==='invoiceDate'||field==='dueDate'){
-        if(!dateIsValid(value))return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
+        if(!(field==='dueDate'&&value===null)&&!dateIsValid(value))return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
       }else{
         if(typeof value!=='string')return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
         value=value.trim();
-        if(!value||value.length>(field==='invoiceNumber'?100:255))return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
+        if(!value||field==='invoiceNumber'&&isPlaceholderInvoiceNumber(value)||value.length>(field==='invoiceNumber'?100:255))return {ok:false,code:'INVALID',message:SAFE_ERRORS.INVALID};
       }
       const evidence=paymentResolution?.extractedFacts
         &&((field==='currency'&&value===paymentResolution.currency)||(field==='direction'&&value==='receivable'))
@@ -767,8 +799,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     if(!saved)return {ok:false,code:'STALE',message:SAFE_ERRORS.STALE};
     if(proposalReady)setReviewReplyRequirement(invoice);
     return {ok:true,action:'review_updated',stage:next.stage,missingFields:next.missingFields,
-      invoice:Object.fromEntries(['invoiceNumber','clientName','total','currency','dueDate']
-        .filter(key=>invoice[key]!==undefined&&invoice[key]!==null).map(key=>[key,invoice[key]])),
+      invoice:safeReviewInvoice(invoice),
       requiresLaterConfirmation:proposalReady};
   }
 
@@ -922,7 +953,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
       const current=await pending.loadInvoiceReview({...scope});
       if(!current||current.id!==pendingAtStart.id||current.version!==pendingAtStart.version)return {ok:false,code:'STALE',message:SAFE_ERRORS.STALE};
       const canceled=await pending.transitionInvoiceReview({...current,...scope,fromStage:action.stage,action:{...action,stage:'canceled'}});
-      return canceled?{ok:true,action:'cancelled'}:{ok:false,code:'STALE',message:SAFE_ERRORS.STALE};
+      return canceled?{ok:true,action:'cancelled',outcome:'review_canceled'}:{ok:false,code:'STALE',message:SAFE_ERRORS.STALE};
     }
     if (!isActionablePending()) return {ok:false,code:'NO_PENDING_ACTION',message:SAFE_ERRORS.NO_PENDING_ACTION};
     if (pendingAtStart.action?.type === 'owner_invoice_delete_proposal') return null;
@@ -1345,7 +1376,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         let retainedReview=null;
         if(token?.id!=null&&token.action?.stage==='extracting'){
           let draft=reviewDraft(extracted,messageId);
-          if(!draft.missingFields.length){
+          if(!draft.missingFields.length&&!draft.validationIssues?.length){
             try{const {missingDueDate,...validated}=validateAssistantInvoice(draft.invoice);draft={...draft,invoice:validated,stage:'proposal'};}
             catch{ /* Preserve extracted facts for an explicit review; never save invalid totals. */ }
           }
@@ -1425,6 +1456,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         }
         if(['incomplete','proposal'].includes(action.stage)){
           const incomplete=action.stage==='incomplete';
+          if(!incomplete)setReviewReplyRequirement(action.invoice);
           if(incomplete)replyRequirement={attachmentReview:{incomplete:true,missingFields:action.missingFields||[],validationIssues:action.validationIssues||[],
             answer:invoiceReviewClarification({...action,missingFields:action.missingFields||[],validationIssues:action.validationIssues||[]})}};
           return {ok:true,outcome:'review_ready',review:reviewFacts,
@@ -1462,6 +1494,16 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     }
     try{const result=await execute(name,args);if(name==='continueInvoiceReview'&&result?.ok&&result.readOnly&&result.unchanged)writeAttempted=false;return result;}catch(error){logger?.error?.('WhatsApp owner tool failed',{workspaceId:scope.workspaceId,tool:name,code:safeError(error).code});return safeError(error);}},
     setServedModel(model){servedModel=typeof model==='string'?model:null;},
+    async decideReviewButton({interactionId,decision,pending:reference}) {
+      const choice=verifyOwnerActionButton({id:interactionId,scope,action:pendingAtStart,env,clock});
+      if(!choice.valid||choice.decision!==decision||reference?.id!==pendingAtStart?.id||reference?.version!==pendingAtStart?.version
+        ||pendingAtStart?.action?.type!=='invoice_review_draft'||writeAttempted)
+        return {ok:false,code:'STALE',message:'That invoice choice has expired, changed, or already been resolved. Review the current proposal.'};
+      await active();
+      writeAttempted=true;verifiedReviewDecision=decision;
+      try{return decision==='confirm'?await confirmInvoiceReview():await cancelPending();}
+      finally{verifiedReviewDecision=null;}
+    },
     getMedia:()=>attachment,getAttachmentIngested:()=>attachmentIngested,
     getAttachmentReviewQuestionIntent:()=>isAttachmentReviewQuestion(),
     getAttachmentReviewContinuation(){
@@ -1470,7 +1512,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
       if(pendingAtStart?.consumed_at||action?.type!=='invoice_review_draft'||action.stage!=='incomplete'
         ||(action.validationIssues?.length&&!paymentResolution)||!Array.isArray(action.missingFields)
         ||/[?]|\b(?:maybe|perhaps|might|if|whether|later|tomorrow|next)\b/i.test(message))return null;
-      const values={};
+      const values=reviewIdentityFacts(message,action.missingFields);
       if(paymentResolution?.extractedFacts)values.currency=paymentResolution.currency;
       if(action.missingFields.includes('currency')){
         const codes=[...new Set([...String(message).matchAll(/\b[A-Za-z]{3}\b/g)].map(match=>match[0].toUpperCase())
@@ -1504,7 +1546,8 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
       if(/[?]|^\s*(?:what|which|why|how|did|does|is|are|(?:please )?(?:show|view|list|read|display|tell me)|i (?:want to know|wonder)|can you (?:check|show|tell|explain))\b/i.test(message))return null;
       if(pendingAtStart?.consumed_at||action?.type!=='invoice_review_draft'||action.stage!=='incomplete'
         ||!action.validationIssues?.length&&!ownerRequestsRetainedInvoiceSave(message)
-        ||!(/\b(?:save|log|record|add)\b|\bpaid\s+(?:stamp|marking|watermark)\b|\bcurrency\s+is\b/i.test(message)))return null;
+        ||!(/\b(?:save|log|record|add)\b|\bpaid\s+(?:stamp|marking|watermark)\b|\bcurrency\s+is\b/i.test(message))
+          &&!Object.keys(reviewIdentityFacts(message,action.missingFields||[])).length)return null;
       return invoiceReviewClarification(action);
     },
     getReplyRequirement:()=>({...replyRequirement,maxLength:attachment?1000:3790}),
@@ -2052,10 +2095,14 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
       const evidence=ownerEvidence(transcript);
       const writeConfirmation=evidence.map(ownerWriteConfirmation).filter(Boolean).at(-1);
       if(writeConfirmation)return resultFor(writeConfirmation,{deterministicWriteReply:true});
+      if(evidence.some(result=>result.ok===true&&result.outcome==='review_canceled'))
+        return resultFor('Canceled the invoice review. Nothing was saved.',{deterministicWriteReply:true});
       const attachmentUnverified=evidence.findLast(result=>result.attachmentSaveUnverified===true);
       if(attachmentUnverified)return resultFor(attachmentUnverified.message,{deterministicWriteReply:true});
+      const continuedProposal=evidence.findLast(result=>result.action==='review_updated'&&result.stage==='proposal');
+      if(continuedProposal)return resultFor(proposalSummary(continuedProposal.invoice,{buttonsAvailable:requirement?.buttonsAvailable,continued:true}),{attachmentReviewReply:true});
       const attachmentProposal=evidence.findLast(result=>result.outcome==='review_ready'&&result.review?.stage==='proposal');
-      if(attachmentProposal)return resultFor(proposalSummary(attachmentProposal.review.invoice),{attachmentReviewReply:true});
+      if(attachmentProposal)return resultFor(proposalSummary(attachmentProposal.review.invoice,{buttonsAvailable:requirement?.buttonsAvailable}),{attachmentReviewReply:true});
       // Reminder preparation already has a server-rendered preview or a
       // specific refusal. A second model pass cannot improve those facts and
       // previously hid them behind reply-repair failures.
