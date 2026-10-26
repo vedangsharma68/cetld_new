@@ -1,6 +1,5 @@
-import {readFile,readdir,writeFile,rename} from 'node:fs/promises';
-import {createHash,randomUUID} from 'node:crypto';
-import {join} from 'node:path';
+import {readFile,readdir} from 'node:fs/promises';
+import {cachedEmptySchema,emptySchemaKey} from './empty-schema-cache.mjs';
 import {PGlite} from '@electric-sql/pglite';
 import {createClient} from '@supabase/supabase-js';
 
@@ -12,17 +11,16 @@ const parameter=value=>value&&typeof value==='object'?JSON.stringify(value):valu
 async function createFixtureDatabase(excludeMigrations){
   const files=(await readdir(new URL('../../supabase/migrations/',import.meta.url))).filter(file=>file.endsWith('.sql') && !['20261023164251_exact_reminder_approval_artifact.sql','20261023083356_per_message_reminder_review.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060000_customer_reminder_tone.sql','20261018060100_invoice_details_templates.sql','20261018090021_remove_stop_footer.sql','20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql'].includes(file) && !excludeMigrations.includes(file)).sort();
   const migrations=await Promise.all(files.map(async file=>[file,await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8')]));
-  // Only the release gate enables this private, per-run cache. Snapshots contain
-  // the migrated empty schema, never test data. Each restore is a separate DB.
-  const cacheDir=process.env.CETLD_SQL_FIXTURE_CACHE_DIR;
-  let cachePath=null;
-  if(cacheDir){
-    const hash=createHash('sha256').update(await readFile(new URL(import.meta.url))).update(await readFile(new URL('../../package-lock.json',import.meta.url))).update(JSON.stringify(migrations)).digest('hex');
-    cachePath=join(cacheDir,hash+'.tgz');
-    let archive;
-    try{archive=await readFile(cachePath);}catch(error){if(error.code!=='ENOENT')throw error;}
-    if(archive){const restored=new PGlite({loadDataDir:new Blob([archive])});await restored.waitReady;return restored;}
-  }
+  // Include schema/bootstrap code, helper, lockfile and runtime/tool dimensions.
+  const directory=process.env.CETLD_SQL_FIXTURE_CACHE_DIR;
+  const key=directory?emptySchemaKey([await readFile(new URL(import.meta.url),'utf8'),
+    await readFile(new URL('./empty-schema-cache.mjs',import.meta.url),'utf8'),
+    await readFile(new URL('../../package-lock.json',import.meta.url),'utf8'),migrations]):null;
+  return cachedEmptySchema({directory,key,
+    restore:async archive=>{
+      const db=new PGlite({loadDataDir:archive});
+      try{await db.waitReady;return db;}catch(error){await db.close().catch(()=>{});throw error;}
+    },create:async()=>{
   const db=new PGlite();
   try{
   await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;
@@ -38,13 +36,9 @@ async function createFixtureDatabase(excludeMigrations){
     alter table storage.objects enable row level security;`);
   for(const [,sql] of migrations)await db.exec(sql.replace('create extension if not exists pgcrypto;',''));
   await db.exec('grant all on all tables in schema public to service_role;grant all on all sequences in schema public to service_role');
-  if(cachePath){
-    const archive=await db.dumpDataDir('gzip'),temporary=cachePath+'.'+randomUUID()+'.tmp';
-    await writeFile(temporary,Buffer.from(await archive.arrayBuffer()),{mode:0o600});
-    await rename(temporary,cachePath);
-  }
   return db;
   }catch(error){await db.close();throw error;}
+  }});
 }
 
 export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[]}={}){

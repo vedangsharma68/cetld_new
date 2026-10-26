@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Tenant-isolated Supabase backend foundation",
   "scripts": {
-    "test": "node --import tsx --test tests/*.test.ts tests/*.test.mjs",
+    "test": "node --import tsx --test --test-concurrency=2 tests/*.test.ts tests/*.test.mjs",
     "test:ai": "node --test tests/ai-*.test.mjs",
     "test:ai:live": "node scripts/ai-smoke.mjs",
     "typecheck": "tsc --noEmit",
