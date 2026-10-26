@@ -1,128 +1,152 @@
-# INCOMPLETE CAPTURE — draft only, no rollout recommendation
+# New Zoho export origin capture — independent review packet
 
 Base: main `f019a995c6ef712388f16be5529d0107c7653003` (PR201).
+This same unmerged PR now implements capture for a strictly supported fresh
+export path. No earlier partial draft was applied; this migration defines the
+new coherent cutover. No PR201 admission/journal or old invoice is upgraded.
 
-**Original-account capture is NOT implemented. Do not merge/deploy/apply this
-partial stage as a substitute for coherent capture.** All linked reminders remain
-PR200-blocked; imports and the PR199 diagnostic are unchanged. There is no origin
-binding table, verified state, capture-enabling flag or JSON grant in this patch.
+**Origin capture is not reminder authority. Every PR200 JS/SQL reminder refusal
+is unchanged, including preview/proposal/confirmation, claim/payment/final gate
+and receipt continuation. PR199's current-account diagnostic is unchanged and
+remains provenance_unverified. Imports and reminder restoration are not enabled.**
 
-## Exact useful dependency closed
+## Supported capture and deliberately unverified cases
 
-The production export previously ended its server journal before the separate
-runtime metadata/link PATCH. The new server path owns a one-shot operation from
-before the first caller lease PATCH through atomic **unverified** linkage and
-durable result completion. It bypasses both caller and runtime metadata finishers.
-A committed completion whose HTTP acknowledgement is lost can be recovered by a
-SELECT-only operation RPC, without redispatching a provider call.
+Capture requires an actual new invoice INSERT after installation, an untouched
+first server operation, a usable current Zoho epoch, and a one-use receipt issued
+only at the adapter's actual successful first invoice POST. The response must
+have exact string invoice/customer IDs, matching pinned account (when echoed),
+reference, number, dates, currency, total, explicit payment_made, balance and
+concrete matching draft/sent/overdue status. Total equals saved total, payment is
+explicitly zero and balance equals total; payments are never inferred from a
+balance difference. Missing payment_made or any required fact is unverified.
 
-A distinct prospective cutover records actual new invoice INSERTs only. It does
-not copy PR201 admissions/journals or admit old rows by read/retry/edit/import,
-timestamp, restored record or invoice-number deduplication. Old lease changes,
-direct linkage and PR201 journal insertion permanently exclude the new candidate;
-clearing metadata/linkage cannot rearm it. Normal edits before reservation may
-remain eligible; changes after reservation invalidate that operation. An excluded
-or completed operation can never become a fresh capture candidate.
+Customer resolution permits either a positively confirmed fresh contact creation
+from the saved local name/email/phone, or a unique exact lookup matching a
+customer ID already protected by a same-account/region origin binding. Mere
+same-name matching, ambiguous contacts, mutable legacy customer external fields
+and current-org metadata cannot supply identity. Response contact/customer IDs
+must equal the actual invoice POST customer_id. Unique existing unbound provider contacts
+remain unverified. Ambiguous lookup or a conflicting protected customer ID is
+refused before invoice POST. This intentionally does not promise binding for every new row.
 
-The server reserves the invoice/customer snapshot and epoch before token work,
-records attempt 1 only at start, and starts before any adapter search/contact or
-invoice write. It pins prepared account/credentials without an integration-level
-retry. Missing epoch and prior-stage rows retain unverified legacy export without
-activating/selecting/reconsenting a connection. A changed known epoch does not
-fall through to another export in the same call. No actual provider ran here.
+The create response is available and [documented by Zoho](https://www.zoho.com/books/api/v3/invoices/create-an-invoice.md).
+The adapter now validates it directly; ID-only return shape is not a blocker.
+A private WeakMap in the adapter brands only actual POST result objects; exported
+pure validation, JSON clones, metadata, fake adapter results and caller flags
+cannot mint that capability. It is consumed once against the operation's exact
+local invoice/customer/account/region/external ID before any capture RPC.
 
-The source guarantee is limited to observed supported write paths. The database
-cannot detect a remote write that performs no database operation. This limitation
-must not be hidden by declaring the new candidate or journal to be origin proof.
+Reference/number dedup, recovery/retry, incomplete or nonmatching facts, unknown
+status, contact ambiguity, legacy rows and missing epoch never mint origin.
+Existing 4097 numbering fallback remains available, but its second POST can
+never issue a fresh receipt even if it returns matching facts. Unknown writes
+are not retried. Contradictory invoice/customer/account/reference identity fails
+before local linkage; unsupported financial facts remain unverified. Existing
+legacy unverified exports retain their established path.
 
-## Actual remaining capture work — not a provider-documentation blocker
+Capture is limited to the app's supported two-decimal currencies and canonical
+Zoho regional endpoints. Requests reject invalid endpoint/account before sending
+credentials, reject redirects, read at most 256 KiB with fatal UTF-8/JSON decoding,
+and have a 40s operation deadline plus 15s per request. Fetch and stalled body
+reads race abort signals. Capture lookup reads do not retry or paginate/enumerate;
+HTTP success requires Zoho code 0. Auth preparation is bounded to 15s. No new
+connection, organization choice, permissions or QA reconsent is performed.
 
-The raw response is already available at `providers.mjs`'s invoice POST.
-[Zoho's create-invoice response contract](https://www.zoho.com/books/api/v3/invoices/create-an-invoice.md)
-exposes the necessary customer, currency, total, balance, status, dates and
-reference fields. The current ID-only return shape is **not** a technical reason
-that validation cannot be added in this same PR. No external impossibility has
-been established; the blocker is unfinished implementation/security-test work:
+## Server protocol and atomic immutable result
 
-1. Add a separately branded fresh-POST receipt at the adapter's actual POST
-   boundary, with strict complete-field normalization, bounded body/deadline,
-   redirects rejected, pinned endpoint/account/region and exact invoice/customer
-   identity/facts/reference validation. Do not brand list/reference/number reuse,
-   recovery, retry, incomplete, malformed or conflicting responses. Preserve 4097
-   legacy behavior while refusing origin on any response whose freshness is not
-   proven. Audit contact resolution against saved local customer identity; a
-   same-name lookup alone is not that proof. No synthetic receipt from an ID.
-2. Carry that receipt only through the trusted server operation; owner metadata,
-   stage admissions, stage journals and caller/RLS finish payloads cannot supply
-   it. Establish the real capture cutover and old-writer coverage before enabling
-   authority. These partial-stage records must not be upgraded/backfilled.
-3. Extend atomic completion to insert a protected immutable binding and external
-   linkage in the same transaction under the expected invoice/customer snapshot,
-   lease and epoch. Add immutable linkage/account/customer guards for all later
-   service/import writes and same-ID/account collisions. Add recovery/replay
-   rules that recover only the already-committed binding, never redispatch.
-4. Add the missing offline adapter receipt mismatch/body/timeout matrix and real
-   SQL binding/forgery/collision/immutability tests, then rerun focused checks and
-   exact-head CI. Those capabilities/tests are not claimed by this draft.
+A separate new cutover records actual INSERT only. Read/edit/retry/reimport/
+dedup/created_at/restore cannot admit an old row. Owner lease changes, direct
+linking and PR201 journal insertion permanently exclude the candidate; clearing
+those fields does not rearm it. The known PR201 old-worker paths are fenced
+before provider writes. A PR201 journal racing an active new operation is
+skipped while permanently excluding the new candidate; the old RPC returns no
+operation ID and its runtime cannot dispatch. A remote action that performs no database operation is
+not observable by SQL; no read or old-worker activity is treated as proof.
 
-This is a bounded remaining path to export capture, not a request to implement
-imports or reopen reminder authority. Keeping the draft unmerged is preferable
-to treating another foundation rollout as automatically warranted. The author
-has not established that the remaining work cannot fit this PR safely; capture
-is simply incomplete at this head. CI passing does not resolve that gap.
+Canonical saved-invoice save/retry/reconciler uses this native path; generic
+legacy provider actions stay unverified and cannot later upgrade the candidate.
 
-## Current protocol and safety boundary
+The native server path owns reserve -> token preparation -> start -> provider
+work -> completion. It runs before caller lease PATCH and bypasses ordinary
+caller/runtime metadata finishers. Reserve records current invoice/customer
+hashes and account epoch; start alone spends attempt 1 and issues a private
+one-shot nonce to the server. The nonce is never saved in invoice metadata,
+sent to Zoho, exposed by probe/recovery, or returned in the application API.
+There is no integration-level authorization retry/account reselection.
 
-Two private tables hold the new cutover/operation and transaction-local write
-permit. Both enable RLS, have no caller policies and revoke all table privileges
-from public/anon/authenticated/service_role. Server-generated birth/operation IDs
-cannot be supplied by invoice metadata. Trigger/helper functions are owner-only;
-the three public SQL RPCs grant service_role EXECUTE only, without grant option:
+A fresh internally branded receipt supplies typed canonical facts to the
+service-only completion RPC. SQL rechecks owner/workspace/local row, operation,
+nonce, two-minute lease, invoice/customer hashes, current connection epoch,
+account/region, local money/status/dates/reference and protected customer mapping.
+It derives original account/region from the protected operation, not caller JSON.
+Only then does one transaction insert the private immutable origin and update
+saved external linkage. A post-invoice-write failure rolls both back. The nonce
+is cleared after completion. Old JSON evidence or a verified flag cannot grant
+origin; wrong nonce/scope/facts/phase fails closed.
 
-- `cetld_probe_zoho_capture_completion`: bounded SELECT-only candidate lookup;
-  derives owner from actual saved workspace/invoice, admits nothing.
-- `cetld_zoho_capture_completion_protocol`: fixed reserve/start/complete/abort
-  actions. Completion permits only `created_unverified`/`duplicate_unverified`;
-  no verified outcome exists. Unknown/aborted operations never rearm.
-- `cetld_recover_zoho_capture_completion`: SELECT-only recovery of an unchanged
-  committed unverified result. Wrong scope/op/link/hash returns no result.
+The trusted server is the HTTPS observer; SQL does not independently observe
+Zoho or cryptographically authenticate provider responses. service_role EXECUTE
+is a trusted backend boundary. Owners/members cannot invoke these RPCs, and even
+service_role has no direct table read/write privileges. This does not claim to
+protect against arbitrary code execution or compromise of the trusted backend.
 
-All protocol results explicitly contain `originCaptured:false`. Neither those
-results nor the tables are consumed by any reminder gate. Local-only reminder
-behavior and every existing linked refusal remain in place.
+The binding freezes original owner/workspace/provider/account/region, local and
+external customer/invoice IDs, operation and normalized POST facts. No names,
+contacts, tokens, raw provider bodies or secrets are stored in it. A row's binding
+cannot be updated/deleted, even through ordinary service DML. Invoice UUID reuse,
+link/provider/workspace/customer reassignment and accountless financial/sync
+updates are rejected. Customer external identity/sync overwrite is also rejected.
+Same external invoice ID within a workspace is conservatively unique across
+accounts, preventing cross-account collision assignment without changing existing
+public indexes. No binding repair/rebind/backfill exists.
 
-Locks: invoice -> customer -> connection -> epoch -> protocol row. Each RPC is
-its own transaction; reservation expires after two server minutes. Provider work
-is outside SQL locks. A provider write may succeed while a switch/edit invalidates
-completion; that is not repaired. There is no distributed atomicity claim. If
-storage is unavailable after dispatch, the durable started operation can remain
-unresolved; it is not eligible for a new operation and is never origin proof.
+**Imports of bound invoices/customers fail closed** until separately pinned,
+account-authorized import semantics exist. Unbound imports are unchanged. This
+is not a general import fix or a claim of atomic legacy snapshot persistence.
+Ordinary notes/operational metadata and owner lifecycle remain subject to existing
+policies; they cannot change original identity. Origin tombstones survive deletion.
 
-A valid unverified completion updates linkage and result in one transaction; an
-error after invoice UPDATE rolls both back. Terminal replay/recovery checks exact
-unchanged saved linkage/hash; it does not assert today's account as original
-origin. Later ordinary/import edits can invalidate recovery but cannot turn the
-record into a binding. Immutable binding enforcement is still absent/deferred.
+## Recovery, epoch races and locking
 
-## Exact additive migration review packet
+Locks: invoice -> customer -> connection -> epoch -> operation. SQL transactions
+end before/after remote work; remote creation and SQL are not distributed atomic.
+Switch/away-back/reconsent/reconnect/credential replacement changes epoch and
+invalidates pending completion. Same-identity refresh preserves the epoch and
+pending operation. A switch after committed capture never rewrites original
+identity. A fresh future operation may use protected customer identity only in
+that original account/region; legacy/unbound records never gain it via reconnect.
+
+Lost completion acknowledgement uses a bounded SELECT-only recovery of the
+already-committed, unchanged operation/link/binding. A capture attempt requires
+a captured binding result; it cannot accept an unverified result as capture.
+No provider redispatch occurs. Ordinary unverified export acknowledgement can
+still recover an explicitly unverified result, without origin authority. Replays
+are read-only, exact scope/link/hash checked and idempotent; edits/deletion can
+make recovery unavailable rather than trigger repair. A storage outage may leave
+an unresolved started operation; it never returns to eligible. Failed/raced
+completion can leave a provider object without a local link; no cleanup occurs.
+
+## Exact additive migration and privilege review
 
 `supabase/migrations/20261026141000_zoho_capture_completion_protocol.sql`
 
-- UTF-8 LF: **20,535 bytes**.
-- SHA256: **`2fd3d4daf94d8868cc794be100064222fa04c9d6d737456bfe8d042f6016bad1`**.
-- One BEGIN/COMMIT; no installation business-row DML/backfill. Runtime DML is
-  inside function definitions. Two tables, two triggers, five new functions;
-  **no existing function body, owner, OID, ACL, mode or search_path changes**.
-- Functions use empty search_path; row hashing functions fix timezone to UTC.
-  Source/owner/ACL/connection protection/schema CREATE guards run before creation;
-  unexpected default grants on the new objects abort before commit.
-- Exact PR200 contained base/approved LF/approved 31-CRLF predecessors are accepted
-  as in PR201; definitions are not normalized or rewritten. Unknown source/ending,
-  ownership, ACL or default-grant drift aborts atomically. No guessed aliases.
-- Supabase CLI is absent. No packages were installed and no remote SQL applied.
+- UTF-8 LF: **31,120 bytes**.
+- SHA256: **`f5e49bde2944c79567e291354d18330d8397e091ccd6b76109ca1243658b7010`**.
+- One BEGIN/COMMIT. Three private RLS tables, eight new functions, five triggers.
+  No installation business-row DML/backfill; runtime DML is inside definitions.
+- No existing function body/OID/owner/ACL/security mode/search_path changes. Empty
+  search_path on new functions; UTC for row hashing. Private trigger helpers are
+  owner-only; the three public SQL RPCs grant service_role EXECUTE without grant
+  option. Table privileges are revoked from public/anon/authenticated/service_role.
+- Exact predecessor source/owner/ACL, app CREATE and connection protection checks
+  precede creation. Unexpected default function/table grants abort before commit.
+  Unknown source/line-ending drift is never normalized or blindly allowlisted.
+- No migration/package/config/API-function/CI-gate/skip change beyond this scoped
+  additive migration. Supabase CLI absent; no packages installed or remote SQL.
 
-Additional PR201 source hashes were derived from isolated main replay under
-`search_path=pg_catalog,public` and checked by the executable tests:
+Additional PR201 hashes, derived exactly in isolated main replay under canonical
+`search_path=pg_catalog,public`, including the independently specified successor:
 
 | Predecessor | UTF-8 pg_get_functiondef SHA256 |
 |---|---|
@@ -133,50 +157,55 @@ Additional PR201 source hashes were derived from isolated main replay under
 | public operation reserve | `ddb82ed9446b67650eac92ff12c79e397296facfe43a247888d21b6535c7e28d` |
 | public operation transition | `8fa84c5c3e4593f5d47acbea993c3ffe03e0e5642dcc01c61f28700ec276011e` |
 
-The migration's first guard contains the complete signatures and all PR200 hash
-variants. Tests reconstruct the approved CRLF bodies, apply PR200 then PR201,
-assert the exact refresh successor, and compare every preexisting pg_proc row
-before/after this migration. Seeded existing invoice data stays unchanged.
 
-**Review only, not an apply request.** For independent catalog review, use a
-read-only transaction, canonical search_path, pg_get_functiondef/UTF-8 SHA256,
-proowner/prosecdef/proconfig/proacl for each signature in the first guard; inspect
-app schema CREATE and connection table/column ACL/RLS. No provider/business-row
-lookup is needed. Verify the exact artifact bytes/hash above before any future
-decision. No installation or rollout is recommended at this incomplete head.
+The first migration guard contains complete signatures and all unchanged PR200
+contained base/approved LF/31-CRLF hashes. Tests reconstruct approved CRLF from
+main, apply PR200 then PR201, assert the refresh successor, reject source/ACL/
+default-grant drift atomically, and compare every installed predecessor definition
+and security attribute unchanged. Existing seeded invoice data is untouched.
 
-If coherent capture is subsequently approved, independently apply its reviewed
-schema before code. Code ahead of schema fails the protocol RPC before provider
-dispatch. PR201 old workers burn new candidates through metadata/journal/link
-events and remain unverified. Code rollback to PR201 does not enable any reminder
-or origin grant. Do not delete tombstones or restore permissive reminder functions
-as rollback; any schema rollback requires separate review.
+## Independent apply-before-code review; no agent rollout
 
-## Executable checks and limitations
+Review the fixed-head source, tests, exact bytes/hash and current CI first. In a
+read-only catalog transaction with canonical search_path inspect pg_get_functiondef,
+UTF-8 SHA256, owner/prosecdef/proconfig/proacl for every signature in the first
+guard; inspect app CREATE and connection table/column ACL/RLS. No business/provider
+lookup is needed. Unknown drift requires review, not allowlist expansion.
 
-All databases, providers, recipients and HTTP callbacks are isolated fixtures.
-The current four new tests prove new-vs-PR201 cutover, irreversible old-worker
-fences, grants/scope/version/epoch/lease/customer invalidation, normal refresh,
-away/back/reconnect/expiry, atomic rollback, terminal replay and lost-ack recovery
-with a single fake provider invocation. They assert no snapshots, claims,
-messages/proposals or reminder authority. They **do not** prove fresh-receipt or
-immutable-binding correctness; those are absent.
+If independently approved, apply schema before code. Missing schema causes the
+server probe to fail before provider dispatch. Old PR201 workers burn new candidates
+and stay unverified during mixed rollout. No partial draft or historic table is
+upgraded. Code rollback to PR201 retains origin protection and all reminder
+refusals; old bound imports remain blocked. Do not drop guards/tombstones or
+restore permissive reminder functions as rollback. Destructive schema rollback
+requires separate review; none is supplied or performed here.
 
-Commands/results:
+## Executable verification
+
+Only isolated SQL, fake adapters and fake HTTP/Graph sentinels run. No actual
+provider, customer data/AI, QA, sends, merge, deployment or remote SQL is used.
+
+- Receipt suite: 4 tests; actual POST capability, one-use/clones/forgery, identity/
+  financial/status/date/reference mismatches, ambiguous/unbound/protected contacts,
+  dedup/4097/unknown transport, redirect/body/UTF-8/JSON/timeout/endpoint bounds.
+- Real SQL/integration suite: 6 tests; fresh cutover/old workers, grants/scope,
+  epoch/refresh/reconnect, version/lease/customer/delete races, atomic binding+link
+  rollback, immutable identities, cross-account same-ID collision, lost ack with
+  one POST, replay, no snapshot/queue/conversation/send effects and unchanged
+  reminder refusal after genuine captured bindings exist.
+- Existing accounting/diagnostic/export/test-invoice/reminder/routing regressions:
+  17-file focused batch passed, 0 failed/skipped. A missing caller version projection
+  was fixed by authoritative server version read plus the original exact observed
+  updated_at comparison; no assertion was removed.
 
 ```sh
-node --import tsx --test --test-concurrency=2 tests/zoho-capture-completion.test.mjs tests/zoho-prospective*.test.mjs tests/manual-invoice-sync.test.mjs tests/invoice-sync-coverage.test.mjs tests/invoice-sync-native-sql.test.mjs tests/accounting-invoice-diagnostic.test.mjs tests/accounting.test.mjs tests/accounting-routes.test.mjs tests/external-reminder-containment*.test.mjs tests/external-reminder-verification-sql.test.mjs tests/test-invoice-export.test.mjs tests/tally-routing.test.mjs
+node --import tsx --test --test-concurrency=2 tests/zoho-fresh-create-receipt.test.mjs tests/zoho-capture-completion.test.mjs tests/zoho-prospective*.test.mjs tests/manual-invoice-sync.test.mjs tests/invoice-sync-coverage.test.mjs tests/invoice-sync-native-sql.test.mjs tests/accounting-invoice-diagnostic.test.mjs tests/accounting.test.mjs tests/accounting-routes.test.mjs tests/external-reminder-containment*.test.mjs tests/external-reminder-verification-sql.test.mjs tests/test-invoice-export.test.mjs tests/tally-routing.test.mjs tests/zoho-auto-number-export.test.mjs tests/zoho-export-diagnostics.test.mjs
+npm run typecheck
+git diff --check
 ```
 
-Initial batch: 13/14 files passed; native manual API exposed a missing caller
-automation_version projection. Fixed by reading the version server-side while
-retaining the exact caller-observed updated_at SQL comparison. The native SQL
-file then passed (1 test). No assertion was removed to resolve it.
-
-`node tests/zoho-capture-completion.test.mjs`: 4 passed; `npm run typecheck` and
-`git diff --check`: passed. Final focused rerun of the new protocol, native SQL API, manual API and PR201
-upgrade-path files passed all 4 files (0 failed/skipped). Exact-head existing CI
-results are recorded in the PR. No duplicate full local release run or CI rerun is needed.
-No new API function, package, CI gate, skip, configuration or spend. vercel.json
-and the Hobby function budget remain unchanged. No merge/deploy/remote SQL or
-actual provider/AI/send activity was performed; no live acceptance is claimed.
+Typecheck/diffcheck passed. Final receipt/SQL focused proof passed both files with 0 failed/skipped. Exact
+updated-head existing CI
+are recorded in the PR; no duplicate full local run. vercel.json and Hobby budget
+are unchanged. This proves offline behavior, not production readiness or live
+provider/dispatch acceptance. Imports and reminder restoration remain separate.
