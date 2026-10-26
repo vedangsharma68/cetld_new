@@ -152,7 +152,8 @@ test('caller cannot forge provider/account/external/user/action fields or use GE
   }
   for (const req of [{ method: 'GET' }, { method: 'DELETE' }, { url: '/api/accounting-invoice-diagnostic?organizationId=forged' },
     { body: { workspaceId, invoiceId: '../arbitrary' } }, { body: { workspaceId: otherId, invoiceId } },
-    { body: { workspaceId, invoiceId, extra: null } }, { body: 'not-json' }, { body: [] }, { body: { workspaceId, invoiceId: 123 } }]) {
+    { body: { workspaceId, invoiceId, extra: null } }, { body: 'not-json' }, { body: [] }, { body: { workspaceId, invoiceId: 123 } },
+    { url: 'http://[', body: { workspaceId: { secret: 'PRIVATE' }, invoiceId } }]) {
     const f = fixture(), res = await f.run(req);
     assert.ok(res.statusCode >= 400); assert.equal(f.providerCalls().length, 0); f.unchanged();
   }

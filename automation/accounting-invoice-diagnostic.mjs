@@ -22,7 +22,7 @@ const unavailable = reason => { throw new Unavailable(reason); };
 export async function handleInvoiceDiagnostic(request, response, dependencies = {}) {
   response.setHeader('Cache-Control', 'no-store');
   response.setHeader('Referrer-Policy', 'no-referrer');
-  let controller, timer, input;
+  let controller, timer, input, validated = false;
   const result = (existence, facts = {}) => ({ workspaceId: input.workspaceId, invoiceId: input.invoiceId,
     provenance: 'provenance_unverified', checkedAt: new Date().toISOString(), existence, ...facts });
   try {
@@ -31,6 +31,7 @@ export async function handleInvoiceDiagnostic(request, response, dependencies = 
     if (new URL(request.url, 'https://cetld.invalid').search
       || Object.keys(input).sort().join(',') !== 'invoiceId,workspaceId') throw new HttpError(400, 'Invalid request');
     uuid(input.invoiceId); uuid(input.workspaceId);
+    validated = true;
     controller = new AbortController();
     const signal = controller.signal;
     const fetchImpl = dependencies.fetchImpl || fetch;
@@ -110,6 +111,7 @@ export async function handleInvoiceDiagnostic(request, response, dependencies = 
     });
     return response.status(200).json(await Promise.race([work(), deadline]));
   } catch (error) {
+    if (!validated && !(error instanceof HttpError)) return response.status(400).json({ error: 'invalid_request' });
     if (error instanceof HttpError) return response.status(error.status).json({ error: error.status === 401 ? 'authentication_required'
       : error.status === 403 ? 'workspace_unavailable' : error.status === 404 ? 'invoice_unavailable'
       : error.status === 405 ? 'post_required' : error.status < 500 ? 'invalid_request' : 'diagnostic_unavailable' });
