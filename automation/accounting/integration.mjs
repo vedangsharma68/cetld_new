@@ -7,6 +7,12 @@ import {isTestInvoice} from '../test-invoice.mjs';
 const DEFAULT_STATE_TTL = 10 * 60 * 1000;
 const EXPIRY_SKEW = 60 * 1000;
 
+// Ignore lease/status bookkeeping timestamps, but detect account selection,
+// disconnect/re-consent and credential replacement even within the same account.
+export const sameAccountingConnection = (a, b) => Boolean(a && b &&
+  ['userId', 'workspaceId', 'provider', 'providerAccountId', 'status', 'region', 'accountsDomain', 'apiDomain',
+    'revision', 'iv', 'ciphertext', 'tag', 'tokenExpiresAt'].every(key => a[key] === b[key]));
+
 function hashState(state) {
   return createHash('sha256').update(state).digest('hex');
 }
@@ -174,9 +180,15 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     return token;
   }
 
-  async function accessToken({ userId, workspaceId, provider } = {}, { force = false } = {}) {
+  async function accessToken({ userId, workspaceId, provider } = {}, { force = false, signal, expectedConnection } = {}) {
     const context = identity({ userId, workspaceId, provider });
+    const assertExpected = connection => {
+      signal?.throwIfAborted();
+      if (expectedConnection && !sameAccountingConnection(expectedConnection, connection))
+        throw new AccountingError('ACCOUNTING_CONNECTION_CONFLICT', 'Accounting connection changed');
+    };
     let connection = await store.getConnection(context);
+    assertExpected(connection);
     let token = await decryptConnection(connection);
     if (!force && Number(token.expiresAt || connection.tokenExpiresAt || 0) > now() + EXPIRY_SKEW) return { token, connection };
 
@@ -189,6 +201,7 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
       while (Date.now() < deadline) {
         await sleep(25);
         connection = await store.getConnection(context);
+        assertExpected(connection);
         token = await decryptConnection(connection);
         if (Number(token.expiresAt || connection.tokenExpiresAt || 0) > now() + EXPIRY_SKEW) return { token, connection };
       }
@@ -196,24 +209,31 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     }
     try {
       connection = await store.getConnection(context);
+      assertExpected(connection);
       token = await decryptConnection(connection);
       if (!force && Number(token.expiresAt) > now() + EXPIRY_SKEW) {
         await store.releaseRefresh(context, leaseToken);
         return { token, connection };
       }
       const refreshed = await providers[provider].refreshToken({ refreshToken: token.refreshToken, region: connection.region });
+      signal?.throwIfAborted();
+      if (expectedConnection && (refreshed.providerAccountId && refreshed.providerAccountId !== connection.providerAccountId
+        || refreshed.apiDomain && refreshed.apiDomain !== connection.apiDomain
+        || refreshed.region && refreshed.region !== connection.region
+        || refreshed.accountsDomain && refreshed.accountsDomain !== connection.accountsDomain))
+        throw new AccountingError('ACCOUNTING_CONNECTION_CONFLICT', 'Accounting connection changed');
       const merged = { ...token, ...refreshed, refreshToken: refreshed.refreshToken || token.refreshToken };
       const encrypted = tokenEnvelope(cipher, merged, provider, context.workspaceId);
       const updated = await store.updateConnection(context, encrypted, { tokenExpiresAt: merged.expiresAt, apiDomain: merged.apiDomain || connection.apiDomain, providerAccountId: merged.providerAccountId || connection.providerAccountId, region: merged.region || connection.region }, claim.revision, leaseToken);
       return { token: merged, connection: updated };
     } catch (error) {
       await store.releaseRefresh(context, leaseToken).catch(() => {});
-      if (error?.code === 'ACCOUNTING_CONNECTION_CONFLICT') {
+      if (error?.code === 'ACCOUNTING_CONNECTION_CONFLICT' && !expectedConnection) {
         const latest = await store.getConnection(context);
         const latestToken = await decryptConnection(latest);
         if (Number(latestToken.expiresAt || latest.tokenExpiresAt || 0) > now() + EXPIRY_SKEW) return { token: latestToken, connection: latest };
       }
-      if (store.setConnectionStatus) await store.setConnectionStatus(context, 'needs_attention', `${provider === 'quickbooks' ? 'QuickBooks' : 'Zoho'} authorization needs to be renewed.`).catch(() => {});
+      if (!expectedConnection && store.setConnectionStatus) await store.setConnectionStatus(context, 'needs_attention', `${provider === 'quickbooks' ? 'QuickBooks' : 'Zoho'} authorization needs to be renewed.`).catch(() => {});
       if (error?.code?.startsWith?.('ACCOUNTING_')) throw error;
       throw new AccountingError('ACCOUNTING_REFRESH_FAILED', 'Accounting credentials could not be refreshed', redactedError(error));
     }

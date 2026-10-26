@@ -1,6 +1,6 @@
 import { AccountingProviderError, zohoResponseDiagnostics } from './errors.mjs';
 
-export async function providerFetch(fetchImpl, provider, url, {retryReads = true, ...options} = {}) {
+export async function providerFetch(fetchImpl, provider, url, {retryReads = true, readErrorBody = true, ...options} = {}) {
   // Retry only safe Zoho reads; writes and OAuth exchanges may already have succeeded.
   const retries = retryReads && provider === 'zoho_books' && ['GET', 'HEAD'].includes(String(options.method || 'GET').toUpperCase()) ? 2 : 0;
   let response;
@@ -14,6 +14,9 @@ export async function providerFetch(fetchImpl, provider, url, {retryReads = true
     }
   }
   if (response.ok) return response;
+  // Exact diagnostic reads need only a stable HTTP classification, never
+  // arbitrary error text/code or an unbounded error body.
+  if (!readErrorBody) throw new AccountingProviderError(provider, response.status);
 
   let providerCode = `http_${response.status}`, diagnostics={};
   try {
