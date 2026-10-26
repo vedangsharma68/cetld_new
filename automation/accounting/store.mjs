@@ -207,6 +207,20 @@ export class SupabaseAccountingStore {
     return this.request(`rpc/${name}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),strictJson:true});
   }
 
+  captureCompletionProtocol(identity,invoiceId,action,extra={}) {
+    return this.operationRpc('cetld_zoho_capture_completion_protocol',{p_owner_id:identity.userId,
+      p_workspace_id:identity.workspaceId,p_invoice_id:invoiceId,p_action:action,...extra});
+  }
+
+  probeCaptureCompletion(workspaceId,invoiceId) {
+    return this.operationRpc('cetld_probe_zoho_capture_completion',{p_workspace_id:workspaceId,p_invoice_id:invoiceId});
+  }
+
+  recoverCaptureCompletion(identity,invoiceId,operationId) {
+    return this.operationRpc('cetld_recover_zoho_capture_completion',{p_owner_id:identity.userId,
+      p_workspace_id:identity.workspaceId,p_invoice_id:invoiceId,p_operation_id:operationId});
+  }
+
   async reserveZohoExportOperation(identity,invoiceId,epochId,row) {
     if(!row||row.id!==invoiceId||row.workspace_id!==identity.workspaceId||!row.updated_at||row.automation_version==null)
       throw new AccountingError('ACCOUNTING_EXPORT_OPERATION_CHANGED','Prospective export invoice unavailable');

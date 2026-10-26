@@ -4,6 +4,7 @@ import { AccountingError, redactedError } from './errors.mjs';
 import { ACCOUNTING_PROVIDERS, createAccountingProviders, zohoRegionFromLocation } from './providers.mjs';
 import {isTestInvoice} from '../test-invoice.mjs';
 import {prospectiveZohoExport} from './prospective-export.mjs';
+import {runCaptureCompletion} from './capture-completion.mjs';
 
 const DEFAULT_STATE_TTL = 10 * 60 * 1000;
 const EXPIRY_SKEW = 60 * 1000;
@@ -377,6 +378,12 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     return (await prepareInvoiceSync(input))();
   }
 
+  async function runNewZohoExportProtocol({row,invoice,userId,workspaceId}={}) {
+    if(!row||row.workspace_id!==workspaceId||isTestInvoice(row)||isTestInvoice(invoice))
+      throw new AccountingError('INVOICE_NOT_EXPORTABLE','Invoice is not exportable');
+    return runCaptureCompletion({store,accessToken,adapter:providers.zoho_books,userId,workspaceId,row,invoice});
+  }
+
   async function updateInvoice({ userId, workspaceId, provider = 'zoho_books', invoiceId, invoice } = {}) {
     if (isTestInvoice(invoice)) throw new AccountingError('INVOICE_NOT_EXPORTABLE', 'Test invoices cannot be exported or linked to accounting');
     const context = identity({ userId, workspaceId, provider });
@@ -404,5 +411,5 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     }
   }
 
-  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, connectionStatus, selectOrganization, disconnect, readZohoData, sync, retrySync: sync, syncInvoicesAndPayments: sync, prepareInvoiceSync, syncInvoice, updateInvoice, latestInvoiceBalance, reminderInvoiceState });
+  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, connectionStatus, selectOrganization, disconnect, readZohoData, sync, retrySync: sync, syncInvoicesAndPayments: sync, prepareInvoiceSync, syncInvoice, runNewZohoExportProtocol, updateInvoice, latestInvoiceBalance, reminderInvoiceState });
 }
