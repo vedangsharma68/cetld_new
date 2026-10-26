@@ -83,6 +83,56 @@ function normalizeZohoInvoice(item) {
   };
 }
 
+const diagnosticCurrencies = new Set(Intl.supportedValuesOf('currency'));
+const diagnosticStatuses = new Set(['draft', 'sent', 'overdue', 'partially_paid', 'paid', 'void']);
+async function diagnosticJson(response, signal) {
+  const maxBytes = 256 * 1024;
+  if (Number(response.headers.get('content-length')) > maxBytes || !response.body) throw new Error('Unverifiable invoice response');
+  const reader = response.body.getReader(), chunks = [];
+  let length = 0;
+  try {
+    for (;;) {
+      signal?.throwIfAborted();
+      const { done, value } = await reader.read();
+      signal?.throwIfAborted();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maxBytes) throw new Error('Invoice response too large');
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(length); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  } finally {
+    void reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+function diagnosticZohoBalance(body, invoiceId, accountId) {
+  const item = body?.invoice;
+  if (body?.code !== 0 || !item || typeof item !== 'object' || Array.isArray(item)
+    || item.invoice_id !== invoiceId || item.organization_id != null && item.organization_id !== accountId
+    || !diagnosticCurrencies.has(item.currency_code) || !diagnosticStatuses.has(item.status))
+    throw new Error('Unverifiable invoice response');
+  const currency = item.currency_code;
+  const digits = ['BHD','IQD','JOD','KWD','LYD','OMR','TND'].includes(currency) ? 3
+    : ['BIF','CLP','DJF','GNF','ISK','JPY','KMF','KRW','PYG','RWF','UGX','VND','VUV','XAF','XOF','XPF'].includes(currency) ? 0 : 2;
+  const minor = value => {
+    if (!['number', 'string'].includes(typeof value) || !/^\d{1,16}(?:\.\d{1,3})?$/.test(String(value))
+      || (String(value).split('.')[1]?.length || 0) > digits) throw new Error('Invalid amount');
+    const scaled = Number(value) * 10 ** digits, rounded = Math.round(scaled);
+    if (!Number.isSafeInteger(rounded) || scaled < 0 || Math.abs(scaled - rounded) > 0.000001) throw new Error('Invalid amount');
+    return rounded;
+  };
+  const totalMinor = minor(item.total), balanceMinor = minor(item.balance);
+  // Payments are not inferred from total-balance: credits/write-offs can also
+  // reduce balance. Report null unless the provider supplies payment_made.
+  const paidMinor = item.payment_made == null ? null : minor(item.payment_made);
+  if (balanceMinor > totalMinor || paidMinor !== null && paidMinor > totalMinor - balanceMinor
+    || item.status === 'paid' && balanceMinor !== 0) throw new Error('Invalid invoice amounts');
+  return { externalId: invoiceId, status: item.status, currency, totalMinor, balanceMinor, paidMinor };
+}
+
 function normalizeZohoPayment(item) {
   const currency = item.currency_code || item.currency || null;
   const amount = amountMinor(item.amount, currency);
@@ -260,12 +310,13 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       result.nextPage = body.page_context?.has_more_page ? Number(page) + 1 : null;
       return result;
     },
-    async fetchInvoiceBalance({ token, accountId, invoiceId, signal, retryReads }) {
+    async fetchInvoiceBalance({ token, accountId, invoiceId, signal, retryReads, diagnostic = false }) {
       if (!accountId || !invoiceId) throw new Error('Zoho Books organization and invoice IDs are required');
       const url = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices/${encodeURIComponent(invoiceId)}`);
       url.search = new URLSearchParams({ organization_id: accountId }).toString();
-      const response = await providerFetch(fetchImpl, 'zoho_books', url, { signal, retryReads, headers: { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' } });
-      const body = await jsonResponse(response, 'zoho_books');
+      const response = await providerFetch(fetchImpl, 'zoho_books', url, { signal, retryReads, readErrorBody: !diagnostic, headers: { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' } });
+      const body = diagnostic ? await diagnosticJson(response, signal) : await jsonResponse(response, 'zoho_books');
+      if (diagnostic) return diagnosticZohoBalance(body, invoiceId, accountId);
       const invoice = normalizeZohoInvoice(body.invoice);
       if (!invoice || invoice.externalId !== String(invoiceId)) throw new Error('Zoho Books returned an invalid invoice balance');
       return { balanceMinor: invoice.balanceMinor, paidMinor: invoice.paidMinor, status: invoice.status, currency: invoice.currency, totalMinor: invoice.amountMinor, externalId: invoice.externalId };

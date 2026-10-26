@@ -48,7 +48,7 @@ export class InMemoryAccountingStore {
     const key = keyOf(identity);
     const row = this.connections.get(key);
     if (!row) throw new AccountingError('ACCOUNTING_NOT_CONNECTED', 'Zoho authorization is not available');
-    const updated = { ...row, providerAccountId: String(organization.id), organizationName: String(organization.name || ''), status: 'connected', connectionProblem: null, updatedAt: this.now() };
+    const updated = { ...row, providerAccountId: String(organization.id), organizationName: String(organization.name || ''), status: 'connected', connectionProblem: null, revision: row.revision + 1, updatedAt: this.now() };
     this.connections.set(key, updated);
     return this.getConnection(identity);
   }
@@ -174,6 +174,17 @@ export class SupabaseAccountingStore {
     return (await this.request(`invoices?${params}`))?.[0] || null;
   }
 
+  // Exact saved-row diagnostic. Include soft-deleted rows without any fallback,
+  // restoration, snapshot lookup or invoice/customer data projection.
+  async getDiagnosticInvoice({workspaceId}, invoiceId) {
+    const select = 'id,workspace_id,external_provider,external_invoice_id,updated_at,deleted_at,'
+      + 'accounting_provider:metadata->>accounting_provider,bookkeeping_provider:metadata->>bookkeeping_provider,'
+      + 'bookkeeping_record_id:metadata->>bookkeeping_record_id';
+    const params = new URLSearchParams({workspace_id:`eq.${workspaceId}`,id:`eq.${invoiceId}`,select,limit:'1'});
+    const rows = await this.request(`invoices?${params}`);
+    return Array.isArray(rows) && rows.length === 1 ? rows[0] : null;
+  }
+
   async rpc(name, body) {
     return this.request(`rpc/${name}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   }
@@ -235,9 +246,14 @@ export class SupabaseAccountingStore {
   }
 
   async setOrganization(identity, organization) {
-    const query = new URLSearchParams({ owner_id: `eq.${identity.userId}`, workspace_id: `eq.${identity.workspaceId}`, provider: `eq.${identity.provider}`, select: '*' });
-    const rows = await this.request(`${this.table}?${query}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' }, body: JSON.stringify({ provider_account_id: organization.id, organization_name: organization.name || null, connection_problem: null, status: 'connected' }) });
-    return Array.isArray(rows) && rows[0] ? mapConnection(rows[0]) : null;
+    // Account switches must advance the existing revision: an away-and-back
+    // selection during an exact read must not look like an unchanged account.
+    const current = await this.getConnection(identity);
+    if (!current) throw new AccountingError('ACCOUNTING_NOT_CONNECTED', 'Accounting provider is not connected');
+    const query = new URLSearchParams({ owner_id: `eq.${identity.userId}`, workspace_id: `eq.${identity.workspaceId}`, provider: `eq.${identity.provider}`, revision: `eq.${current.revision}`, select: '*' });
+    const rows = await this.request(`${this.table}?${query}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' }, body: JSON.stringify({ provider_account_id: organization.id, organization_name: organization.name || null, connection_problem: null, status: 'connected', revision: current.revision + 1 }) });
+    if (!Array.isArray(rows) || rows.length !== 1) throw new AccountingError('ACCOUNTING_CONNECTION_CONFLICT', 'Accounting connection changed');
+    return mapConnection(rows[0]);
   }
 
   async setConnectionStatus(identity, status, problem = null) {
