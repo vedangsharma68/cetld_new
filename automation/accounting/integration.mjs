@@ -3,6 +3,7 @@ import { TokenCipher, connectionAad } from './crypto.mjs';
 import { AccountingError, redactedError } from './errors.mjs';
 import { ACCOUNTING_PROVIDERS, createAccountingProviders, zohoRegionFromLocation } from './providers.mjs';
 import {isTestInvoice} from '../test-invoice.mjs';
+import {prospectiveZohoExport} from './prospective-export.mjs';
 
 const DEFAULT_STATE_TTL = 10 * 60 * 1000;
 const EXPIRY_SKEW = 60 * 1000;
@@ -323,9 +324,10 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
       if (store.getInvoiceExportState) {
         const saved = await store.getInvoiceExportState(workspaceId, invoiceId);
         if (!saved || saved.workspace_id !== workspaceId || saved.id !== invoiceId || saved.deleted_at || isTestInvoice(saved)) throw new AccountingError('INVOICE_NOT_EXPORTABLE', 'Invoice cannot be exported or linked to accounting');
+        return saved;
       }
     }
-    await assertExportable();
+    const preparedInvoice=await assertExportable();
     if (!provider) {
       for (const candidate of ACCOUNTING_PROVIDERS) {
         const row = await store.getConnection({userId: String(userId), workspaceId: String(workspaceId), provider: candidate});
@@ -344,11 +346,24 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     if (!connection?.providerAccountId || (provider === 'zoho_books' && !connection.apiDomain) || connection.status !== 'connected') throw new AccountingError('ACCOUNTING_NOT_CONNECTED', 'Accounting provider is not connected');
     const adapter = providers[provider];
     if (typeof adapter.createInvoice !== 'function') throw new AccountingError('ACCOUNTING_NOT_CONFIGURED', 'Accounting invoice creation is unavailable');
+    const operationContext=provider==='zoho_books'&&store.zohoOperationContext
+      ?await store.zohoOperationContext(context):null;
     const authorization = await accessToken(context);
     return async () => {
-      await assertExportable();
+      const currentInvoice=await assertExportable();
+      if(preparedInvoice&&currentInvoice&&(
+        ['automation_version','invoice_number','customer_id','issue_date','due_date','currency','total_amount','status']
+          .some(key=>String(preparedInvoice[key]??'')!==String(currentInvoice[key]??''))
+        ||preparedInvoice.metadata?.bookkeeping_sync_attempted_at!==currentInvoice.metadata?.bookkeeping_sync_attempted_at))
+        throw new AccountingError('ACCOUNTING_EXPORT_OPERATION_CHANGED','Prepared invoice changed');
       try {
-        const {result} = await withProviderRetry(context, ({token, connection}) => adapter.createInvoice({token, accountId: connection.providerAccountId, invoice: {...invoice, localInvoiceId: String(invoiceId)}}), authorization);
+        const dispatch=async ({token,connection})=>{
+          const result=await adapter.createInvoice({token,accountId:connection.providerAccountId,invoice:{...invoice,localInvoiceId:String(invoiceId)}});
+          if(!result?.externalId)throw new AccountingError('ACCOUNTING_SYNC_FAILED','Invoice export outcome is unverified');
+          return result;
+        };
+        const legacyDispatch=async ()=>(await withProviderRetry(context,dispatch,authorization)).result;
+        const result=await prospectiveZohoExport({store,identity:context,invoiceId,invoice:currentInvoice,expectedContext:operationContext,authorization,dispatch,legacyDispatch});
         if (!result?.externalId) throw new Error('Missing external invoice ID');
         return {provider, externalId: String(result.externalId), duplicate: Boolean(result.duplicate)};
       } catch (error) {

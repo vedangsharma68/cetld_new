@@ -50,9 +50,17 @@ function fixture({attempts=0}={}) {
       return Response.json([state.connection]);
     }
     const service=headers.get('authorization')===`Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`;
+    if(url.pathname==='/rest/v1/rpc/cetld_zoho_operation_context'){
+      assert.equal(service,true,'operation context is server-only');
+      assert.equal(options.method,'POST');
+      assert.deepEqual(JSON.parse(options.body),{p_owner_id:ownerId,p_workspace_id:workspaceId});
+      // This fixture represents a preinstallation connection, which a read or
+      // ordinary export must not enroll in a prospective epoch.
+      return Response.json(null);
+    }
     if(service) {
       assert.equal(url.pathname,'/rest/v1/invoices','service data access is limited to saved-row export authorization and sync completion');
-      if(url.searchParams.get('select')==='id,workspace_id,invoice_number,metadata,status,deleted_at') assert.equal(options.method,undefined,'export authorization only reads saved facts');
+      if(url.searchParams.get('select')==='id,workspace_id,invoice_number,metadata,status,deleted_at,updated_at,automation_version,customer_id,issue_date,due_date,currency,total_amount') assert.equal(options.method,undefined,'export authorization only reads saved facts');
       else assert.equal(state.row.metadata.bookkeeping_sync_attempts,attempts+1);
     } else assert.equal(headers.get('authorization'),authorization,'invoice data must retain caller RLS');
     assert.equal(headers.get('apikey'),service?env.SUPABASE_SERVICE_ROLE_KEY:env.SUPABASE_PUBLISHABLE_KEY);
