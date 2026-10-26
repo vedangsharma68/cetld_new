@@ -59,8 +59,8 @@ No new API function/package/config/gate/skip or billing change is included.
 
 File: `supabase/migrations/20261026090000_contain_unproven_external_reminders.sql`
 
-- Encoding: UTF-8, LF; **6,228 bytes**.
-- SHA256: **`1beb8ed28d0e6f255dc210dc1f3d515f72ccb3da16ec8e5879228ede55eba6ee`**.
+- Encoding: UTF-8, LF; **7,774 bytes**.
+- SHA256: **`434713cb5fcf70ed746e26492d403f8be41387c593660931e2f237f8501445c2`**.
 - One transaction, one DO block, replacing only four existing function bodies.
 - No table/column/trigger creation, new function, grants/revokes, business-row DML,
   provenance persistence/backfill, invoice/customer/snapshot/queue repair or edits.
@@ -91,15 +91,42 @@ and exercised by executable tests.
 | `app.reminder_local_status_payable(public.invoices)` | `e36d0a1f718bf10ae9005f9ed2cb628199e54a50610803f69c7a4c696be4b57a` |
 | `public.cetld_core_claim_due_followups(uuid,uuid,timestamptz,integer,uuid)` — approved | `ed0ea611b1367778031fe4c6d4e9b8e086e7eb3659a0764a1afaffa9a880ee23` |
 | Same — base invoker | `70bc302dc086e6da8321a16439591669e97856e876fd5db1427d65901b279464` |
+| Same — audited approved CRLF body (31 CRLFs) | `1f8e4b305c3442b429f273f165ee15abf4286e6c3cf10e39f616b466621dfd88` |
 | `public.cetld_core_authorize_delivery(uuid,uuid,uuid,timestamptz)` — approved | `c579a14174d421dc6ac71452ef0ac7502ffebed1e5a2f18b6b1e08812849e1a1` |
 | Same — base invoker | `7e648b333362bd3fb554c6c81cace69f897797c479c264b010cc4fb18ae628a0` |
+| Same — audited approved CRLF body (31 CRLFs) | `dc81b47567de1b6ed3a437c48317eee93f61aa31162b23e199fd17db8494d889` |
 
-Missing/unknown/CRLF/modified source, an unexpected patch-point count or ACL drift
+Missing/unknown/modified source, unaudited line-ending changes, an unexpected patch-point count or ACL drift
 aborts atomically. There is no fallback, silent normalization or unguarded
 replacement. The migration is intentionally not a general-purpose reapplication
 script: already-contained function sources do not match its predecessors.
 Review unexpected live drift separately rather than changing the allowlist to
 make an application pass.
+
+### Audited CRLF compatibility, without source normalization
+
+Independent production **read-only** review reported the two exact approved CRLF
+hashes above; the three private predicate hashes matched the existing allowlist.
+The coding agent reproduced both public definitions from main's approved-reminder
+migration in an isolated DB, converting only their bodies to CRLF. Each has exactly
+31 CRLFs, no bare LF/CR in its body, and CRLF→LF conversion yields byte-for-byte the
+accepted approved LF definition/hash. No live access was used for this reproduction.
+
+Acceptance requires the **original raw hash first**, then checks that a temporary
+normalized audit copy matches the corresponding exact LF predecessor and has the
+audited CRLF count. That copy is never executed. Replacements use the original
+function definition; postconditions enforce the same 31 CRLF body endings. Owner,
+security-definer/private-invoker mode, empty function search paths and ACLs remain
+unchanged. No arbitrary normalization, base-invoker CRLF alias, mixed endings,
+extra newline or content drift is accepted.
+
+`tests/fixtures/external-reminder-containment-lf-only-predecessor.sql` preserves the
+published `3eb9b2ad` migration (6,228 bytes; SHA256
+`1beb8ed28d0e6f255dc210dc1f3d515f72ccb3da16ec8e5879228ede55eba6ee`)
+for an executable rejection regression. It is a test fixture, **not** an additional
+migration. The test first proves that artifact refuses the production-shaped CRLF
+predecessors atomically, then proves revised acceptance changes exactly four bodies
+with business rows/security/ACLs intact. Unknown CRLF/content changes still fail.
 
 The Supabase CLI was absent in the coding environment. In accordance with the
 instruction not to install packages, the timestamped file follows the repository
@@ -117,6 +144,7 @@ set local search_path=pg_catalog,public;
 select p.oid::regprocedure as signature,
        encode(sha256(convert_to(pg_get_functiondef(p.oid),'UTF8')),'hex') as sha256,
        pg_get_userbyid(p.proowner) as owner, p.prosecdef, p.proconfig, p.proacl,
+       (length(p.prosrc)-length(replace(p.prosrc,E'\r\n','')))/2 as body_crlf_count,
        pg_get_functiondef(p.oid) as definition
 from pg_proc p
 where p.oid in (
