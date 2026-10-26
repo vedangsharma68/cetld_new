@@ -145,7 +145,7 @@ export class SupabaseAccountingStore {
     this.snapshotTable = snapshotTable;
   }
 
-  async request(path, options = {}) {
+  async request(path, {strictJson=false,...options} = {}) {
     const response = await this.fetch(`${this.base}/rest/v1/${path}`, {
       ...options,
       signal: AbortSignal.timeout(10000),
@@ -159,8 +159,11 @@ export class SupabaseAccountingStore {
       }
       throw new AccountingError('ACCOUNTING_STORE_ERROR', 'Accounting storage request failed');
     }
-    if (response.status === 204) return null;
-    try { return await response.json(); } catch { return null; }
+    if (response.status === 204 && !strictJson) return null;
+    try { return await response.json(); } catch {
+      if(strictJson)throw new AccountingError('ACCOUNTING_STORE_ERROR','Accounting operation storage response is invalid');
+      return null;
+    }
   }
 
   async getWorkspaceInvoiceConnection(workspaceId) {
@@ -170,7 +173,7 @@ export class SupabaseAccountingStore {
 
   // Export authorization reads the saved row, never caller-supplied metadata.
   async getInvoiceExportState(workspaceId, invoiceId) {
-    const params = new URLSearchParams({workspace_id:`eq.${workspaceId}`,id:`eq.${invoiceId}`,select:'id,workspace_id,invoice_number,metadata,status,deleted_at',limit:'1'});
+    const params = new URLSearchParams({workspace_id:`eq.${workspaceId}`,id:`eq.${invoiceId}`,select:'id,workspace_id,invoice_number,metadata,status,deleted_at,updated_at,automation_version,customer_id,issue_date,due_date,currency,total_amount',limit:'1'});
     return (await this.request(`invoices?${params}`))?.[0] || null;
   }
 
@@ -187,6 +190,33 @@ export class SupabaseAccountingStore {
 
   async rpc(name, body) {
     return this.request(`rpc/${name}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  }
+
+  async zohoOperationContext(identity) {
+    const value=await this.operationRpc('cetld_zoho_operation_context',{p_owner_id:identity.userId,p_workspace_id:identity.workspaceId});
+    if(value===null)return null;
+    const keys=['epochId','accountId','region','apiDomain','accountsDomain','provenance'];
+    if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==keys.length
+      ||!keys.every(key=>typeof value[key]==='string'&&value[key].length>0&&value[key].length<=2048&&!/[\x00-\x1f\x7f]/.test(value[key]))
+      ||value.provenance!=='unverified'||!/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(value.epochId))
+      throw new AccountingError('ACCOUNTING_STORE_ERROR','Accounting operation context is invalid');
+    return value;
+  }
+
+  operationRpc(name,body) {
+    return this.request(`rpc/${name}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),strictJson:true});
+  }
+
+  async reserveZohoExportOperation(identity,invoiceId,epochId,row) {
+    if(!row||row.id!==invoiceId||row.workspace_id!==identity.workspaceId||!row.updated_at||row.automation_version==null)
+      throw new AccountingError('ACCOUNTING_EXPORT_OPERATION_CHANGED','Prospective export invoice unavailable');
+    return this.operationRpc('cetld_reserve_zoho_export_operation',{p_owner_id:identity.userId,p_workspace_id:identity.workspaceId,
+      p_invoice_id:invoiceId,p_expected_updated_at:row.updated_at,p_expected_version:row.automation_version,p_expected_epoch:epochId});
+  }
+
+  transitionZohoExportOperation(identity,invoiceId,operationId,action,outcome) {
+    return this.operationRpc('cetld_transition_zoho_export_operation',{p_owner_id:identity.userId,p_workspace_id:identity.workspaceId,
+      p_invoice_id:invoiceId,p_operation_id:operationId,p_action:action,p_outcome:outcome});
   }
 
   async findInvoiceForSync(filters, columns) {

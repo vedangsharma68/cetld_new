@@ -42,6 +42,10 @@ async function createFixtureDatabase(excludeMigrations){
 }
 
 export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[]}={}){
+  // Historical containment fixtures install that predecessor themselves. The
+  // prospective journal must follow the installed containment, never precede it.
+  if(excludeMigrations.includes('20261026090000_contain_unproven_external_reminders.sql'))
+    excludeMigrations=[...excludeMigrations,'20261026110000_zoho_prospective_operation_foundation.sql'];
   // The source-binding migration extends these exact installed entrypoints.
   // Historical fixtures that deliberately omit them must also omit the patch.
   if(excludeMigrations.some(file=>['20261022100000_owner_phone_contact_recovery.sql','20261022180000_owner_chat_record_consent.sql'].includes(file)))
