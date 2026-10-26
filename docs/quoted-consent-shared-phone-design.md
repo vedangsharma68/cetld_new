@@ -1,7 +1,7 @@
 # Quoted consent and shared recipient numbers
 
-Decision for this PR: keep `UNIQUE(workspace_id, phone)` on `whatsapp_consents`.
-The owner approved this safe intermediate scope. Legitimate cases where one
+Implementation scope for this PR: keep `UNIQUE(workspace_id, phone)` on `whatsapp_consents`.
+This describes routing scope, not an owner consent grant. Legitimate cases where one
 contact represents multiple business customers remain an open product/model gap.
 An explanation of the collision does **not** make Customer A send eligible.
 
@@ -117,7 +117,14 @@ invoice bindings; SQL null handling; phone/invoice/customer lock order; existing
 RLS and table grants; explicit service-only EXECUTE grants and revoked PUBLIC,
 anon and authenticated access; and the phone-save result drift assertion. The
 migration is transactional and checks exact predecessor body hashes for both
-phone-save and consent endpoints before changing either. Local tests verify
+phone-save and consent endpoints before changing either. The consent allowlist
+contains only original `e5364b8b1a42d345d89c9a5e22c7f031` and audited production
+`ac329ad4b7e87435228139dc77ad68bd` (whitespace-only difference); phone-save must
+still match `7627fff07f418024d07dc0722b5cccc2` exactly. There is no runtime source
+or comment normalization. The exact audited body is a byte-preserving fixture;
+tests verify its MD5, whitespace-collapsed equality and unchanged line content
+against the original, acceptance of both bodies, and atomic rejection of a
+hotfix, a comment change and an unlisted whitespace variant. Local tests verify
 atomic drift refusal, non-superuser installation, RLS and endpoint/private-helper
 ACLs. Concurrent SDK retries are tested on the embedded database; that is not
 proof of production multi-connection race behavior.

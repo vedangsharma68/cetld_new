@@ -1,9 +1,13 @@
 begin;
--- Refuse a drifted deployed body rather than overwrite unrelated hotfixes.
+-- Refuse drift rather than overwrite unrelated hotfixes. Consent permits only
+-- the original body and the exact whitespace-only body audited in PR197 review.
+-- Do not normalize SQL/comments or accept other whitespace variants at runtime.
 do $drift$
 begin
  if (select md5(prosrc) from pg_proc where oid='public.whatsapp_owner_save_phone(uuid,uuid,text,uuid,uuid,text,text,text)'::regprocedure) is distinct from '7627fff07f418024d07dc0722b5cccc2'
- or (select md5(prosrc) from pg_proc where oid='public.whatsapp_owner_record_consent(uuid,uuid,text,uuid,text,text,text)'::regprocedure) is distinct from 'e5364b8b1a42d345d89c9a5e22c7f031'
+ or not exists(select 1 from pg_proc
+   where oid='public.whatsapp_owner_record_consent(uuid,uuid,text,uuid,text,text,text)'::regprocedure
+   and md5(prosrc) in ('e5364b8b1a42d345d89c9a5e22c7f031','ac329ad4b7e87435228139dc77ad68bd'))
  then raise exception 'quoted consent predecessor body drifted; review before applying'; end if;
 end $drift$;
 -- Authenticated ingress persists only the provider's bounded reply ID. Duplicate
