@@ -1,5 +1,5 @@
 import {assertTestReminderDelivery,TEST_TEMPLATE_BLOCK_MESSAGE} from './test-reminder-policy.mjs';
-import {reminderPaymentRpc,localReminderStatusPayable} from '../external-reminder-verification.mjs';
+import {reminderPaymentRpc,localReminderStatusPayable,hasExternalReminderLedger} from '../external-reminder-verification.mjs';
 import {PHONE_FORMAT_GUIDANCE} from './owner-phone.mjs';
 import {ownerConsentFailure} from './owner-consent.mjs';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
@@ -34,7 +34,7 @@ const MESSAGES={
   reminder_limit:'This invoice has reached the maximum number of reminders. Review the reminder limit in Settings before requesting another.',
   contact_hours:'The customer is outside your allowed contact hours. Request the reminder during the contact window.',
   delivery_in_progress:'A reminder delivery is already pending or uncertain. Review its delivery status before requesting another.',
-  external_accounting_required:'This invoice requires external accounting verification before reminders can be queued.',
+  external_accounting_required:'Reminders for externally linked invoices are unavailable until immutable provider-account provenance is supported.',
   payment_audit_mismatch:'The recorded payment audit is inconsistent. Review the payment history first.',
   payment_balance_mismatch:'The invoice balance does not match its recorded payments. Review the payment history first.',
   template_unavailable:'The approved reminder template is unavailable. Check the approved template in WhatsApp Settings, then request a fresh preview. Nothing was approved or queued.',
@@ -138,10 +138,11 @@ export function createOwnerReminderRuntime({supabase,scope,message='',messageId,
       }
       try{
         await check(ctx);
-        const found=await resolveWorkspaceRecord({supabase,scope,table:'invoices',filters:params.filters,operation:'update',select:'id,invoice_number,customer_id,due_date,currency,total_amount,amount_paid,status,metadata,automation_version,updated_at,deleted_at',
+        const found=await resolveWorkspaceRecord({supabase,scope,table:'invoices',filters:params.filters,operation:'update',select:'id,invoice_number,customer_id,due_date,currency,total_amount,amount_paid,status,metadata,external_provider,external_invoice_id,automation_version,updated_at,deleted_at',
           assertAuthorized:()=>check(ctx),assertLive:()=>ctx?.assertLive?.()});
         if(!found.ok)return refuse(found.code);
         const invoice=found.row;
+        if(hasExternalReminderLedger(invoice))return refuse('external_accounting_required');
         const settings=unwrap(await supabase.from('workspace_settings').select('business_name,default_timezone,follow_up_preferences,updated_at').eq('workspace_id',scope.workspaceId).maybeSingle());
         const customer=unwrap(await supabase.from('customers').select('id,name,phone,reminder_tone').eq('workspace_id',scope.workspaceId).eq('id',invoice.customer_id).maybeSingle());
         customerName=customer?.name?.trim()||null;

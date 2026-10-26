@@ -58,7 +58,14 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
         || row.external_provider || row.external_invoice_id || row.metadata?.bookkeeping_record_id) throw new APIError(503, 'TEST_INVOICE_NOT_SAVED');
       return row;
     },
-    ownerConversation: createOwnerConversation({workspaceId,ownerId:userId,rpc:async(name,args)=>({data:await request(`/rest/v1/rpc/${name}`,{method:'POST',body:JSON.stringify(args)})})}),
+    ownerConversation: createOwnerConversation({workspaceId,ownerId:userId,
+      readReminderInvoice:async id=>(await store.query('invoices',{select:'*',filters:{id:`eq.${uuid(id)}`},limit:1}))[0],
+      readProposal:async id=>{
+        const rows=checkRows(await request('/rest/v1/owner_assistant_proposals?'+new URLSearchParams({
+          workspace_id:`eq.${workspaceId}`,owner_id:`eq.${userId}`,id:`eq.${uuid(id)}`,select:'id,workspace_id,owner_id,state,action',limit:'1'})));
+        if(rows.some(row=>row.owner_id!==userId||row.id!==id))throw new APIError(502,'WORKSPACE_SCOPE_VIOLATION');
+        return rows[0]||null;
+      },rpc:async(name,args)=>({data:await request(`/rest/v1/rpc/${name}`,{method:'POST',body:JSON.stringify(args)})})}),
     async ownerAssistantRPC(name,args={}) {
       if(role!=='owner'||!['owner_assistant_preview_reminder','owner_assistant_reminder_window','owner_assistant_reminder_status','owner_assistant_resolve_token','owner_assistant_claim_token'].includes(name))throw new APIError(403,'OWNER_REQUIRED');
       return request(`/rest/v1/rpc/${name}`,{method:'POST',body:JSON.stringify({...args,p_workspace_id:workspaceId,p_owner_id:userId})});

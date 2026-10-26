@@ -6,8 +6,9 @@ import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 
 const migration='20261019090000_business_name_reminder_reapproval.sql';
 const overdueMigration='20261024124500_unlinked_overdue_reminder_eligibility.sql';
+const containment='20261026090000_contain_unproven_external_reminders.sql';
 test('rename migration includes overdue approvals without backfill; count and review transition stay tenant scoped',async()=>{
- const f=await createOfflineSqlNetwork({excludeMigrations:[migration,overdueMigration]});const {db}=f;
+ const f=await createOfflineSqlNetwork({excludeMigrations:[migration,overdueMigration,containment]});const {db}=f;
  try{
   const owner=randomUUID(),stranger=randomUUID();await db.query('insert into auth.users(id) values($1),($2)',[owner,stranger]);
   async function workspace(user,name){
@@ -38,6 +39,8 @@ test('rename migration includes overdue approvals without backfill; count and re
   await db.exec(sql);await db.exec(sql);assert.deepEqual(await all(),before);
   const overdueSql=await readFile(new URL(`../supabase/migrations/${overdueMigration}`,import.meta.url),'utf8');
   await db.exec(overdueSql);await db.exec(overdueSql);assert.deepEqual(await all(),before);
+  await db.exec(await readFile(new URL(`../supabase/migrations/${containment}`,import.meta.url),'utf8'));
+  assert.deepEqual(await all(),before,'containment changes functions only');
   await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${owner}';set role authenticated`);
   async function count(id){return (await db.query('select public.business_name_reminder_pause_count($1) n',[id])).rows[0].n}
   assert.equal(await count(ws),affected.length);assert.equal(await count(foreign),0);

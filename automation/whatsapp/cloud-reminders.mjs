@@ -1,6 +1,6 @@
 import {isTestInvoice} from '../test-invoice.mjs';
 import {TEST_TEMPLATE_BLOCK_REASON} from './test-reminder-policy.mjs';
-import {reminderPaymentRpc,localReminderStatusPayable} from '../external-reminder-verification.mjs';
+import {reminderPaymentRpc,localReminderStatusPayable,hasExternalReminderLedger} from '../external-reminder-verification.mjs';
 import {reminderDeliveryForm,matchesReminderDelivery} from './reminder-approval.mjs';
 import {reminderFingerprint} from './reminder-fingerprint.mjs';
 import {getSendEligibility} from './consent.mjs';
@@ -45,8 +45,10 @@ export function createFirstPartyReminderProvider({env=process.env,supabase,store
     let snapshot,payload,hash,callbackToken;
     try {
       const scope={ownerId,workspaceId,invoiceId:input.invoiceId};
-      const invoice=await store.getInvoice(scope),settings=await store.getWorkspacePreferences(scope);
+      const invoice=await store.getInvoice(scope);
       if(!invoice||invoice.deleted_at)return blocked('invoice_unavailable');
+      if(hasExternalReminderLedger(invoice))return blocked('external_accounting_required');
+      const settings=await store.getWorkspacePreferences(scope);
       if(isTestInvoice(invoice))return blocked(TEST_TEMPLATE_BLOCK_REASON);
       if(invoice.customer_id!==input.customerId)return blocked('customer_changed');
       if(!localReminderStatusPayable(invoice)||invoice.metadata?.invoice_direction!=='receivable'||Number(invoice.amount_paid)>=Number(invoice.total_amount))return blocked('invoice_not_remindable');

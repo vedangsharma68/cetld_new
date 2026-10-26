@@ -12,12 +12,13 @@ import {createApprovedReminderProvider} from '../automation/whatsapp/approved-re
 const phone='+919818685252';
 const freshReads='20261024094013_fresh_external_reminder_reads.sql';
 const overdueGate='20261024124500_unlinked_overdue_reminder_eligibility.sql';
+const containment='20261026090000_contain_unproven_external_reminders.sql';
 
 // Actual owner API, approval SQL, scheduler and first-party provider. Every HTTP
 // request remains inside the offline SQL fixture or the captured Graph stub.
 async function setup(){
  const graph=[];
- const f=await createOfflineSqlNetwork({excludeMigrations:['20261023061702_shared_owner_assistant.sql',freshReads,overdueGate],externalFetch:async(url,options)=>{
+ const f=await createOfflineSqlNetwork({excludeMigrations:['20261023061702_shared_owner_assistant.sql',freshReads,overdueGate,containment],externalFetch:async(url,options)=>{
   assert.equal(url.origin,'https://graph.facebook.com');
   graph.push(JSON.parse(options.body));return Response.json({messages:[{id:'wamid.test-invoice.'+graph.length}]});
  }}),{db}=f;
@@ -25,7 +26,7 @@ async function setup(){
   for(const file of ['20261018060000_customer_reminder_tone.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060100_invoice_details_templates.sql'])
    await db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
   await applyNoFooterMigration(db,{approve:true});
-  for(const file of ['20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql','20261023061702_shared_owner_assistant.sql','20261023083356_per_message_reminder_review.sql','20261023164251_exact_reminder_approval_artifact.sql',freshReads,overdueGate])
+  for(const file of ['20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql','20261023061702_shared_owner_assistant.sql','20261023083356_per_message_reminder_review.sql','20261023164251_exact_reminder_approval_artifact.sql',freshReads,overdueGate,containment])
    await db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
   const ownerId=randomUUID(),otherOwner=randomUUID();
   await db.query('insert into auth.users(id) values($1),($2)',[ownerId,otherOwner]);

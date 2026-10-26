@@ -67,7 +67,9 @@ test('shared owner context and dashboard commands use real authenticated stores 
   const ask=message=>api('assistant',{message,history:[{role:'user',content:'FORGED browser history'}]});
   const confirm=(pending,confirmed=true)=>api(confirmed?'confirm-accounting-action':'cancel-assistant-action',{confirmed,confirmationToken:pending.confirmationToken});
   const invoice=async()=>{await service();return (await db.query('select * from invoices where id=$1',[invoiceId])).rows[0];};
-  const shared=()=>createOwnerConversation({rpc:(name,args)=>f.supabase.rpc(name,args),workspaceId,ownerId,channel:'whatsapp'});
+  const shared=()=>createOwnerConversation({rpc:(name,args)=>f.supabase.rpc(name,args),workspaceId,ownerId,channel:'whatsapp',
+    readReminderInvoice:async id=>(await db.query('select * from invoices where workspace_id=$1 and id=$2',[workspaceId,id])).rows[0],
+    readProposal:async id=>(await db.query('select * from owner_assistant_proposals where workspace_id=$1 and owner_id=$2 and id=$3',[workspaceId,ownerId,id])).rows[0]});
   const wa=async(message,agentFactory=async()=>({answer:'WhatsApp context received.'}))=>{
    await service();const messageId=randomUUID();await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[messageId,phone,message]);
    return createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test'},providerFactory:()=>provider,...(agentFactory?{agentFactory}:{}),logger,replyStore:null})({workspaceId,ownerId,customerId:ownerCustomer,phone,messageId,message});

@@ -430,10 +430,11 @@ test('actual current-account diagnostic output cannot grant existing SQL reminde
   const { createOfflineSqlNetwork } = await import('./fixtures/offline-sql-network.mjs');
   const fresh = '20261024094013_fresh_external_reminder_reads.sql';
   const overdue = '20261024124500_unlinked_overdue_reminder_eligibility.sql';
-  const f = await createOfflineSqlNetwork({ excludeMigrations: [fresh, overdue] });
+  const containment = '20261026090000_contain_unproven_external_reminders.sql';
+  const f = await createOfflineSqlNetwork({ excludeMigrations: [fresh, overdue, containment] });
   try {
     const { db } = f;
-    for (const file of ['20261018060000_customer_reminder_tone.sql', '20261005070000_approved_whatsapp_reminders.sql', fresh, overdue])
+    for (const file of ['20261018060000_customer_reminder_tone.sql', '20261005070000_approved_whatsapp_reminders.sql', fresh, overdue, containment])
       await db.exec(await readFile(new URL('../supabase/migrations/' + file, import.meta.url), 'utf8'));
     await db.query('insert into auth.users(id) values($1)', [userId]);
     await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${userId}'`);
