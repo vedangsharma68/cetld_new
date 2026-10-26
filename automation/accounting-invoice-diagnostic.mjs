@@ -7,6 +7,31 @@ import { createAccountingProviders } from './accounting/providers.mjs';
 import { AccountingProviderError } from './accounting/errors.mjs';
 
 export const INVOICE_DIAGNOSTIC_TIMEOUT_MS = 5000;
+export const INVOICE_DIAGNOSTIC_ACTION = 'invoice-diagnostic';
+
+// A local invoice selector reserves the envelope even with a forged action.
+// Query selectors also reserve it so they cannot reach OAuth callbacks. This
+// classifier performs no auth, provider, integration or other external work.
+export function isInvoiceDiagnosticRequest(request) {
+  const diagnosticAction = value => value === INVOICE_DIAGNOSTIC_ACTION
+    || Array.isArray(value) && value.includes(INVOICE_DIAGNOSTIC_ACTION);
+  const reserved = value => value && typeof value === 'object'
+    && (Object.hasOwn(value, 'invoiceId') || diagnosticAction(value.action));
+  let body = request.body;
+  // OAuth callbacks have no request body. Never reinterpret a malformed/non-POST
+  // diagnostic body as a callback solely because parsing its selector failed.
+  if (request.method !== 'POST' && (typeof body === 'string' ? body.length > 0
+    : body && typeof body === 'object' && Object.keys(body).length > 0)) return true;
+  if (typeof body === 'string') {
+    if (Buffer.byteLength(body) > 32768) return true; // Rejected by bodyOf before work.
+    try { body = JSON.parse(body); } catch { body = null; }
+  }
+  if (reserved(body) || reserved(request.query)) return true;
+  try {
+    const query = new URL(request.url, 'https://cetld.invalid').searchParams;
+    return query.has('invoiceId') || query.getAll('action').some(diagnosticAction);
+  } catch { return false; }
+}
 const numericId = value => typeof value === 'string' && /^[0-9]{1,40}$/.test(value);
 const regions = new Set(['com', 'eu', 'in', 'com.au', 'jp', 'ca', 'com.cn', 'sa']);
 const linkageKeys = ['id', 'workspace_id', 'external_provider', 'external_invoice_id', 'updated_at', 'deleted_at',
@@ -28,8 +53,9 @@ export async function handleInvoiceDiagnostic(request, response, dependencies = 
   try {
     if (request.method !== 'POST') throw new HttpError(405, 'POST required');
     input = bodyOf(request);
-    if (new URL(request.url, 'https://cetld.invalid').search
-      || Object.keys(input).sort().join(',') !== 'invoiceId,workspaceId') throw new HttpError(400, 'Invalid request');
+    if (new URL(request.url, 'https://cetld.invalid').search || Object.keys(request.query || {}).length
+      || Object.keys(input).sort().join(',') !== 'action,invoiceId,workspaceId'
+      || input.action !== INVOICE_DIAGNOSTIC_ACTION) throw new HttpError(400, 'Invalid request');
     uuid(input.invoiceId); uuid(input.workspaceId);
     validated = true;
     controller = new AbortController();

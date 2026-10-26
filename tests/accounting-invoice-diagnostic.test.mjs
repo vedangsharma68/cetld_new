@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { handleInvoiceDiagnostic, INVOICE_DIAGNOSTIC_TIMEOUT_MS } from '../automation/accounting-invoice-diagnostic.mjs';
+import { readFile, access } from 'node:fs/promises';
+import accountingHandler from '../api/accounting.js';
+import { INVOICE_DIAGNOSTIC_ACTION, INVOICE_DIAGNOSTIC_TIMEOUT_MS } from '../automation/accounting-invoice-diagnostic.mjs';
 import { TokenCipher, connectionAad } from '../automation/accounting/crypto.mjs';
 import { SupabaseAccountingStore, InMemoryAccountingStore } from '../automation/accounting/store.mjs';
 
@@ -109,9 +110,13 @@ function fixture(options = {}) {
     const response = { headers: {}, statusCode: null, payload: null,
       setHeader(k, v) { this.headers[k] = v; }, status(code) { this.statusCode = code; return this; },
       json(payload) { this.payload = payload; return this; } };
-    await handleInvoiceDiagnostic({ method: 'POST', url: '/api/accounting-invoice-diagnostic',
-      headers: { authorization: 'Bearer fixture-user' }, body: { workspaceId, invoiceId }, ...overrides }, response,
-    { env, fetchImpl, timeoutMs: options.timeoutMs });
+    let dispatcherAccesses = 0;
+    await accountingHandler({ method: 'POST', url: '/api/accounting',
+      headers: { authorization: 'Bearer fixture-user' }, body: { action: INVOICE_DIAGNOSTIC_ACTION, workspaceId, invoiceId }, ...overrides }, response,
+    { env, fetchImpl, timeoutMs: options.timeoutMs, integration: new Proxy({}, { get() {
+      dispatcherAccesses++; throw Error('Normal accounting dispatcher must not be reached');
+    } }) });
+    assert.equal(dispatcherAccesses, 0, 'diagnostic cannot reach normal mutation/callback dispatch');
     assert.deepEqual(forbidden, [], 'no other provider/service/action can be reached');
     assert.equal(response.headers['Cache-Control'], 'no-store');
     const serialized = JSON.stringify(response.payload);
@@ -146,17 +151,66 @@ test('exact current-account diagnostic reads active and soft-deleted rows withou
 
 test('caller cannot forge provider/account/external/user/action fields or use GET/query fallthrough', async () => {
   for (const extra of ['provider', 'organizationId', 'currentAccountId', 'externalId', 'userId', 'ownerId', 'action', 'keepExistingInvoices', '__proto__']) {
-    const f = fixture(), body = JSON.parse(JSON.stringify({ workspaceId, invoiceId }).slice(0, -1) + `,"${extra}":"forged"}`);
+    const f = fixture(), body = JSON.parse(JSON.stringify({ action: INVOICE_DIAGNOSTIC_ACTION, workspaceId, invoiceId }).slice(0, -1) + `,"${extra}":"forged"}`);
     assert.equal((await f.run({ body })).statusCode, 400);
     assert.equal(f.calls.length, 0); f.unchanged();
   }
-  for (const req of [{ method: 'GET' }, { method: 'DELETE' }, { url: '/api/accounting-invoice-diagnostic?organizationId=forged' },
+  for (const req of [{ method: 'GET' }, { method: 'DELETE' }, { url: '/api/accounting?organizationId=forged' },
     { body: { workspaceId, invoiceId: '../arbitrary' } }, { body: { workspaceId: otherId, invoiceId } },
     { body: { workspaceId, invoiceId, extra: null } }, { body: 'not-json' }, { body: [] }, { body: { workspaceId, invoiceId: 123 } },
     { url: 'http://[', body: { workspaceId: { secret: 'PRIVATE' }, invoiceId } }]) {
     const f = fixture(), res = await f.run(req);
     assert.ok(res.statusCode >= 400); assert.equal(f.providerCalls().length, 0); f.unchanged();
   }
+});
+
+test('reserved diagnostic envelopes cannot fall through into any normal action or OAuth callback', async () => {
+  for (const action of ['sync', 'start', 'select-organization', 'disconnect', 'status', '', null, ['invoice-diagnostic'], 'invoice-diagnostic-forged']) {
+    const f = fixture();
+    const res = await f.run({ body: { action, workspaceId, invoiceId, provider: 'zoho_books', keepExistingInvoices: true } });
+    assert.equal(res.statusCode, 400); assert.equal(f.calls.length, 0); f.unchanged();
+  }
+  for (const req of [
+    { body: { workspaceId, invoiceId } },
+    { body: { action: INVOICE_DIAGNOSTIC_ACTION, workspaceId } },
+    { body: { action: INVOICE_DIAGNOSTIC_ACTION, workspaceId, invoiceId }, query: { organizationId: 'forged' } },
+    { body: { action: 'sync', provider: 'zoho_books', workspaceId }, query: { action: INVOICE_DIAGNOSTIC_ACTION } },
+    { body: { action: 'disconnect', provider: 'zoho_books', workspaceId }, url: '/api/accounting?invoiceId=forged' },
+    { body: { action: 'sync', provider: 'zoho_books', workspaceId }, url: '/api/accounting?action=invoice-diagnostic&action=sync' },
+    { method: 'GET', body: undefined, url: '/api/accounting?action=invoice-diagnostic&provider=zoho_books&code=forged&state=forged',
+      headers: { cookie: '__Host-cetld-accounting-zoho_books=fixture' } },
+    { method: 'GET', body: undefined, query: { action: [INVOICE_DIAGNOSTIC_ACTION, 'sync'] },
+      url: '/api/accounting?provider=zoho_books&code=forged&state=forged', headers: { cookie: '__Host-cetld-accounting-zoho_books=fixture' } },
+    { method: 'GET', body: '{"action":"invoice-diagnostic","invoiceId":',
+      url: '/api/accounting?provider=zoho_books&code=forged&state=forged', headers: { cookie: '__Host-cetld-accounting-zoho_books=fixture' } },
+    { method: 'PATCH' },
+    { body: '{"action":"invoice-diagnostic","invoiceId":' },
+  ]) {
+    const f = fixture(), res = await f.run(req);
+    assert.ok([400, 405].includes(res.statusCode)); assert.equal(f.calls.length, 0); f.unchanged();
+  }
+});
+
+test('existing accounting API still delegates ordinary owner status and OAuth callback envelopes', async () => {
+  const response = () => ({ statusCode: null, payload: null, setHeader() {}, status(n) { this.statusCode = n; return this; },
+    json(payload) { this.payload = payload; return this; }, send(payload) { this.payload = payload; return this; } });
+  const calls = [];
+  const env = { SUPABASE_URL: 'https://db.example.test', SUPABASE_PUBLISHABLE_KEY: 'fixture-public',
+    ZOHO_BOOKS_REDIRECT_URI: 'https://app.example.test/api/integrations/zoho/callback' };
+  const integration = { async connectionStatus(input) { calls.push(['status', input]); return { status: 'connected' }; },
+    async callback() { calls.push(['callback']); return { status: 'connected', userId, workspaceId }; },
+    async sync() { calls.push(['sync']); return {}; } };
+  let authCalls = 0;
+  const fetchImpl = async () => Response.json(++authCalls === 1 ? { id: userId } : [{ id: workspaceId, owner_id: userId }]);
+  const status = response();
+  await accountingHandler({ method: 'POST', url: '/api/accounting', headers: { authorization: 'Bearer fixture-user' },
+    body: { action: 'status', provider: 'zoho_books', workspaceId } }, status, { env, integration, fetchImpl });
+  assert.equal(status.statusCode, 200); assert.equal(calls[0][0], 'status');
+  assert.equal(calls[0][1].userId, userId); assert.equal(calls[0][1].workspaceId, workspaceId);
+  const callback = response();
+  await accountingHandler({ method: 'GET', url: '/api/accounting?provider=zoho_books&code=fixture&state=fixture',
+    headers: { cookie: '__Host-cetld-accounting-zoho_books=fixture' } }, callback, { env, integration });
+  assert.equal(callback.statusCode, 200); assert.deepEqual(calls.slice(1), [['callback'], ['sync']]);
 });
 
 test('auth, workspace owner, saved workspace and canonical linkage fail closed before any provider access', async () => {
@@ -263,8 +317,8 @@ test('one deadline bounds auth, connection preparation, refresh and provider/bod
   const f = fixture({ timeoutMs: 25 });
   let release;
   const res = { setHeader() {}, status() { return this; }, json(body) { this.payload = body; } };
-  await handleInvoiceDiagnostic({ method: 'POST', url: '/api/accounting-invoice-diagnostic', headers: { authorization: 'Bearer fixture-user' },
-    body: { workspaceId, invoiceId } }, res, { timeoutMs: 25, env: { SUPABASE_URL: 'https://db.example.test', SUPABASE_PUBLISHABLE_KEY: 'public' },
+  await accountingHandler({ method: 'POST', url: '/api/accounting', headers: { authorization: 'Bearer fixture-user' },
+    body: { action: INVOICE_DIAGNOSTIC_ACTION, workspaceId, invoiceId } }, res, { timeoutMs: 25, env: { SUPABASE_URL: 'https://db.example.test', SUPABASE_PUBLISHABLE_KEY: 'public' },
     fetchImpl: async () => ({ ok: true, json: () => new Promise(resolve => { release = resolve; }) }) });
   assert.equal(res.payload.reason, 'timeout'); release({ id: userId });
   await new Promise(resolve => setTimeout(resolve, 5)); f.unchanged();
@@ -367,8 +421,9 @@ test('organization selection advances revision with CAS, detecting away-and-back
 test('diagnostic has no assistant/runtime/action dispatcher or reminder evidence dependency', async () => {
   const source = await readFile(new URL('../automation/accounting-invoice-diagnostic.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /from ['"].*(?:runtime|assistant|reminder|accounting-routes|conversation|queue)/);
-  const api = await readFile(new URL('../api/accounting-invoice-diagnostic.js', import.meta.url), 'utf8');
-  assert.match(api, /handleInvoiceDiagnostic/); assert.doesNotMatch(api, /handleAccountingRequest/);
+  const api = await readFile(new URL('../api/accounting.js', import.meta.url), 'utf8');
+  assert.ok(api.indexOf('return handleInvoiceDiagnostic') < api.indexOf("await import('../automation/accounting-routes.mjs')"));
+  await assert.rejects(access(new URL('../api/accounting-invoice-diagnostic.js', import.meta.url)), { code: 'ENOENT' });
 });
 
 test('actual current-account diagnostic output cannot grant existing SQL reminder authority', async () => {

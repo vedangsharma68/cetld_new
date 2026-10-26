@@ -1,6 +1,7 @@
 # Saved invoice diagnostic in the current accounting account
 
-`POST /api/accounting-invoice-diagnostic` is an explicit owner-only diagnostic.
+`POST /api/accounting` with the fixed `action: "invoice-diagnostic"` selector is
+an explicit owner-only diagnostic, using the existing deployed function.
 It checks a saved invoice's exact external ID inside the workspace owner's
 **current** authenticated Zoho Books organization. Historical export origin is
 unknown: every diagnostic result says `provenance: "provenance_unverified"`.
@@ -10,14 +11,14 @@ authority to remind, approve, queue, dispatch or send.
 ## Invocation
 
 Use an existing authenticated owner bearer session. The JSON body must contain
-exactly these two UUID fields; no query parameters are accepted:
+exactly this action and two UUID fields; no query parameters are accepted:
 
 ```http
-POST /api/accounting-invoice-diagnostic
+POST /api/accounting
 Authorization: Bearer <existing-owner-session>
 Content-Type: application/json
 
-{"workspaceId":"<workspace-uuid>","invoiceId":"<saved-local-invoice-uuid>"}
+{"action":"invoice-diagnostic","workspaceId":"<workspace-uuid>","invoiceId":"<saved-local-invoice-uuid>"}
 ```
 
 No provider, external invoice ID, organization, account, user or action override
@@ -102,7 +103,12 @@ revision CAS so an away-and-back account switch invalidates an in-flight read.
 Normal token refresh is permitted; concurrent replacement/conflict invalidates
 the diagnostic. These are bounded observations, not a lock on later changes.
 
-The dedicated handler imports accounting preparation and adapters directly; it
+The existing API entrypoint reserves the fixed diagnostic action or a local
+`invoiceId` selector before importing the normal accounting dispatcher. Forged
+actions on diagnostic envelopes and query/method selectors fail in the isolated
+handler, with no callback or mutating-action fallthrough. The handler validates
+the exact envelope before auth/provider work and imports accounting preparation
+and adapters directly; it
 does not import the assistant, action dispatcher, automation runtime or reminder
 runtime. It never calls invoice/customer/payment writes, sync/snapshot/import,
 conversation/model, review/queue/reminder/send, OAuth authorization, organization
@@ -111,12 +117,15 @@ body, customer details, credentials or arbitrary error text are returned/logged.
 Regular reminder read/gate behavior is unchanged. An executable SQL test proves
 this diagnostic result cannot satisfy the existing reminder evidence checker.
 
-No schema migration, provenance backfill, repair or production SQL is included.
+No new deployed function, CI/config/gate change, schema migration, provenance
+backfill, repair or production SQL is included. The unchanged Hobby-budget test
+counts 11 API functions plus one middleware function, within the 12-function cap.
 
 ## Offline verification
 
 ```sh
 node tests/accounting-invoice-diagnostic.test.mjs
+node --test tests/tally-routing.test.mjs tests/accounting-routes.test.mjs
 node --import tsx --test --test-concurrency=2 tests/accounting.test.mjs tests/accounting-routes.test.mjs tests/accounting-soft-delete-sync.test.mjs tests/accounting-invoice-integrity-sql.test.mjs tests/zoho-network-retry.test.mjs tests/zoho-organization-diagnostics.test.mjs tests/external-reminder-verification-sql.test.mjs tests/zoho-reminder-authority-sql.test.mjs tests/assistant-accounting-actions.test.mjs tests/assistant-accounting-tools.test.mjs tests/zoho-rebind-retention.test.mjs tests/exact-reminder-approval.test.mjs tests/reminder-cron-route.test.mjs tests/test-invoice-reminders.test.mjs tests/zoho-ledger-refresh.test.mjs
 npm run typecheck
 git diff --check
