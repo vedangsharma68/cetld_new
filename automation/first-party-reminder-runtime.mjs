@@ -18,7 +18,8 @@ export function createFirstPartyReminderRuntime({env=process.env,scope,store,sup
   let scopes;
   try{scopes=JSON.parse(env.AUTOMATION_WORKSPACES);}catch{throw Error('Reviewed reminder configuration unavailable');}
   if(!Array.isArray(scopes)||scopes.length>1000||!scopes.some(item=>item.ownerId===scope.ownerId&&item.workspaceId===scope.workspaceId))throw Error('Reminder scope unavailable');
-  // Keep the existing payment mode flag. Linked invoices additionally require live reads.
+  // Keep the existing local payment mode flag. Linked reminders are unavailable
+  // until authoritative immutable provider-account provenance is implemented.
   if(env.WHATSAPP_REMINDER_PAYMENT_MODE!=='local_verified')throw Error('Reviewed payment verification unavailable');
   supabase ||= createClient(env.SUPABASE_URL,env.SUPABASE_SERVICE_ROLE_KEY,{
     auth:{persistSession:false,autoRefreshToken:false},global:{fetch:fetchImpl}});

@@ -12,12 +12,16 @@ import {createAccountingIntegration} from '../automation/accounting/integration.
 import {createAccountingProviders} from '../automation/accounting/providers.mjs';
 import {externalReminderRead} from '../automation/external-reminder-verification.mjs';
 import {createApprovedReminderProvider} from '../automation/whatsapp/approved-reminders.mjs';
+import {selectInvoiceReminderTemplate} from '../automation/whatsapp/reminder-templates.mjs';
+import {buildInvoiceReminderParameters,buildDefaultInvoiceReminderDraft} from '../automation/whatsapp/reminder-parameters.mjs';
+import {reminderFingerprint} from '../automation/whatsapp/reminder-fingerprint.mjs';
 
 const migration=()=>readFile(new URL('../supabase/migrations/20261024094013_fresh_external_reminder_reads.sql',import.meta.url),'utf8');
 const overdueMigration='20261024124500_unlinked_overdue_reminder_eligibility.sql';
-for(const fullReview of [false,true])test(`linked reminder live reads fail closed through executable SQL (full review: ${fullReview})`,async t=>{
+const containmentMigration='20261026090000_contain_unproven_external_reminders.sql';
+for(const fullReview of [false,true])test(`linked reminder provenance containment through executable SQL (full review: ${fullReview})`,async t=>{
  const sends=[];let remoteStatus='sent',qboStatus=undefined,remoteBalance=125,remoteTotal=125,unreachable=false,stalled=false,missingCredentials=false,reads=0;
- const f=await createOfflineSqlNetwork({excludeMigrations:['20261024094013_fresh_external_reminder_reads.sql',overdueMigration],externalFetch:async(url,options)=>{
+ const f=await createOfflineSqlNetwork({excludeMigrations:['20261024094013_fresh_external_reminder_reads.sql',overdueMigration,containmentMigration],externalFetch:async(url,options)=>{
    assert.equal(url.origin,'https://graph.facebook.com');sends.push(JSON.parse(options.body));return Response.json({messages:[{id:'wamid.external.'+sends.length}]});
  }}),{db,supabase}=f;
  try{
@@ -48,6 +52,7 @@ for(const fullReview of [false,true])test(`linked reminder live reads fail close
   assert.deepEqual((await protections()).rows,beforeOverdue,'all installed queue/authorization/receipt wrappers and protected bodies/ACLs stay identical');
   assert.deepEqual((await businessProtections()).rows,beforeBusiness.map(row=>({...row,definition:row.definition.replaceAll("status='sent'","status in ('sent','overdue')")})));
   assert.deepEqual((await db.query("select proacl::text acl from pg_proc where oid='app.reminder_local_status_payable(public.invoices)'::regprocedure")).rows[0],helperAcl);
+  await db.exec(await readFile(new URL('../supabase/migrations/'+containmentMigration,import.meta.url),'utf8'));
   const ownerId=randomUUID(),phone='+12025550107',recipient='+919871367051';
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
   await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
@@ -175,40 +180,27 @@ for(const fullReview of [false,true])test(`linked reminder live reads fail close
    assert.equal(paused.status,'overdue');assert.equal(paused.followup_state,'paused');assert.equal(paused.next_follow_up_at,null);
    assert.equal(reads,before);
   });
-  for(const localStatus of ['sent','overdue'])for(const remoteState of ['sent','overdue','partially_paid'])
-   await t.test(`Zoho concrete ${remoteState} with local ${localStatus} queues and dispatches`,async()=>{
-    resetRemote();remoteStatus=remoteState;const paid=remoteState==='partially_paid'?25:0;remoteBalance=125-paid;
-    let i=await invoice();i=(await db.query('update invoices set status=$2,amount_paid=$3 where id=$1 returning *',[i.id,localStatus,paid])).rows[0];
-    if(paid)await db.query(`insert into payments(workspace_id,invoice_id,amount,external_provider,external_payment_id,metadata)
-      values($1,$2,$3,'zoho_books',$4,$5)`,[workspaceId,i.id,paid,randomUUID(),{external_invoice_id:i.external_invoice_id}]);
+  // These formerly permissive status/fact matrices now deliberately prove
+  // containment: matching facts in any current account cannot establish origin.
+  for(const provider of ['zoho_books','quickbooks'])
+   for(const localStatus of ['sent','overdue'])
+    for(const remoteState of provider==='zoho_books'?['sent','overdue','partially_paid','paid','void','voided','draft','viewed','unpaid','mystery','',null]:
+      ['DUE_VIEWED','DUE_NOT_SENT','DUE_SENT','OVERDUE_VIEWED','OVERDUE_NOT_SENT','OVERDUE_SENT','PARTIALLY_PAID','VOIDED','REVERSED','PAID','PAID_NOT_DEPOSITED','DEPOSITED','UNKNOWN','DUE_BOGUS','unpaid','',null])
+   await t.test(`${provider} ${JSON.stringify(remoteState)} / local ${localStatus} cannot queue, approve or dispatch`,async()=>{
+    resetRemote();remoteStatus=remoteState;qboStatus=remoteState;
+    let i=await invoice(provider);i=(await db.query('update invoices set status=$2 where id=$1 returning *',[i.id,localStatus])).rows[0];
     const before=reads,count=sends.length;
-    assert.equal((await prepare(i)).ok,true);assert.equal((await confirm()).completed,true);
-    const result=await automation.tick(scope);assert.equal(sends.length,count+1,JSON.stringify({result,errors:f.errors}));
-    assert.equal(result.results.find(r=>r.invoiceId===i.id)?.status,'sent');assert.equal(reads,before+4);
-    const saved=(await db.query('select * from invoices where id=$1',[i.id])).rows[0];
-    assert.equal(saved.status,localStatus);assert.equal(Number(saved.amount_paid),paid);assert.equal(saved.reminder_count,1);
-    assert.ok(new Date(saved.next_follow_up_at)>new Date(),'overdue receipts advance cadence too');
-   });
-  for(const remoteState of ['paid','void','voided','draft','viewed','unpaid','mystery','',null])
-   await t.test(`Zoho ${JSON.stringify(remoteState)} refuses queue and final dispatch`,async()=>{
-    resetRemote();const i=await invoice();remoteStatus=remoteState;
     assert.equal((await prepare(i)).code,'external_accounting_required');
-    remoteStatus='sent';assert.equal((await prepare(i)).ok,true);assert.equal((await confirm()).completed,true);
-    const before=reads,count=sends.length;
-    f.intercept(async url=>{if(url.pathname.endsWith('/rpc/cetld_core_authorize_delivery'))remoteStatus=remoteState;});
-    try{await automation.tick(scope);}finally{f.intercept(null);}
-    assert.equal(sends.length,count);assert.equal(reads,before+2);
-   });
-  await t.test('terminal and draft statuses refuse linked and unlinked queue and dispatch',async()=>{
-   resetRemote();
-   for(const provider of ['zoho_books',null])for(const status of ['draft','paid','void','cancelled']){
-    let i=await invoice(provider);i=(await db.query('update invoices set status=$2 where id=$1 returning *',[i.id,status])).rows[0];
-    const before=reads;assert.equal((await prepare(i)).code,'ineligible_invoice');assert.equal(reads,before);
+    assert.equal((await check(i)).ok,false);
+    assert.deepEqual((await db.query('select * from invoices where id=$1',[i.id])).rows[0],i);
+    // Simulate a pre-containment approval only inside this disposable fixture.
     await db.exec('reset role');await approveReviewedReminder(db,{workspaceId,invoiceId:i.id});await db.exec('set role service_role');
-    const count=sends.length;await automation.tick(scope);assert.equal(sends.length,count);assert.equal(reads,before);
-   }
-  });
-  for(const scenario of ['paid','error','timeout','credentials','amount','status','unsupported','unconnected'])await t.test(scenario+' blocks queue without mutations',async()=>{
+    assert.equal((await store.claimDueFollowups({...scope,now:new Date().toISOString(),invoiceId:i.id,limit:1})).length,0);
+    await automation.tick({...scope,invoiceId:i.id});
+    assert.equal(reads,before);assert.equal(sends.length,count);
+    assert.equal((await db.query('select count(*)::int n from cetld_core_automation_delivery_claims where invoice_id=$1',[i.id])).rows[0].n,0);
+   });
+  for(const scenario of ['same-facts','org-switched','switch-during-read','paid','error','timeout','credentials','amount','status','unsupported','unconnected'])await t.test(scenario+' is unavailable before provider access',async()=>{
    resetRemote();const i=await invoice(scenario==='unsupported'?'tally':'zoho_books');
    if(scenario==='paid'){remoteStatus='paid';remoteBalance=0;}
    if(scenario==='error')unreachable=true;
@@ -217,110 +209,68 @@ for(const fullReview of [false,true])test(`linked reminder live reads fail close
    if(scenario==='amount')remoteTotal=126;
    if(scenario==='status')remoteStatus='void';
    if(scenario==='unconnected')connection.status='disconnected';
+   if(scenario==='org-switched')connection.providerAccountId='another-org';
+   const before=reads,count=sends.length;
    assert.equal((await prepare(i)).code,'external_accounting_required');assert.equal((await check(i)).ok,false);
    assert.deepEqual((await db.query('select * from invoices where id=$1',[i.id])).rows[0],i);
+   assert.equal(reads,before);assert.equal(sends.length,count);
   });
-  await t.test('unsupported linkage cannot dispatch even with an existing reviewed approval',async()=>{
-   resetRemote();const i=await invoice('tally'),before=reads,count=sends.length;
-   await db.exec('reset role');await approveReviewedReminder(db,{workspaceId,invoiceId:i.id});await db.exec('set role service_role');
-   const result=await automation.tick(scope);assert.equal(sends.length,count);assert.equal(reads,before);
-   assert.equal(result.results.find(r=>r.invoiceId===i.id)?.status,'quarantined');
-  });
-  for(const scenario of ['paid','error','amount','status','pass'])await t.test(scenario+' independently verified at dispatch',async()=>{
-   resetRemote();const i=await invoice();const before=reads;
-   assert.equal((await prepare(i)).ok,true);assert.equal((await confirm()).completed,true);assert.equal(reads,before+2);
-   if(scenario==='paid'){remoteStatus='paid';remoteBalance=0;}
-   if(scenario==='error')unreachable=true;
-   if(scenario==='timeout')stalled=true;
-   if(scenario==='credentials')missingCredentials=true;
-   if(scenario==='amount')remoteBalance=124;
-   if(scenario==='status')remoteStatus='draft';
-   const count=sends.length,result=await automation.tick({...scope,invoiceId:i.id});
-   assert.equal(sends.length,count+(scenario==='pass'?1:0),JSON.stringify({result,errors:f.errors}));
-   assert.ok(reads>before+2,'dispatch never trusts queue evidence');
-   if(scenario==='pass')assert.equal(result.results.find(r=>r.invoiceId===i.id)?.status,'sent',JSON.stringify({result,errors:f.errors}));
-  });
-  await t.test('QuickBooks uses the same read abstraction without connecting any production account',async()=>{
-   resetRemote();const i=await invoice('quickbooks'),before=reads,count=sends.length;
-   assert.equal((await prepare(i)).ok,true);assert.equal((await confirm()).completed,true);
-   const result=await automation.tick(scope);assert.equal(sends.length,count+1,JSON.stringify({result,errors:f.errors}));
-   assert.equal(reads,before+4);assert.equal(result.results.find(r=>r.invoiceId===i.id)?.status,'sent');
-  });
-  await t.test('past-due QuickBooks with local overdue passes by positive balance',async()=>{
-   resetRemote();let i=await invoice('quickbooks');i=(await db.query("update invoices set status='overdue' where id=$1 returning *",[i.id])).rows[0];
-   assert.ok(new Date(i.due_date)<new Date());const count=sends.length,before=reads;
-   assert.equal((await prepare(i)).ok,true);assert.equal((await confirm()).completed,true);
-   const result=await automation.tick(scope);assert.equal(sends.length,count+1,JSON.stringify({result,errors:f.errors}));
-   assert.equal(result.results.find(r=>r.invoiceId===i.id)?.status,'sent');assert.equal(reads,before+4);
-  });
-  for(const status of ['DUE_VIEWED','DUE_NOT_SENT','DUE_SENT','OVERDUE_VIEWED','OVERDUE_NOT_SENT','OVERDUE_SENT','PARTIALLY_PAID'])
-   await t.test(`QuickBooks optional ${status} qualifies only with consistent positive balance`,async()=>{
-    resetRemote();qboStatus=status;let i=await invoice('quickbooks');const paid=status==='PARTIALLY_PAID'?25:0;remoteBalance=125-paid;
-    i=(await db.query("update invoices set status='overdue',amount_paid=$2 where id=$1 returning *",[i.id,paid])).rows[0];
-    if(paid)await db.query(`insert into payments(workspace_id,invoice_id,amount,external_provider,external_payment_id,metadata)
-     values($1,$2,$3,'quickbooks',$4,$5)`,[workspaceId,i.id,paid,randomUUID(),{external_invoice_id:i.external_invoice_id}]);
-    const count=sends.length,before=reads;assert.equal((await prepare(i)).ok,true);assert.equal((await confirm()).completed,true);
-    const result=await automation.tick(scope);assert.equal(sends.length,count+1,JSON.stringify({result,errors:f.errors}));
-    assert.equal(result.results.find(r=>r.invoiceId===i.id)?.status,'sent');assert.equal(reads,before+4);
-   });
-  for(const status of ['VOIDED','REVERSED','PAID','PAID_NOT_DEPOSITED','DEPOSITED','UNKNOWN','DUE_BOGUS','unpaid','',null])
-   await t.test(`QuickBooks optional ${JSON.stringify(status)} refuses queue and final dispatch`,async()=>{
-    resetRemote();qboStatus=status;const i=await invoice('quickbooks');assert.equal((await prepare(i)).code,'external_accounting_required');
-    qboStatus=undefined;assert.equal((await prepare(i)).ok,true);assert.equal((await confirm()).completed,true);
-    const count=sends.length,before=reads;
-    f.intercept(async url=>{if(url.pathname.endsWith('/rpc/cetld_core_authorize_delivery'))qboStatus=status;});
-    try{await automation.tick(scope);}finally{f.intercept(null);}
-    assert.equal(sends.length,count);assert.equal(reads,before+2);
-   });
-  await t.test('QuickBooks voided zero amounts refuse queue and final dispatch',async()=>{
-   resetRemote();const i=await invoice('quickbooks');remoteTotal=0;remoteBalance=0;
-   assert.equal((await prepare(i)).code,'external_accounting_required');
-   resetRemote();assert.equal((await prepare(i)).ok,true);assert.equal((await confirm()).completed,true);
-   const count=sends.length,before=reads;
-   f.intercept(async url=>{if(url.pathname.endsWith('/rpc/cetld_core_authorize_delivery')){remoteTotal=0;remoteBalance=0;}});
-   try{await automation.tick(scope);}finally{f.intercept(null);}
-   assert.equal(sends.length,count);assert.equal(reads,before+2);
-  });
-  for(const scenario of ['paid','error','timeout','credentials','amount','status'])await t.test(scenario+' changes after engine payment check and fails final dispatch read',async()=>{
-   resetRemote();const i=await invoice();assert.equal((await prepare(i)).ok,true);assert.equal((await confirm()).completed,true);
-   const before=reads,count=sends.length;
-   f.intercept(async url=>{if(url.pathname.endsWith('/rpc/cetld_core_authorize_delivery')){
-    if(scenario==='paid'){remoteStatus='paid';remoteBalance=0;}
-    if(scenario==='error')unreachable=true;
-    if(scenario==='timeout')stalled=true;
-    if(scenario==='credentials')missingCredentials=true;
-    if(scenario==='amount')remoteTotal=126;
-    if(scenario==='status')remoteStatus='void';
-   }});
-   try{await automation.tick(scope);}finally{f.intercept(null);}
-   assert.equal(reads,before+(scenario==='credentials'?1:2),'engine and final dispatcher independently verify');assert.equal(sends.length,count);
+  await t.test('crafted legacy evidence, forged account metadata and diagnostics cannot bypass independent SQL gates',async()=>{
+   resetRemote();let i=await invoice();
+   i=(await db.query(`update invoices set metadata=metadata||$2::jsonb where id=$1 returning *`,[i.id,{provider_account_id:'fixture-org',provenance:'verified',provider_account_binding:{immutable:true,accountId:'fixture-org'}}])).rows[0];
+   const old={ownerId,workspaceId,invoiceId:i.id,provider:i.external_provider,externalId:i.external_invoice_id,startedAt:new Date().toISOString(),
+    invoiceVersion:String(i.automation_version),invoiceUpdatedAt:i.updated_at,status:i.status,currency:i.currency,total:'125',paid:'0',
+    linkage:[i.external_provider,i.external_invoice_id,i.metadata.accounting_provider,i.metadata.bookkeeping_record_id]};
+   const evidence=[old,{...old,currentAccountId:'fixture-org',verified:true,immutable:true},null,[],{},'malformed',
+    {workspaceId,invoiceId:i.id,provider:i.external_provider,currentAccountId:'fixture-org',exactId:i.external_invoice_id,checkedAt:new Date().toISOString(),existence:'present',provenance:'provenance_unverified',status:'sent',currency:'USD',totalMinor:12500,balanceMinor:12500,paidMinor:0}];
+   for(const e of evidence){
+    const result=await supabase.rpc('cetld_core_check_local_reminder_payment_with_external_read',{p_owner_id:ownerId,p_workspace_id:workspaceId,p_invoice_id:i.id,p_external_read:e});
+    if(typeof e==='string')assert.equal(result.error?.code,'22P02');else assert.equal(result.error,null);
+    assert.notEqual(result.data?.ok,true);
+   }
+   assert.equal((await check(i)).ok,false,'unwrapped RPC stays fail closed');
    await db.exec('reset role');
-   assert.equal((await db.query('select count(*)::int n from app.first_party_reminder_dispatches where invoice_id=$1',[i.id])).rows[0].n,0);
+   for(const apply of [false,true]){
+    const direct=(await db.query("select app.owner_assistant_reminder($1,$2,$3,true,'fixture','fixture','{}'::jsonb,'{}'::jsonb,$4) value",[workspaceId,ownerId,i.id,apply])).rows[0].value;
+    assert.equal(direct.ok,false,'private owner prepare/apply variants cannot approve linked rows');
+   }
+   assert.deepEqual((await db.query('select * from invoices where id=$1',[i.id])).rows[0],i);
+   await db.exec('reset role');const delivery=await approveReviewedReminder(db,{workspaceId,invoiceId:i.id});
+   i=(await db.query('select * from invoices where id=$1',[i.id])).rows[0];
+   const settings=(await db.query('select * from workspace_settings where workspace_id=$1',[workspaceId])).rows[0];
+   const claim=(await db.query(`insert into cetld_core_automation_delivery_claims(workspace_id,invoice_id,scheduled_for,invoice_version,preferences_updated_at,status,lease_until)
+     values($1,$2,now()-interval '1 minute',$3,$4,'claimed',now()+interval '2 minutes') returning *`,[workspaceId,i.id,i.automation_version,settings.updated_at])).rows[0];
    await db.exec('set role service_role');
-   const after=(await db.query('select * from invoices where id=$1',[i.id])).rows[0];
-   assert.equal(Number(after.total_amount),125);assert.equal(Number(after.amount_paid),0);assert.equal(after.status,'sent');
-  });
-  await t.test('evidence is scoped, expires, and does not bypass audit or role checks',async()=>{
-   resetRemote();const i=await invoice(),evidence=await externalReminderRead({invoice:i,ownerId,workspaceId,accounting});
-   const verify=async e=>(await supabase.rpc('cetld_core_check_local_reminder_payment_with_external_read',{p_owner_id:ownerId,p_workspace_id:workspaceId,p_invoice_id:i.id,p_external_read:e})).data;
-   assert.equal((await verify(evidence)).ok,true);
-   assert.equal((await check(i)).ok,false,'no evidence survives the RPC');
-   assert.equal((await verify({...evidence,startedAt:'2000-01-01T00:00:00Z'})).ok,false);
-   assert.equal((await verify({...evidence,invoiceId:randomUUID()})).ok,false);
-   await db.query('update invoices set amount_paid=1 where id=$1',[i.id]);remoteBalance=124;
-   const changed=(await db.query('select * from invoices where id=$1',[i.id])).rows[0];
-   assert.equal((await verify(evidence)).ok,false,'concurrent local update invalidates evidence');
-   const fresh=await externalReminderRead({invoice:changed,ownerId,workspaceId,accounting});
-   assert.equal((await verify(fresh)).reason,'payment_balance_mismatch');
+   const gate=await store.authorizeDelivery({...scope,claimId:claim.id,preferencesVersion:settings.updated_at});
+   assert.equal(gate.authorized,false);
+   assert.deepEqual((await db.query('select * from cetld_core_automation_delivery_claims where id=$1',[claim.id])).rows[0],claim);
+   // Simulate an old worker that already obtained generic authorization, using
+   // complete matching facts rather than relying on a malformed snapshot denial.
+   await db.query("update cetld_core_automation_delivery_claims set status='sending',delivery_token=$2 where id=$1",[claim.id,randomUUID()]);
+   const customer=(await db.query('select * from customers where id=$1',[customerId])).rows[0];
+   const consent=(await db.query('select * from whatsapp_consents where workspace_id=$1 and customer_id=$2',[workspaceId,customerId])).rows[0];
+   const entry=selectInvoiceReminderTemplate(settings.follow_up_preferences,customer.reminder_tone??null);
+   const normalized={...i,due_date:new Date(i.due_date).toISOString().slice(0,10)};
+   const parameters=buildInvoiceReminderParameters({invoice:normalized,settings,customer});
+   const snapshot={invoiceId:i.id,customerId,phone:recipient,body:delivery.body,delivery,
+    invoiceVersion:String(i.automation_version),invoiceUpdatedAt:i.updated_at,preferencesUpdatedAt:settings.updated_at,
+    consentId:consent.id,consentCreatedAt:consent.created_at,
+    template:{name:entry.name,language:entry.language,body:entry.body,revision:entry.revision,wabaId:env.WHATSAPP_WABA_ID,phoneNumberId:env.WHATSAPP_PHONE_NUMBER_ID,parameters},
+    ...(entry.parameterCount===5?{defaultDraft:buildDefaultInvoiceReminderDraft({invoice:normalized,settings,customer})}:{})};
+   const currentEvidence={...old,invoiceVersion:String(i.automation_version),invoiceUpdatedAt:i.updated_at,startedAt:new Date().toISOString()};
+   for(const e of [currentEvidence,...evidence]){
+    const final=await supabase.rpc('cetld_core_authorize_first_party_reminder_with_external_read',{p_owner_id:ownerId,p_workspace_id:workspaceId,p_claim_id:claim.id,p_snapshot:snapshot,p_snapshot_hash:reminderFingerprint(snapshot),p_external_read:e});
+    assert.notEqual(final.data?.authorized,true);
+   }
    await db.exec(`reset role;set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
-   await assert.rejects(db.query('select cetld_core_check_local_reminder_payment_with_external_read($1,$2,$3,$4)',[ownerId,workspaceId,i.id,evidence]),/permission denied/);
+   await assert.rejects(db.query('select cetld_core_check_local_reminder_payment_with_external_read($1,$2,$3,$4)',[ownerId,workspaceId,i.id,old]),/permission denied/);
    await assert.rejects(db.query("select record_invoice_payment($1,$2,1,'local','fixture',false)",[workspaceId,i.id]),/EXTERNAL_ACCOUNTING/);
   });
  }finally{await f.close();}
 });
 
-test('bounded read discards timeout and missing credentials',async()=>{
+test('unsupported provenance refuses even before timeout or credential preparation',async()=>{
  const invoice={id:randomUUID(),external_provider:'zoho_books',external_invoice_id:'remote-id',metadata:{},currency:'USD',total_amount:125,amount_paid:0,status:'sent'};
- await assert.rejects(externalReminderRead({invoice,ownerId:randomUUID(),workspaceId:randomUUID(),accounting:{reminderInvoiceState:()=>new Promise(()=>{})},timeoutMs:10}),/timed out/);
+ await assert.rejects(externalReminderRead({invoice,ownerId:randomUUID(),workspaceId:randomUUID(),accounting:{reminderInvoiceState:()=>new Promise(()=>{})},timeoutMs:10}),/provenance is unsupported/);
  await assert.rejects(externalReminderRead({invoice,ownerId:randomUUID(),workspaceId:randomUUID(),env:{}}));
 });

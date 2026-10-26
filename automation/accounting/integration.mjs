@@ -307,15 +307,11 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     return { provider, invoiceId: String(invoiceId), balanceMinor: balance.balanceMinor, currency: balance.currency || null, amountMinor: balance.totalMinor ?? null };
   }
 
-  // Live single-invoice read only. Never imports snapshots or updates invoices.
-  async function reminderInvoiceState({userId, workspaceId, provider, invoiceId, signal} = {}) {
-    const context = identity({userId, workspaceId, provider});
-    const connection = await store.getConnection(context);
-    if (connection?.status !== 'connected' || !connection.providerAccountId || !invoiceId
-      || typeof providers[provider].fetchInvoiceBalance !== 'function') throw new Error('Authoritative invoice read unavailable');
-    const {token,connection:active} = await accessToken(context);
-    if (active.status !== 'connected' || active.providerAccountId !== connection.providerAccountId) throw new Error('Accounting connection changed');
-    return providers[provider].fetchInvoiceBalance({token, accountId: active.providerAccountId, invoiceId, signal, retryReads:false});
+  // Current connection identity cannot establish original invoice provenance.
+  // Refuse before loading credentials. The isolated current-account diagnostic
+  // retains its own explicitly non-authoritative read contract.
+  async function reminderInvoiceState() {
+    throw new AccountingError('ACCOUNTING_REMINDER_PROVENANCE_UNSUPPORTED', 'Immutable provider-account provenance is unsupported');
   }
 
   // Connection selection and token preparation belong to this server runtime,

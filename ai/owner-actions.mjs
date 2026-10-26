@@ -7,6 +7,7 @@ import {requestedOwnerPayment,ownerPaymentAmountMentioned} from '../automation/w
 import {parseInvoiceCorrection} from '../automation/whatsapp/assistant-handler.mjs';
 import {validateInvoiceCorrection,requestedOwnerInvoiceTotalChange,invoiceTotalCorrectionValues} from '../automation/whatsapp/invoice-corrections.mjs';
 import {invoiceBusinessFields} from '../invoice/business-fields.mjs';
+import {hasExternalReminderLedger} from '../automation/external-reminder-verification.mjs';
 
 const labels={tone:'Tone',maxReminders:'Maximum reminders',cadenceDays:'Days between reminders',firstReminderDays:'Days after due date for first reminder',contactStart:'Contact start',contactEnd:'Contact end',allowedWeekdays:'Contact weekdays (Sunday = 0)',pauseOnReply:'Pause on customer reply',dailySummary:'Daily summary'};
 const patchFields=['tone','maxReminders','cadenceDays','firstReminderDays','contactStart','contactEnd','allowedWeekdays','pauseOnReply','dailySummary'];
@@ -85,6 +86,7 @@ export function createOwnerAssistantActions({store,conversation=store.ownerConve
       const fieldLabels={customer_id:'Customer',total_amount:'Total',issue_date:'Invoice date',due_date:'Due date',line_items:'Line items',custom_fields:'Business fields'};
       return propose('owner_correction',{invoiceId:i.id,updatedAt:i.updated_at,values},`Correct ${i.invoice_number}:\n`+Object.entries(shown).map(([k,v])=>`${fieldLabels[k]||k.replaceAll('_',' ')}: ${Array.isArray(v)?v.map(item=>`${item.description}: ${item.quantity??''} × ${item.unitPrice??''}, amount ${item.amount}`).join('; '):v===null?'clear':typeof v==='object'?Object.entries(v).map(([name,value])=>`${name}: ${value}`).join('; '):v}`).join('\n'),message);
     }
+    if(hasExternalReminderLedger(i))return result(ownerReminderFailure('external_accounting_required').message);
     const s=await store.getOwnerAssistantSettings();
     const customer=(await store.query('customers',{select:'id,name,phone,reminder_tone',filters:{id:`eq.${i.customer_id}`},limit:1}))[0];
     if(!customer?.phone)return result(ownerReminderFailure('missing_contact').message);

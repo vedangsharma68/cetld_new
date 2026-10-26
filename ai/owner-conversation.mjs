@@ -1,8 +1,16 @@
 import {APIError} from './http.mjs';
+import {hasExternalReminderLedger} from '../automation/external-reminder-verification.mjs';
 
 // Both transports supply a server-verified owner identity. Never derive this
 // identity from customer metadata, a phone number alone, or browser history.
-export function createOwnerConversation({rpc, workspaceId, ownerId, channel = 'web'}) {
+export function createOwnerConversation({rpc, workspaceId, ownerId, channel = 'web', readProposal, readReminderInvoice}) {
+  const reminderPreflight = async proposal => {
+    if(proposal?.type!=='owner_reminder')return;
+    if(!readReminderInvoice)throw new APIError(503,'external_accounting_required');
+    const invoice=await readReminderInvoice(proposal.payload?.invoiceId);
+    if(!invoice||invoice.deleted_at)throw new APIError(409,'INVOICE_NOT_FOUND');
+    if(hasExternalReminderLedger(invoice))throw new APIError(409,'external_accounting_required');
+  };
   const call = async (name, args = {}) => {
     const result = await rpc(name, {...args,p_workspace_id:workspaceId,p_owner_id:ownerId});
     if (result?.error) throw new APIError(503, 'OWNER_CONVERSATION_UNAVAILABLE');
@@ -21,12 +29,22 @@ export function createOwnerConversation({rpc, workspaceId, ownerId, channel = 'w
       if(!Number.isSafeInteger(Number(receipt?.id))||Number(receipt.id)<1)throw new APIError(503,'OWNER_CONVERSATION_UNAVAILABLE');
       return receipt;
     },
-    propose: proposal => call('owner_assistant_propose', {p_proposal:proposal}),
+    async propose(proposal) {
+      await reminderPreflight(proposal);
+      return call('owner_assistant_propose', {p_proposal:proposal});
+    },
     pending: () => call('owner_assistant_pending'),
-    decide: (id, confirmed, proof = {}) => call('owner_assistant_decide', {
+    async decide(id, confirmed, proof = {}) {
+      if(confirmed===true){
+        if(!readProposal)throw new APIError(503,'OWNER_CONVERSATION_UNAVAILABLE');
+        const proposal=await readProposal(id);
+        if(proposal?.state==='pending')await reminderPreflight(proposal.action);
+      }
+      return call('owner_assistant_decide', {
       p_id:id, p_confirmed:confirmed, p_phone:proof.phone ?? null,
       p_message_id:proof.messageId ?? null, p_user_message:proof.message ?? null,
-    }),
+      });
+    },
   });
 }
 

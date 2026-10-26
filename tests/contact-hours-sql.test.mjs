@@ -24,7 +24,9 @@ function uiSavedPreferences(){
 }
 
 for(const modern of [false,true])test(`SQL contact migration: ${modern?'current first-party gate with CRLF':'legacy inline gate with LF'}`,async t=>{
-  const f=await createOfflineSqlNetwork({excludeMigrations:[migration]});
+  // This test intentionally constructs pre-contact-hours LF/CRLF predecessors;
+  // the later exact-source containment migration is tested on current sources.
+  const f=await createOfflineSqlNetwork({excludeMigrations:[migration,'20261026090000_contain_unproven_external_reminders.sql']});
   try{
     const {db}=f;
     if(modern)for(const file of ['20261018060000_customer_reminder_tone.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060100_invoice_details_templates.sql'])await db.exec(await sqlFile(file));

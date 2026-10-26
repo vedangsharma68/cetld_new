@@ -571,7 +571,12 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
               agentDiagnostics:{rounds:0,toolRounds:0,cacheHits:0,safetyRejects:[]}};
           }catch{logger?.warn?.('WhatsApp owner reply receipt lookup failed',{code:'OWNER_REPLY_STORE_FAILED'});}
         }
-        const conversation=historyReader===readSharedOwnerHistory?createOwnerConversation({rpc:(name,args)=>supabase.rpc(name,args),workspaceId:scope.workspaceId,ownerId:scope.ownerId,channel:'whatsapp'}):null;
+        const conversation=historyReader===readSharedOwnerHistory?createOwnerConversation({
+          rpc:(name,args)=>supabase.rpc(name,args),workspaceId:scope.workspaceId,ownerId:scope.ownerId,channel:'whatsapp',
+          readReminderInvoice:async id=>dataOrThrow(await supabase.from('invoices').select('*')
+            .eq('workspace_id',scope.workspaceId).eq('id',id).maybeSingle()),
+          readProposal:async id=>dataOrThrow(await supabase.from('owner_assistant_proposals').select('id,workspace_id,owner_id,state,action')
+            .eq('workspace_id',scope.workspaceId).eq('owner_id',scope.ownerId).eq('id',id).maybeSingle())}):null;
         if(conversation){
           // Persist before processing. Missing schema/storage blocks all owner
           // work; customer handlers never construct this owner repository.

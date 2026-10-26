@@ -6,6 +6,7 @@ import {reminderFingerprint} from '../automation/whatsapp/reminder-fingerprint.m
 import {REMINDER_TONES,selectInvoiceReminderTemplate,buildReminderTemplate} from '../automation/whatsapp/reminder-templates.mjs';
 import {buildInvoiceReminderParameters} from '../automation/whatsapp/reminder-parameters.mjs';
 import {reminderDeliveryForm} from '../automation/whatsapp/reminder-approval.mjs';
+import {hasExternalReminderLedger} from '../automation/external-reminder-verification.mjs';
 const secret=env=>env.AI_ACCOUNTING_CONFIRMATION_SECRET||env.ACCOUNTING_TOKEN_ENCRYPTION_KEY||env.SUPABASE_SERVICE_ROLE_KEY;
 const owner=store=>{if(store.role!=='owner'||!store.ownerConversation)throw new APIError(403,'OWNER_REQUIRED');};
 
@@ -18,11 +19,12 @@ async function checkApprovalSlot(store,clock,proposalId=null){
 
 export async function previewReminderReview({store,body,env,clock=()=>new Date()}) {
  owner(store);
- await checkApprovalSlot(store,clock);
  const invoiceId=uuid(body.invoiceId),{text,tone,sendNow,approveFallback=false}=body;
  if(typeof text!=='string'||!text.trim()||text.length>4000||!REMINDER_TONES.includes(tone)||typeof sendNow!=='boolean'||typeof approveFallback!=='boolean')throw new APIError(400,'INVALID_REMINDER_REVIEW');
  const invoice=(await store.query('invoices',{select:'*',filters:{id:`eq.${invoiceId}`},limit:1}))[0];
  if(!invoice||invoice.deleted_at)throw new APIError(404,'INVOICE_NOT_FOUND');
+ if(hasExternalReminderLedger(invoice))throw new APIError(409,'external_accounting_required');
+ await checkApprovalSlot(store,clock);
  const settings=await store.getOwnerAssistantSettings();
  const customer=(await store.query('customers',{select:'id,name,phone,reminder_tone',filters:{id:`eq.${invoice.customer_id}`},limit:1}))[0];
  if(!customer)throw new APIError(409,'missing_contact');
@@ -64,6 +66,7 @@ export async function approveReminderReview({store,body,env,clock=()=>new Date()
  object(body.reviewPayload,['payload','summary']);
  const invoice=(await store.query('invoices',{select:'*',filters:{id:`eq.${uuid(payload.invoiceId)}`},limit:1}))[0];
  if(!invoice||invoice.deleted_at)throw new APIError(404,'INVOICE_NOT_FOUND');
+ if(hasExternalReminderLedger(invoice))throw new APIError(409,'external_accounting_required');
  try{assertTestReminderDelivery(invoice,payload.template?.reviewedDelivery);}catch(error){throw new APIError(409,error.code);}
  const id=uuid(token.payload.proposalId);
  await checkApprovalSlot(store,clock,id);

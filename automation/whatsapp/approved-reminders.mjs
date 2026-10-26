@@ -1,5 +1,5 @@
 import {assertTestReminderDelivery,TEST_TEMPLATE_BLOCK_REASON} from './test-reminder-policy.mjs';
-import {reminderPaymentRpc,localReminderStatusPayable} from '../external-reminder-verification.mjs';
+import {reminderPaymentRpc,localReminderStatusPayable,hasExternalReminderLedger} from '../external-reminder-verification.mjs';
 import {brandedReminder} from '../preferences.mjs';
 import {reminderDeliveryForm,matchesReminderDelivery,hasPersistedLegacyReminderApproval} from './reminder-approval.mjs';
 import {getSendEligibility} from './consent.mjs';
@@ -36,8 +36,9 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
   }
   async function facts(input){
     if(!scope(input)||await recipientBlock(input.to))throw Error('Reminder scope unavailable');
-    const [invoice,settings,eligibility]=await Promise.all([
-      store.getInvoice({ownerId,workspaceId,invoiceId:input.invoiceId}),
+    const invoice=await store.getInvoice({ownerId,workspaceId,invoiceId:input.invoiceId});
+    if(invoice&&hasExternalReminderLedger(invoice))throw Object.assign(Error('Immutable provider-account provenance is unsupported'),{code:'external_accounting_required'});
+    const [settings,eligibility]=await Promise.all([
       store.getWorkspacePreferences({ownerId,workspaceId}),
       getSendEligibility({supabase,workspaceId,phone:input.to,category:'invoice_updates'}),
     ]);
@@ -121,7 +122,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
           }
         }else if(receipt.snapshot_hash!==hash)return blocked('atomic_gate_denied');
         callbackToken=receipt.callback_token;payload.biz_opaque_callback_data=callbackToken;
-      }catch(error){if([TEST_TEMPLATE_BLOCK_REASON,'test_invoice_marker_required'].includes(error?.code))return blocked(error.code);return blocked(error?.code==='DELIVERY_REVIEW_REQUIRED'?'needs_re_review':'eligibility_unavailable');}
+      }catch(error){if([TEST_TEMPLATE_BLOCK_REASON,'test_invoice_marker_required','external_accounting_required'].includes(error?.code))return blocked(error.code);return blocked(error?.code==='DELIVERY_REVIEW_REQUIRED'?'needs_re_review':'eligibility_unavailable');}
       // No asynchronous operation between the final atomic reservation and POST.
       if(serviceDeadline!==null&&serviceDeadline<=clock().getTime()){
         // No HTTP dispatch follows this branch. Persist the freshly evaluated
