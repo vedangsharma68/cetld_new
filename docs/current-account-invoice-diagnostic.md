@@ -112,7 +112,6 @@ Regular reminder read/gate behavior is unchanged. An executable SQL test proves
 this diagnostic result cannot satisfy the existing reminder evidence checker.
 
 No schema migration, provenance backfill, repair or production SQL is included.
-The review branch disables automatic Vercel Git deployments for that branch.
 
 ## Offline verification
 
