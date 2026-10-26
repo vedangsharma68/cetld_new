@@ -231,7 +231,7 @@ export async function persistContactQuestion(pending, scope, action) {
 }
 
 /** Shared owner answer path for typed numbers and contact cards. */
-export async function answerDebtorPhone({pending, storeFactory, scope, message, contactCard, clock, pendingRow}) {
+export async function answerDebtorPhone({pending, storeFactory, scope, message, contactCard, clock, pendingRow,onSaved}) {
   let row = pendingRow;
   if (row === undefined) {
     try { row = await pending.loadPendingAction?.(scope); }
@@ -255,7 +255,8 @@ export async function answerDebtorPhone({pending, storeFactory, scope, message, 
   try { normalized = normalizeOwnerPhone(candidate); }
   catch { return PHONE_FORMAT_GUIDANCE; }
   const store = await storeFactory();
-  await store.saveDebtorPhone({invoiceId: contact.invoiceId, phone: normalized, assumedConsentAt: clock().toISOString()});
+  const saved=await store.saveDebtorPhone({invoiceId: contact.invoiceId, phone: normalized, assumedConsentAt: clock().toISOString()});
+  onSaved?.(saved);
   await pending.consumePendingAction({...row, ...scope});
   return `Saved ${normalized} for ${contact.clientName}. Before reminders, confirm their agreement and approve the follow-up in cetld.`;
 }

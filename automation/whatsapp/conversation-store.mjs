@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import {normalizeOwnerNextActionRef} from './owner-next-actions.mjs';
+import {normalizeOwnerReceiptRef} from './owner-receipt-ref.mjs';
 
 export const conversationCallbackToken=(workspaceId,key)=>createHash('sha256').update(JSON.stringify([workspaceId,key])).digest('hex');
 export function normalizeOwnerReplyMediaRef(value){
@@ -24,11 +25,13 @@ function ownerActionReference(value,audience,direction){
 export function createConversationStore(supabase) {
   return {
     async record({workspaceId,customerId=null,invoiceId=null,phone,direction,body,kind='text',
-      audience='customer',status,providerMessageId=null,key,createdAt,ownerActionRef=null,ownerNextActionRef=null,ownerReplyMediaRef=null}) {
+      audience='customer',status,providerMessageId=null,key,createdAt,ownerActionRef=null,ownerNextActionRef=null,ownerReplyMediaRef=null,ownerReceiptRef=null}) {
       if(!workspaceId)return;
       const actionRef=ownerActionReference(ownerActionRef,audience,direction);
       const nextRef=normalizeOwnerNextActionRef(ownerNextActionRef);
       const mediaRef=normalizeOwnerReplyMediaRef(ownerReplyMediaRef);
+      const receiptRef=normalizeOwnerReceiptRef(ownerReceiptRef);
+      if(ownerReceiptRef!=null&&(!receiptRef||audience!=='owner'||direction!=='outbound'||kind!=='normal'))throw new TypeError('Invalid owner phone receipt.');
       if(ownerReplyMediaRef!=null&&(!mediaRef||audience!=='owner'||direction!=='outbound'||kind!=='normal'||actionRef||nextRef))throw new TypeError('Invalid owner file receipt.');
       if(ownerNextActionRef!=null&&(!nextRef||audience!=='owner'||direction!=='outbound'||kind!=='normal'||actionRef))
         throw new TypeError('Invalid owner next-action reference.');
@@ -39,6 +42,7 @@ export function createConversationStore(supabase) {
         ...(actionRef?{owner_action_ref:actionRef}:{}),
         ...(nextRef?{owner_next_action_ref:nextRef}:{}),
         ...(mediaRef?{owner_reply_media_ref:mediaRef}:{}),
+        ...(receiptRef?{owner_receipt_ref:receiptRef}:{}),
         ...(direction==='outbound'?{callback_token:conversationCallbackToken(workspaceId,key)}:{}),
         ...(createdAt?{created_at:createdAt}:{}),
       },{onConflict:'workspace_id,idempotency_key',ignoreDuplicates:true}));

@@ -141,7 +141,7 @@ export function createWhatsAppInvoiceStore({supabase, workspaceId, customerId, a
       if(owner){
         const result=await saveOwnerPhone({supabase,scope:{workspaceId,ownerId,phone:ownerPhone},customerId:row.customer_id,invoiceId,phone,messageId,message,authorize});
         if(!result?.ok)throw new Error('Phone save was not confirmed');
-        return mappedInvoice(await ownedInvoice(invoiceId));
+        return {...mappedInvoice(await ownedInvoice(invoiceId)),ownerReceiptRef:result.ownerReceiptRef};
       }
       // Invoice metadata only: customers.phone is the owner's WhatsApp binding key and must never be overwritten.
       const metadata = {...(row.metadata || {}), debtor_phone: phone, client_phone: phone};

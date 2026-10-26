@@ -3,7 +3,8 @@ import {answerDebtorPhone} from './assistant-handler.mjs';
 import {normalizeOwnerPhone,saveOwnerPhone,PHONE_FORMAT_GUIDANCE,recentPhoneSubject} from './owner-phone.mjs';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
 import {ownerReminderRequest} from './owner-reminders.mjs';
-import {ownerConsentRequest} from './owner-consent.mjs';
+import {ownerConsentRequest,createOwnerConsentRuntime} from './owner-consent.mjs';
+import {isOwnerConsentTopic,quotedConsentDateReply,QUOTED_TARGET_CLARIFICATION} from './owner-quoted-consent.mjs';
 import {normalizeOwnerBotPreferences,normalizeOwnerServiceReplyText} from './bot-preferences.mjs';
 import {ownerCalendar} from './workspace-records.mjs';
 import {isOwnerNextButton,runOwnerNextAction,planOwnerNextActions,createOwnerNextButtons,pendingBlocksOwnerNextActions,ownerMenuInvoiceEdit,loadOwnerMenuEditTarget,NEXT_ACTION_STALE_REPLY} from './owner-next-actions.mjs';
@@ -211,14 +212,39 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     const {settings,available:settingsAvailable}=settingsState;
     const {pendingAtStart,pendingInitialState,available:pendingStateAvailable}=pendingState;
     pendingStoreAvailable=pendingStateAvailable;
+    // A provider reply ID is a lookup hint, never authorization or a target.
+    // SQL resolves it from the immutable inbound event and a scoped bot receipt.
+    if(scope.replyContextId&&!scope.interactionId&&!media&&!mediaError
+      &&(isOwnerConsentTopic(message)||ownerIsConfirmation(message)||/\b(?:remind|reminder|due)\b/i.test(message))){
+      try{
+        const target=dataOrThrow(await supabase.rpc('whatsapp_owner_resolve_quote',{
+          p_workspace_id:workspaceId,p_owner_id:ownerId,p_phone:phone,p_message_id:messageId,p_user_message:message,
+        }));
+        if(!await authorizeTurn(scope))return '';
+        if(!target?.ok)return {answer:QUOTED_TARGET_CLARIFICATION};
+        if(ownerIsConfirmation(message))return {answer:"A phone receipt isn't consent or reminder approval. Request a reminder preview, then approve its exact wording. Nothing was sent."};
+        // Resolve before the conversational planner; intervening history cannot
+        // retarget the current owner's original words to another customer.
+        const runtime=createOwnerConsentRuntime({supabase,scope,message,messageId,authorize:authorizeTurn});
+        const result=isOwnerConsentTopic(message)?await runtime.execute({operation:'recordConsent',table:'customers',
+          filters:[{column:'id',operator:'eq',value:target.customerId}]}):null;
+        if(!await authorizeTurn(scope))return '';
+        const dateReply=quotedConsentDateReply(target,timezone);
+        const reply=result?.message||'Request a reminder preview for this invoice, then approve its exact wording. Nothing was sent.';
+        return {answer:[reply,dateReply,!dateReply&&target.reminderRequested
+          ?'Request a reminder preview for this invoice, then approve its exact wording. Nothing was sent.':null].filter(Boolean).join('\n\n')};
+      }catch{return {answer:QUOTED_TARGET_CLARIFICATION};}
+    }
     // Resume the original operation before handling a phone follow-up it created.
     // Its confirmation message is not a new answer to that follow-up.
     if (!scope.interactionId && !scope.checkpoint && (scope.contactCard || (!scope.media && !scope.mediaError && pendingAtStart?.action?.type === 'invoice_debtor_phone'))) {
+      let ownerReceiptRef=null;
       const answer = await answerDebtorPhone({pending, scope: {workspaceId, customerId: scope.customerId, phone},
         message, contactCard: scope.contactCard, clock, pendingRow: pendingAtStart,
+        onSaved:saved=>{ownerReceiptRef=saved?.ownerReceiptRef||null;},
         storeFactory: () => invoiceStoreFactory({...scope,ownerId,ownerPhone:phone,messageId,message,audience:'owner',
           authorize: () => authorizeTurn(scope)})});
-      if (answer) return {answer};
+      if (answer) return {answer,...(ownerReceiptRef?{ownerReceiptRef}:{})};
     }
 
     const {history,available:historyAvailable}=historyState;
@@ -365,7 +391,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         initialToolResults=[{name:'workspaceData',args:{operation:choice.decision},result}];
       }
     }
-    let phoneCorrectionReply=null;
+    let phoneCorrectionReply=null,phoneReceiptRef=null;
     if(!recovered?.completed&&!scope.interactionId&&!media&&!mediaError&&!pendingBlocksOwnerNextActions(pendingAtStart)){
       const text=String(message||'').trim();
       const candidate=text.match(/^(?:(?:it is|it's|the (?:phone|number) is)\s+)?(\+?[\d\s-]+)[.!]?$/i)?.[1];
@@ -400,6 +426,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
                 const result=await saveOwnerPhone({supabase,scope,customerId:filters?found.row.customer_id:found.row.id,
                   invoiceId:filters?found.row.id:null,phone:normalized,messageId,message,authorize:()=>authorizeTurn(scope)});
                 phoneCorrectionReply=result?.ok?`Saved ${result.phone} for ${result.customerName}.`: 'I could not save that number. Check the customer and try again.';
+                if(result?.ok)phoneReceiptRef=result.ownerReceiptRef||null;
                 const contactFailure=Boolean(recovery)||/usable WhatsApp number|valid WhatsApp phone|invalid (?:phone|contact)|missing_contact/i.test(subject.reply||'');
                 if(result?.ok&&prior&&contactFailure){
                   await tools.execute('workspaceData',{...prior,filters:[{column:'id',operator:'eq',value:found.row.id}]},{signal});
@@ -481,7 +508,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         if(!buttons.length)ownerNextActionRef=null;
       }catch{ownerNextActionRef=null;logger?.warn?.('WhatsApp next actions unavailable',{code:'OWNER_NEXT_ACTIONS_UNAVAILABLE'});}
     }
-    return {answer,...(buttons.length?{buttons,...(ownerActionRef?{ownerActionRef}:{ownerNextActionRef})}:{}),...(response?.media?{media:response.media}:{}),
+    return {answer,...(phoneReceiptRef?{ownerReceiptRef:phoneReceiptRef}:{}),...(buttons.length?{buttons,...(ownerActionRef?{ownerActionRef}:{ownerNextActionRef})}:{}),...(response?.media?{media:response.media}:{}),
       ...(response?.plannerFailure?{plannerFailure:response.plannerFailure}:{}),
       ...(response?.agentDiagnostics?{agentDiagnostics:response.agentDiagnostics}:{}),
       ...(response?.model?{servedModel:response.model}:{}),...(response?.servedProvider?{servedProvider:response.servedProvider}:{})};
