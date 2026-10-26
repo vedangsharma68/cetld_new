@@ -1,10 +1,11 @@
 import {normalizeOwnerPhone} from './owner-phone.mjs';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
+import {isOwnerConsentTopic} from './owner-quoted-consent.mjs';
 
 const GUIDANCE='Tell me the customer name and current number, and confirm they agreed to WhatsApp invoice reminders.';
 const MESSAGES={
   OWNER_PHONE:'That number is your verified owner WhatsApp number. Send a different number for the customer; owner consent cannot be reassigned.',
-  CONFLICT:'That number already has consent linked to another customer. Check the customer and send their own number.',
+  CONFLICT:'This shared number already has consent linked to another customer. That consent does not cover this customer. I cannot record a separate consent for this customer on the shared number yet. No consent was copied or changed, and no reminder was sent.',
   suppressed:'This customer has stopped WhatsApp reminders. Ask them to opt back in before recording consent.',
   globally_suppressed:'This phone has stopped WhatsApp messages. Ask the recipient to opt back in before recording consent.',
   revoked:'This customer withdrew consent. Ask them to opt back in from their own WhatsApp number before recording consent.',
@@ -24,7 +25,7 @@ export function ownerConsentFailure(code){
 // current, affirmative instruction. Questions and negations cannot write.
 export function ownerConsentRequest(message){
   const text=String(message||'').trim();
-  if(!/\b(?:consent(?:ed)?|agreed)\b/i.test(text)||!/\b(?:reminders?|WhatsApp|consent)\b/i.test(text))return null;
+  if(!isOwnerConsentTopic(text)||!/\b(?:reminders?|WhatsApp|consent)\b/i.test(text))return null;
   const invoice=text.match(/\bINV[-/][A-Z0-9][A-Z0-9/-]*/i)?.[0];
   const named=text.match(/^(?:record|save)\s+(?:(?:the|reminder)\s+)?consent\s*(?:(?:for|:)\s*)?(.+?)(?=\s+(?:on|agreed|has agreed|have agreed)\b|[.!]?$)/i)?.[1]?.trim()
     ||text.match(/^(.+?)\s+(?:(?:has|have)\s+)?(?:agreed|consented)\s+(?:to|for)\b/i)?.[1]?.trim();
@@ -40,7 +41,9 @@ export function ownerConsentRequest(message){
 export function createOwnerConsentRuntime({supabase,scope,message='',messageId,authorize}={}){
   let reply=null;
   const check=async ctx=>{ctx?.assertLive?.();if(!await authorize(scope))throw Error('owner required');await ctx?.assertAuthorized?.();ctx?.assertLive?.();};
-  const finish=result=>{reply=result?.ok&&result.completed
+  const finish=result=>{reply=result?.code==='CONFLICT'&&result.customerName&&result.consentCustomerName
+    ?`${result.phone} has reminder consent for ${result.consentCustomerName}; it does not cover ${result.customerName}. Separate consent for ${result.customerName} on this shared number is not supported yet. Repeating the confirmation will not resolve this collision. Use a genuinely different recipient number if available, or wait for separate customer-scoped consent support. No consent or phone was changed, and no reminder was sent.`
+    :result?.ok&&result.completed
     ?`Recorded reminder consent for ${result.customerName} on ${result.phone}. No reminder was sent.`
     :ownerConsentFailure(result?.code).message;return {...result,message:reply,
       ...(result?.code==='INVALID'?{validationCode:'CONSENT_EVIDENCE_REQUIRED'}:{})};};

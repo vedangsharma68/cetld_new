@@ -48,6 +48,10 @@ async function createFixtureDatabase(excludeMigrations){
 }
 
 export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[]}={}){
+  // The source-binding migration extends these exact installed entrypoints.
+  // Historical fixtures that deliberately omit them must also omit the patch.
+  if(excludeMigrations.some(file=>['20261022100000_owner_phone_contact_recovery.sql','20261022180000_owner_chat_record_consent.sql'].includes(file)))
+    excludeMigrations=[...excludeMigrations,'20261026045045_quoted_owner_consent_source.sql'];
   // The bookkeeping forward migration requires the installed factual parser.
   // Historical migration fixtures intentionally omit that predecessor.
   if(excludeMigrations.includes('20261009015001_owner_payment_factual_instruction.sql'))

@@ -14,6 +14,8 @@ test('consent confirmations use a bounded, supported owner operation',()=>{
   assert.equal(ownerConsentRequest('yes, he has agreed to get reminders on this number').filters.length,0);
   assert.equal(ownerConsentRequest('John Smith has agreed to reminders').filters[0].value,'John Smith');
   assert.equal(ownerConsentRequest('send a reminder for INV-2026-1234'),null);
+  assert.equal(ownerConsentRequest('approve'),null,'bare proposal fallback is not customer consent');
+  assert.equal(ownerConsentRequest('they approve, send them a reminder (the invoice is due tommrow)').filters.length,0,'an unquoted pronoun cannot select recent customers');
 });
 
 test('owner consent commits with evidence and a receipt; owner bindings and STOP remain intact',async()=>{

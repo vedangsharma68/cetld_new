@@ -23,14 +23,47 @@ function lastMoneyCents(line) {
 
 /** Identity extraction must not depend on recognizing the entire item table. */
 export function printedInvoiceNumber(text) {
-  const matches = [...String(text || '').matchAll(/\binvoice\s*(?:number|no\.?|#)\s*[:#]?\s*([A-Z0-9][A-Z0-9_./-]{0,99})(?=\s|$)/gi)]
-    .map(match => match[1]);
-  const numbers = [...new Set(matches.filter(number => !isPlaceholderInvoiceNumber(number)))];
+  const lines = String(text || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const numberLabel = /\binvoice[ \t]*(?:number|no\.?|#)[ \t]*[:#]?[ \t]*/gi;
+  const valid = value => /^[A-Z0-9][A-Z0-9_./-]{0,99}$/i.test(value || '')
+    && !isPlaceholderInvoiceNumber(value)
+    && !/^(?:\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{4}[/.-]\d{1,2}[/.-]\d{1,2}|\d{1,2}[-/.](?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[-/.]\d{2,4})$/i.test(value);
+  // PDF text can be row ordered (label/value) or column ordered (all labels,
+  // then all values). Only an explicit, contiguous label/value block establishes
+  // that position; never scan ahead past unrelated text looking for a code.
+  const fieldLabel = /^(?:invoice[ \t]*(?:number|no\.?|#|date)|(?:due|invoice)[ \t]+date|date[ \t]+range|a\/?c[ \t]*code|hsn\/?sac)[ \t]*[:#]?[ \t]*$/i;
+  const matches = [];
+  for (let i = 0; i < lines.length; i++) {
+    const columns=[...lines[i].matchAll(/(?:invoice[ \t]*(?:number|no\.?|#|date)|due[ \t]+date|date[ \t]+range|a\/?c[ \t]*code|hsn\/?sac)[ \t]*[:#]?/gi)];
+    if(columns.length>1&&!lines[i].replace(/(?:invoice[ \t]*(?:number|no\.?|#|date)|due[ \t]+date|date[ \t]+range|a\/?c[ \t]*code|hsn\/?sac)[ \t]*[:#]?/gi,'').trim()){
+      const row=lines[i+1]?.split(/[ \t]+/)||[];
+      const values=row.length===columns.length?row:lines.slice(i+1,i+1+columns.length);
+      columns.forEach((column,index)=>{
+        if(/^invoice[ \t]*(?:number|no\.?|#)/i.test(column[0])&&valid(values[index]))matches.push(values[index]);
+      });
+      continue;
+    }
+    for (const match of lines[i].matchAll(numberLabel)) {
+      const tail = lines[i].slice(match.index + match[0].length);
+      if (tail) {
+        if(/^(?:\d{1,2}[ \t]+[A-Za-z]{3,9}[ \t]+\d{4}\b|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[ \t]+\d{1,2},?[ \t]+\d{4}\b|(?:bank[ \t]+details|a\/?c[ \t]+code|hsn\/?sac|date[ \t]+range)\b)/i.test(tail))continue;
+        const token = tail.match(/^([^\s]+)/)?.[1];
+        if (valid(token)) matches.push(token);
+      } else if (fieldLabel.test(lines[i])) {
+        let start = i, end = i + 1;
+        while (start > 0 && fieldLabel.test(lines[start - 1])) start--;
+        while (end < lines.length && fieldLabel.test(lines[end])) end++;
+        const token = lines[end + i - start];
+        if (valid(token)) matches.push(token);
+      }
+    }
+  }
+  const numbers = [...new Set(matches)];
   return numbers.length === 1 ? numbers[0] : null;
 }
 
 export function isPlaceholderInvoiceNumber(value) {
-  return /^(?:auto|not|n\/?a|none|null|unknown|not[ _-]?(?:shown|available|applicable)|tbd|pending|-)$/i.test(String(value || '').trim());
+  return /^(?:auto|not|n\/?a|none|null|unknown|not[ _-]?(?:shown|available|applicable)|tbd|pending|invoice|invoice[ _-]?(?:date|no\.?|number)|date|due|number|no\.?|-)$/i.test(String(value || '').trim());
 }
 
 // Freight tables often itemize charges beneath a shipment without repeating

@@ -3,6 +3,7 @@ import {createWhatsAppInvoiceStore} from './invoice-store.mjs';
 import {authorizeOwnerPhone} from './owner-binding.mjs';
 import {createOwnerActionButtons} from './owner-action-buttons.mjs';
 import {createOwnerNextButtons,normalizeOwnerNextActionRef} from './owner-next-actions.mjs';
+import {normalizeOwnerReceiptRef} from './owner-receipt-ref.mjs';
 
 const data=result=>{if(result?.error)throw result.error;return result?.data;};
 const epoch=clock=>{const value=clock();return value instanceof Date?value.getTime():Number(value);};
@@ -71,17 +72,19 @@ export function createOwnerReplyStore({supabase,clock=()=>new Date(),env=process
       if(!scope.messageId||!result?.answer?.trim())return result;
       const ownerActionRef=normalizeOwnerActionRef(result.ownerActionRef);
       const ownerNextActionRef=ownerActionRef?null:normalizeOwnerNextActionRef(result.ownerNextActionRef);
+      const ownerReceiptRef=normalizeOwnerReceiptRef(result.ownerReceiptRef);
       const choicesExpected=result.ownerNextActionRef==null&&(result.ownerActionRef!=null||(Array.isArray(result.buttons)&&result.buttons.length>0));
       const storedBody=choicesExpected&&!ownerActionRef?OWNER_ACTION_CHOICES_UNAVAILABLE_REPLY:result.answer;
       const stored=await conversations.record({workspaceId:scope.workspaceId,phone:scope.phone,
         customerId:null,invoiceId:null,audience:'owner',direction:'outbound',kind:'normal',status:'pending',
-        body:storedBody,key:`reply:${scope.messageId}`,createdAt:new Date(epoch(clock)).toISOString(),ownerActionRef,ownerNextActionRef,ownerReplyMediaRef:result.ownerReplyMediaRef});
+        body:storedBody,key:`reply:${scope.messageId}`,createdAt:new Date(epoch(clock)).toISOString(),ownerActionRef,ownerNextActionRef,ownerReplyMediaRef:result.ownerReplyMediaRef,ownerReceiptRef});
       if(!stored?.body||stored.phone!==scope.phone||stored.audience!=='owner'||stored.kind!=='normal')
         throw Object.assign(new Error('Owner reply receipt unavailable'),{code:'OWNER_REPLY_STORE_FAILED'});
       const output={...result,answer:stored.body};
       delete output.ownerActionRef;
       delete output.ownerNextActionRef;
       delete output.ownerReplyMediaRef;
+      delete output.ownerReceiptRef;
       delete output.buttons;
       if(stored.owner_reply_media_ref!=null)return {...output,media:await replayMedia(scope,stored)};
       if(stored.owner_next_action_ref!=null&&stored.owner_action_ref==null){

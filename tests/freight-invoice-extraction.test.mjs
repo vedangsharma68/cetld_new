@@ -49,7 +49,7 @@ test('omitted charge and non-reconciling components are never promoted to verifi
 test('printed identity survives an unrecognized table and placeholder provider output is discarded',()=>{
  assert.equal(printedInvoiceNumber('Unrecognized table\nInvoice No.: ZX-123/45'), 'ZX-123/45');
  assert.equal(printedInvoiceNumber('Invoice No.: A-1\nInvoice No.: A-2'),null);
- for(const placeholder of ['AUTO','auto','N/A','unknown','not shown','TBD']){
+ for(const placeholder of ['AUTO','auto','N/A','unknown','not shown','TBD','Invoice','Invoice Date','Date','Number']){
   const parsed=parsePdfInvoiceText(freightInvoiceText,{businessName});
   parsed.invoiceNumber.value=placeholder;
   const result=validateInvoiceExtractionResponse(parsed);
@@ -57,6 +57,42 @@ test('printed identity survives an unrecognized table and placeholder provider o
   assert(reviewDraft(result).missingFields.includes('invoiceNumber'));
  }
  assert.match(invoiceExtractionPrompt(),/continuation rows/);
+});
+
+test('printed number follows explicit label/value positions without crossing into labels or dates',()=>{
+ for(const [text,expected] of [
+  ['Invoice No.\nInvoice Date\nCR-25260643\n31/03/2026','CR-25260643'],
+  ['Invoice Date\nInvoice No.\n31/03/2026\nCR-25260643','CR-25260643'],
+  ['A/C Code:\nInvoice No.:\nInvoice Date:\nKHEVAN\nAB/2027-0099\n31/03/2026','AB/2027-0099'],
+  ['Invoice No.:\nALPHA','ALPHA'],
+  ['Invoice No.: LETTERS','LETTERS'],
+  ['Invoice No.: CR-25260643 Invoice Date: 31/03/2026','CR-25260643'],
+  ['Invoice No.\nInvoice Date\n31/03/2026',null],
+  ['Invoice No.\n31/03/2026',null],
+  ['Invoice No.\nInvoice Date\n2026-03-31\nCR-25260643',null],
+  ['Invoice No.\nBank details\nCR-25260643',null],
+  ['Invoice No. Invoice Date\nCR-25260643 31/03/2026','CR-25260643'],
+  ['Invoice Date Invoice No.\n31/03/2026 CR-25260643','CR-25260643'],
+  ['Invoice No. Invoice Date\nCR-25260643\n31/03/2026','CR-25260643'],
+  ['Invoice No.: 31 March 2026',null],
+  ['Invoice No.: March 31, 2026',null],
+  ['Invoice No.: 31-MAR-2026',null],
+  ['Invoice No.: Bank details\nCR-25260643',null],
+  ['Invoice No.: AUTO\nCR-25260643',null],
+ ])assert.equal(printedInvoiceNumber(text),expected,text);
+});
+
+test('column-ordered freight PDF keeps both amounts and an absent due date; ambiguous number stays unknown',async()=>{
+ const columnText=freightInvoiceText.replace('Invoice No.: CR-25260643\nInvoice Date: 31/03/2026','Invoice No.\nInvoice Date\nCR-25260643\n31/03/2026');
+ const result=await extractInvoice({bytes:freightInvoicePdf(columnText),mimeType:'application/pdf',businessName,
+  provider:{async generateStructured(){throw Error('must parse the reconciled freight table');}}});
+ assert.equal(result.invoiceNumber.value,'CR-25260643');assert.equal(result.dueDate.value,null);
+ assert.deepEqual(result.lineItems.value.map(r=>r.amount),[5033.6,450.45]);assert.equal(result.subtotal.value,5484.05);
+ const ambiguous=columnText.replace('CR-25260643','31/03/2026').replace('G.Total','Row total');
+ const parsed=parsePdfInvoiceText(freightInvoiceText,{businessName});parsed.invoiceNumber={value:'Invoice',confidence:.99};
+ const unknown=await extractInvoice({bytes:freightInvoicePdf(ambiguous),mimeType:'application/pdf',businessName,
+  provider:{async generateStructured(options){return {data:options.validate(invoiceWire(parsed)),model:'fixture'};}}});
+ assert.equal(unknown.invoiceNumber.value,null);assert(reviewDraft(unknown).missingFields.includes('invoiceNumber'));
 });
 
 

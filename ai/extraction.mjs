@@ -415,6 +415,8 @@ export async function extractInvoice({ provider, bytes, mimeType, fileName, busi
     const normalized = adaptInvoiceExtractionWireResponse(data);
     const sourceNumber = pdfText ? printedInvoiceNumber(pdfText) : null;
     if (sourceNumber) normalized.invoiceNumber = {value: sourceNumber, confidence: .99};
+    else if (pdfText && /\binvoice[ \t]*(?:number|no\.?|#)/i.test(pdfText))
+      normalized.invoiceNumber = {value: null, confidence: 0};
     // A model must not fill a PDF's absent due date from its invoice date,
     // service period or payment prose. Null remains an honest unknown.
     if (pdfText && !/\b(?:due\s+date|payment\s+due|due\s+(?:by|on)|pay(?:ment)?\s+(?:by|before)|last\s+(?:payment\s+)?date)\b|\bdue\s+(?:\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[/.-]\d{1,2}[/.-]\d{4})\b/i.test(pdfText))

@@ -76,7 +76,10 @@ export function parseMetaMessages(payload, expectedPhoneNumberId, expectedWabaId
       if (!id || id.length > 256 || !E164.test(phone) || !type || type.length > 64 || typeof body !== 'string' || body.length > 4000) continue;
       const seconds = Number(message?.timestamp);
       const timestamp = Number.isSafeInteger(seconds) && seconds > 0 ? new Date(seconds * 1000).toISOString() : null;
+      const replyContextId = message?.context?.id;
       found.push({ provider_message_id: id, phone_number_id: String(expectedPhoneNumberId), sender_phone: phone, message_type: type, message_text: body, provider_timestamp: timestamp,
+        ...(typeof replyContextId === 'string' && replyContextId.trim() && Buffer.byteLength(replyContextId, 'utf8') <= 256
+          ? {reply_context_id: replyContextId} : {}),
         ...(interactionId ? {interactionId} : {}),
         ...(media ? {media_id: String(media.id || ''), media_mime_type: String(media.mime_type || ''), media_caption: String(media.caption || '')} : {}) });
     }
@@ -490,6 +493,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       try{
         response = event.media_error&&!owner ? MEDIA_FETCH_FAILED_REPLY : await handle({ workspaceId: binding.workspaceId, customerId: binding.customerId, ownerId:binding.ownerId,
         phone: event.sender_phone, message: event.message_text, messageType:event.message_type,
+        ...(owner ? {replyContextId:event.reply_context_id||null,messageTimestamp:event.provider_timestamp||event.received_at} : {}),
         ...(event.message_type === 'contacts' ? {contactCard: JSON.parse(event.message_text)} : {}), messageId: event.provider_message_id, media,
         ...(owner&&typeof interactionId==='string'&&Buffer.byteLength(interactionId,'utf8')<=MAX_INTERACTION_ID_LENGTH
           ?{interactionId}:{}),
