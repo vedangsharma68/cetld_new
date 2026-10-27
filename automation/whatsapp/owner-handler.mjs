@@ -7,7 +7,7 @@ import {ownerConsentRequest,createOwnerConsentRuntime} from './owner-consent.mjs
 import {isOwnerConsentTopic,quotedConsentDateReply,QUOTED_TARGET_CLARIFICATION} from './owner-quoted-consent.mjs';
 import {normalizeOwnerBotPreferences,normalizeOwnerServiceReplyText} from './bot-preferences.mjs';
 import {ownerCalendar} from './workspace-records.mjs';
-import {isOwnerNextButton,runOwnerNextAction,planOwnerNextActions,createOwnerNextButtons,pendingBlocksOwnerNextActions,ownerMenuInvoiceEdit,loadOwnerMenuEditTarget,NEXT_ACTION_STALE_REPLY} from './owner-next-actions.mjs';
+import {isOwnerNextButton,runOwnerNextAction,planOwnerNextActions,planOwnerMenuActions,createOwnerNextButtons,pendingBlocksOwnerNextActions,ownerMenuInvoiceEdit,loadOwnerMenuEditTarget,NEXT_ACTION_STALE_REPLY} from './owner-next-actions.mjs';
 import {createOwnerActionButtons,verifyOwnerActionButton} from './owner-action-buttons.mjs';
 import {AIProvider, CF_PRIMARY_MODEL, GEMINI_FALLBACK_MODEL, sanitizeModelSettings} from '../../ai/provider.mjs';
 import {createInvoiceLifecycleService} from '../../ai/invoice-lifecycle.mjs';
@@ -45,6 +45,8 @@ export function standaloneOwnerGreeting(message){
   if(['what do you do','what can you do'].includes(text))return 'I can look up and manage your customers, invoices, and payments. What do you need?';
   return null;
 }
+
+export const standaloneOwnerMenu=message=>/^(?:menu|show menu)$/i.test(String(message||'').trim());
 
 const dataOrThrow = result => {if(result?.error)throw result.error;return result?.data;};
 async function timedContextRead(logger,query,operation){
@@ -212,6 +214,17 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     const {settings,available:settingsAvailable}=settingsState;
     const {pendingAtStart,pendingInitialState,available:pendingStateAvailable}=pendingState;
     pendingStoreAvailable=pendingStateAvailable;
+    if(!scope.interactionId&&!media&&!mediaError&&!scope.contactCard&&!scope.checkpoint&&standaloneOwnerMenu(message)){
+      const {lifecyclePending,available:lifecycleAvailable}=lifecycleState;
+      if(historyReader===readSharedOwnerHistory&&!historyState.available)return {answer:'Your business conversation is temporarily unavailable. Try again shortly. No action was taken.'};
+      const blocked=pendingBlocksOwnerNextActions(pendingAtStart)||Boolean(lifecyclePending?.pending)||!pendingStoreAvailable||!lifecycleAvailable;
+      if(blocked)return {answer:'Finish or cancel the current approval first.'};
+      if(!replyStore||!messageId)return {answer:'The navigation menu is temporarily unavailable. Try again shortly.'};
+      const ownerNextActionRef=await planOwnerMenuActions({scope,pending:blocked,authorize:authorizeTurn,clock});
+      const buttons=createOwnerNextButtons({scope,reference:ownerNextActionRef,env,clock});
+      return buttons.length?{answer:'Choose an invoice lookup.',buttons,ownerNextActionRef}
+        :{answer:'The navigation menu is temporarily unavailable. Try again shortly.'};
+    }
     // A provider reply ID is a lookup hint, never authorization or a target.
     // SQL resolves it from the immutable inbound event and a scoped bot receipt.
     if(scope.replyContextId&&!scope.interactionId&&!media&&!mediaError
