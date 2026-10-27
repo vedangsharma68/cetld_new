@@ -674,7 +674,7 @@ async function boot({crlfLegacyWorkspaceData=false,supabaseDefaultGrants=false,s
   for(const name of migrations){
     // Historical fixtures intentionally omit the private correction permit.
     // Its prospective capture dependent must not install without that source.
-    if(skipClassificationGuard&&['20261004214000_invoice_history_classification_guard.sql','20261006163000_owner_invoice_total_corrections.sql','20261026141000_zoho_capture_completion_protocol.sql','20261027050000_zoho_original_bound_read.sql'].includes(name))continue;
+    if(skipClassificationGuard&&['20261004214000_invoice_history_classification_guard.sql','20261006163000_owner_invoice_total_corrections.sql','20261026141000_zoho_capture_completion_protocol.sql','20261027050000_zoho_original_bound_read.sql','20261027070000_zoho_bound_claim_protocol.sql'].includes(name))continue;
     if(crlfLegacyWorkspaceData&&name==='20261003141000_direct_owner_write.sql'){
       const current=(await db.query(`select
         pg_catalog.pg_get_functiondef('public.whatsapp_workspace_data_propose(uuid,uuid,text,text,text,text,uuid,timestamptz,jsonb,text,bigint,bigint,bigint)'::regprocedure) as propose,

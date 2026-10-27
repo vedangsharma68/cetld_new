@@ -46,6 +46,8 @@ export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[
     excludeMigrations=[...excludeMigrations,'20261026141000_zoho_capture_completion_protocol.sql'];
   if(excludeMigrations.includes('20261026141000_zoho_capture_completion_protocol.sql'))
     excludeMigrations=[...excludeMigrations,'20261027050000_zoho_original_bound_read.sql'];
+  if(excludeMigrations.includes('20261027050000_zoho_original_bound_read.sql'))
+    excludeMigrations=[...excludeMigrations,'20261027070000_zoho_bound_claim_protocol.sql'];
   // Historical containment fixtures install that predecessor themselves. The
   // prospective journal must follow the installed containment, never precede it.
   if(excludeMigrations.includes('20261026090000_contain_unproven_external_reminders.sql'))
