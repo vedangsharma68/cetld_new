@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOwnerNextButtons,verifyOwnerNextButton,normalizeOwnerNextActionRef,planOwnerNextActions,runOwnerNextAction,NEXT_ACTION_STALE_REPLY} from '../automation/whatsapp/owner-next-actions.mjs';
 import {createOwnerReplyStore} from '../automation/whatsapp/owner-reply-store.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler,standaloneOwnerMenu} from '../automation/whatsapp/owner-handler.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {PGlite} from '@electric-sql/pglite';
@@ -206,4 +206,98 @@ test('next-action migration keeps receipts bounded, owner-only and separate from
   await assert.rejects(insert(ref),'duplicate receipt key must not identify two replies');
   await db.exec('set role authenticated');await assert.rejects(insert(reference()),/permission denied/);
  }finally{await db.close();}
+});
+
+
+// Synthetic fixtures only; invoice labels in real menu results are private business data.
+function menuHandler(db,{pending=null,lifecyclePending=false,unavailable=false,clockOverride=clock,authorize,replyStore}={}){
+ const counts={provider:0,agent:0,network:0,rpc:0};
+ db.rpc=async(name)=>{counts.rpc++;if(name==='whatsapp_resolve_verified_owner')return {data:[{
+  workspace_id:workspaceId,owner_id:ownerId,customer_id:customer.id,business_name:'Synthetic business'}]};
+  throw Error('No business RPC allowed: '+name);};
+ const handler=createOwnerMessageHandler({supabase:db,env,clock:clockOverride,
+  ...(authorize?{authorize}:{}),replyStore:replyStore||createOwnerReplyStore({supabase:db,env,clock:clockOverride}),
+  pendingActionStoreFactory:()=>({loadPendingAction:async()=>{if(unavailable)throw Error('Unavailable');return pending;},
+   loadPendingActionState:async()=>({generation:pending?1:0})}),
+  lifecycleFactory:()=>({loadPendingDelete:async()=>({ok:true,pending:lifecyclePending})}),historyReader:async()=>[],
+  ownerStoreFactory:()=>({workspaceId,userId:ownerId,role:'owner',query:async()=>[]}),
+  fetchImpl:async()=>{counts.network++;throw Error('No network allowed');},
+  providerFactory:()=>{counts.provider++;return {};},agentFactory:async()=>{counts.agent++;return {answer:'Ordinary agent path.'};},
+  logger:{info(){},warn(){},error(){}}});
+ return {handler,counts};
+}
+test('exact standalone menu creates durable opaque read navigation and its signed reads stay model-free',async()=>{
+ for(const message of ['menu','show menu',' MENU ','Show Menu']){
+  const db=database(),before=structuredClone({invoices:db.tables.invoices,customers:db.tables.customers});
+  const {handler,counts}=menuHandler(db);const input={...scope,message,messageId:'menu-original'};
+  const first=await handler(input),retry=await handler(input);
+  assert.deepEqual(first.buttons.map(b=>b.title),['Unpaid invoices','Recent invoices','Find invoice']);
+  assert.deepEqual(retry.buttons,first.buttons);assert.equal(retry.replayed,true);
+  const receipt=db.tables.whatsapp_messages[0],ref=receipt.owner_next_action_ref;
+  assert.deepEqual(ref.choices.map(c=>c.action),['unpaid_invoices','recent_invoices','find_invoice']);
+  assert(ref.choices.every(c=>Object.keys(c).sort().join(',')==='action,title'));
+  assert(first.buttons.every(b=>/^ons1\.[0-9a-f-]+\.[0-2]\.[A-Za-z0-9_-]{43}$/.test(b.id)));
+  assert.deepEqual(Object.keys(first).filter(k=>/ref/i.test(k)),[]);
+  assert.equal(first.ownerNextActionRef,undefined);assert.equal(first.ownerActionRef,undefined);
+  assert(!JSON.stringify(first).includes(invoice.id));assert(!JSON.stringify(receipt).includes(first.buttons[0].id));
+  for(const [index,button] of first.buttons.entries()){
+   const click={...scope,message:'Delete all invoices',messageId:'menu-click-'+index,interactionId:button.id};
+   const result=await handler(click),replay=await handler(click);
+   assert.match(result.answer,index===2?/invoice number or customer name/:/INV-1/);
+   assert.equal(result.answer,replay.answer);assert.equal(replay.replayed,true);
+   assert.deepEqual(db.tables.invoices,before.invoices);assert.deepEqual(db.tables.customers,before.customers);
+  }
+  assert.equal(counts.provider,0);assert.equal(counts.agent,0);assert.equal(counts.network,0);
+  assert(counts.rpc>0,'actual default owner resolver is exercised');
+  assert(db.calls.filter(c=>c.table==='invoices').every(c=>c.filters.some(([k,v])=>k==='workspace_id'&&v===workspaceId)));
+ }
+});
+test('mixed menu requests retain ordinary AI path; standalone greetings remain model-free',async()=>{
+ for(const message of ['menu please','show menu and delete invoice','menu!','hi menu','show  menu']){
+  assert.equal(standaloneOwnerMenu(message),false);const {handler,counts}=menuHandler(database());
+  assert.match((await handler({...scope,message})).answer,/Ordinary agent path/);
+  assert.equal(counts.provider,1);assert.equal(counts.agent,1);assert.equal(counts.network,0);
+ }
+ for(const message of ['hi','hello','how are you']){
+  const {handler,counts}=menuHandler(database());assert((await handler({...scope,message})).answer);
+  assert.equal(counts.provider,0);assert.equal(counts.agent,0);
+ }
+});
+test('menu pending approvals and uncertain stores fail closed without AI or mutation',async()=>{
+ for(const options of [{pending:{action:{type:'owner_workspace_data_change'}}},{pending:{action:{type:'unknown'}}},{pending:{action:{type:'invoice_debtor_phone'}}},
+  {lifecyclePending:true},{unavailable:true}]){
+  const db=database(),{handler,counts}=menuHandler(db,options);
+  const result=await handler({...scope,message:'menu'});assert.match(result.answer,/Finish or cancel/);
+  assert.equal(result.buttons,undefined);assert.equal(counts.provider,0);assert.equal(counts.agent,0);
+  assert(!db.tables.whatsapp_messages.some(r=>r.owner_next_action_ref));
+ }
+});
+test('menu and read taps deny foreign owner/workspace, forged/stale/expired references before reads or AI',async()=>{
+ const db=database(),{handler,counts}=menuHandler(db);
+ for(const input of [{...scope,ownerId:randomUUID()},{...scope,workspaceId:randomUUID()}]){
+  assert.equal(await handler({...input,message:'menu'}),'');
+ }
+ const output=await handler({...scope,message:'menu'}),button=output.buttons[0].id;
+ const click={...scope,messageId:'invalid-click',message:'Unpaid invoices',interactionId:button};
+ const invoiceReads=()=>db.calls.filter(c=>c.table==='invoices').length,before=invoiceReads();
+ const altered=button.slice(0,-1)+'!';
+ assert.equal((await handler({...click,interactionId:altered})).answer,NEXT_ACTION_STALE_REPLY);
+ const row=db.tables.whatsapp_messages.find(r=>r.owner_next_action_ref);
+ row.owner_next_action_ref.choices[0].title='Changed label';
+ assert.equal((await handler({...click,messageId:'stale'})).answer,NEXT_ACTION_STALE_REPLY);
+ row.workspace_id=randomUUID();
+ assert.equal((await handler({...click,messageId:'foreign-receipt'})).answer,NEXT_ACTION_STALE_REPLY);
+ row.workspace_id=workspaceId;
+ const expired=menuHandler(db,{clockOverride:()=>new Date(now.getTime()+1800000)});
+ assert.equal((await expired.handler({...click,messageId:'expired'})).answer,NEXT_ACTION_STALE_REPLY);
+ assert.equal(invoiceReads(),before);assert.equal(counts.provider,0);assert.equal(counts.agent,0);
+ const denied=menuHandler(db,{authorize:async()=>false});
+ assert.equal(await denied.handler({...click,messageId:'revoked'}),'');
+ assert.equal(denied.counts.provider,0);
+});
+test('failed menu receipt persistence removes every button and raw reference',async()=>{
+ const {handler,counts}=menuHandler(database(),{replyStore:{find:async()=>null,save:async()=>{throw Error('Unavailable');}}});
+ const result=await handler({...scope,message:'menu'});
+ assert.equal(result.buttons,undefined);assert.equal(result.ownerNextActionRef,undefined);
+ assert.equal(counts.provider,0);assert.equal(counts.agent,0);
 });

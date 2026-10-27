@@ -70,6 +70,12 @@ async function currentRecord({supabase,scope,choice,authorize}) {
 function refFor(choices,clock) {
   return normalizeOwnerNextActionRef({v:1,key:randomUUID(),expiresAt:new Date(now(clock)+30*60*1000).toISOString(),choices});
 }
+// Explicit standalone navigation has no record target or mutation capability.
+export async function planOwnerMenuActions({scope,pending=false,authorize,clock=()=>new Date()}={}) {
+  if(pending||!await authorize(scope))return null;
+  return refFor([{action:'unpaid_invoices',title:'Unpaid invoices'},
+    {action:'recent_invoices',title:'Recent invoices'},{action:'find_invoice',title:'Find invoice'}],clock);
+}
 // A field-only reply may use only the immediately preceding, scoped edit
 // prompt. General questions never inherit a record from conversation history.
 export function ownerMenuInvoiceEdit(message){
