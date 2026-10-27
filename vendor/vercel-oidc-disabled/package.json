@@ -1,0 +1,10 @@
+{
+  "name": "@vercel/oidc",
+  "version": "0.0.0-cetld-disabled",
+  "private": true,
+  "description": "Fail-closed replacement for unused Vercel OIDC; not an OIDC implementation",
+  "license": "UNLICENSED",
+  "main": "index.cjs",
+  "exports": {".": "./index.cjs"},
+  "files": ["index.cjs"]
+}
