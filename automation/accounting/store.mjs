@@ -1,3 +1,5 @@
+import {abortable} from './zoho-create-receipt.mjs';
+import {originalReadJson} from './original-bound-read.mjs';
 import { randomUUID } from 'node:crypto';
 import { AccountingError } from './errors.mjs';
 import {isDeletedInvoice, isMissingDeletedAtColumn} from '../../invoice/deleted-at-compat.mjs';
@@ -190,6 +192,16 @@ export class SupabaseAccountingStore {
 
   async rpc(name, body) {
     return this.request(`rpc/${name}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  }
+
+  async originalBoundReadContext(identity,invoiceId,{signal=AbortSignal.timeout(5000)}={}) {
+    signal.throwIfAborted();
+    const url=`${this.base}/rest/v1/rpc/cetld_zoho_original_bound_read_context`;
+    const response=await abortable(this.fetch(url,{method:'POST',redirect:'error',signal,
+      headers:{apikey:this.key,Authorization:`Bearer ${this.key}`,Accept:'application/json','Content-Type':'application/json'},
+      body:JSON.stringify({p_owner_id:identity.userId,p_workspace_id:identity.workspaceId,p_invoice_id:invoiceId})}),signal);
+    if(response.url&&response.url!==url)throw new AccountingError('ACCOUNTING_STORE_ERROR','Accounting storage request failed');
+    return originalReadJson(response,signal);
   }
 
   async zohoOperationContext(identity) {
