@@ -173,7 +173,8 @@ below 4.6.6. Lockfile source confirms @vercel/functions 3.9.9 -> @vercel/oidc 3.
 -> @vercel/cli-config 0.3.0 -> zod **4.1.11**. This is one advisory appearing at
 four affected dependency nodes, not four independent root vulnerabilities.
 
-Application source uses only `waitUntil` in `api/whatsapp.js:1`; its installed
+Application source uses `waitUntil` in `api/whatsapp.js:1` and `next` from the
+functions middleware subpath in `middleware.js:1`; the installed `waitUntil`
 implementation calls `getContext().waitUntil`, with no Zod/CLI parsing. The root
 functions entry imports neither its oidc subpath nor @vercel/oidc. Within that
 package the OIDC dependency occurs in separate oidc entrypoints. The transitive
@@ -243,3 +244,10 @@ accounting/diagnostic/receipt/containment regressions **5/5 files**; typecheck a
 diffcheck passed. No new skips/cancellations, package/config/gate/provider scope
 changes, remote SQL, merge or rollout. Exact fixed-head CI is recorded in PR203;
 no duplicate full local run or manual CI rerun. All reminder refusals stay intact.
+
+
+Subsequent dependency remediation is reviewed separately in
+[vercel-oidc-exclusion.md](vercel-oidc-exclusion.md). It removes unused upstream
+OIDC/CLI-config/Zod from the installed artifact using a fail-closed local
+replacement; it does not patch or bless the old bundled validator. The finding
+above describes the pre-remediation dependency tree.
