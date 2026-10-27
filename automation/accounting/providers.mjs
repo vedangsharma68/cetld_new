@@ -1,3 +1,4 @@
+import {originalReadJson} from './original-bound-read.mjs';
 import { providerFetch, jsonResponse, formBody } from './http.mjs';
 import { AccountingError, AccountingProviderError } from './errors.mjs';
 import { zohoCustomerPhone } from './zoho-phone.mjs';
@@ -240,11 +241,11 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       if (!body.access_token || !body.refresh_token) throw new Error('Zoho Books did not return required tokens');
       return { accessToken: body.access_token, refreshToken: body.refresh_token, expiresAt: Date.now() + Number(body.expires_in || 3600) * 1000, accountsDomain: accountDomain(selectedRegion), apiDomain: safeApiDomain(body.api_domain, selectedRegion), region: selectedRegion };
     },
-    async refreshToken({ refreshToken, region: selectedRegion = region }) {
+    async refreshToken({ refreshToken, region: selectedRegion = region, signal }) {
       if (!clientId || !clientSecret || !refreshToken) throw new Error('Zoho Books client is not configured');
       const url = new URL(`${accountDomain(selectedRegion)}/oauth/v2/token`);
-      const response = await providerFetch(fetchImpl, 'zoho_books', url, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: formBody({ refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret, grant_type: 'refresh_token' }) });
-      const body = await jsonResponse(response, 'zoho_books');
+      const response = await providerFetch(fetchImpl, 'zoho_books', url, { ...(signal?{signal,readErrorBody:false}:{}), method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: formBody({ refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret, grant_type: 'refresh_token' }) });
+      const body = signal ? await originalReadJson(response,signal) : await jsonResponse(response, 'zoho_books');
       if (!body.access_token) throw new Error('Zoho Books did not return an access token');
       return { accessToken: body.access_token, refreshToken: body.refresh_token || refreshToken, expiresAt: Date.now() + Number(body.expires_in || 3600) * 1000, accountsDomain: accountDomain(selectedRegion), apiDomain: safeApiDomain(body.api_domain, selectedRegion), region: selectedRegion };
     },

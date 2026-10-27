@@ -4,6 +4,7 @@ import { AccountingError, redactedError } from './errors.mjs';
 import { ACCOUNTING_PROVIDERS, createAccountingProviders, zohoRegionFromLocation } from './providers.mjs';
 import {isTestInvoice} from '../test-invoice.mjs';
 import {prospectiveZohoExport} from './prospective-export.mjs';
+import {inspectOriginalBoundInvoice} from './original-bound-read.mjs';
 import {runCaptureCompletion} from './capture-completion.mjs';
 
 const DEFAULT_STATE_TTL = 10 * 60 * 1000;
@@ -217,7 +218,7 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
         await store.releaseRefresh(context, leaseToken);
         return { token, connection };
       }
-      const refreshed = await providers[provider].refreshToken({ refreshToken: token.refreshToken, region: connection.region });
+      const refreshed = await providers[provider].refreshToken({ refreshToken: token.refreshToken, region: connection.region, ...(signal?{signal}:{}) });
       signal?.throwIfAborted();
       if (expectedConnection && (refreshed.providerAccountId && refreshed.providerAccountId !== connection.providerAccountId
         || refreshed.apiDomain && refreshed.apiDomain !== connection.apiDomain
@@ -312,6 +313,8 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
   // Current connection identity cannot establish original invoice provenance.
   // Refuse before loading credentials. The isolated current-account diagnostic
   // retains its own explicitly non-authoritative read contract.
+  const inspectOriginalInvoice = input => inspectOriginalBoundInvoice({store,accessToken},input);
+
   async function reminderInvoiceState() {
     throw new AccountingError('ACCOUNTING_REMINDER_PROVENANCE_UNSUPPORTED', 'Immutable provider-account provenance is unsupported');
   }
@@ -411,5 +414,5 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     }
   }
 
-  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, connectionStatus, selectOrganization, disconnect, readZohoData, sync, retrySync: sync, syncInvoicesAndPayments: sync, prepareInvoiceSync, syncInvoice, runNewZohoExportProtocol, updateInvoice, latestInvoiceBalance, reminderInvoiceState });
+  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, connectionStatus, selectOrganization, disconnect, readZohoData, sync, retrySync: sync, syncInvoicesAndPayments: sync, prepareInvoiceSync, syncInvoice, runNewZohoExportProtocol, updateInvoice, latestInvoiceBalance, reminderInvoiceState, inspectOriginalInvoice });
 }
