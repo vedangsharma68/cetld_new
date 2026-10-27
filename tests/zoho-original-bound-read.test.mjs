@@ -171,7 +171,7 @@ test('audited CRLF and source/ACL/default-grant drift fail closed atomically; no
   const gate=(await f.db.query("select prosrc from pg_proc where oid='cetld_core_authorize_delivery(uuid,uuid,uuid,timestamptz)'::regprocedure")).rows[0].prosrc;
   assert.equal(gate.split('\r\n').length-1,31);
   const gateDefinition=(await f.db.query("select pg_get_functiondef(oid) d from pg_proc where oid='cetld_core_authorize_delivery(uuid,uuid,uuid,timestamptz)'::regprocedure")).rows[0].d;
-  for(const mode of ['source','CRLF','ACL','column','trigger','constraint','default']){
+  for(const mode of ['source','CRLF','ACL','column','trigger','constraint','notnull','column-type','column-extra','default']){
    if(mode==='CRLF')await f.db.exec(gateDefinition.replace('\r\n','\n'));
    if(mode==='source')await f.db.exec(saved.replace('begin','begin /* unknown drift */'));
    if(mode==='ACL')await f.db.exec('grant select on app.zoho_invoice_origins to service_role');
@@ -179,10 +179,16 @@ test('audited CRLF and source/ACL/default-grant drift fail closed atomically; no
    if(mode==='trigger')await f.db.exec('alter table app.zoho_invoice_origins disable trigger zoho_origin_immutable');
    const constraint=(await f.db.query("select conname,pg_get_constraintdef(oid) d from pg_constraint where conrelid='app.zoho_customer_origins'::regclass and contype='p'")).rows[0];
    if(mode==='constraint')await f.db.exec(`alter table app.zoho_customer_origins drop constraint ${constraint.conname}`);
+   if(mode==='notnull')await f.db.exec('alter table app.zoho_invoice_origins alter column reference drop not null');
+   if(mode==='column-type')await f.db.exec('alter table app.zoho_invoice_origins alter column reference type varchar(100)');
+   if(mode==='column-extra')await f.db.exec('alter table app.zoho_invoice_origins add column fixture_extra text');
    if(mode==='default')await f.db.exec('create role unexpected_read_grantee;alter default privileges in schema public grant execute on functions to unexpected_read_grantee');
    await assert.rejects(f.db.exec(await sql()),/drift/);await f.db.exec('rollback');
    assert.equal((await f.db.query("select to_regprocedure('public.cetld_zoho_original_bound_read_context(uuid,uuid,uuid)') p")).rows[0].p,null);
    if(mode==='constraint')await f.db.exec(`alter table app.zoho_customer_origins add constraint ${constraint.conname} ${constraint.d}`);
+   if(mode==='notnull')await f.db.exec('alter table app.zoho_invoice_origins alter column reference set not null');
+   if(mode==='column-type')await f.db.exec('alter table app.zoho_invoice_origins alter column reference type text');
+   if(mode==='column-extra')await f.db.exec('alter table app.zoho_invoice_origins drop column fixture_extra');
    await f.db.exec(gateDefinition);
    await f.db.exec(saved+';revoke select on app.zoho_invoice_origins from service_role;revoke select(account_id) on app.zoho_customer_origins from authenticated;alter table app.zoho_invoice_origins enable trigger zoho_origin_immutable');
    if(mode==='default')await f.db.exec('alter default privileges in schema public revoke execute on functions from unexpected_read_grantee;drop role unexpected_read_grantee');
@@ -204,4 +210,58 @@ test('scoped Zoho refresh and SQL response bodies are bounded, abortable and red
   const pending=new Response(new ReadableStream({start(){}}),{headers:{'content-type':'application/json'}});
   await assert.rejects(originalReadJson(pending,controller.signal));
  }finally{clearTimeout(timer);controller.abort();}
+});
+
+test('catalog-version NOT NULL rows are optional metadata; exact column NOT NULL/type protection is mandatory on both representations',async()=>{
+ const f=await fixture();try{
+  await f.db.exec('set search_path=pg_catalog,public');
+  const tables="('app.zoho_invoice_origins'::regclass,'app.zoho_customer_origins'::regclass,'app.zoho_capture_completion'::regclass,'app.accounting_connection_epochs'::regclass)";
+  const semantic=async()=>(await f.db.query(`select encode(sha256(convert_to(jsonb_agg(jsonb_build_array(c.conrelid::regclass::text,c.contype,pg_get_constraintdef(c.oid),c.convalidated) order by c.conrelid::regclass::text,c.contype,pg_get_constraintdef(c.oid))::text,'UTF8')),'hex') hash,count(*) n from pg_constraint c where c.conrelid in ${tables} and c.contype in ('c','p','u','f')`)).rows[0];
+  const attrs=async()=>(await f.db.query(`select attrelid::regclass::text relation,attnum,attname,format_type(atttypid,atttypmod) type,attnotnull,attidentity,attgenerated from pg_attribute where attrelid in ${tables} and attnum>0 and not attisdropped order by attrelid::regclass::text,attnum`)).rows;
+  const before=await semantic(),columns=await attrs();assert.equal(before.n,20);assert.equal(columns.length,53);assert.equal(columns.filter(a=>a.attnotnull).length,39);
+  assert.equal(before.hash,'4e724a814f77fd0002fa4ccf59637e10c31efcf292ab75b20e20e9f5bb41660a');
+  await f.db.exec(await sql());assert.ok(await f.context(),'new catalog representation accepted');
+  await f.db.exec('drop function cetld_zoho_original_bound_read_context(uuid,uuid,uuid)');
+  // Isolated fixture ONLY: emulate the older catalog representation. The
+  // migration never writes a catalog or business row. Keep all attribute flags.
+  const removed=await f.db.query(`delete from pg_constraint where conrelid in ${tables} and contype='n' returning conname`);
+  assert.equal(removed.rows.length,39);assert.deepEqual(await attrs(),columns);assert.deepEqual(await semantic(),before);
+  await f.db.exec(await sql());assert.ok(await f.context(),'old catalog representation accepted');
+  await f.db.exec('drop function cetld_zoho_original_bound_read_context(uuid,uuid,uuid)');
+  // With n rows absent, emulate a missing legacy NOT NULL directly in this
+  // disposable catalog. It must fail even though all 20 semantic rows match.
+  await f.db.exec("update pg_attribute set attnotnull=false where attrelid='app.zoho_invoice_origins'::regclass and attname='reference'");
+  assert.deepEqual(await semantic(),before);
+  await assert.rejects(f.db.exec(await sql()),/original read private protection drift/);await f.db.exec('rollback');
+  assert.equal((await f.db.query("select to_regprocedure('cetld_zoho_original_bound_read_context(uuid,uuid,uuid)') p")).rows[0].p,null);
+  await f.db.exec("update pg_attribute set attnotnull=true where attrelid='app.zoho_invoice_origins'::regclass and attname='reference'");
+  await f.db.exec(await sql());assert.ok(await f.context());
+ }finally{await f.close();}
+});
+
+test('returned integration.inspectOriginalInvoice wires SQL, token preparation and bounded exact global fetch without network or authority',{timeout:30000},async()=>{
+ const f=await fixture(),originalFetch=globalThis.fetch;let requests=0,mode='success',lastSignal;
+ try{
+  await f.db.exec(await sql());const before=await f.read(),origins=(await f.db.query('select * from app.zoho_invoice_origins')).rows;
+  globalThis.fetch=async(url,options)=>{
+   requests++;assert.equal(String(url),'https://www.zohoapis.in/books/v3/invoices/99001?organization_id=90001');
+   assert.equal(options.method||'GET','GET');assert.equal(options.redirect,'error');assert.equal(options.headers.Authorization,`Zoho-oauthtoken ${f.token.accessToken}`);assert.ok(options.signal);lastSignal=options.signal;
+   if(mode==='timeout')return new Promise(()=>{}); // Ignores abort: outer deadline must still bound it.
+   if(mode==='denied')return Response.json({code:1000,message:'PRIVATE secret token'},{status:403});
+   return Response.json({code:0,invoice:{...f.remote(),customer_name:'PRIVATE CLIENT',contact_persons:['PRIVATE CONTACT'],access_token:'PRIVATE TOKEN'}});
+  };
+  // Construct after installing the sentinel so even unexpected OAuth adapter
+  // work uses the fake transport, never a captured native fetch.
+  const integration=createAccountingIntegration({store:f.store,cipher:f.cipher});
+  const startRequests=f.requests.length,result=await integration.inspectOriginalInvoice(f.input);
+  assert.equal(requests,1);assert.equal(result.existence,'verified');assert.equal(result.reminderAuthority,false);assert.equal(result.externalCustomerId,'88001');
+  assert.doesNotMatch(JSON.stringify(result),/PRIVATE|access|refresh|fingerprint|epochId/);
+  assert.ok(f.requests.slice(startRequests).some(r=>r.url.endsWith('/rpc/cetld_zoho_original_bound_read_context')),'real SQL context invoked');
+  assert.ok(f.requests.slice(startRequests).some(r=>r.url.includes('/cetld_accounting_connections?')),'real connection/token preparation invoked');
+  mode='denied';await assert.rejects(integration.inspectOriginalInvoice(f.input),e=>e.code==='ACCOUNTING_ORIGINAL_READ_UNAVAILABLE'&&!e.message.includes('PRIVATE'));assert.equal(requests,2);
+  mode='timeout';const started=Date.now();await assert.rejects(integration.inspectOriginalInvoice(f.input),/unavailable/);
+  assert.ok(Date.now()-started<7500,'actual public method enforces its five-second deadline');assert.equal(requests,3);assert.equal(lastSignal.aborted,true);
+  assert.deepEqual(await f.read(),before);assert.deepEqual((await f.db.query('select * from app.zoho_invoice_origins')).rows,origins);
+  for(const table of ['payments','cetld_accounting_sync_records','cetld_core_automation_delivery_claims','owner_assistant_proposals','whatsapp_messages'])assert.equal((await f.db.query(`select count(*) n from ${table}`)).rows[0].n,0);
+ }finally{globalThis.fetch=originalFetch;await f.close();}
 });

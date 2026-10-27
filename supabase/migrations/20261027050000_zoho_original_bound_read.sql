@@ -78,8 +78,16 @@ begin
    and t.tgname=expected.name and t.tgfoid=to_regprocedure(expected.func) and t.tgenabled='O')<>6
   or (select encode(sha256(convert_to(jsonb_agg(jsonb_build_array(c.conrelid::regclass::text,c.contype,pg_get_constraintdef(c.oid),c.convalidated)
    order by c.conrelid::regclass::text,c.contype,pg_get_constraintdef(c.oid))::text,'UTF8')),'hex') from pg_constraint c
-   where c.conrelid in ('app.zoho_invoice_origins'::regclass,'app.zoho_customer_origins'::regclass,'app.zoho_capture_completion'::regclass,'app.accounting_connection_epochs'::regclass))
-   is distinct from '95dd43365ab952980fbc4eb85d669d5c206efc0df4ee17943e0be14d009018ea' then
+   where c.conrelid in ('app.zoho_invoice_origins'::regclass,'app.zoho_customer_origins'::regclass,'app.zoho_capture_completion'::regclass,'app.accounting_connection_epochs'::regclass) and c.contype in ('c','p','u','f'))
+   is distinct from '4e724a814f77fd0002fa4ccf59637e10c31efcf292ab75b20e20e9f5bb41660a'
+  -- PG versions differ in whether NOT NULL also appears as contype='n'.
+  -- Independently protect every column/type/NOT NULL flag via pg_attribute;
+  -- ignore no attribute merely because its constraint catalog row is absent.
+  or (select encode(sha256(convert_to(jsonb_agg(jsonb_build_array(a.attrelid::regclass::text,a.attnum,a.attname,
+   format_type(a.atttypid,a.atttypmod),a.attnotnull,a.attidentity,a.attgenerated) order by a.attrelid::regclass::text,a.attnum)::text,'UTF8')),'hex')
+   from pg_attribute a where a.attrelid in ('app.zoho_invoice_origins'::regclass,'app.zoho_customer_origins'::regclass,
+    'app.zoho_capture_completion'::regclass,'app.accounting_connection_epochs'::regclass) and a.attnum>0 and not a.attisdropped)
+   is distinct from '8f3a72a36de67e045982275071a34cba02f62c7ac614a7f59b331a435e55b9ee' then
   raise exception 'original read private protection drift';end if;
 end $private$;
 

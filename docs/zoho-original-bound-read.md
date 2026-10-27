@@ -86,7 +86,7 @@ metadata, fingerprint, token material and raw provider bodies are not returned.
 
 File: `supabase/migrations/20261027050000_zoho_original_bound_read.sql`
 
-- UTF-8 LF bytes: **12,349**. SHA256: **`23db81df178df0acc91739f333f783a36630c1c973ecc0b780dd81c8779baa65`**.
+- UTF-8 LF bytes: **13,211**. SHA256: **`56d2ada78e82410003cdd63b798b59ca47e90266468ef38fb37f5ca977fd0daf`**.
 - Atomic BEGIN/COMMIT; ONE new SELECT-only SQL function, no new tables/triggers,
   installation/runtime business-row DML, context/evidence persistence or backfill.
 - Existing functions/OIDs/sources/owners/ACL/security/search_paths remain exactly
@@ -96,7 +96,19 @@ File: `supabase/migrations/20261027050000_zoho_original_bound_read.sql`
 - Reuses exact PR200/201/202 source guards (including refresh successor
   fb4e3a8f82aabc64dd0ae525938341c9170336582af9c58737d816ae27497110 and
   approved CRLF variants). Private origin/customer/completion/epoch table RLS,
-  owner and table/column ACLs plus six exact active capture trigger/relation/function bindings are checked. The protected PK/UNIQUE/FK/CHECK constraint definitions and validation state are guarded by the isolated-derived catalog digest `95dd43365ab952980fbc4eb85d669d5c206efc0df4ee17943e0be14d009018ea`. Dropped/changed constraints abort.
+  owner and table/column ACLs plus six exact active capture trigger/relation/function bindings are checked. The exact **20** protected CHECK/PK/UNIQUE/FK definitions and validation states
+  are guarded by a digest explicitly restricted to `contype in ('c','p','u','f')`:
+  `4e724a814f77fd0002fa4ccf59637e10c31efcf292ab75b20e20e9f5bb41660a`.
+  PostgreSQL versions differ in whether NOT NULL also appears as `contype='n'`;
+  those representation-only rows are not part of this semantic digest.
+- NOT NULL is independently mandatory: exact `pg_attribute` catalog digest
+  `8f3a72a36de67e045982275071a34cba02f62c7ac614a7f59b331a435e55b9ee`
+  covers all **53** live columns, including **39** NOT NULL flags, in these four
+  tables. Inputs: qualified relation name, attribute position/name, formatted
+  type/typmod, attnotnull, identity and generated status, ordered by relation and
+  position. Missing/extra/renamed/altered columns, types or NOT NULL flags abort.
+  Both digests were derived from the exact PR201/PR202 schema in isolated main
+  replay; no production-hash allowlist or source normalization was added.
 - No row lock is retained across HTTP. Each context is a fresh statement snapshot;
   full invoice/customer/origin/mapping/owner + epoch fingerprint must match at
   every check. This is not a final authorization lock or distributed transaction.
@@ -180,9 +192,54 @@ CI totals were 2613 pass / 0 fail / 3 existing skips. Live STOP/START/customer-A
 and actual provider/send acceptance remain separately unauthorized and unproved.
 
 
-Final focused outcomes before publication: **8/8 new SQL/HTTP tests passed**;
+Original publication focused outcomes: **8/8 SQL/HTTP tests passed**;
 **13/13 existing regression files passed**; after tightening scoped refresh/body
 transport, **3/3 accounting/diagnostic/receipt regression files passed**.
 `npm run typecheck` and `git diff --check` pass. No test was skipped/cancelled in
 these batches. Exact-head CI result is recorded on the draft PR, without a
 follow-up code push merely to record CI metadata.
+
+
+## Catalog portability correction and public-method proof
+
+Independent read-only review found the earlier all-constraint digest incompatible
+with production's PostgreSQL catalog representation: the fixture has 39 NOT NULL
+`n` entries in pg_constraint, while production records those flags only through
+pg_attribute. All 20 CHECK/PK/UNIQUE/FK definitions and validation states matched.
+The revised migration separates those two independent semantic protections; it
+does not accept an alternate raw-catalog hash or ignore NOT NULL.
+
+The actual SQL tests install successfully with all 39 n entries present and,
+in an **isolated disposable fixture only**, remove those representation rows
+while preserving every attribute flag and prove installation still succeeds.
+They then emulate a missing old-version NOT NULL through pg_attribute and prove
+atomic refusal despite an unchanged 20-row semantic digest. On the modern
+representation actual ALTER COLUMN DROP NOT NULL also fails the guard. Existing
+PK-drop negatives remain; column type/extra-column, source, CRLF, table/column
+ACL, trigger and default-grant negatives remain enforced. The migration itself
+contains no catalog or business-row DML. The fixture simulation is not a live
+old-version PostgreSQL server test; no production access/application occurred.
+
+A new test constructs the actual returned integration **after** replacing global
+fetch with a strict sentinel, so even an unexpected OAuth path cannot use a
+captured native transport. It calls integration.inspectOriginalInvoice directly,
+proves real SQL context and connection/token preparation, one exact pinned GET,
+redaction and reminderAuthority:false, then proves sanitized HTTP refusal and the
+actual five-second public-method deadline even when fake fetch ignores abort.
+The global is always restored in finally. No runtime/API parameter was added.
+
+Correction checks:
+
+```sh
+node --import tsx tests/zoho-original-bound-read.test.mjs
+node --import tsx --test-name-pattern='returned integration.inspectOriginalInvoice' tests/zoho-original-bound-read.test.mjs
+node --import tsx --test --test-concurrency=2 tests/accounting.test.mjs tests/accounting-invoice-diagnostic.test.mjs tests/zoho-fresh-create-receipt.test.mjs tests/external-reminder-containment.test.mjs tests/external-reminder-containment-sql.test.mjs
+npm run typecheck
+git diff --check
+```
+
+Results: **10/10** SQL/HTTP tests passed; final public-method wiring proof **1/1**;
+accounting/diagnostic/receipt/containment regressions **5/5 files**; typecheck and
+diffcheck passed. No new skips/cancellations, package/config/gate/provider scope
+changes, remote SQL, merge or rollout. Exact fixed-head CI is recorded in PR203;
+no duplicate full local run or manual CI rerun. All reminder refusals stay intact.
