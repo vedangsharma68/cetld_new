@@ -1,3 +1,4 @@
+import {installObservedPredecessors} from './zoho-installed-predecessors.mjs';
 import {createClient} from '@supabase/supabase-js';
 import assert from 'node:assert/strict';
 import {PGlite} from '@electric-sql/pglite';
@@ -9,7 +10,7 @@ import {CoreAutomationStore} from '../../automation/core-store.mjs';
 import {FollowUpEngine} from '../../automation/engine.mjs';
 import {createFirstPartyReminderRuntime} from '../../automation/first-party-reminder-runtime.mjs';
 import {createOwnerReminderRuntime} from '../../automation/whatsapp/owner-reminders.mjs';
-export async function createZohoBoundReminderFixture({installBridge=true,crlf=false}={}){
+export async function createZohoBoundReminderFixture({installBridge=true,crlf=false,installedShape=false}={}){
 let gets=0,posts=0;let row;const controls={remote:null,onGet:null,onPost:null,afterHttp:null,beforeHttp:null},postBodies=[];
 const database=new PGlite();
 await database.exec(`create role anon;create role authenticated;create role service_role bypassrls;
@@ -35,8 +36,8 @@ try{
 // Exact chronological main + held PR204 chain, never reinstall an earlier
 // optional sender after a later security patch.
 for(const name of (await readdir(new URL('../../supabase/migrations/',import.meta.url))).filter(n=>n.endsWith('.sql')).sort()){
-if(name==='20261027100000_zoho_first_party_reminder_bridge.sql'&&!installBridge)continue;
-if(crlf&&name==='20261026090000_contain_unproven_external_reminders.sql')for(const sig of ['cetld_core_claim_due_followups(uuid,uuid,timestamptz,integer,uuid)','cetld_core_authorize_delivery(uuid,uuid,uuid,timestamptz)']){const p=(await f.db.query('select pg_get_functiondef(oid) d,prosrc from pg_proc where oid=$1::regprocedure',[sig])).rows[0];await f.db.exec(p.d.replace(p.prosrc,()=>p.prosrc.replaceAll('\n','\r\n')));}
+if(name==='20261027100000_zoho_first_party_reminder_bridge.sql'){if(installedShape)await installObservedPredecessors(f.db);if(!installBridge)continue;}
+if((crlf||installedShape)&&name==='20261026090000_contain_unproven_external_reminders.sql')for(const sig of ['cetld_core_claim_due_followups(uuid,uuid,timestamptz,integer,uuid)','cetld_core_authorize_delivery(uuid,uuid,uuid,timestamptz)']){const p=(await f.db.query('select pg_get_functiondef(oid) d,prosrc from pg_proc where oid=$1::regprocedure',[sig])).rows[0];await f.db.exec(p.d.replace(p.prosrc,()=>p.prosrc.replaceAll('\n','\r\n')));}
 await f.db.exec((await readFile(new URL('../../supabase/migrations/'+name,import.meta.url),'utf8')).replace('create extension if not exists pgcrypto;',''));
 }
 await f.db.exec('grant all on all tables in schema public to service_role;grant all on all sequences in schema public to service_role');

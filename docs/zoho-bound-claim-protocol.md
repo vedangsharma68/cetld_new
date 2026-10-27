@@ -117,8 +117,8 @@ Apply neither migration without independent source/security review. Held foundat
 
 - `20261027070000_zoho_bound_claim_protocol.sql`: **29,088 UTF-8 LF bytes**,
   SHA256 `0fdd30024791eb05a6dec249a66f0839be7c1526397e1d52ece2126723521758`.
-- Successor `20261027100000_zoho_first_party_reminder_bridge.sql`: **123,888 UTF-8 LF bytes**,
-  SHA256 `e7b3e41db3cbc737080099b29c0fe30ef9e11c4065d08714be90850b66823e80`.
+- Successor `20261027100000_zoho_first_party_reminder_bridge.sql`: **128,301 UTF-8 bytes**,
+  SHA256 `6a76042a9588192501139dd4fcf5a4a55cd78127ddc039152d6142dcd433bb4e`.
 
 The successor is one atomic guarded transaction. Two new private RLS tables
 (transaction context and immutable core/journal mapping), eleven private definer
@@ -129,7 +129,7 @@ service EXECUTE. No general table write/verified flag or caller account override
 Unknown default grants, column ACLs, RLS/policy or source drift abort.
 
 Existing function OIDs, owners, ACLs, definer/invoker flags, search paths and other
-security attributes are preserved. Exactly five existing bodies change:
+security attributes are preserved. On the canonical path five existing bodies change:
 
 - capture completion: customer-before-invoice lock/recheck only;
 - private candidate protocol: compatible customer/invoice order/recheck;
@@ -137,8 +137,10 @@ security attributes are preserved. Exactly five existing bodies change:
 - private owner routine: explicit supported-origin branch;
 - public first-party receipt: explicit mapped-attempt branch.
 
-Everything else, including PR200 predicates and both generic core gates, remains
-byte-identical. The migration includes the full exact predecessor inventory:
+The observed installed path additionally restores the canonical public approved-final
+guard (six existing bodies total) and creates one missing canonical private helper.
+All six unchanged observed CRLF functions, PR200 predicates and generic core gates
+remain byte-identical. The migration includes the full exact predecessor inventory:
 21 prior capture/read guards plus 34 exact policy/protocol helper signatures with
 semantic ACL inventories derived offline. It supports only the audited contained
 approved LF/31-CRLF core variants; unknown/mixed line endings abort. No unknown
@@ -152,6 +154,95 @@ The exact chronological main chain produces approved-final predecessor
 A partial fixture reinstall lost the exact delivery/words block and produced
 `60f3cbe76915a27769c1e664cf208a5cccb194e361d6f7d3b13ec71d63528271`;
 the new migration rejects that incomplete definition. No compatibility waiver.
+
+### Observed installed-source repair — still unapplied
+
+Chronological main is a reconstruction fixture, not a claim about installed
+production source. The independently reported installed shapes are reproduced
+from reviewed migrations offline, and their full hashes are asserted before
+applying any repair. No live access by agent was used.
+
+Before the strict canonical bridge guards/copies, the same atomic transaction:
+
+1. Accepts only approved-final canonical `286ea00f…` or exact observed
+   `a9cb55e078ac3203d20bc375f6b5cc7859709fefc417cef06699d824fc37d84f`.
+   For the latter, reinstates exactly the six-line protected legacy-approval
+   refusal/hold block and asserts the resulting full hash is canonical. No weak
+   predecessor is merely allowlisted for execution.
+2. Creates `app.legacy_reminder_approval_matches(uuid,public.invoices)` only when
+   absent, from its exact reviewed canonical definition. Resulting full hash:
+   `5f6f096cf89040c2682cdf299d105694f4f913c98b9c6ad99f91e2c0dc836415`.
+   Owner postgres, SQL/STABLE/definer, empty search_path, owner EXECUTE only.
+   Existing canonical definition/OID is untouched. Unknown source, flags, owner,
+   ACL or default grants abort; no receipt, approval or provenance is inferred.
+3. Accepts receipt canonical `d0071207…` or exact observed
+   `add70c665905608618618b6156b7c849ec5b49ea59790b8f30da108c606cfb42`.
+   Repairs only the nullable version/mode condition to the canonical coalesce
+   expression. The 68 CRLF plus two historical inserted LF endings stay intact.
+   Repaired pre-branch hash is
+   `73a9eadb281a6d107b63b46d0a9c8ee3b463b7b043bf0b839a2154d7d9142c42`;
+   a comparison-only normalized copy exactly matches `d0071207…`.
+   The mapped-receipt branch is then inserted using the installed body's line
+   ending, retaining the original OID/ACL/config. The resulting body has 71 CRLF;
+   its comparison-only LF copy matches the canonical branch hash `ff44a3b7…`.
+
+Six unchanged functions accept only their canonical hash and the following exact
+observed CRLF hash. Comparison copies must normalize exactly to canonical and
+match the specified CRLF count; unknown/mixed variants fail. None is rewritten.
+
+| Function | Observed full SHA256 | CRLF |
+| --- | --- | ---: |
+| `app.reminder_canonical_json(jsonb)` | `51b89ca99fca774daa6077454b735c3059636e4c23d77878115198ae574b5f66` | 5 |
+| `cetld_core_check_local_reminder_payment(uuid,uuid,uuid)` | `5bfeccccb370e82543aba56fcd241ead4f8fbc29739569bdd32848acc92f9178` | 23 |
+| `app.first_party_receipt_audit_guard()` | `ca43f160c886182e72350fcde7ced8551c59b2030cabf75147e5983f5bd01658` | 1 |
+| `app.first_party_consent_phone_lock()` | `2a0b2fcd396d8e1ce63be7118af5dc60a94269f1a50ae89c5afaa4876e44c1d1` | 8 |
+| `app.cancel_first_party_phone(text,uuid)` | `265269a0711b3a5dfc72636455f330a9da199823251d1d4075f308dcf48d4dff` | 17 |
+| `app.first_party_suppression_hook()` | `fc1a836b55819bdc964c200cfd92eab098b364af633725dd5d2eaa8a166d03f9` | 4 |
+
+The exact-hash reconstructions retain invoker status for canonical-json,
+receipt-audit and consent-phone-lock, as encoded in their canonical definitions;
+no definer upgrade is made. Preserve and independently inspect actual flags as
+well as owner/ACL. Public functions retain owner + service EXECUTE without grant
+option; private functions retain owner EXECUTE only. Known generic core 31-CRLF
+variants remain covered by their existing exact guards.
+
+Helper dependency inventory, checked before creation/copying:
+
+| Relation | Required columns |
+| --- | --- |
+| `app.reminder_approvals` | workspace_id, owner_id, invoice_id |
+| `public.owner_assistant_proposals` | workspace_id, owner_id, action, state, result |
+| `public.whatsapp_pending_actions` | workspace_id, phone, id, version, consumed_at, action |
+| `public.whatsapp_direct_write_receipts` | workspace_id, owner_id, phone, request, result |
+
+Private approvals must remain postgres-owned with RLS and no non-owner table or
+column grants. Missing tables/columns fail closed. SQL helper creation also
+validates its referenced columns; the existing 34 exact helper source/ACL guards
+and 29 trigger audit remain in force. No entire historical migration, data
+backfill or historical approval conversion is run.
+
+For fresh operator **catalog-only read-only** compatibility review, inspect
+`pg_get_functiondef`, SHA256, `proowner`, `prosecdef`, `proconfig`, semantic ACL and
+CRLF counts for these eight signatures plus the possibly absent helper. For
+example (extend the VALUES with the exact inventory above):
+
+```sql
+select e.signature, p.oid, pg_get_userbyid(p.proowner) owner,
+ p.prosecdef, p.proconfig, p.proacl,
+ encode(sha256(convert_to(pg_get_functiondef(p.oid),'UTF8')),'hex') full_sha256,
+ (length(p.prosrc)-length(replace(p.prosrc,E'\r\n','')))/2 crlf_count
+from (values
+ ('public.cetld_core_authorize_first_party_reminder(uuid,uuid,uuid,jsonb,text)'),
+ ('public.cetld_core_record_first_party_receipt(text,text,text,text,text,text)'),
+ ('app.legacy_reminder_approval_matches(uuid,public.invoices)')
+) e(signature) left join pg_proc p on p.oid=to_regprocedure(e.signature);
+```
+
+This probe changes no schema/data and invokes no business/provider routine.
+Compare dependency columns/RLS/ACL via catalogs too. Foundation is still held;
+its guards run before successor repair. Apply neither until independent review
+approves this exact packet. Canonical-path repair is a no-op; later unknown drift
+aborts the complete transaction, including helper creation and both repairs.
 
 Version-portable protection retains the 20 c/p/u/f constraints digest
 `4e724a814f77fd0002fa4ccf59637e10c31efcf292ab75b20e20e9f5bb41660a`
@@ -202,6 +293,7 @@ customer AI, business data, sends, imports, SQL or deployment are used.
 Exact focused commands and outcomes are recorded on draft PR204. Required commands:
 
 ```sh
+node --import tsx tests/zoho-installed-compatibility.test.mjs
 node --import tsx tests/zoho-first-party-reminder-bridge.test.mjs
 node --import tsx --test --test-concurrency=2 tests/zoho-original-bound-read.test.mjs tests/zoho-capture-completion.test.mjs tests/zoho-prospective-export.test.mjs tests/zoho-prospective-foundation-sql.test.mjs tests/zoho-fresh-create-receipt.test.mjs tests/external-reminder-containment-sql.test.mjs tests/external-reminder-verification-sql.test.mjs tests/reminder-durability-sql.test.mjs tests/direct-owner-write-sql.test.mjs tests/invoice-lifecycle-sql.test.mjs tests/whatsapp-owner-sql.test.mjs tests/tally-routing.test.mjs
 npm run typecheck
@@ -215,3 +307,11 @@ remediation still needs a compatible patched resolution/review. Actual provider
 field availability, deployed/installed source compatibility, multi-session locks,
 real STOP/START, customer AI and genuinely authorized live delivery proof remain
 independent work. Stop for review; do not apply, merge or deploy.
+
+Bounded installed-compatibility correction proof: **16/16** new actual-SQL tests
+passed, including exact observed hashes/absence/CRLF, atomic drift rollback,
+unchanged installation row hashes, forged versionless approval/words and the
+unwrapped service final gate. Bridge suite **111/111** passed on canonical and
+observed shapes, including actual owner/engine/fake GET+POST/signed receipt and
+versionless cadence. No runtime/provider/API/package/config changes in this
+correction. Exact updated-head CI and commands/results are recorded on PR204.

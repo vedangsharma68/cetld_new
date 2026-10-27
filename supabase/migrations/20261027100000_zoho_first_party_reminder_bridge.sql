@@ -95,11 +95,130 @@ end $private$;
 
 -- This successor binds private journals to exact first-party core attempts.
 -- Generic gates stay closed; no installation business DML/backfill.
+-- Exact independently observed installed predecessors. Strengthen the two
+-- known semantic gaps before the unchanged canonical policy-copy guards.
+-- No historical migration/backfill is executed and no business row is touched.
+do $installed_repair$
+declare r record;p oid;d text;h text;before_security jsonb;after_security jsonb;marker text;
+begin
+ for r in select * from (values
+  ('public.cetld_core_authorize_first_party_reminder(uuid,uuid,uuid,jsonb,text)','286ea00f8e2ebf9bf843bc13bf45fd2d9884e4208d523185ef11abe50469746a','a9cb55e078ac3203d20bc375f6b5cc7859709fefc417cef06699d824fc37d84f'),
+  ('public.cetld_core_record_first_party_receipt(text,text,text,text,text,text)','d0071207a0d762be1c3b58be9cf7d4ba9bf2b44f25c1c99637a1f2c3dabfe948','add70c665905608618618b6156b7c849ec5b49ea59790b8f30da108c606cfb42'),
+  ('app.legacy_reminder_approval_matches(uuid,public.invoices)','5f6f096cf89040c2682cdf299d105694f4f913c98b9c6ad99f91e2c0dc836415','5f6f096cf89040c2682cdf299d105694f4f913c98b9c6ad99f91e2c0dc836415')
+ ) expected(signature,canonical,observed) loop
+  p:=to_regprocedure(r.signature);
+  if p is null then
+   if r.signature<>'app.legacy_reminder_approval_matches(uuid,public.invoices)' then raise exception 'installed repair missing predecessor: %',r.signature;end if;
+   continue;
+  end if;
+  d:=pg_get_functiondef(p);h:=encode(sha256(convert_to(d,'UTF8')),'hex');
+  if h not in (r.canonical,r.observed) then raise exception 'installed repair source drift: %',r.signature;end if;
+  if (select pg_get_userbyid(proowner)<>'postgres' or not prosecdef or proconfig is distinct from array['search_path=""'] from pg_proc where oid=p)
+   or (select jsonb_agg(jsonb_build_array(case when a.grantee=0 then 'PUBLIC' else pg_get_userbyid(a.grantee) end,pg_get_userbyid(a.grantor),a.privilege_type,a.is_grantable) order by a.grantee::regrole::text,a.privilege_type)
+    from pg_proc f cross join lateral aclexplode(coalesce(f.proacl,acldefault('f',f.proowner))) a where f.oid=p)
+    is distinct from (case when r.signature like 'app.%' then '[["postgres","postgres","EXECUTE",false]]'::jsonb else '[["postgres","postgres","EXECUTE",false],["service_role","postgres","EXECUTE",false]]'::jsonb end) then
+   raise exception 'installed repair security/ACL drift: %',r.signature;end if;
+  select to_jsonb(f)-'prosrc' into before_security from pg_proc f where oid=p;
+  if h<>r.canonical and r.signature like '%authorize_first_party%' then
+   marker:=E'  else\n  select * into t from app.first_party_reminder_templates';
+   if (length(d)-length(replace(d,marker,'')))/length(marker)<>1 then raise exception 'installed final repair marker drift';end if;
+   execute replace(d,marker,E'  else\n'||$legacy_guard$    if not app.legacy_reminder_approval_matches(p_owner_id,i) then
+      update public.invoices set followup_state='paused',next_follow_up_at=null,
+        metadata=metadata||jsonb_build_object('followup_state','paused','next_follow_up_at',null,'reminder_review_reason','delivery_form_review')
+        where workspace_id=p_workspace_id and id=i.id;
+      return '{"authorized":false,"reason":"needs_re_review"}';
+    end if;
+$legacy_guard$||'  select * into t from app.first_party_reminder_templates');
+   if encode(sha256(convert_to(pg_get_functiondef(p),'UTF8')),'hex')<>r.canonical then raise exception 'installed final repair canonical mismatch';end if;
+  elsif h<>r.canonical and r.signature like '%record_first_party%' then
+   marker:=$old$and not (i.metadata#>>'{approved_reminder_delivery,version}'='2' and i.metadata#>>'{approved_reminder_delivery,mode}'='immediate')$old$;
+   if (length(d)-length(replace(d,marker,'')))/length(marker)<>1 then raise exception 'installed receipt repair marker drift';end if;
+   execute replace(d,marker,$safe$and not (coalesce(i.metadata#>>'{approved_reminder_delivery,version}','')='2' and coalesce(i.metadata#>>'{approved_reminder_delivery,mode}','')='immediate')$safe$);
+   -- Comparison COPY only: retain the 68 CRLF + two historical inserted LF.
+   if encode(sha256(convert_to(replace(pg_get_functiondef(p),E'\r\n',E'\n'),'UTF8')),'hex')<>r.canonical
+    or (select (length(prosrc)-length(replace(prosrc,E'\r\n','')))/2 from pg_proc where oid=p)<>68 then
+    raise exception 'installed receipt repair canonical mismatch';end if;
+  end if;
+  select to_jsonb(f)-'prosrc' into after_security from pg_proc f where oid=p;
+  if before_security is distinct from after_security then raise exception 'installed repair changed OID/security';end if;
+ end loop;
+ -- Fail closed on missing dependencies; never recreate historical business data.
+ for r in select * from (values
+  ('app.reminder_approvals',array['workspace_id','owner_id','invoice_id']),
+  ('public.owner_assistant_proposals',array['workspace_id','owner_id','action','state','result']),
+  ('public.whatsapp_pending_actions',array['workspace_id','phone','id','version','consumed_at','action']),
+  ('public.whatsapp_direct_write_receipts',array['workspace_id','owner_id','phone','request','result'])
+ ) required(relation,columns) loop
+  if to_regclass(r.relation) is null or (select count(*) from pg_attribute where attrelid=to_regclass(r.relation)
+   and attname=any(r.columns) and attnum>0 and not attisdropped)<>cardinality(r.columns) then
+   raise exception 'installed legacy helper dependency missing: %',r.relation;end if;
+ end loop;
+ if not (select relrowsecurity and pg_get_userbyid(relowner)='postgres' from pg_class where oid='app.reminder_approvals'::regclass)
+  or exists(select 1 from pg_class c cross join lateral aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) a
+   where c.oid='app.reminder_approvals'::regclass and a.grantee<>c.relowner)
+  or exists(select 1 from pg_attribute c cross join lateral aclexplode(c.attacl) a
+   where c.attrelid='app.reminder_approvals'::regclass and a.grantee<>'postgres'::regrole) then
+  raise exception 'installed legacy helper private dependency ACL/RLS drift';end if;
+ if to_regprocedure('app.legacy_reminder_approval_matches(uuid,public.invoices)') is null then
+  execute $canonical_helper$create function app.legacy_reminder_approval_matches(p_owner_id uuid,i public.invoices) returns boolean
+language sql stable security definer set search_path='' as $$
+ select coalesce(i.metadata#>>'{approved_reminder_delivery,type}'='template',false)
+ and i.metadata#>>'{approved_reminder_delivery,version}' is null
+ -- An older template approval cannot replace a later immutable v2 approval.
+ and not exists(select 1 from app.reminder_approvals r where r.workspace_id=i.workspace_id and r.owner_id=p_owner_id and r.invoice_id=i.id)
+ and exists(
+  select 1 from (
+   select p.action->'payload' payload from public.owner_assistant_proposals p
+   where p.workspace_id=i.workspace_id and p.owner_id=p_owner_id and p.state='confirmed'
+    and p.action->>'type'='owner_reminder' and p.result->>'ok'='true' and p.result->>'action'='reminder.approved'
+   union all
+   select a.action from public.whatsapp_direct_write_receipts r join public.whatsapp_pending_actions a
+    on a.workspace_id=r.workspace_id and a.phone=r.phone and a.id::text=r.request->>'pendingId'
+    and a.version::text=r.request->>'pendingVersion' and a.consumed_at is not null
+   where r.workspace_id=i.workspace_id and r.owner_id=p_owner_id and r.request->>'operation'='reminder.confirm'
+    and r.result->>'ok'='true' and r.result->>'action'='reminder.approved' and a.action->>'type'='owner_reminder_approval'
+  ) evidence
+  where payload->>'invoiceId'=i.id::text and payload#>'{template,reviewedDelivery}' is null
+   and payload->>'preview'=i.metadata#>>'{approved_reminder_delivery,body}'
+   and payload->>'approvalText'=i.metadata->>'approved_reminder_text'
+   and payload#>'{template,name}'=i.metadata#>'{approved_reminder_delivery,name}'
+   and payload#>'{template,language}'=i.metadata#>'{approved_reminder_delivery,language}'
+   and payload#>'{template,revision}'=i.metadata#>'{approved_reminder_delivery,revision}'
+   and payload#>'{template,parameters}'=i.metadata#>'{approved_reminder_delivery,parameters}'
+ )
+$$;
+revoke all on function app.legacy_reminder_approval_matches(uuid,public.invoices) from public,anon,authenticated,service_role;$canonical_helper$;
+ end if;
+end $installed_repair$;
+
+-- Audit a comparison copy ONLY for the six exact known unchanged CRLF bodies.
+do $observed_crlf$
+declare r record;d text;body text;h text;
+begin
+ for r in select * from (values
+ ('app.reminder_canonical_json(jsonb)','bde651fce09364013aad52c1994d9d500d0b863ed6a87a6957563f86cfd3cdeb','51b89ca99fca774daa6077454b735c3059636e4c23d77878115198ae574b5f66',5),
+ ('public.cetld_core_check_local_reminder_payment(uuid,uuid,uuid)','3a7a4acf4ec6d959edf3e3f47b17be65ae285cec40decedd651f2e235cf2ec9c','5bfeccccb370e82543aba56fcd241ead4f8fbc29739569bdd32848acc92f9178',23),
+ ('app.first_party_receipt_audit_guard()','d6d78983e7ddf154eaf4ebd37e8307630691c4b2af5d872e493e4143fe1fc120','ca43f160c886182e72350fcde7ced8551c59b2030cabf75147e5983f5bd01658',1),
+ ('app.first_party_consent_phone_lock()','22bda9228eacde94ad8d456bae0a0a87a7012d10722b7318821f88a1c082028a','2a0b2fcd396d8e1ce63be7118af5dc60a94269f1a50ae89c5afaa4876e44c1d1',8),
+ ('app.cancel_first_party_phone(text,uuid)','35a59393854fcfb7feb2467c4302a218770d73d932d8271a82c80cc270728e5a','265269a0711b3a5dfc72636455f330a9da199823251d1d4075f308dcf48d4dff',17),
+ ('app.first_party_suppression_hook()','744d82c4e74e14de86603e21149ccdfae7dce80256dd428c603d439df20381c7','fc1a836b55819bdc964c200cfd92eab098b364af633725dd5d2eaa8a166d03f9',4)
+ ) expected(signature,canonical,observed,crlf_count) loop
+  select pg_get_functiondef(oid),prosrc into d,body from pg_proc where oid=to_regprocedure(r.signature);
+  h:=encode(sha256(convert_to(d,'UTF8')),'hex');
+  if h=r.observed then
+   if encode(sha256(convert_to(replace(d,E'\r\n',E'\n'),'UTF8')),'hex')<>r.canonical
+    or (length(body)-length(replace(body,E'\r\n','')))/2<>r.crlf_count
+    or strpos(replace(body,E'\r\n',''),E'\n')>0 or strpos(replace(body,E'\r\n',''),E'\r')>0 then
+    raise exception 'observed CRLF comparison mismatch: %',r.signature;end if;
+  elsif h is distinct from r.canonical then raise exception 'observed CRLF source drift: %',r.signature;end if;
+ end loop;
+end $observed_crlf$;
+
 do $guard$
 declare r record; p oid;
 begin
  for r in select * from (values
- ('cetld_core_record_first_party_receipt(text,text,text,text,text,text)','d0071207a0d762be1c3b58be9cf7d4ba9bf2b44f25c1c99637a1f2c3dabfe948','[["postgres","postgres","EXECUTE",false],["service_role","postgres","EXECUTE",false]]'::jsonb),
+ ('cetld_core_record_first_party_receipt(text,text,text,text,text,text)','d0071207a0d762be1c3b58be9cf7d4ba9bf2b44f25c1c99637a1f2c3dabfe948|73a9eadb281a6d107b63b46d0a9c8ee3b463b7b043bf0b839a2154d7d9142c42','[["postgres","postgres","EXECUTE",false],["service_role","postgres","EXECUTE",false]]'::jsonb),
  ('app.evaluate_reviewed_reminder(uuid,uuid,uuid,uuid,jsonb,text,boolean)','b756d238fefcbef28d0289fcb055930e27f8bfa1e926493559939c10bce49d50','[["postgres","postgres","EXECUTE",false]]'::jsonb),
  ('cetld_core_claim_due_followups(uuid,uuid,timestamp with time zone,integer,uuid)','515a146cfc808f3bcfc8290a9fa883d9d5d725649c696b656e34964cd868b687|7682bf8e74ce798442b3054f4672e888c952dce4fce70c31a80554606e1ab6ef','[["postgres","postgres","EXECUTE",false],["service_role","postgres","EXECUTE",false]]'::jsonb),
  ('cetld_zoho_capture_completion_protocol(uuid,uuid,uuid,text,uuid,timestamp with time zone,bigint,uuid,text,text,uuid,text,text,numeric,numeric,numeric,text,date,date,text,text)','639642afa5ba4c61119d9146bdf1fac1a940de8b5f97838452e6faaa1fc5f8ec','[["postgres","postgres","EXECUTE",false],["service_role","postgres","EXECUTE",false]]'::jsonb),
@@ -108,7 +227,7 @@ begin
  ('cetld_core_authorize_delivery(uuid,uuid,uuid,timestamp with time zone)','3f73ac01580326a2106f9529c8794f59607a205e7a8d86e96febe51095eabcb4|a642cdbd4d09e1aab02e2f02f21e3faf9948e40415520f187a87fb8bb121a8df','[["postgres","postgres","EXECUTE",false],["service_role","postgres","EXECUTE",false]]'::jsonb),
  ('app.guard_zoho_bound_invoice()','6a3ea57db81270a75667c9bae7bb68af15c5fdb34230d6d23ac9a09dac07f58f','[["postgres","postgres","EXECUTE",false]]'::jsonb),
  ('app.owner_assistant_reminder_template_gate(uuid,uuid,uuid,boolean,text,text,jsonb,jsonb,boolean)','5ca9b33071c214441303855f6e059818add67301c87d50450a1237c54e4a7c82','[["postgres","postgres","EXECUTE",false]]'::jsonb),
- ('cetld_core_check_local_reminder_payment(uuid,uuid,uuid)','3a7a4acf4ec6d959edf3e3f47b17be65ae285cec40decedd651f2e235cf2ec9c','[["postgres","postgres","EXECUTE",false],["service_role","postgres","EXECUTE",false]]'::jsonb),
+ ('cetld_core_check_local_reminder_payment(uuid,uuid,uuid)','3a7a4acf4ec6d959edf3e3f47b17be65ae285cec40decedd651f2e235cf2ec9c|5bfeccccb370e82543aba56fcd241ead4f8fbc29739569bdd32848acc92f9178','[["postgres","postgres","EXECUTE",false],["service_role","postgres","EXECUTE",false]]'::jsonb),
  ('app.zoho_bound_claim_protocol(uuid,uuid,uuid,text,uuid,uuid,uuid,text,jsonb,text,text)','5e52475aef46651ee3f6afcfe15d839cc6b4de2a1e89fc9748a29f6803ef5ae7','[["postgres","postgres","EXECUTE",false]]'::jsonb),
  ('app.invalidate_zoho_bound_claims()','3d3aa42cfd79227c46b4998f19c05587a5c74baf1b3fe598856503d65022f3f0','[["postgres","postgres","EXECUTE",false]]'::jsonb),
  ('app.reminder_window_deadline(uuid,uuid,text)','01b5e64ed72feecad18a15de576a660c8d75f5a5ed610d96e93f2dd12f96bd46','[["postgres","postgres","EXECUTE",false]]'::jsonb),
@@ -117,11 +236,11 @@ begin
  ('app.checked_reminder_template(invoices,workspace_settings,customers,jsonb)','024d64dd51bb2a55687f44e00841d8d5ffd6f52b50650daa920993c4d17961a5','[["postgres","postgres","EXECUTE",false]]'::jsonb),
  ('app.core_next_contact(timestamp with time zone,jsonb,text)','2fdc6ffcbe2db4fdadbeb61f06267a9afa9e4aa19e79f1925289a9140de10f19','[["PUBLIC","postgres","EXECUTE",false],["postgres","postgres","EXECUTE",false],["service_role","postgres","EXECUTE",false]]'::jsonb),
  ('app.require_branded_reminder_approval()','bbcb5e185adfa7525e6be3f74ae6dd348a799a12b0dba8fd02e3b154e00256c8','[["PUBLIC","postgres","EXECUTE",false],["postgres","postgres","EXECUTE",false]]'::jsonb),
- ('app.first_party_receipt_audit_guard()','d6d78983e7ddf154eaf4ebd37e8307630691c4b2af5d872e493e4143fe1fc120','[["postgres","postgres","EXECUTE",false]]'::jsonb),
- ('app.cancel_first_party_phone(text,uuid)','35a59393854fcfb7feb2467c4302a218770d73d932d8271a82c80cc270728e5a','[["postgres","postgres","EXECUTE",false]]'::jsonb),
- ('app.first_party_suppression_hook()','744d82c4e74e14de86603e21149ccdfae7dce80256dd428c603d439df20381c7','[["postgres","postgres","EXECUTE",false]]'::jsonb),
- ('app.reminder_canonical_json(jsonb)','bde651fce09364013aad52c1994d9d500d0b863ed6a87a6957563f86cfd3cdeb','[["postgres","postgres","EXECUTE",false]]'::jsonb),
- ('app.first_party_consent_phone_lock()','22bda9228eacde94ad8d456bae0a0a87a7012d10722b7318821f88a1c082028a','[["postgres","postgres","EXECUTE",false]]'::jsonb),
+ ('app.first_party_receipt_audit_guard()','d6d78983e7ddf154eaf4ebd37e8307630691c4b2af5d872e493e4143fe1fc120|ca43f160c886182e72350fcde7ced8551c59b2030cabf75147e5983f5bd01658','[["postgres","postgres","EXECUTE",false]]'::jsonb),
+ ('app.cancel_first_party_phone(text,uuid)','35a59393854fcfb7feb2467c4302a218770d73d932d8271a82c80cc270728e5a|265269a0711b3a5dfc72636455f330a9da199823251d1d4075f308dcf48d4dff','[["postgres","postgres","EXECUTE",false]]'::jsonb),
+ ('app.first_party_suppression_hook()','744d82c4e74e14de86603e21149ccdfae7dce80256dd428c603d439df20381c7|fc1a836b55819bdc964c200cfd92eab098b364af633725dd5d2eaa8a166d03f9','[["postgres","postgres","EXECUTE",false]]'::jsonb),
+ ('app.reminder_canonical_json(jsonb)','bde651fce09364013aad52c1994d9d500d0b863ed6a87a6957563f86cfd3cdeb|51b89ca99fca774daa6077454b735c3059636e4c23d77878115198ae574b5f66','[["postgres","postgres","EXECUTE",false]]'::jsonb),
+ ('app.first_party_consent_phone_lock()','22bda9228eacde94ad8d456bae0a0a87a7012d10722b7318821f88a1c082028a|2a0b2fcd396d8e1ce63be7118af5dc60a94269f1a50ae89c5afaa4876e44c1d1','[["postgres","postgres","EXECUTE",false]]'::jsonb),
  ('app.reminder_outstanding_text(numeric,text)','f94c7eff5102639542c0dc8a9f1898ffdfc4e4181d6b44923e534253f932a3fa','[["postgres","postgres","EXECUTE",false]]'::jsonb),
  ('app.sync_core_followup_invoice()','3a8fa359ab25bd0a7a61001b08418cd59cf43b08b8e7ca7ab2e81eeb5f07e264','[["PUBLIC","postgres","EXECUTE",false],["postgres","postgres","EXECUTE",false],["service_role","postgres","EXECUTE",false]]'::jsonb),
  ('app.owner_assistant_authorized(uuid,uuid)','394ae931ae7aaddcf2a85b770481d8027501d39e6bc450523e3e5aec0a6a5583','[["postgres","postgres","EXECUTE",false]]'::jsonb),
@@ -1164,86 +1283,20 @@ begin
  return jsonb_build_object('ok',true,'completed',true,'action','reminder.approved','invoiceNumber',i.invoice_number,'sendNow',p_send_now,'delivery',d);
 end $function$
 ;
-CREATE OR REPLACE FUNCTION public.cetld_core_record_first_party_receipt(p_callback_token text, p_waba_id text, p_phone_number_id text, p_phone text, p_message_id text, p_status text)
- RETURNS jsonb
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path TO ''
-AS $function$
-declare d app.first_party_reminder_dispatches%rowtype;i public.invoices%rowtype;s public.workspace_settings%rowtype;
-  next_at timestamptz; rank_old integer;rank_new integer; own_reconciled_version bigint;
+do $receipt_branch$
+declare p oid:='public.cetld_core_record_first_party_receipt(text,text,text,text,text,text)'::regprocedure;
+ d text;nl text;marker text;before_security jsonb;
 begin
- if exists(select 1 from app.first_party_reminder_dispatches probe join app.zoho_reminder_core_bindings mapping on mapping.core_claim_id=probe.claim_id where probe.callback_token=p_callback_token) then
+ select pg_get_functiondef(oid),case when strpos(prosrc,E'\r\n')>0 then E'\r\n' else E'\n' end,to_jsonb(f)-'prosrc'
+ into d,nl,before_security from pg_proc f where oid=p;
+ marker:='begin'||nl;
+ if (length(d)-length(replace(d,marker,'')))/length(marker)<>1 then raise exception 'bound receipt branch marker drift';end if;
+ execute replace(d,marker,marker||replace($branch$ if exists(select 1 from app.first_party_reminder_dispatches probe join app.zoho_reminder_core_bindings mapping on mapping.core_claim_id=probe.claim_id where probe.callback_token=p_callback_token) then
   return app.zoho_bound_receipt(p_callback_token,p_waba_id,p_phone_number_id,p_phone,p_message_id,p_status);
  end if;
-  if p_status is null or p_status not in ('accepted','sent','delivered','read','failed') or p_message_id is null or length(p_message_id) not between 1 and 256 then return '{"ok":false}';end if;
-  select * into d from app.first_party_reminder_dispatches where callback_token=p_callback_token;
-  if d.claim_id is null or d.phone is distinct from p_phone or d.snapshot#>>'{template,wabaId}' is distinct from p_waba_id or d.snapshot#>>'{template,phoneNumberId}' is distinct from p_phone_number_id then return '{"ok":false}';end if;
-  perform pg_advisory_xact_lock(hashtextextended(d.phone,0));
-  select * into s from public.workspace_settings where workspace_id=d.workspace_id for share;
-  select * into i from public.invoices where workspace_id=d.workspace_id and id=d.invoice_id for update;
-  perform 1 from public.cetld_core_automation_delivery_claims where id=d.claim_id for update;
-  select * into d from app.first_party_reminder_dispatches where claim_id=d.claim_id for update;
-  if d.provider_message_id is not null and d.provider_message_id<>p_message_id then return '{"ok":false}';end if;
-  if exists(select 1 from app.first_party_reminder_dispatches where provider_message_id=p_message_id and claim_id<>d.claim_id) then return '{"ok":false}';end if;
-  insert into app.first_party_reminder_receipt_events(callback_token,provider_message_id,status)
-    values(p_callback_token,p_message_id,p_status) on conflict do nothing;
-  if p_status='accepted' then
-    update public.whatsapp_messages set status='accepted',provider_message_id=p_message_id,updated_at=clock_timestamp()
-      where workspace_id=d.workspace_id and callback_token=p_callback_token and status in ('unknown','pending');
-  else perform public.whatsapp_record_delivery_status(p_message_id,p_phone,p_status,p_callback_token);end if;
-  rank_old:=case d.state when 'accepted' then 1 when 'delivered' then 2 when 'read' then 3 else 0 end;
-  rank_new:=case p_status when 'accepted' then 1 when 'sent' then 1 when 'delivered' then 2 when 'read' then 3 else 0 end;
-  if rank_new=0 and rank_old>=2 then return '{"ok":true}';end if;
-  -- HTTP acceptance and sent are weaker than a signed conclusive failure.
-  -- Delivered/read may supersede it, retaining the complete receipt audit.
-  if d.state='failed' and rank_new=1 then return '{"ok":true,"status":"failed"}';end if;
-  update app.first_party_reminder_dispatches set state=case when rank_new>=rank_old then case p_status when 'sent' then 'accepted' else p_status end else state end,
-    provider_message_id=p_message_id,receipt_at=coalesce(receipt_at,clock_timestamp()) where claim_id=d.claim_id;
-  if rank_new=0 then
-    update app.first_party_reminder_dispatches set state='failed',last_error='signed_provider_failure' where claim_id=d.claim_id;
-    update public.cetld_core_automation_delivery_claims set status='failed',provider_message_id=p_message_id,last_error='signed_provider_failure' where id=d.claim_id;
-    update public.cetld_core_automation_messages set status='failed',provider_message_id=p_message_id where workspace_id=d.workspace_id and payload->>'claimId'=d.claim_id::text;
-    -- Pause only the exact invoice state produced by this dispatch. Never undo
-    -- a newer owner edit, payment, STOP, settings edit or review. Accepted counts
-    -- remain attempts; no subtraction or retry is safe after provider acceptance.
-    if d.state<>'failed' and i.deleted_at is null
-      and i.automation_version=coalesce(d.reconciled_invoice_version,(d.snapshot->>'invoiceVersion')::bigint)
-      and s.updated_at=(d.snapshot->>'preferencesUpdatedAt')::timestamptz
-      and i.followup_state in ('approved','active','scheduled') and app.reminder_local_status_payable(i)
-      and i.amount_paid<i.total_amount and i.metadata->>'invoice_direction'='receivable' then
-      update public.invoices set followup_state='paused',next_follow_up_at=null,
-        metadata=metadata-'approved_reminder_text'-'approved_preferences_updated_at'
-        where workspace_id=d.workspace_id and id=d.invoice_id;
-    end if;
-    return '{"ok":true,"status":"failed"}';
-  end if;
-  update public.cetld_core_automation_delivery_claims set status='sent',provider_message_id=p_message_id,last_error=null where id=d.claim_id;
-  update public.cetld_core_automation_messages set status='sent',provider_message_id=p_message_id where workspace_id=d.workspace_id and payload->>'claimId'=d.claim_id::text;
-  if not d.counted and i.deleted_at is null then
-    -- Already committed normal engine receipt/count wins. A recovered receipt
-    -- never overwrites payment/pause/STOP/changed preferences or edited facts.
-    if i.reminder_count<=d.count_before then
-      next_at:=i.next_follow_up_at;
-      if i.metadata#>>'{approved_reminder_delivery,version}'='2' and i.metadata#>>'{approved_reminder_delivery,mode}'='immediate' then next_at:=null;end if;
-      if i.automation_version=(d.snapshot->>'invoiceVersion')::bigint and i.followup_state in ('approved','active','scheduled')
-        and not (coalesce(i.metadata#>>'{approved_reminder_delivery,version}','')='2' and coalesce(i.metadata#>>'{approved_reminder_delivery,mode}','')='immediate')
-        and i.amount_paid<i.total_amount and app.reminder_local_status_payable(i) and i.metadata->>'invoice_direction'='receivable'
-        and s.updated_at=(d.snapshot->>'preferencesUpdatedAt')::timestamptz
-        and not exists(select 1 from public.whatsapp_global_suppressions where phone=d.phone)
-        and not exists(select 1 from public.whatsapp_suppressions where workspace_id=d.workspace_id and phone=d.phone) then
-        next_at:=app.core_next_contact(clock_timestamp()+make_interval(days=>coalesce((s.follow_up_preferences->>'cadenceDays')::integer,3)),s.follow_up_preferences,s.default_timezone);
-        if i.reminder_count+1>=coalesce((s.follow_up_preferences->>'maxReminders')::integer,3) then next_at:=null;end if;
-      end if;
-      update public.invoices set reminder_count=reminder_count+1,last_follow_up_at=greatest(coalesce(last_follow_up_at,d.reserved_at),d.reserved_at),
-        next_follow_up_at=next_at,followup_state=case when next_at is null and followup_state in ('approved','active','scheduled') then 'paused' else followup_state end
-        where workspace_id=d.workspace_id and id=d.invoice_id returning automation_version into own_reconciled_version;
-    end if;
-    update app.first_party_reminder_dispatches set counted=true,reconciled_invoice_version=own_reconciled_version where claim_id=d.claim_id;
-  end if;
-  return '{"ok":true}';
-end $function$
-;
+$branch$,E'\n',nl));
+ if (select to_jsonb(f)-'prosrc' from pg_proc f where oid=p) is distinct from before_security then raise exception 'bound receipt branch security drift';end if;
+end $receipt_branch$;
 
 do $bridge_acl$
 declare r record;p oid;

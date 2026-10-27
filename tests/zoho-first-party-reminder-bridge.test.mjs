@@ -15,12 +15,13 @@ async function callback(f,{status='delivered',id='wamid.offline.capture.1',token
  await h({method:'POST',rawBody,headers:{'x-hub-signature-256':signature?'sha256='+createHmac('sha256',env.WHATSAPP_APP_SECRET).update(rawBody).digest('hex'):'sha256='+'0'.repeat(64)}},response);return response;
 }
 
-test('actual owner confirmation -> engine/core claim -> bounded exact GET -> atomic approved final -> fake POST -> SQL receipt and signed callback',async()=>{
- const f=await createZohoBoundReminderFixture();try{
+for(const installedShape of [false,true])test(`actual owner confirmation -> engine/core claim -> bounded exact GET -> atomic approved final -> fake POST -> SQL receipt and signed callback (installedShape=${installedShape})`,async()=>{
+ const f=await createZohoBoundReminderFixture({installedShape});try{
   const origin=(await f.db.query('select * from app.zoho_invoice_origins')).rows;
   await f.approve();const before=await f.read();
   const result=await f.run();assert.equal(result.status,'sent');assert.deepEqual(f.counts(),{gets:1,posts:1});
   const after=await f.read();assert.equal(Number(after.reminder_count),1);assert.equal(Number(after.amount_paid),0);assert.equal(after.total_amount,before.total_amount);
+  assert.ok(new Date(after.next_follow_up_at)>new Date(before.next_follow_up_at).getTime()+86400000,'versionless cadence reconciles to a future day');
   assert.equal((await sqlValue(f,'select state from app.zoho_bound_claims')).state,'accepted');
   assert.equal((await sqlValue(f,'select status from cetld_core_automation_delivery_claims')).status,'sent');
   await assert.rejects(f.db.exec("update cetld_core_automation_delivery_claims set status='sending',delivery_token=gen_random_uuid()"),/ZOHO_CORE_CLAIM_PROTECTED/);
@@ -266,11 +267,12 @@ test('real final RPC rejects each independently forged snapshot even with a genu
  }finally{await f.close();}
 });
 
-test('local-only confirmation, native payment/final gate, counter and receipt remain functional under the complete migration',async()=>{
- const f=await createZohoBoundReminderFixture();try{
+for(const installedShape of [false,true])test(`local-only confirmation, native payment/final gate, counter and receipt remain functional under the complete migration (installedShape=${installedShape})`,async()=>{
+ const f=await createZohoBoundReminderFixture({installedShape});try{
   const originId=f.row.id,local=(await f.db.query("insert into invoices(workspace_id,customer_id,customer_phone,invoice_number,issue_date,due_date,currency,total_amount,status,metadata) values($1,$2,$3,'LOCAL-PROOF','2026-10-01','2026-10-20','USD',5,'sent','{\"invoice_direction\":\"receivable\"}') returning id",[f.ws,f.cust,f.customerPhone])).rows[0].id;
   f.row.id=local;
   await f.approve();assert.equal((await f.run()).status,'sent');assert.deepEqual(f.counts(),{gets:0,posts:1});assert.equal(Number((await f.read()).reminder_count),1);
+  assert.ok(new Date((await f.read()).next_follow_up_at)>Date.now()+86400000,'versionless local cadence is null-safe');
   assert.equal(Number((await sqlValue(f,'select count(*) n from app.zoho_reminder_core_bindings')).n),0);
   assert.equal(Number((await sqlValue(f,'select count(*) n from app.zoho_bound_claims')).n),0);
   assert.equal((await callback(f)).statusCode,200);assert.equal(Number((await f.read()).reminder_count),1);
