@@ -9,7 +9,7 @@ import {createClient} from '@supabase/supabase-js';
 const name=value=>{if(!/^[a-z_][a-z0-9_]*$/i.test(value))throw Error('unsupported fixture identifier');return `"${value}"`;};
 const parameter=value=>value&&typeof value==='object'?JSON.stringify(value):value;
 async function createFixtureDatabase(excludeMigrations){
-  const files=(await readdir(new URL('../../supabase/migrations/',import.meta.url))).filter(file=>file.endsWith('.sql') && !['20261023164251_exact_reminder_approval_artifact.sql','20261023083356_per_message_reminder_review.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060000_customer_reminder_tone.sql','20261018060100_invoice_details_templates.sql','20261018090021_remove_stop_footer.sql','20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql'].includes(file) && !excludeMigrations.includes(file)).sort();
+  const files=(await readdir(new URL('../../supabase/migrations/',import.meta.url))).filter(file=>file.endsWith('.sql') && !['20261023164251_exact_reminder_approval_artifact.sql','20261023083356_per_message_reminder_review.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060000_customer_reminder_tone.sql','20261018060100_invoice_details_templates.sql','20261018090021_remove_stop_footer.sql','20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql','20261027100000_zoho_first_party_reminder_bridge.sql'].includes(file) && !excludeMigrations.includes(file)).sort();
   const migrations=await Promise.all(files.map(async file=>[file,await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8')]));
   // Include schema/bootstrap code, helper, lockfile and runtime/tool dimensions.
   const directory=process.env.CETLD_SQL_FIXTURE_CACHE_DIR;
@@ -41,7 +41,7 @@ async function createFixtureDatabase(excludeMigrations){
   }});
 }
 
-export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[]}={}){
+export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[],database}={}){
   if(excludeMigrations.some(file=>['20261026090000_contain_unproven_external_reminders.sql','20261026110000_zoho_prospective_operation_foundation.sql'].includes(file)))
     excludeMigrations=[...excludeMigrations,'20261026141000_zoho_capture_completion_protocol.sql'];
   if(excludeMigrations.includes('20261026141000_zoho_capture_completion_protocol.sql'))
@@ -63,7 +63,7 @@ export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[
   // A historical review body must not receive patches for its later replacement.
   if(excludeMigrations.includes('20261009040005_invoice_review_general_inferred_currency_correction.sql'))
     excludeMigrations=[...excludeMigrations,'20261025170000_invoice_review_unknown_due_date.sql'];
-  const db=await createFixtureDatabase(excludeMigrations),requests=[],errors=[],objects=new Map();let interceptor=null;
+  const db=database||await createFixtureDatabase(excludeMigrations),requests=[],errors=[],objects=new Map();let interceptor=null;
 
   async function fetchImpl(input,options={}){
     const request=input instanceof Request?input:null,url=new URL(request?.url||String(input));

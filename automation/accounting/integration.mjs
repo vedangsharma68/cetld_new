@@ -5,6 +5,7 @@ import { ACCOUNTING_PROVIDERS, createAccountingProviders, zohoRegionFromLocation
 import {isTestInvoice} from '../test-invoice.mjs';
 import {prospectiveZohoExport} from './prospective-export.mjs';
 import {inspectOriginalBoundInvoice} from './original-bound-read.mjs';
+import {createDisabledZohoClaimProtocol} from './bound-claim-protocol.mjs';
 import {runCaptureCompletion} from './capture-completion.mjs';
 
 const DEFAULT_STATE_TTL = 10 * 60 * 1000;
@@ -313,6 +314,7 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
   // Current connection identity cannot establish original invoice provenance.
   // Refuse before loading credentials. The isolated current-account diagnostic
   // retains its own explicitly non-authoritative read contract.
+  const createBoundClaimProtocol=(executor,fetchImpl)=>createDisabledZohoClaimProtocol({executor,store,accessToken,fetchImpl});
   const inspectOriginalInvoice = input => inspectOriginalBoundInvoice({store,accessToken},input);
 
   async function reminderInvoiceState() {
@@ -414,5 +416,5 @@ export function createAccountingIntegration({ store, cipher = new TokenCipher(),
     }
   }
 
-  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, connectionStatus, selectOrganization, disconnect, readZohoData, sync, retrySync: sync, syncInvoicesAndPayments: sync, prepareInvoiceSync, syncInvoice, runNewZohoExportProtocol, updateInvoice, latestInvoiceBalance, reminderInvoiceState, inspectOriginalInvoice });
+  return Object.freeze({ startOAuth, callback, handleOAuthCallback: callback, accessToken, getAccessToken: accessToken, connectionStatus, selectOrganization, disconnect, readZohoData, sync, retrySync: sync, syncInvoicesAndPayments: sync, prepareInvoiceSync, syncInvoice, runNewZohoExportProtocol, updateInvoice, latestInvoiceBalance, reminderInvoiceState, inspectOriginalInvoice, createBoundClaimProtocol });
 }

@@ -1,224 +1,217 @@
-# Disabled Zoho origin/epoch claim-to-final protocol foundation
+# Protected Zoho first-party reminder bridge — PR204
 
-**No reminder sender is enabled. Overall protected reminder restoration and
-production readiness are NOT complete.** This is the explicitly allowed disabled
-claim-protocol cut, not another informational read. It adds immutable private
-claim/attempt state, fresh-read challenges, one-use final candidate permits,
-irreversible invalidation and scoped receipt audit. It is not registered with an
-API, model, integration factory, scheduler, engine, provider or webhook. The new
-functions are owner-executable only; no service-role executor is granted. There
-is no flag/GUC/metadata path that enables it. Every result says
-`deliveryAuthority:false`; the factory has no sendReminder/Graph transport.
+Draft, unapplied and unmerged. This PR now implements the functional bridge in
+addition to its held foundation. Offline success is not production readiness,
+live provider acceptance, live STOP/START or customer-AI proof.
 
-## Concrete dependency closed
+## Supported path
 
-Current code executes:
+Only a genuine immutable PR202 Zoho origin, with its protected customer mapping,
+matching current original account/region and a fresh connection epoch, can use
+this path. The supported approval is the existing **versionless, template-only
+WhatsApp owner prepare/explicit-confirm workflow**, backed by the consumed
+proposal and protected confirmation receipt. This approval format's SQL helper
+is named `legacy_reminder_approval_matches`; it does **not** admit legacy
+accounting rows. There is no grandfathering, metadata grant or new test grant.
+The original approved-recipient/WABA/template restrictions remain; this does not
+open reminders to every commercial recipient.
 
-1. owner reminder confirmation schedules the shared queue;
-2. `FollowUpEngine.run` calls `CoreAutomationStore.claimDueFollowups`;
-3. prepareReminder, intent persistence and payment check;
-4. core authorizeDelivery, then approved-provider facts and its separate final RPC;
-5. Graph POST, core markSent, first-party receipt and async signed callback.
+Actual path:
 
-The old claim has no protected original-account/epoch binding. PR200 intentionally
-blocks linked rows, and PR203 inspection is informational. Reopening a predicate
-would neither bind those successive gates to one attempt nor prevent switch/
-STOP/revert from reviving an old worker's capability. This PR implements that
-missing private claim/challenge/final-attempt lifecycle without reopening any of
-the existing consumer gates. It creates NO public core queue claim/message.
+1. Existing verified owner-message and pending-action/CAS checks prepare and
+   confirm exact template words, parameters and invoice/customer/preferences
+   snapshots. The private origin-scoped copy preserves the existing validators.
+2. The first-party scheduler's engine store atomically creates a real
+   `cetld_core_automation_delivery_claims` row and immutable private journal/map.
+3. Actual approved-provider preparation, intent persistence, local payment audit
+   and intermediate core authorization run against that same scoped claim.
+   Payment must remain zero; no provider response updates local money.
+4. The internal candidate reader performs one five-second challenged GET pinned
+   to original account/region/invoice/customer. Auth/ordinary refresh, SQL context,
+   HTTP, JSON/body and reserve share that deadline. No list/search/retry/reselect.
+5. One SQL transaction consumes the one-use candidate and runs the real approved
+   final-policy implementation. It checks the current immutable binding, live
+   epoch/frame, actual core claim, owner approval, exact snapshot/hash, template,
+   default draft, phone/customer/consent/STOP, payment audit, cadence, preferences,
+   versions, deletion/test/payable/in-flight/lease/idempotency protections.
+6. A final synchronous monotonic one-use check immediately precedes Graph POST.
+   No intervening HTTP/SQL/other asynchronous operation is performed. The existing
+   approved provider and durable receipt adapter handle HTTP acceptance.
+7. The existing receipt RPC dispatches mapped attempts through an atomic private
+   receipt bridge, then its unchanged counter/cadence/reconciliation policy.
+   Actual webhook raw-body HMAC verification and WABA/phone filtering precede
+   callback handling. Duplicate/cross-message callbacks cannot count twice.
 
-Supported here: private owner-only protocol transactions and fake-HTTP proof.
-Still blocked: **all** linked owner preview/proposal/confirmation, payment check,
-automatic/manual queue, generic/final dispatch, approved sender and business
-receipt/cadence continuation. QuickBooks/Tally/imports/legacy/PR201 remain blocked
-before token/provider access. Local-only reminders and PR199 are unchanged.
+The source-derived policy copies are private, owner-executable only. Their
+external predicate is a private backend/transaction/invoice context, never a
+caller GUC/JSON flag. All originals keep their fail-closed external predicates;
+only the existing owner routine and receipt routine acquire explicit bound
+branches. The candidate always returns `deliveryAuthority:false`; final send
+permission comes from the independent composed SQL reservation and the runtime's
+opaque, instance-local one-use state. PR203 inspection is never accepted as proof.
 
-## Protocol and binding
+Still blocked before token/provider access: unbound/legacy/imported invoices,
+PR201 admissions/journals, current-org diagnostics, wrong account/scope, QuickBooks,
+Tally, generic core/cloud/other workers and standalone old evidence wrappers.
+Linked v2/free-form/fallback/dashboard/AI review paths remain unavailable. Local-only
+reminders and PR199 diagnostic behavior remain. Bound imports and owner financial
+payment/mark-paid/void refusals are unchanged. Owner notes/delete/undo/date rules
+remain; a date correction preserves the immutable original and makes this read/
+reminder unavailable when current dates differ. Draft-origin or otherwise
+nonmatching provider status is not upgraded into payable authority.
 
-`createDisabledZohoClaimProtocol({executor,store,accessToken,fetchImpl})` requires an
-explicit trusted private executor. There is no default service RPC or public API.
-Input is only `{userId,workspaceId,invoiceId}`. Handles/permits/receipt references
-are frozen opaque objects kept in instance-local WeakMaps, not JSON evidence.
-Clones, caller fields, informational inspection results and GUCs cannot use them.
+## State, races and trust
 
-Private SQL resolves workspace owner, current invoice/customer and genuine PR202
-origin + customer mapping through the installed PR203 context RPC. It captures
-original operation/account/region/customer/external invoice identity, current
-epoch, invoice version/schedule and full invoice/customer/origin fingerprint.
-Settings/consent are hashed server-side. The data frame additionally requires
-active same-customer consent, no STOP, due approved/active/scheduled state, contact
-hours/cadence and unchanged approved-preference time. **This is not an owner
-approval/template/commercial-recipient authority validator.** Those existing
-consumer gates are still closed and must be combined in the future bridge.
+Private claim: invoice/version/schedule, owner/workspace/customer, immutable origin
+operation/account/region/external identities, current epoch and exact frame;
+two-minute lease. Challenge: one server nonce, five seconds. Candidate: one attempt,
+only a stored permit hash, deadline at most two seconds and no later than the
+read deadline. No nonce/permit is returned by read-only recovery.
 
-- Claim: one durable journal row per invoice/version/schedule, two-minute lease.
-  Existing public/private in-flight or quarantined attempts block another claim.
-  Identity/frame/lease are immutable; journal writes require a private per-backend,
-  transaction/claim context. No owner/member/service table writes or execute.
-- Challenge: exactly once, nonce + five-second server deadline before any token/
-  provider work. A matching live frame is checked again after token preparation.
-- Read: one exact Zoho GET pinned to original account/region/customer/invoice,
-  one five-second end-to-end client deadline, no list/search/retry/reselection.
-  Exact currency/total/zero paid/balance/status/dates/reference and explicit zero
-  credits/write-off must match protected original AND local state. Reuses bounded
-  256 KiB JSON/redirect/UTF-8 transport and existing deadline-aware token refresh.
-  It does not promote PR203's informational output; it performs its own challenged
-  GET and submits internally constructed typed facts with the private nonce.
-- Reserve: SQL independently rechecks live frame, nonce, read lease and exact
-  normalized facts. Atomically stores one attempt and only a permit hash. The
-  opaque random token is returned once, expires within two seconds and never
-  appears in JSON returned by the JS factory.
-- Begin: SQL rechecks binding, policy snapshot, epoch, lease, attempt and permit
-  under current locks, then consumes it by moving to posting. Client removes its
-  permit before awaiting SQL. Replay cannot create another attempt. This remains
-  a **candidate reservation with deliveryAuthority:false**, never a send grant.
-- Receipt: only an attempt that actually reached private posting can record its
-  scoped token/message/status. Duplicate same-event records are idempotent;
-  cross-message and cross-attempt substitution fails. Delivered/read outrank
-  later failure, and weak accepted/sent cannot overturn a conclusive failure.
-  Receipt handling changes PRIVATE AUDIT ONLY, never invoices/counters/schedules,
-  messages, payments, core claims or consent. Callback after switch/STOP may audit
-  its own historical attempt; it cannot authorize another action.
+Both the beginning **and end** of final SQL enforce expiry/current frame. A slow
+policy/template lock rolls back consumption and reservation. The runtime also
+uses monotonic time from reserve-request start, a five-second overall final-read
+budget, and a synchronous consumed-before-POST check; a late SQL HTTP response
+cannot grant a stale send. Individual bridge RPCs are bounded too. Lost responses
+may leave committed state, never permission to retry.
 
-Private receipt input presumes a future trusted HTTP-acceptance/signed-webhook
-attestor. This PR does NOT validate a Graph signature or dispatch a POST; synthetic
-receipt fixtures are not live provider acceptance proof. No privileged JSON audit
-record can turn deliveryAuthority into true or make a public gate pass.
+Switch, away/back, reconnect/reconsent/credential replacement permanently invalidate
+old claims. Same-account reconnect may create a *new* inspected/claimed operation
+for a valid immutable origin; it cannot resurrect an old attempt. Normal token
+refresh preserves the epoch. Invoice/customer/settings/consent/STOP/owner-membership
+changes invalidate pending claims irreversibly, including edit/revert and STOP/
+START. No owner-editable lease or metadata can restore one.
 
-## Races, failure and recovery
+Lock order for the composed path is phone advisory -> owner membership -> settings
+-> customer -> invoice -> connection -> epoch -> core claim -> private journal.
+Capture and the private protocol now lock customer before invoice, matching
+review/approval and customer tone invalidation. Capture rechecks the locked
+customer against the locked invoice. Receipts use the compatible historical
+phone/settings/customer/invoice/core/private order. No lock spans HTTP. Tests use
+single-session PGlite with explicit interleavings; multi-session PostgreSQL lock/
+liveness testing remains unverified (no local PostgreSQL server was available).
 
-Locks: phone advisory -> settings -> invoice -> customer -> connection -> epoch
--> private claim. The phone/settings prefix follows STOP. PR202 capture uses invoice-before-
-customer; v2 review-capable installations' app.evaluate_reviewed_reminder uses
-customer-before-invoice. These paths must NOT be composed blindly. The future
-bridge must reconcile that order before enablement; cross-path deadlock/liveness
-is not proven by isolated tests. The private executor remains inaccessible to
-service/owner-member roles, so no enabled concurrent sender path is claimed.
-No locks span HTTP.
-Normal protected refresh preserves epoch and the claim. Account selection,
-away/back, reconnect/reconsent/credential replacement invalidate it permanently.
-New AFTER triggers invalidate pending private claims on invoice/customer/settings/
-workspace/consent/suppression/epoch changes. Claimed/challenged/reserved becomes
-cancelled; posting becomes quarantined. An edit/revert or STOP/START cannot revive
-it, even if current values happen to match again. These triggers change no public
-business fields. Four filtered indexes bound normal pending-claim lookups.
+Receipts make the private journal terminal *before* legitimate counter/version
+writes in the same transaction. Thus its own receipt does not self-cancel; no
+service/GUC/invoice-DML invalidation bypass is installed. All other pending edits
+still cancel or quarantine. Scoped historical receipts after STOP/account switch
+can audit/count their own accepted attempt once; they never restore approval,
+resume a paused invoice or authorize another send.
 
-Read/SQL timeout does not permit another GET. If the deadline has passed, cleanup
-is not allowed to start a new request; the non-reusable state/expiry remains and
-requires separate review. A reserve/begin acknowledgement can be lost after commit;
-read-only recovery returns state/attempt identifiers, never the permit or nonce.
-It cannot redispatch or invent a receipt. Unknown posting remains quarantined and
-blocks another claim. There is no cleanup/rebind/repair/unquarantine operation.
-Account recovery alone cannot reset a cancelled claim's version/schedule identity;
-a new explicit review/schedule is required. Unknown attempts need separately
-reviewed reconciliation, not another epoch or edited metadata.
+Unknown POST, lost final acknowledgement and missing receipt acknowledgement are
+quarantined. There is no automatic redispatch, recovered permit, invented receipt,
+cleanup/reset/unquarantine or rebind. A committed receipt survives lost HTTP
+acknowledgement. Explicit known policy re-review still uses the existing review
+hold path. Recovery is read-only state/attempt metadata, not an authorization.
 
-The provider can change after the last exact GET, and STOP/edit can occur after
-SQL reservation and before HTTP. There is no distributed transaction with Zoho or
-Graph. This disabled foundation sends nothing. Future wiring must run every
-existing final policy check and consume the private candidate in the SAME SQL
-transaction, then perform no asynchronous work before POST. An informational or
-candidate result must never be treated as final permission.
+The backend is the trusted HTTPS provider/signature attestor. Service JSON cannot
+create/alter original provenance or private contexts/tables; existing origins and
+current SQL facts are independently required. This is not a defense against an
+operator/compromised trusted backend fabricating provider attestations. Zoho or
+consent can change after the last read/SQL commit and before provider receipt:
+SQL and external providers do not form a distributed atomic transaction.
 
-## Exact remaining wiring before any enablement
+## Exact migration/security packet
 
-This is code work still required, not a production/operator enable switch:
+Apply neither migration without independent source/security review. Held foundation:
 
-1. Add a narrowly scoped private SQL bridge that atomically creates the real core
-   claim and this immutable binding; route exact-invoice first-party scheduler
-   claims through it. Keep generic/unscoped/old-worker linked claims refused.
-2. Integrate owner preview/confirmation, payment check, core authorization and the
-   approved sender's final RPC with that same bound claim. Preserve their actual
-   owner/approval receipts, exact words/delivery snapshot/fingerprint/template/
-   default-draft, consent/STOP, commercial identity, phone, payment audit,
-   settings/cadence/contact-hour/deletion/test/payable/inflight guards. The data
-   frame alone is insufficient and intentionally grants no authority.
-3. At final reservation combine the existing approved-provider policy validator
-   and one-use private begin transition under the reviewed lock order. Only the
-   approved sender may receive an internal dispatch capability/callback value;
-   wire the engine adapters without exposing raw permits or generic JSON proof.
-4. Bind core markSent/markFailed/quarantine and actual first-party signed receipt
-   callbacks to the journal attempt, atomically preserving existing count/version/
-   callback/dedup semantics. Route acceptance/signature evidence through an
-   internal attestor, never caller JSON. Keep lost/unknown POST non-retriable.
-5. Prove a complete real engine -> approved provider -> fake Graph -> actual SQL
-   receipt positive path plus each isolated final guard, then independent source,
-   migration, CI/deploy and genuinely authorized live-flow review. There is NO
-   positive enabled engine/send path in this PR; tests prove it remains blocked.
+- `20261027070000_zoho_bound_claim_protocol.sql`: **29,088 UTF-8 LF bytes**,
+  SHA256 `0fdd30024791eb05a6dec249a66f0839be7c1526397e1d52ece2126723521758`.
+- Successor `20261027100000_zoho_first_party_reminder_bridge.sql`: **123,888 UTF-8 LF bytes**,
+  SHA256 `e7b3e41db3cbc737080099b29c0fe30ef9e11c4065d08714be90850b66823e80`.
 
-## Migration/security review
+The successor is one atomic guarded transaction. Two new private RLS tables
+(transaction context and immutable core/journal mapping), eleven private definer
+helpers/policy copies, one fixed-action service-only RPC and two new triggers.
+All new functions have empty search_path; all private tables/functions deny
+PUBLIC/anon/authenticated/service access. Only the narrow public bridge grants
+service EXECUTE. No general table write/verified flag or caller account override.
+Unknown default grants, column ACLs, RLS/policy or source drift abort.
 
-`supabase/migrations/20261027070000_zoho_bound_claim_protocol.sql`: **29,088 UTF-8 LF bytes**, SHA256 **`0fdd30024791eb05a6dec249a66f0839be7c1526397e1d52ece2126723521758`**.
+Existing function OIDs, owners, ACLs, definer/invoker flags, search paths and other
+security attributes are preserved. Exactly five existing bodies change:
 
-One atomic additive BEGIN/COMMIT: three private RLS tables, four owner-only
-SECURITY DEFINER functions, ten triggers (two new-table guards, eight invalidation
-hooks), four filtered indexes. Empty search_path; UTC on hashing/protocol routines.
-No installation business-row DML/backfill, no public API/service function grant,
-no existing function body/OID/owner/ACL/search_path replacement. Runtime mutations
-are limited to private protocol rows/context/audit. Existing source table writes
-remain governed by their original policies and triggers.
+- capture completion: customer-before-invoice lock/recheck only;
+- private candidate protocol: compatible customer/invoice order/recheck;
+- private invalidation: add owner-membership invalidation;
+- private owner routine: explicit supported-origin branch;
+- public first-party receipt: explicit mapped-attempt branch.
 
-All 21 installed source guards include accepted PR200 approved 31-CRLF variants,
-PR201 refresh successor and epoch/capture guards, PR202 protected origin/identity
-helpers and PR203 context RPC. The new PR203 predecessor was derived in isolated
-exact-main replay under canonical search_path, not guessed:
+Everything else, including PR200 predicates and both generic core gates, remains
+byte-identical. The migration includes the full exact predecessor inventory:
+21 prior capture/read guards plus 34 exact policy/protocol helper signatures with
+semantic ACL inventories derived offline. It supports only the audited contained
+approved LF/31-CRLF core variants; unknown/mixed line endings abort. No unknown
+source is normalized. PR203 context predecessor is
+`273f1fc397a0505ba49e97d7e6625fa63da86acef1f813dab208434335270dbd`;
+refresh successor remains
+`fb4e3a8f82aabc64dd0ae525938341c9170336582af9c58737d816ae27497110`.
 
-`public.cetld_zoho_original_bound_read_context(uuid,uuid,uuid)`
-SHA256 `273f1fc397a0505ba49e97d7e6625fa63da86acef1f813dab208434335270dbd`.
+The exact chronological main chain produces approved-final predecessor
+`286ea00f8e2ebf9bf843bc13bf45fd2d9884e4208d523185ef11abe50469746a`.
+A partial fixture reinstall lost the exact delivery/words block and produced
+`60f3cbe76915a27769c1e664cf208a5cccb194e361d6f7d3b13ec71d63528271`;
+the new migration rejects that incomplete definition. No compatibility waiver.
 
-The reviewed semantic 20-constraint digest and independent 53-column/type/39-NOT-
-NULL digest are reused exactly, as are table/column ACL, RLS, six exact active
-capture trigger bindings and app CREATE protections. Unknown source, catalog,
-ACL/default-grant or line-ending drift aborts. New function/table default grants
-are audited; no hidden grantee or grant option survives. No source normalization
-or raw production-hash allowlist was added. The migration itself is the exact
-remaining predecessor hash inventory; original-read packet documents derivation.
+Version-portable protection retains the 20 c/p/u/f constraints digest
+`4e724a814f77fd0002fa4ccf59637e10c31efcf292ab75b20e20e9f5bb41660a`
+and independent 53-column/39-NOT-NULL digest
+`8f3a72a36de67e045982275071a34cba02f62c7ac614a7f59b331a435e55b9ee`.
+Foundation journals add 10 c/p/u/f constraints digest
+`89b715bfd5cb2aa5328d160f808d278dc7504e1534d7effe3a6aa19db7e8fece`
+and 34-column/27-NOT-NULL digest
+`6128cb8ac69188093275a549e6c9d7084ac19def04887df4061c2bcfac37ba86`.
+NOT NULL is never inferred solely from version-dependent pg_constraint 'n' rows.
 
-After independent review ONLY: compare installed source/security/catalog/triggers
-read-only, verify exact bytes/hash, apply schema before code, verify new private
-ACL/RLS and unchanged business hashes/old functions. Owner-only executor and all
-old blocks remain closed before/after code. Do not grant private EXECUTE or flip
-any existing gate as a rollout shortcut. A code rollback leaves private journals
-for audit; do not delete them or reset unknown attempts. Trigger/function removal
-or receipt reconciliation needs a separately reviewed operator plan. No agent
-apply/merge/deploy is authorized or performed.
+A 29-trigger semantic digest audits relation/function, event bits, enabled state,
+columns, arguments and WHEN expression, including epoch, admissions, capture,
+private invalidation, test, branding, version, preferences, STOP and consent locks:
+`365e9a3337b16054e0e26f1b18766d61ec55a8813c719dd2ad1f081193a9de4b`.
+The original six capture and ten foundation registrations are also checked. New
+core updates/deletes cannot rewrite a mapped claim into permission. Existing
+fail-closed STOP/quarantine transitions remain possible.
 
-## Offline proof and limits
+No installation business-row DML/backfill. No provenance migration/upgrade of
+existing admissions, journals or invoices. Runtime effects are the explicitly
+reviewed reminder claim/intent/reservation/receipt/counter/cadence operations;
+no invoice financial/customer/origin/snapshot/import/model mutation.
 
-Tests use isolated real SQL, actual token/capture/accounting integration and fake
-OAuth/Zoho HTTP. They exercise claim/challenge/permit/begin/receipt transitions,
-opaque forgery/replay, origin/scope/metadata/GUC/diagnostic negatives, SQL rollback,
-reserve acknowledgement loss, unknown posting, late receipt audit, immutable
-identity, switch/away-back/reconnect, refresh, edit/customer/preferences/STOP/START,
-owner date/delete compatibility, remote identity/money/status/date/credit/error/
-timeout/body/redirect failures, short permit expiry and unchanged old gates.
-The actual engine/approved provider are also run negatively with Graph sentinels:
-core claim remains refused, payment/Graph are not reached. No test bypasses that
-real gate to claim an enabled positive send. Synthetic private receipts are only
-journal fixtures. No multi-session PostgreSQL contention, real provider field
-availability, real signature/callback, live STOP/START/customer-AI or sellability
-proof is claimed.
+Review/rollout order: read-only compare exact source/ACL/RLS/constraint/attribute/
+trigger inventories and bytes; approve both held migrations; apply foundation then
+successor before code; verify five source changes, unchanged old security and
+business hashes; only then independently review/deploy code/current CI. If the
+successor aborts, the foundation remains disabled and old workers fail closed.
+Old code cannot use this bridge. Code rollback leaves protected attempts/audits
+and signed historical receipt handling intact; never delete/reset journals or
+unknown attempts. No automatic SQL rollback script or remote application by agent.
 
-Exact commands/results and exact-head CI are recorded on the draft PR:
+## Offline proof and remaining review
+
+`tests/fixtures/zoho-bound-reminder.mjs` now installs the exact chronological full
+migration chain; it never reinstalls an earlier optional gate over a later patch.
+The injected database option attaches only the offline HTTP fixture. Historical
+partial fixtures omit the dependent successor; no assertion/test/gate is skipped.
+
+Tests exercise real owner confirmation, engine/core claims, approved provider,
+final SQL and signed webhook with fake exact Zoho GET/Graph POST, plus each
+snapshot/financial/transport/race/rollback/replay/uncertainty guard. Local-only
+positive and owner date/delete/financial/test guard regressions remain. Network
+sentinels reject every other external request; no actual credentials/providers,
+customer AI, business data, sends, imports, SQL or deployment are used.
+
+Exact focused commands and outcomes are recorded on draft PR204. Required commands:
 
 ```sh
-node --import tsx tests/zoho-bound-claim-protocol.test.mjs
-node --import tsx --test-name-pattern='switch/away-back' tests/zoho-bound-claim-protocol.test.mjs
-node --import tsx --test --test-concurrency=2 tests/zoho-original-bound-read.test.mjs tests/zoho-capture-completion.test.mjs tests/zoho-prospective*.test.mjs tests/accounting.test.mjs tests/accounting-invoice-diagnostic.test.mjs tests/external-reminder-containment*.test.mjs tests/approved-reminders.test.mjs tests/engine.test.mjs tests/invoice-sync-native-sql.test.mjs tests/direct-owner-write-sql.test.mjs tests/tally-routing.test.mjs
+node --import tsx tests/zoho-first-party-reminder-bridge.test.mjs
+node --import tsx --test --test-concurrency=2 tests/zoho-original-bound-read.test.mjs tests/zoho-capture-completion.test.mjs tests/zoho-prospective-export.test.mjs tests/zoho-prospective-foundation-sql.test.mjs tests/zoho-fresh-create-receipt.test.mjs tests/external-reminder-containment-sql.test.mjs tests/external-reminder-verification-sql.test.mjs tests/reminder-durability-sql.test.mjs tests/direct-owner-write-sql.test.mjs tests/invoice-lifecycle-sql.test.mjs tests/whatsapp-owner-sql.test.mjs tests/tally-routing.test.mjs
 npm run typecheck
 git diff --check
 ```
 
-No full local release rerun, parallel coding, packages, config/API functions, CI
-gates/skips or spend. Historical fixtures omitting PR203 omit this exact dependent
-migration; no assertion is removed. The separate Zod high-advisory dependency
-finding remains open and unchanged; it needs its own compatible patched
-resolution/review. None of this authorizes actual provider/customer-AI/business
-QA/import/queue/send/cleanup/rebind work. All linked reminders remain blocked.
-
-
-Focused results before publication: **9/9 protocol tests passed**, **13/13 existing
-regression files passed**, and the final owner-date/delete/invalidation case
-passed separately after its fixture correction. Typecheck and diffcheck passed.
-No focused assertion was skipped or cancelled. Exact-head CI belongs on the draft
-PR, without another code push merely to record CI metadata.
+One fixed-head configured CI run follows focused proof; no manual reruns or full
+local release duplication. No packages, config, API functions, CI gates/skips or
+spend changes. vercel.json/Hobby budget unchanged. Separate Zod four-high advisory
+remediation still needs a compatible patched resolution/review. Actual provider
+field availability, deployed/installed source compatibility, multi-session locks,
+real STOP/START, customer AI and genuinely authorized live delivery proof remain
+independent work. Stop for review; do not apply, merge or deploy.

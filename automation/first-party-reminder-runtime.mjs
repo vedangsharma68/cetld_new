@@ -1,3 +1,4 @@
+import {createFirstPartyBoundBridge} from './accounting/first-party-bound-bridge.mjs';
 import {createClient} from '@supabase/supabase-js';
 import {createApprovedReminderProvider} from './whatsapp/approved-reminders.mjs';
 import {createFirstPartyReminderReceiptStore,createDurableReminderProvider} from './whatsapp/reminder-receipts.mjs';
@@ -26,9 +27,11 @@ export function createFirstPartyReminderRuntime({env=process.env,scope,store,sup
   const receiptStore=createFirstPartyReminderReceiptStore({supabase,env});
   if(!receiptStore.isEnabled())throw Error('Reminder receipt backend unavailable');
   const testGate=test.mode==='test'?createScheduledOwnerTestGate({test,env,supabase,store,fetchImpl,clock}):null;
+  const boundBridge=test.mode==='test'?null:createFirstPartyBoundBridge({supabase,store,accounting,ownerId:scope.ownerId,workspaceId:scope.workspaceId,fetchImpl});
+  const localPayment=createLocalReminderPaymentChecker({supabase,...scope,accounting,env,fetchImpl});
   const provider=createDurableReminderProvider({receiptStore,provider:createApprovedReminderProvider({
-    env,supabase,store,ownerId:scope.ownerId,workspaceId:scope.workspaceId,accounting,fetchImpl,clock})});
-  return {provider,paymentChecker:createLocalReminderPaymentChecker({supabase,...scope,accounting,env,fetchImpl}),testGate,async sweep(){
+    env,supabase,store,ownerId:scope.ownerId,workspaceId:scope.workspaceId,accounting,fetchImpl,clock,boundBridge})});
+  return {store:boundBridge?.store||store,provider,paymentChecker:input=>boundBridge?.has(input.invoiceId)?boundBridge.payment(input):localPayment(input),testGate,async sweep(){
     if(testGate)return 0; // A test must not quarantine other invoices' leases.
     // Let PostgreSQL supply its current clock; never use worker-controlled time.
     const result=await supabase.rpc('cetld_core_quarantine_first_party_leases',{

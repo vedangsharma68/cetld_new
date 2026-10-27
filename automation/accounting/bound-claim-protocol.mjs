@@ -4,8 +4,9 @@ import {abortable,boundedZohoRequest,exactMinor} from './zoho-create-receipt.mjs
 
 const uuid=x=>typeof x==='string'&&/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(x);
 const fail=()=>new AccountingError('BOUND_CLAIM_UNAVAILABLE','Protected claim protocol unavailable');
-// DISABLED foundation: no registration, public RPC, service grant, engine hook
-// or Graph transport. These opaque handles are not reminder delivery authority.
+// Standalone candidate protocol: these opaque handles are never delivery
+// authority. The first-party bridge composes them with the real final policy
+// transaction; no caller flag, informational read or candidate result can send.
 export function createDisabledZohoClaimProtocol({executor,store,accessToken,fetchImpl=fetch}={}){
  if(typeof executor!=='function'||!store?.getConnection||typeof accessToken!=='function')throw fail();
  const claims=new WeakMap(),permits=new WeakMap(),receipts=new WeakMap();

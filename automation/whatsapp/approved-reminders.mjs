@@ -15,7 +15,7 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const QA=new Set(['+919871367051','+919818685252']);
 const blocked=reason=>({status:'blocked',reason});
 
-export function createApprovedReminderProvider({env=process.env,supabase,store,ownerId,workspaceId,accounting,fetchImpl=fetch,clock=()=>new Date()}={}){
+export function createApprovedReminderProvider({env=process.env,supabase,store,ownerId,workspaceId,accounting,boundBridge,fetchImpl=fetch,clock=()=>new Date()}={}){
   const test=scheduledOwnerTestMode(env,clock());
   const testGate=test.mode==='test'?createScheduledOwnerTestGate({test,env,supabase,store,fetchImpl,clock}):null;
   function enabled(){return ['WHATSAPP_REMINDERS_ENABLED','AUTOMATION_OUTBOUND_ENABLED','WHATSAPP_OUTBOUND_ENABLED'].every(k=>env[k]==='true')
@@ -37,7 +37,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
   async function facts(input){
     if(!scope(input)||await recipientBlock(input.to))throw Error('Reminder scope unavailable');
     const invoice=await store.getInvoice({ownerId,workspaceId,invoiceId:input.invoiceId});
-    if(invoice&&hasExternalReminderLedger(invoice))throw Object.assign(Error('Immutable provider-account provenance is unsupported'),{code:'external_accounting_required'});
+    if(invoice&&hasExternalReminderLedger(invoice)&&(!boundBridge?.has(input.invoiceId)||!await boundBridge.payment(input)))throw Object.assign(Error('Immutable provider-account provenance is unsupported'),{code:'external_accounting_required'});
     const [settings,eligibility]=await Promise.all([
       store.getWorkspacePreferences({ownerId,workspaceId}),
       getSendEligibility({supabase,workspaceId,phone:input.to,category:'invoice_updates'}),
@@ -96,7 +96,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
         payload={messaging_product:'whatsapp',recipient_type:'individual',to:input.to.slice(1),...(f.delivery.type==='freeform'?{type:'text',text:{preview_url:false,body:f.body}}:{type:'template',template:f.template})};
         serviceDeadline=f.delivery.type==='freeform'?Date.parse(f.windowDeadline):null;
         if(testGate&&!await testGate.claimAttempt())return blocked('scheduled_owner_test_already_attempted');
-        const result=await reminderPaymentRpc({supabase,name:'cetld_core_authorize_first_party_reminder',invoice:f.invoice,ownerId,workspaceId,accounting,env,fetchImpl,args:{
+        const result=hasExternalReminderLedger(f.invoice)?await boundBridge.final({invoiceId:input.invoiceId,claimId,snapshot,hash}):await reminderPaymentRpc({supabase,name:'cetld_core_authorize_first_party_reminder',invoice:f.invoice,ownerId,workspaceId,accounting,env,fetchImpl,args:{
           p_owner_id:ownerId,p_workspace_id:workspaceId,p_claim_id:claimId,p_snapshot:snapshot,p_snapshot_hash:hash}});
         if(result.error)return blocked('atomic_gate_unavailable');
         const receipt=Array.isArray(result.data)?result.data[0]:result.data;
@@ -131,6 +131,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
         return blocked('needs_re_review');
       }
       if(testGate&&!testGate.isOpen())return blocked('scheduled_owner_test_window_closed');
+      if(boundBridge?.has(input.invoiceId)&&!boundBridge.consumePost(input.invoiceId))return blocked('bound_permit_expired');
       try{
         const response=await fetchImpl(`https://graph.facebook.com/${env.WHATSAPP_GRAPH_API_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,{
           method:'POST',redirect:'error',headers:{Authorization:`Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,'Content-Type':'application/json'},
