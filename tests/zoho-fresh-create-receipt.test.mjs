@@ -72,17 +72,23 @@ test('dedup, ambiguous/unbound same-name contacts, and 4097 recovery remain unve
 });
 
 test('transport rejects redirects, malformed/oversized bodies and uncertainty without POST retries; fetch/body timeout is bounded',async()=>{
+ // AbortSignal.timeout is unref'd in Node: keep a referenced deadline and
+ // always release it, including assertion failures in standalone execution.
+ const timers=[];
+ const deadline=ms=>{const c=new AbortController();timers.push(setTimeout(()=>c.abort(new DOMException('Timeout','TimeoutError')),ms));return c.signal;};
+ try{
  for(const options of [{redirect:true},{malformed:true},{oversize:true},{network:true}]){
   const f=fixture(options);await assert.rejects(f.run());assert.ok(f.posts()<=1);
  }
- await assert.rejects(boundedZohoRequest(async()=>new Promise(()=>{}),'https://fixture.test',{},AbortSignal.timeout(20)),error=>error.status===504);
+ await assert.rejects(boundedZohoRequest(async()=>new Promise(()=>{}),'https://fixture.test',{},deadline(20)),error=>error.status===504);
  const stream=new ReadableStream({start(){}});
- await assert.rejects(boundedZohoRequest(async()=>new Response(stream,{headers:{'content-type':'application/json'}}),'https://fixture.test',{},AbortSignal.timeout(20)));
+ await assert.rejects(boundedZohoRequest(async()=>new Response(stream,{headers:{'content-type':'application/json'}}),'https://fixture.test',{},deadline(20)));
  const big=new ReadableStream({start(c){c.enqueue(new Uint8Array(262145));c.close();}});
- await assert.rejects(boundedZohoRequest(async()=>new Response(big,{headers:{'content-type':'application/json'}}),'https://fixture.test',{},AbortSignal.timeout(100)));
- await assert.rejects(boundedZohoRequest(async()=>new Response(new Uint8Array([255]),{headers:{'content-type':'application/json'}}),'https://fixture.test',{},AbortSignal.timeout(100)));
- await assert.rejects(boundedZohoRequest(async()=>Response.json({code:0},{status:202}),'https://fixture.test',{},AbortSignal.timeout(100)));
+ await assert.rejects(boundedZohoRequest(async()=>new Response(big,{headers:{'content-type':'application/json'}}),'https://fixture.test',{},deadline(100)));
+ await assert.rejects(boundedZohoRequest(async()=>new Response(new Uint8Array([255]),{headers:{'content-type':'application/json'}}),'https://fixture.test',{},deadline(100)));
+ await assert.rejects(boundedZohoRequest(async()=>Response.json({code:0},{status:202}),'https://fixture.test',{},deadline(100)));
  const adapter=createZohoBooksProvider({fetchImpl:()=>assert.fail('invalid endpoint must fail before credentials leave the server')});
  await assert.rejects(adapter.createInvoice({token:{...token,apiDomain:'https://attacker.test'},accountId:'90001',invoice,capture}),/Verified Zoho regional endpoint/);
  await assert.rejects(adapter.createInvoice({token,accountId:'not-an-account',invoice,capture}),/Verified Zoho regional endpoint/);
+ }finally{for(const timer of timers)clearTimeout(timer);}
 });

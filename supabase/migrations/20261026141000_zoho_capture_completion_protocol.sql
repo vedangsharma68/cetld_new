@@ -12,6 +12,8 @@ begin
  ('public.cetld_core_authorize_delivery(uuid,uuid,uuid,timestamptz)',array['f8c636e89460d6107b0f009c893c1e02a2a5d155f10c9f6ee66ba405d01e5876','3f73ac01580326a2106f9529c8794f59607a205e7a8d86e96febe51095eabcb4','a642cdbd4d09e1aab02e2f02f21e3faf9948e40415520f187a87fb8bb121a8df']),
  ('public.cetld_update_accounting_connection_tokens(uuid,uuid,text,bigint,uuid,text,text,text,timestamptz,text,text,text)',array['fb4e3a8f82aabc64dd0ae525938341c9170336582af9c58737d816ae27497110'])
 ,
+ ('app.has_invoice_total_correction_context(uuid)',array['5b53eee3ad8c388ff0f29929e11b072efd1bb57fcc66f9373965640bad6155ad']),
+ ('app.apply_owner_invoice_correction(uuid,uuid,uuid,timestamptz,jsonb,text,text)',array['0f287de4b01b1a334d73e7d6e0e50ce292ad7419c1d6962167054d49d22d0449']),
  ('app.admit_accounting_invoice_insert()',array['881380398dd689c2096d45e8772edfed4364ce3b0dc6b11e0cfc1a341ecdc015']),
  ('app.track_accounting_connection_epoch()',array['546976eeae6c0629f5b27b1cd38eb64a8368bde26234c7cae1ebb9892fd25fc5']),
  ('public.cetld_zoho_operation_context(uuid,uuid)',array['8b6e02843dbe8bb44115e382ac02161e39921a70813d83b57bb56e4309785106']),
@@ -29,6 +31,15 @@ begin
     (r.signature not like 'public.%' or a.grantee<>'service_role'::regrole or a.is_grantable)) then
    raise exception 'capture protocol predecessor ACL drift: %',r.signature;end if;
  end loop;
+ -- Reuse only the installed private owner-correction permit. Neither JWT/GUC
+ -- claims nor service DML may manufacture it. Preserve its existing ACL/schema.
+ if not exists(select 1 from pg_class where oid='app.invoice_total_correction_context'::regclass
+   and relkind='r' and pg_get_userbyid(relowner)='postgres')
+  or exists(select 1 from pg_class c cross join lateral aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) a
+   where c.oid='app.invoice_total_correction_context'::regclass and a.grantee<>c.relowner)
+  or exists(select 1 from pg_attribute t cross join lateral aclexplode(t.attacl) a
+   where t.attrelid='app.invoice_total_correction_context'::regclass and a.grantee<>'postgres'::regrole) then
+  raise exception 'capture protocol owner correction context ACL drift';end if;
  if not (select relrowsecurity and pg_get_userbyid(relowner)='postgres' from pg_class where oid='public.cetld_accounting_connections'::regclass)
   or has_any_column_privilege('authenticated','public.cetld_accounting_connections','SELECT,INSERT,UPDATE')
   or has_table_privilege('authenticated','public.cetld_accounting_connections','DELETE')
@@ -60,6 +71,34 @@ alter table app.zoho_capture_completion enable row level security;
 alter table app.zoho_capture_write_context enable row level security;
 revoke all on app.zoho_capture_completion,app.zoho_capture_write_context from public,anon,authenticated,service_role;
 
+-- One immutable customer identity per local customer/account, and no implicit
+-- sharing of a remote customer between local customers. No installation backfill.
+create table app.zoho_customer_origins (
+ owner_id uuid not null,workspace_id uuid not null,provider text not null check(provider='zoho_books'),
+ account_id text not null,region text not null,customer_id uuid not null,external_customer_id text not null,
+ operation_id uuid not null references app.zoho_capture_completion(operation_id),
+ primary key(workspace_id,provider,account_id,region,customer_id),
+ unique(workspace_id,provider,account_id,region,external_customer_id),
+ unique(owner_id,workspace_id,provider,account_id,region,customer_id,external_customer_id)
+);
+alter table app.zoho_customer_origins enable row level security;
+revoke all on app.zoho_customer_origins from public,anon,authenticated,service_role;
+create function app.guard_zoho_customer_origin() returns trigger
+language plpgsql security definer set search_path='' as $$
+begin
+ if tg_op<>'INSERT' or not exists(select 1 from app.zoho_capture_write_context c
+  join app.zoho_capture_completion o on o.invoice_id=c.invoice_id
+  join public.invoices i on i.id=o.invoice_id
+  where c.transaction_id=txid_current() and o.operation_id=new.operation_id and o.state='started'
+   and (o.owner_id,o.workspace_id,o.attempted_account_id,o.attempted_region,i.customer_id)
+    = (new.owner_id,new.workspace_id,new.account_id,new.region,new.customer_id)) then
+  raise exception 'ZOHO_CUSTOMER_ORIGIN_IMMUTABLE' using errcode='42501';end if;
+ return new;
+end; $$;
+revoke all on function app.guard_zoho_customer_origin() from public,anon,authenticated,service_role;
+create trigger zoho_customer_origin_immutable before insert or update or delete on app.zoho_customer_origins
+ for each row execute function app.guard_zoho_customer_origin();
+
 -- Original identity is immutable. No FK cascade erases the origin tombstone.
 create table app.zoho_invoice_origins (
  invoice_id uuid primary key,owner_id uuid not null,workspace_id uuid not null,
@@ -68,7 +107,9 @@ create table app.zoho_invoice_origins (
  operation_id uuid not null unique references app.zoho_capture_completion(operation_id),
  currency text not null,total numeric not null,paid numeric not null,balance numeric not null,
  provider_status text not null,invoice_date date not null,due_date date,reference text not null,remote_number text not null,
- captured_at timestamptz not null default clock_timestamp(),unique(workspace_id,provider,external_invoice_id)
+ captured_at timestamptz not null default clock_timestamp(),unique(workspace_id,provider,external_invoice_id),
+ foreign key(owner_id,workspace_id,provider,account_id,region,customer_id,external_customer_id)
+ references app.zoho_customer_origins(owner_id,workspace_id,provider,account_id,region,customer_id,external_customer_id)
 );
 alter table app.zoho_invoice_origins enable row level security;
 revoke all on app.zoho_invoice_origins from public,anon,authenticated,service_role;
@@ -103,10 +144,16 @@ begin
   is distinct from (b.invoice_id,b.workspace_id,b.customer_id,b.provider,b.external_invoice_id) then
   raise exception 'ZOHO_ORIGIN_LINK_IMMUTABLE' using errcode='42501';end if;
  select exists(select 1 from app.zoho_capture_write_context where transaction_id=txid_current() and invoice_id=old.id) into trusted;
- if not trusted and ((new.total_amount,new.amount_paid,new.currency,new.status,new.issue_date,new.due_date,new.last_synced_at,new.sync_status,new.last_sync_error)
-  is distinct from (old.total_amount,old.amount_paid,old.currency,old.status,old.issue_date,old.due_date,old.last_synced_at,old.sync_status,old.last_sync_error)
+ if not trusted and ((new.total_amount,new.amount_paid,new.currency,new.status,new.last_synced_at,new.sync_status,new.last_sync_error)
+  is distinct from (old.total_amount,old.amount_paid,old.currency,old.status,old.last_synced_at,old.sync_status,old.last_sync_error)
   or (new.metadata->'accounting_provider',new.metadata->'bookkeeping_provider',new.metadata->'bookkeeping_record_id',new.metadata->'external_customer_id',new.metadata->'invoice_direction')
    is distinct from (old.metadata->'accounting_provider',old.metadata->'bookkeeping_provider',old.metadata->'bookkeeping_record_id',old.metadata->'external_customer_id',old.metadata->'invoice_direction')) then
+  raise exception 'ZOHO_BOUND_IMPORT_UNSUPPORTED' using errcode='42501';end if;
+ -- This exception covers dates only. Existing owner correction verifies scope,
+ -- stale row, terminal/delivery state and audit/replay before issuing its private
+ -- transaction/invoice permit. The original receipt dates remain immutable.
+ if not trusted and (new.issue_date,new.due_date) is distinct from (old.issue_date,old.due_date)
+  and not app.has_invoice_total_correction_context(old.id) then
   raise exception 'ZOHO_BOUND_IMPORT_UNSUPPORTED' using errcode='42501';end if;
  return new;
 end; $$;
@@ -215,7 +262,7 @@ begin
  select v.* into i from public.invoices v join public.workspaces w on w.id=v.workspace_id
  where v.id=p_invoice_id and v.workspace_id=p_workspace_id and w.owner_id=p_owner_id for update of v;
  if i.id is null then raise exception 'CAPTURE_PROTOCOL_SCOPE';end if;
- select * into cust from public.customers where id=i.customer_id and workspace_id=p_workspace_id for share;
+ select * into cust from public.customers where id=i.customer_id and workspace_id=p_workspace_id for update;
  select * into c from public.cetld_accounting_connections where owner_id=p_owner_id and workspace_id=p_workspace_id and provider='zoho_books' for update;
  select * into e from app.accounting_connection_epochs where owner_id=p_owner_id and workspace_id=p_workspace_id and provider='zoho_books' for update;
  select * into o from app.zoho_capture_completion where invoice_id=i.id and owner_id=p_owner_id and workspace_id=p_workspace_id for update;
@@ -241,7 +288,7 @@ begin
   delete from app.zoho_capture_write_context where transaction_id=txid_current() and invoice_id=i.id;
   update app.zoho_capture_completion set state='reserved',operation_id=gen_random_uuid(),epoch_id=e.epoch_id,
    attempted_account_id=c.provider_account_id,attempted_region=c.region,deadline=clock_timestamp()+interval '2 minutes',
-   expected_customer_id=(select external_customer_id from app.zoho_invoice_origins where customer_id=cust.id and workspace_id=p_workspace_id and account_id=c.provider_account_id and region=c.region limit 1),
+   expected_customer_id=(select external_customer_id from app.zoho_customer_origins where customer_id=cust.id and workspace_id=p_workspace_id and account_id=c.provider_account_id and region=c.region),
    invoice_hash=encode(sha256(convert_to(to_jsonb(i)::text,'UTF8')),'hex'),
    customer_hash=encode(sha256(convert_to(to_jsonb(cust)::text,'UTF8')),'hex') where invoice_id=i.id returning * into o;
   return jsonb_build_object('state','reserved','operationId',o.operation_id,'invoice',to_jsonb(i)||jsonb_build_object('total_amount',i.total_amount::text,'amount_paid',i.amount_paid::text),
@@ -308,6 +355,20 @@ begin
    and (account_id,region) is distinct from (o.attempted_account_id,o.attempted_region))) then raise exception 'CAPTURE_RECEIPT_INVALID';end if;
  insert into app.zoho_capture_write_context values(txid_current(),i.id);
  if p_outcome='captured' then
+  -- Customer FOR UPDATE serializes same-customer completion. Recheck NOW,
+  -- not the reserve-time NULL snapshot; reverse uniqueness serializes distinct
+  -- local customers attempting the same remote identity. Any conflict rolls
+  -- back mapping, origin and invoice linkage together.
+  if exists(select 1 from app.zoho_customer_origins m where m.workspace_id=i.workspace_id
+   and m.provider='zoho_books' and m.account_id=o.attempted_account_id and m.region=o.attempted_region
+   and ((m.customer_id=i.customer_id and m.external_customer_id<>p_customer_external_id)
+    or (m.external_customer_id=p_customer_external_id and m.customer_id<>i.customer_id))) then
+   raise exception 'CAPTURE_CUSTOMER_IDENTITY_CONFLICT';end if;
+  if not exists(select 1 from app.zoho_customer_origins m where m.workspace_id=i.workspace_id
+   and m.provider='zoho_books' and m.account_id=o.attempted_account_id and m.region=o.attempted_region and m.customer_id=i.customer_id) then
+   insert into app.zoho_customer_origins values(p_owner_id,p_workspace_id,'zoho_books',o.attempted_account_id,o.attempted_region,
+    i.customer_id,p_customer_external_id,o.operation_id);
+  end if;
   insert into app.zoho_invoice_origins(invoice_id,owner_id,workspace_id,provider,account_id,region,customer_id,external_customer_id,
    external_invoice_id,operation_id,currency,total,paid,balance,provider_status,invoice_date,due_date,reference,remote_number)
   values(i.id,p_owner_id,p_workspace_id,'zoho_books',o.attempted_account_id,o.attempted_region,i.customer_id,p_customer_external_id,
@@ -340,14 +401,14 @@ grant execute on function public.cetld_zoho_capture_completion_protocol(uuid,uui
 do $acl$
 begin
  if exists(select 1 from pg_proc p cross join lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
- where p.oid in ('app.guard_zoho_origin()'::regprocedure,'app.guard_zoho_bound_invoice()'::regprocedure,'app.guard_zoho_bound_customer()'::regprocedure,'app.fence_zoho_capture_candidate()'::regprocedure,'app.fence_old_zoho_export_journal()'::regprocedure,
+ where p.oid in ('app.guard_zoho_customer_origin()'::regprocedure,'app.guard_zoho_origin()'::regprocedure,'app.guard_zoho_bound_invoice()'::regprocedure,'app.guard_zoho_bound_customer()'::regprocedure,'app.fence_zoho_capture_candidate()'::regprocedure,'app.fence_old_zoho_export_journal()'::regprocedure,
   'public.cetld_zoho_capture_completion_protocol(uuid,uuid,uuid,text,uuid,timestamptz,bigint,uuid,text,text,uuid,text,text,numeric,numeric,numeric,text,date,date,text,text)'::regprocedure,
   'public.cetld_recover_zoho_capture_completion(uuid,uuid,uuid,uuid)'::regprocedure,'public.cetld_probe_zoho_capture_completion(uuid,uuid)'::regprocedure)
  and (pg_get_userbyid(p.proowner)<>'postgres' or not p.prosecdef or (a.grantee<>p.proowner and
   (p.pronamespace<>'public'::regnamespace or a.grantee<>'service_role'::regrole or a.is_grantable)))) then
  raise exception 'capture protocol new function ACL drift';end if;
  if exists(select 1 from pg_class c cross join lateral aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) a
- where c.oid in ('app.zoho_capture_completion'::regclass,'app.zoho_capture_write_context'::regclass,'app.zoho_invoice_origins'::regclass)
+ where c.oid in ('app.zoho_customer_origins'::regclass,'app.zoho_capture_completion'::regclass,'app.zoho_capture_write_context'::regclass,'app.zoho_invoice_origins'::regclass)
  and (pg_get_userbyid(c.relowner)<>'postgres' or not c.relrowsecurity or a.grantee<>c.relowner)) then
  raise exception 'capture protocol new table ACL drift';end if;
 end $acl$;

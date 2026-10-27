@@ -672,7 +672,9 @@ async function boot({crlfLegacyWorkspaceData=false,supabaseDefaultGrants=false,s
   if(supabaseDefaultGrants)await db.exec('alter default privileges in schema public grant all on tables to service_role');
   const migrations=(await readdir(new URL('../supabase/migrations/',import.meta.url))).filter(name=>name.endsWith('.sql')).sort();
   for(const name of migrations){
-    if(skipClassificationGuard&&['20261004214000_invoice_history_classification_guard.sql','20261006163000_owner_invoice_total_corrections.sql'].includes(name))continue;
+    // Historical fixtures intentionally omit the private correction permit.
+    // Its prospective capture dependent must not install without that source.
+    if(skipClassificationGuard&&['20261004214000_invoice_history_classification_guard.sql','20261006163000_owner_invoice_total_corrections.sql','20261026141000_zoho_capture_completion_protocol.sql'].includes(name))continue;
     if(crlfLegacyWorkspaceData&&name==='20261003141000_direct_owner_write.sql'){
       const current=(await db.query(`select
         pg_catalog.pg_get_functiondef('public.whatsapp_workspace_data_propose(uuid,uuid,text,text,text,text,uuid,timestamptz,jsonb,text,bigint,bigint,bigint)'::regprocedure) as propose,

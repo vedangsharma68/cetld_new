@@ -69,7 +69,7 @@ test('new cutover has no backfill, cannot upgrade PR201 rows, and permanently ex
   assert.equal((await f.db.query('select count(*) n from app.zoho_invoice_origins')).rows[0].n,0);
   for(const name of ['anon','authenticated','service_role']){
    await f.db.exec(`set role ${name}`);
-   for(const table of ['zoho_capture_completion','zoho_capture_write_context','zoho_invoice_origins'])for(const query of [`select * from app.${table}`,`delete from app.${table}`,`insert into app.${table} default values`])await assert.rejects(f.db.exec(query),/permission denied/);
+   for(const table of ['zoho_capture_completion','zoho_capture_write_context','zoho_customer_origins','zoho_invoice_origins'])for(const query of [`select * from app.${table}`,`delete from app.${table}`,`insert into app.${table} default values`])await assert.rejects(f.db.exec(query),/permission denied/);
    if(name!=='service_role')await assert.rejects(f.db.query("select cetld_zoho_capture_completion_protocol($1,$2,$3,'reserve')",[f.owner,f.ws,f.legacy.id]),/permission denied/);
    if(name!=='service_role')await assert.rejects(f.db.query('select cetld_recover_zoho_capture_completion($1,$2,$3,$4)',[f.owner,f.ws,f.legacy.id,randomUUID()]),/permission denied/);
    await f.db.exec('reset role');
@@ -140,7 +140,15 @@ test('exact PR201 refresh successor and contained approved CRLF sources are acce
   assert.equal(refresh.hash,'fb4e3a8f82aabc64dd0ae525938341c9170336582af9c58737d816ae27497110');
   const gate=before.find(p=>p.proname==='cetld_core_authorize_delivery');
   assert.equal(gate.hash,'a642cdbd4d09e1aab02e2f02f21e3faf9948e40415520f187a87fb8bb121a8df');
-  for(const drift of ['refresh','CRLF','ACL','default_function','default_table']){
+  const permit=before.find(p=>p.proname==='has_invoice_total_correction_context'),correction=before.find(p=>p.proname==='apply_owner_invoice_correction');
+  assert.equal(permit.hash,'5b53eee3ad8c388ff0f29929e11b072efd1bb57fcc66f9373965640bad6155ad');
+  assert.equal(correction.hash,'0f287de4b01b1a334d73e7d6e0e50ce292ad7419c1d6962167054d49d22d0449');
+  for(const drift of ['refresh','CRLF','ACL','permit_source','correction_source','permit_ACL','permit_table_ACL','permit_column_ACL','default_function','default_table']){
+   if(drift==='permit_source')await f.db.exec(permit.d.replace('select exists','select /* unknown */ exists'));
+   if(drift==='correction_source')await f.db.exec(correction.d.replace('begin','begin /* unknown */'));
+   if(drift==='permit_ACL')await f.db.exec('grant execute on function app.has_invoice_total_correction_context(uuid) to service_role');
+   if(drift==='permit_table_ACL')await f.db.exec('grant insert on app.invoice_total_correction_context to service_role');
+   if(drift==='permit_column_ACL')await f.db.exec('grant insert(invoice_id) on app.invoice_total_correction_context to service_role');
    if(drift==='refresh')await f.db.exec(refresh.d.replace('select * from','select /* unknown */ * from'));
    if(drift==='CRLF')await f.db.exec(gate.d.replace('\r\n','\n'));
    if(drift==='ACL')await f.db.exec('grant execute on function cetld_core_authorize_delivery(uuid,uuid,uuid,timestamptz) to authenticated');
@@ -150,6 +158,8 @@ test('exact PR201 refresh successor and contained approved CRLF sources are acce
    }
    await assert.rejects(f.db.exec(await migration()),/capture protocol .*drift/);await f.db.exec('rollback');
    assert.equal((await f.db.query("select to_regclass('app.zoho_capture_completion') t")).rows[0].t,null);
+   await f.db.exec(permit.d);await f.db.exec(correction.d);
+   await f.db.exec('revoke execute on function app.has_invoice_total_correction_context(uuid) from service_role;revoke insert on app.invoice_total_correction_context from service_role;revoke insert(invoice_id) on app.invoice_total_correction_context from service_role');
    await f.db.exec(refresh.d);await f.db.exec(gate.d);await f.db.exec('revoke execute on function cetld_core_authorize_delivery(uuid,uuid,uuid,timestamptz) from authenticated');
    if(drift.startsWith('default_')){
     await f.db.exec(`alter default privileges in schema app revoke ${drift==='default_function'?'execute on functions':'select on tables'} from unexpected_capture_grantee`);
@@ -303,6 +313,7 @@ test('capture requires the private start nonce and exact SQL facts; binding inse
   await f.db.exec("create function app.fixture_capture_rollback() returns trigger language plpgsql as $$begin if new.external_invoice_id is not null then raise exception 'offline capture rollback';end if;return new;end;$$;create trigger zz_capture_rollback after update on invoices for each row execute function app.fixture_capture_rollback()");
   await assert.rejects(f.call(row,'complete',facts),/Accounting storage request failed/);
   assert.equal((await f.db.query('select count(*) n from app.zoho_invoice_origins')).rows[0].n,0);assert.equal((await f.state(row)).state,'started');assert.equal((await f.read(row)).external_invoice_id,null);
+  assert.equal((await f.db.query('select count(*) n from app.zoho_customer_origins')).rows[0].n,0,'mapping insertion rolls back with binding/link');
   await f.db.exec('drop trigger zz_capture_rollback on invoices;drop function app.fixture_capture_rollback()');
   assert.equal((await f.call(row,'complete',facts)).originCaptured,true);
   assert.equal((await f.call(row,'complete',facts)).originCaptured,true,'terminal replay only returns the committed original binding');
@@ -318,5 +329,131 @@ test('capture requires the private start nonce and exact SQL facts; binding inse
   assert.equal((await f.read(other)).external_invoice_id,null);
   assert.equal((await f.db.query('select account_id from app.zoho_invoice_origins where invoice_id=$1',[row.id])).rows[0].account_id,'90001');
   assert.equal((await f.db.query('select count(*) n from app.zoho_invoice_origins')).rows[0].n,1);
+ }finally{await f.close();}
+});
+
+// This reproduces two genuine operations reserved/started before either knows
+// a remote customer. A reserve-time NULL must never be an identity wildcard.
+test('interleaved completion serializes immutable customer identity in both directions, without partial linkage',async()=>{
+ const f=await fixture();try{
+  await f.db.exec(await migration());
+  const prepare=async row=>{const op=await f.reserve(row),s=await f.call(row,'start',{p_operation_id:op.operationId});
+   return {p_operation_id:op.operationId,p_capture_nonce:s.captureNonce,p_outcome:'captured',p_external_id:'99001',p_customer_external_id:'88001',
+    p_currency:'USD',p_total:5,p_paid:0,p_balance:5,p_status:'sent',p_date:row.issue_date,p_due_date:row.due_date,p_reference:`cetld:${row.id}`,p_remote_number:row.invoice_number};};
+  const a=await f.create(),b=await f.create();
+  const fa=await prepare(a),fb={...await prepare(b),p_external_id:'99002'};
+  assert.equal((await f.state(a)).expected_customer_id,null);assert.equal((await f.state(b)).expected_customer_id,null);
+  assert.equal((await f.call(a,'complete',fa)).originCaptured,true);
+  await assert.rejects(f.call(b,'complete',{...fb,p_customer_external_id:'88002'}),/Accounting storage request failed/);
+  assert.equal((await f.read(b)).external_invoice_id,null);assert.equal((await f.state(b)).state,'started');
+  assert.equal((await f.db.query('select count(*) n from app.zoho_customer_origins')).rows[0].n,1);
+  assert.equal((await f.db.query('select count(*) n from app.zoho_invoice_origins')).rows[0].n,1);
+  assert.equal((await f.call(b,'complete',fb)).originCaptured,true,'same remote identity can serve another invoice for the SAME local customer');
+  const next=await f.create();assert.equal((await f.reserve(next)).customer.expectedExternalCustomerId,'88001');
+  const otherCustomer=(await f.db.query("insert into customers(workspace_id,name) values($1,'Other identity') returning id",[f.ws])).rows[0].id;
+  const other=(await f.db.query("insert into invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,status,metadata) values($1,$2,'OTHER-IDENTITY','2026-10-01','2026-10-20','USD',5,'sent','{\"invoice_direction\":\"receivable\"}') returning *",[f.ws,otherCustomer])).rows[0];
+  const fo={...await prepare(other),p_external_id:'99003'};
+  await assert.rejects(f.call(other,'complete',fo),/Accounting storage request failed/);
+  assert.equal((await f.read(other)).external_invoice_id,null,'reverse mapping cannot merge local identities');
+  assert.equal((await f.call(other,'complete',{...fo,p_customer_external_id:'88003'})).originCaptured,true);
+  for(const role of ['anon','authenticated','service_role']){
+   await f.db.exec(`set role ${role}`);
+   for(const sql of ['select * from app.zoho_customer_origins','delete from app.zoho_customer_origins','insert into app.zoho_customer_origins default values'])await assert.rejects(f.db.exec(sql),/permission denied/);
+   await f.db.exec('reset role');
+  }
+  await assert.rejects(f.db.query("update app.zoho_customer_origins set external_customer_id='forged'"),/ZOHO_CUSTOMER_ORIGIN_IMMUTABLE/);
+  await f.store.setOrganization(f.identity,{id:'90002'});
+  const changed=await f.create(),fc=await prepare(changed);
+  await assert.rejects(f.call(changed,'complete',fc),/Accounting storage request failed/);
+  assert.equal((await f.read(changed)).external_invoice_id,null);
+  assert.equal((await f.db.query('select count(*) n from app.zoho_customer_origins')).rows[0].n,2);
+ }finally{await f.close();}
+});
+
+test('genuinely captured invoices retain existing owner RPC boundaries and delete/undo without altering original identity',async()=>{
+ const f=await fixture();try{
+  await f.db.exec(await migration());const row=await f.create(),op=await f.reserve(row),s=await f.call(row,'start',{p_operation_id:op.operationId});
+  await f.call(row,'complete',{p_operation_id:op.operationId,p_capture_nonce:s.captureNonce,p_outcome:'captured',p_external_id:'99101',p_customer_external_id:'88101',
+   p_currency:'USD',p_total:5,p_paid:0,p_balance:5,p_status:'sent',p_date:row.issue_date,p_due_date:row.due_date,p_reference:`cetld:${row.id}`,p_remote_number:row.invoice_number});
+  const origins=(await f.db.query('select * from app.zoho_invoice_origins')).rows;
+  // Actual verified owner direct-write RPC: void/paid already belong to the
+  // connected ledger. Exercise its authentication, not a privileged raw UPDATE.
+  const phone='+15550001234';
+  await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${f.owner}';set role authenticated`);
+  const verification=(await f.db.query('select * from owner_start_whatsapp_verification($1,$2)',[f.ws,phone])).rows[0];
+  await f.db.query("update workspace_settings set owner_bot_preferences=owner_bot_preferences||'{\"confirmationMode\":\"direct\"}' where workspace_id=$1",[f.ws]);
+  await f.db.exec("reset role;set request.jwt.claim.role='service_role';set request.jwt.claim.sub='';set role service_role");
+  assert.equal((await f.db.query('select whatsapp_verify_owner_code($1,$2) value',[phone,verification.code])).rows[0].value.ok,true);
+  for(const status of ['paid','void']){
+   const message=`captured-${status}-${randomUUID()}`,quote=`Set invoice status ${status}`;
+   await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'123456',$2,'text',$3,'processing')",[message,phone,quote]);
+   const result=(await f.db.query('select whatsapp_apply_direct_owner_write($1,$2,$3,$4,null,$5,$6,$7,$8,$9,$10,null,null,null,$11::jsonb) value',
+    [f.ws,f.owner,phone,message,`ownerwrite_${randomUUID()}`,'invoice.update',row.id,(await f.read(row)).updated_at,'instruction',quote,{status}])).rows[0].value;
+   assert.equal(result.code,'EXTERNAL_ACCOUNTING',JSON.stringify(result));
+  }
+  await f.db.exec('reset role');
+  await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${f.owner}';set role authenticated`);
+  for(const full of [false,true])await assert.rejects(f.db.query('select record_invoice_payment($1,$2,1,$3,$4,$5)',[f.ws,row.id,randomUUID(),'Offline actual owner payment',full]),/EXTERNAL_ACCOUNTING/);
+  const correction=async patch=>(await f.db.query('select owner_correct_invoice($1,$2,$3,$4,$5) value',[f.ws,row.id,(await f.read(row)).updated_at,randomUUID(),patch])).rows[0].value;
+  assert.equal((await correction({total_amount:6})).code,'EXTERNAL_ACCOUNTING');
+  const beforeDate=await f.read(row),dateRequest=randomUUID(),datePatch={issue_date:'2026-09-30',due_date:'2026-11-01'};
+  const dateCall=(expected=beforeDate.updated_at,request=dateRequest,patch=datePatch)=>(f.db.query('select owner_correct_invoice($1,$2,$3,$4,$5) value',[f.ws,row.id,expected,request,patch])).then(r=>r.rows[0].value);
+  const dateResult=await dateCall();assert.equal(dateResult.ok,true,JSON.stringify(dateResult));
+  assert.equal(dateResult.record.issue_date,'2026-09-30');assert.equal(dateResult.record.due_date,'2026-11-01');
+  assert.ok(dateResult.record.automation_version>beforeDate.automation_version,'date edits retain invoice version invalidation');
+  assert.equal((await dateCall()).replayed,true);
+  assert.equal((await dateCall(beforeDate.updated_at,randomUUID())).code,'STALE');
+  assert.equal((await dateCall(beforeDate.updated_at,dateRequest,{due_date:'2026-12-01'})).code,'REPLAY_MISMATCH');
+  assert.equal((await f.db.query('select count(*) n from invoice_correction_audits where invoice_id=$1 and source_event_id=$2',[row.id,dateRequest])).rows[0].n,1);
+  await f.db.exec('reset role');
+  assert.equal((await f.db.query('select count(*) n from app.invoice_total_correction_context')).rows[0].n,0,'permit cleared after successful edit');
+  await f.db.exec("reset role;set request.jwt.claim.role='service_role';set request.jwt.claim.sub='';set role service_role");
+  const message=`captured-date-${randomUUID()}`,quote='Correct the invoice dates',waPatch={issue_date:'2026-09-29',due_date:'2026-11-02'},waExpected=(await f.read(row)).updated_at;
+  await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'123456',$2,'text',$3,'processing')",[message,phone,quote]);
+  const waArgs=[f.ws,f.owner,phone,message,quote,`ownerwrite_${randomUUID()}`,row.id,waExpected,waPatch];
+  const waCall=async(args=waArgs)=>(await f.db.query('select whatsapp_correct_owner_invoice($1,$2,$3,$4,$5,$6,$7,$8,$9) value',args)).rows[0].value;
+  assert.equal((await waCall([...waArgs.slice(0,1),f.foreign,...waArgs.slice(2)])).code,'DENIED');
+  assert.equal((await waCall([randomUUID(),...waArgs.slice(1)])).code,'DENIED');
+  const waDate=await waCall();assert.equal(waDate.ok,true,JSON.stringify(waDate));
+  assert.equal(waDate.record.issue_date,'2026-09-29');assert.equal(waDate.record.due_date,'2026-11-02');
+  assert.equal((await waCall()).replayed,true);
+  assert.equal((await f.read(row)).external_invoice_id,'99101');
+  await f.db.exec("reset role;set request.jwt.claim.role='service_role';set request.jwt.claim.sub=''");
+  assert.equal(await f.store.recoverCaptureCompletion(f.identity,row.id,op.operationId),null,'date edit invalidates immutable committed-row recovery; no origin rewrite');
+  for(const role of ['anon','authenticated','service_role']){
+   await f.db.exec(`set request.jwt.claim.role='${role}';set request.jwt.claim.sub='${role==='authenticated'?f.owner:''}';set role ${role}`);
+   await assert.rejects(f.db.query('insert into app.invoice_total_correction_context values(pg_backend_pid(),txid_current(),$1)',[row.id]),/permission denied/);
+   await assert.rejects(f.db.query('select app.has_invoice_total_correction_context($1)',[row.id]),/permission denied/);
+   if(role!=='anon'){
+    await f.db.exec("set app.owner_invoice_correction_id='forged';set app.invoice_total_correction_context='true'");
+    for(const assignment of ["issue_date='2026-09-28'","due_date='2026-12-01'","amount_paid=1","status='void'"])
+     await assert.rejects(f.db.query(`update invoices set ${assignment} where id=$1`,[row.id]),/ZOHO_BOUND_IMPORT_UNSUPPORTED|EXTERNAL_ACCOUNTING|permission denied/);
+   }
+   await f.db.exec('reset role');
+  }
+  // A real accountless import-shaped PATCH gets no private date authority.
+  await f.db.exec("set request.jwt.claim.role='service_role';set request.jwt.claim.sub='';set role service_role");
+  await assert.rejects(f.db.query("update invoices set due_date='2026-12-01',last_synced_at=now(),sync_status='synced' where id=$1",[row.id]),/ZOHO_BOUND_IMPORT_UNSUPPORTED/);
+  await f.db.exec('reset role');
+  await f.db.query("insert into cetld_core_automation_delivery_claims(workspace_id,invoice_id,scheduled_for,invoice_version,preferences_updated_at,status,lease_until) values($1,$2,now(),1,now(),'sending',now()-interval '1 hour')",[f.ws,row.id]);
+  await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${f.owner}';set role authenticated`);
+  for(const status of ['sending','quarantined']){
+   assert.equal((await dateCall((await f.read(row)).updated_at,randomUUID(),{due_date:'2026-12-01'})).code,'DELIVERY_IN_FLIGHT');
+   await f.db.exec('reset role');await f.db.query("update cetld_core_automation_delivery_claims set status='quarantined' where invoice_id=$1",[row.id]);
+   await f.db.exec('set role authenticated');
+  }
+  await f.db.exec('reset role');await f.db.query('delete from cetld_core_automation_delivery_claims where invoice_id=$1',[row.id]);
+  await f.db.exec('set role authenticated');
+  const benign=await correction({notes:'Owner local note'});assert.equal(benign.ok,true,JSON.stringify(benign));
+  const action=async(type,proposal=null)=>(await f.db.query("select invoice_lifecycle_action($1,$2,$3,$4,null,null,$5,'yes',null,$6) value",[type,f.ws,proposal?null:row.id,proposal,`dashboard_delete_${randomUUID()}`,`delete-${randomUUID()}`])).rows[0].value;
+  const proposal=await action('prepare');assert.equal(proposal.ok,true,JSON.stringify(proposal));
+  const deleted=await action('confirm',proposal.proposalId);assert.equal(deleted.action,'deleted',JSON.stringify(deleted));
+  await f.db.exec('reset role');const deletedRow=await f.read(row);await f.db.exec('set role authenticated');
+  assert.equal((await dateCall(deletedRow.updated_at,randomUUID(),{due_date:'2026-12-01'})).code,'TERMINAL');
+  const restored=await action('undo');assert.equal(restored.action,'restored',JSON.stringify(restored));
+  await f.db.exec("reset role;set request.jwt.claim.role='service_role';set request.jwt.claim.sub=''");
+  assert.deepEqual((await f.db.query('select * from app.zoho_invoice_origins')).rows,origins);
+  assert.equal((await f.db.query('select count(*) n from payments where invoice_id=$1',[row.id])).rows[0].n,0);
+  for(const sql of ["amount_paid=1","status='void'"])await assert.rejects(f.db.query(`update invoices set ${sql} where id=$1`,[row.id]),/ZOHO_BOUND_IMPORT_UNSUPPORTED/);
  }finally{await f.close();}
 });

@@ -104,12 +104,54 @@ public indexes. No binding repair/rebind/backfill exists.
 **Imports of bound invoices/customers fail closed** until separately pinned,
 account-authorized import semantics exist. Unbound imports are unchanged. This
 is not a general import fix or a claim of atomic legacy snapshot persistence.
-Ordinary notes/operational metadata and owner lifecycle remain subject to existing
-policies; they cannot change original identity. Origin tombstones survive deletion.
+Actual captured-fixture RPC tests prove owner notes and lifecycle delete/undo
+succeed without changing origin. Existing authenticated record_invoice_payment
+(partial/full) and verified-owner direct status paid/void actions already refuse
+linked rows with EXTERNAL_ACCOUNTING; this PR does not reopen them. Raw service
+financial/status updates remain denied. Origin tombstones survive deletion.
+
+Authorized `issue_date` / `due_date` corrections reuse the installed
+`app.invoice_total_correction_context` only. Its private helper matches backend
+PID, transaction ID and invoice ID; `app.apply_owner_invoice_correction` creates
+the permit immediately before its already-authorized UPDATE and removes it
+immediately afterward. Only the date comparison uses that permit; money, status,
+linkage and sync guards remain independent. No caller-set GUC, JWT role, service
+identity or JSON field is an exemption. Original receipt dates never change.
+Dashboard and verified WhatsApp corrections, exact replay/audit, stale version,
+wrong owner/workspace, delivery-in-flight, deleted terminal state and permit
+cleanup are exercised on a genuinely captured fixture. Date edits invalidate
+unchanged-row acknowledgement recovery rather than rewriting origin.
+
+The exact installed correction/helper sources are additional migration guards:
+
+| Dependency | UTF-8 pg_get_functiondef SHA256 |
+| --- | --- |
+| app.has_invoice_total_correction_context(uuid) | `5b53eee3ad8c388ff0f29929e11b072efd1bb57fcc66f9373965640bad6155ad` |
+| app.apply_owner_invoice_correction(uuid,uuid,uuid,timestamptz,jsonb,text,text) | `0f287de4b01b1a334d73e7d6e0e50ce292ad7419c1d6962167054d49d22d0449` |
+
+These were derived from isolated full main migration replay with canonical
+`search_path=pg_catalog,public`, not guessed or normalized. Both are postgres-owned,
+SECURITY DEFINER, empty search_path and owner-only EXECUTE. The context table is
+postgres-owned with only owner table ACLs and no non-owner column privileges.
+Its existing definition/ACL and both function OIDs/sources/security remain
+unchanged. Migration rejects unknown source, helper EXECUTE, context INSERT or
+column-grant drift before creating any capture object. No new context issuer,
+existing RPC modification or additional permission is introduced.
 
 ## Recovery, epoch races and locking
 
-Locks: invoice -> customer -> connection -> epoch -> operation. SQL transactions
+Locks: invoice FOR UPDATE -> customer FOR UPDATE -> connection -> epoch ->
+operation -> customer mapping insertion. Customer serialization and a complete-time
+mapping recheck cover two operations reserved/started with NULL expected customer
+IDs before either completes. Mapping primary/unique constraints independently
+reject one local customer receiving different remote IDs and two local customers
+sharing one remote ID within the same workspace/provider/account/region. Invoice
+origins have a composite FK to that mapping. Multiple invoices for the same
+local/remote customer pair are supported; implicit customer merging is not.
+A different account is a separate remote ID namespace, but an already-bound local
+customer is conservatively unavailable in that different account. No mapping is
+backfilled or inferred. The mapping is immutable, owner-only, RLS protected and
+transactionally inserted with origin/linkage; rollback leaves no partial mapping. SQL transactions
 end before/after remote work; remote creation and SQL are not distributed atomic.
 Switch/away-back/reconsent/reconnect/credential replacement changes epoch and
 invalidates pending completion. Same-identity refresh preserves the epoch and
@@ -131,9 +173,9 @@ completion can leave a provider object without a local link; no cleanup occurs.
 
 `supabase/migrations/20261026141000_zoho_capture_completion_protocol.sql`
 
-- UTF-8 LF: **31,120 bytes**.
-- SHA256: **`f5e49bde2944c79567e291354d18330d8397e091ccd6b76109ca1243658b7010`**.
-- One BEGIN/COMMIT. Three private RLS tables, eight new functions, five triggers.
+- UTF-8 LF: **35,946 bytes**.
+- SHA256: **`f1f3e70d51b355f9e7cbd1d40b2081a4727242b8bb0ba7601576b6d4b62f17ad`**.
+- One BEGIN/COMMIT. Four private RLS tables, nine new functions, six triggers.
   No installation business-row DML/backfill; runtime DML is inside definitions.
 - No existing function body/OID/owner/ACL/security mode/search_path changes. Empty
   search_path on new functions; UTC for row hashing. Private trigger helpers are
@@ -188,7 +230,7 @@ provider, customer data/AI, QA, sends, merge, deployment or remote SQL is used.
 - Receipt suite: 4 tests; actual POST capability, one-use/clones/forgery, identity/
   financial/status/date/reference mismatches, ambiguous/unbound/protected contacts,
   dedup/4097/unknown transport, redirect/body/UTF-8/JSON/timeout/endpoint bounds.
-- Real SQL/integration suite: 6 tests; fresh cutover/old workers, grants/scope,
+- Real SQL/integration suite: 8 tests; fresh cutover/old workers, grants/scope,
   epoch/refresh/reconnect, version/lease/customer/delete races, atomic binding+link
   rollback, immutable identities, cross-account same-ID collision, lost ack with
   one POST, replay, no snapshot/queue/conversation/send effects and unchanged
@@ -209,3 +251,53 @@ updated-head existing CI
 are recorded in the PR; no duplicate full local run. vercel.json and Hobby budget
 are unchanged. This proves offline behavior, not production readiness or live
 provider/dispatch acceptance. Imports and reminder restoration remain separate.
+
+
+## Review correction proof
+
+- Two reserve/start operations with NULL expected customer IDs: first complete
+  succeeds; conflicting second remote customer fails with no link/origin/mapping
+  change; same identity succeeds. Reverse identity merge fails. Subsequent
+  reserve uses the single protected mapping, never LIMIT 1 over invoice origins.
+- Mapping ACLs deny anon/authenticated/service_role SELECT/INSERT/DELETE; even
+  owner direct UPDATE is rejected by the immutable trigger. The composite FK,
+  reverse unique key, default-grant checks and atomic rollback are executable.
+- Standalone receipt timeout tests use referenced AbortController timers with
+  finally cleanup, so node --test cannot silently cancel an unref-only deadline.
+
+```sh
+node --test tests/zoho-fresh-create-receipt.test.mjs
+node tests/zoho-fresh-create-receipt.test.mjs
+node --import tsx tests/zoho-capture-completion.test.mjs
+node --import tsx --test --test-concurrency=2 tests/zoho-prospective*.test.mjs tests/invoice-total-correction-sql.test.mjs tests/direct-owner-write-sql.test.mjs tests/invoice-lifecycle-sql.test.mjs tests/external-reminder-containment*.test.mjs tests/accounting-invoice-diagnostic.test.mjs tests/tally-routing.test.mjs
+npm run typecheck
+git diff --check
+```
+
+Exact-head CI results belong in PR202. No duplicate full local release run or CI
+rerun is requested. PR200 reminder predicates and their source guards are unchanged.
+
+The customer race witness uses real isolated PGlite SQL with both operations
+reserved and started before interleaved completion. PostgreSQL row locks plus
+primary/reverse UNIQUE constraints enforce serialization in the deployed engine;
+the isolated single-backend fixture does not simulate two simultaneous PostgreSQL
+sessions or claim a measured lock-contention result. No postgres/psql runtime is
+installed here, and no remote DB was used. This limit does not turn a NULL reserve
+snapshot into permission: completion independently rereads the protected mapping,
+with a composite FK and transactional rollback guarding every invoice binding.
+
+
+Correction verification (before publishing): receipt suite 4/4; capture SQL suite
+8/8; typecheck and diffcheck pass. The targeted nine-file regression batch passed
+eight files and exposed two historical fixture setup failures in
+`direct-owner-write-sql.test.mjs`: those fixtures deliberately omit
+20261006163000, so the newly guarded capture dependency correctly refuses to
+install. Their existing migration-exclusion list now also omits this dependent
+capture migration; no test/assertion is skipped or removed. Both affected tests
+pass after that adjustment. All other current-chain tests keep capture installed.
+The direct file and exact-head CI results are recorded in PR202.
+
+```sh
+node --import tsx tests/direct-owner-write-sql.test.mjs
+node --import tsx --test-name-pattern='invoice correction math preserves legacy|incoming payments require receivable' tests/direct-owner-write-sql.test.mjs
+```
