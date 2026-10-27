@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
 import {prospectiveZohoExport} from '../automation/accounting/prospective-export.mjs';
 import {createAccountingIntegration,TokenCipher,SupabaseAccountingStore,connectionAad} from '../automation/accounting/index.mjs';
 import {createInvoiceReconcileStore} from '../automation/invoice-sync-reconciler.mjs';
@@ -33,7 +34,8 @@ test('journal boundary never turns reserve/replay/duplicate/error into verified 
 });
 
 test('real SQL plus actual integration/store: a first new export journals, links normally, and remains PR200 blocked',async()=>{
- const f=await createOfflineSqlNetwork(),owner=randomUUID();
+ const next='20261026141000_zoho_capture_completion_protocol.sql';
+ const f=await createOfflineSqlNetwork({excludeMigrations:[next]}),owner=randomUUID();
  try{
   await f.db.query('insert into auth.users(id) values($1)',[owner]);
   await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${owner}'`);
@@ -42,6 +44,10 @@ test('real SQL plus actual integration/store: a first new export journals, links
   const customer=(await f.db.query("insert into customers(workspace_id,name) values($1,'Offline fixture') returning id",[workspaceId])).rows[0].id;
   const create=async()=>(await f.db.query(`insert into invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,status,metadata)
    values($1,$2,$3,'2026-10-01','2026-10-20','USD',5,'sent','{"invoice_direction":"receivable"}') returning *`,[workspaceId,customer,'OFFLINE-'+randomUUID()])).rows[0];
+  // These four are genuine PR201-stage rows. Installing the next cutover must
+  // preserve their unverified journal/export behavior without upgrading them.
+  const historicalRows=await Promise.all([create(),create(),create(),create()]);
+  await f.db.exec(await readFile(new URL('../supabase/migrations/'+next,import.meta.url),'utf8'));
   const store=new SupabaseAccountingStore({url:'https://fixture.supabase.test',serviceRoleKey:'offline-fixture-only',fetchImpl:f.fetchImpl});
   const cipher=new TokenCipher(Buffer.alloc(32,9));
   const token={accessToken:'offline-access',refreshToken:'offline-refresh',expiresAt:Date.now()+3600000,region:'in',apiDomain:'https://www.zohoapis.in',accountsDomain:'https://accounts.zoho.in'};
@@ -58,7 +64,7 @@ test('real SQL plus actual integration/store: a first new export journals, links
   }}}});
   const rows=[];
   for(mode of ['new','duplicate','error','switch']){
-   const row=await create();rows.push(row);
+   const row=historicalRows[rows.length];rows.push(row);
    const result=await retryAssistantInvoiceSync({store:invoiceStore,invoiceId:row.id,accounting:integration});
    assert.equal(result.sync.status,['error','switch'].includes(mode)?'failed':'synced');
    const op=(await f.db.query('select * from app.zoho_export_operations where invoice_id=$1',[row.id])).rows[0];

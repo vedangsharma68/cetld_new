@@ -2,6 +2,13 @@ import { providerFetch, jsonResponse, formBody } from './http.mjs';
 import { AccountingError, AccountingProviderError } from './errors.mjs';
 import { zohoCustomerPhone } from './zoho-phone.mjs';
 import {isTestInvoice} from '../test-invoice.mjs';
+import {boundedZohoRequest,validateFreshZohoPost} from './zoho-create-receipt.mjs';
+
+const freshCreateReceipts=new WeakMap();
+export function consumeFreshZohoCreateReceipt(result,expected){
+ const value=freshCreateReceipts.get(result);freshCreateReceipts.delete(result);
+ return value&&['accountId','region','localInvoiceId','localCustomerId','externalId'].every(k=>value[k]===expected[k])?value:null;
+}
 
 const ZOHO_DEFAULT_ACCOUNTS = 'https://accounts.zoho.com';
 const ZOHO_DEFAULT_API = 'https://www.zohoapis.com';
@@ -350,11 +357,19 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       if (String(body.invoice?.invoice_id || '') !== String(invoiceId)) throw new Error('Zoho Books did not confirm the requested invoice update');
       return this.fetchInvoice({ token, accountId, invoiceId });
     },
-    async createInvoice({ token, accountId, invoice }) {
+    async createInvoice({ token, accountId, invoice, capture }) {
       if (isTestInvoice(invoice)) throw new AccountingError('INVOICE_NOT_EXPORTABLE', 'Test invoices cannot be exported or linked to accounting');
       if (invoice?.direction==='payable') throw new AccountingError('ACCOUNTING_INVOICE_DIRECTION_UNSUPPORTED', 'Vendor bills cannot be exported as sales invoices');
       if (!invoice?.clientName?.trim()) throw new AccountingError('INVOICE_CUSTOMER_REQUIRED', 'An invoice customer is required');
       if (!accountId) throw new Error('Zoho Books organization ID is required');
+      if(capture&&(!['com','eu','in','com.au','jp','ca','com.cn','sa'].includes(token.region)
+       ||token.apiDomain!==`https://www.zohoapis.${token.region}`||token.accountsDomain!==`https://accounts.zoho.${token.region}`
+       ||typeof accountId!=='string'||!/^\d{1,40}$/.test(accountId)))
+       throw new AccountingError('ACCOUNTING_CAPTURE_ENDPOINT_INVALID','Verified Zoho regional endpoint is required');
+      const signal=capture?AbortSignal.timeout(40000):null;
+      const request=(url,options)=>capture?boundedZohoRequest(fetchImpl,url,options,signal)
+        :providerFetch(fetchImpl,'zoho_books',url,options).then(r=>jsonResponse(r,'zoho_books'));
+      let postCount=0,contactBody=null,freshSearches=true;
       const headers = { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' };
       const reuse = existing => {
         const localReference=String(existing.raw?.reference_number || '');
@@ -372,7 +387,8 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       if (invoice.localInvoiceId) {
         const reference = `cetld:${invoice.localInvoiceId}`;
         existingUrl.search = new URLSearchParams({organization_id: accountId, reference_number: reference}).toString();
-        const body = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', existingUrl, {headers}), 'zoho_books');
+        const body = await request(existingUrl,{headers});
+        freshSearches=body.code===0&&Array.isArray(body.invoices)&&body.page_context?.has_more_page!==true;
         const matches = (body.invoices || []).filter(item => item.reference_number === reference);
         if (matches.length) {
           const linked = matches.length === 1 && normalizeZohoInvoice(matches[0]);
@@ -381,27 +397,40 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
         }
       }
       existingUrl.search = new URLSearchParams({organization_id: accountId, invoice_number: invoice.invoiceNumber}).toString();
-      const existingBody = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', existingUrl, {headers}), 'zoho_books');
+      const existingBody = await request(existingUrl,{headers});
+      freshSearches=freshSearches&&existingBody.code===0&&Array.isArray(existingBody.invoices)&&existingBody.page_context?.has_more_page!==true;
       const existing = (existingBody.invoices || []).map(normalizeZohoInvoice).find(item => item?.number === invoice.invoiceNumber);
       if (existing) return reuse(existing);
 
       const contactsUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/contacts`);
       contactsUrl.search = new URLSearchParams({organization_id: accountId, contact_name_contains: invoice.clientName}).toString();
-      const contactsBody = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', contactsUrl, {headers}), 'zoho_books');
+      const contactsBody = await request(contactsUrl,{headers});
+      const exactContacts=(contactsBody.contacts||[]).filter(item=>String(item.contact_name||'').toLowerCase()===invoice.clientName.toLowerCase()).length;
+      if(capture&&exactContacts>1)throw new AccountingError('ACCOUNTING_CUSTOMER_AMBIGUOUS','Zoho customer resolution is ambiguous');
       let contact = (contactsBody.contacts || []).find(item => String(item.contact_name || '').toLowerCase() === invoice.clientName.toLowerCase());
       if (!contact) {
-        const contactBody = {contact_name: invoice.clientName, company_name: invoice.clientName, contact_type: 'customer'};
-        if (invoice.clientEmail || invoice.clientPhone) contactBody.contact_persons = [{first_name: invoice.clientName.slice(0, 100), email: invoice.clientEmail || undefined, phone: invoice.clientPhone || undefined, is_primary_contact: true}];
+        const contactPayload = {contact_name: invoice.clientName, company_name: invoice.clientName, contact_type: 'customer'};
+        if (invoice.clientEmail || invoice.clientPhone) contactPayload.contact_persons = [{first_name: invoice.clientName.slice(0, 100), email: invoice.clientEmail || undefined, phone: invoice.clientPhone || undefined, is_primary_contact: true}];
         const createUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/contacts`);
         createUrl.search = new URLSearchParams({organization_id: accountId}).toString();
-        const created = await jsonResponse(await providerFetch(fetchImpl, 'zoho_books', createUrl, {method: 'POST', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify(contactBody)}), 'zoho_books');
+        const created = await request(createUrl,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify(contactPayload)});
+        contactBody=created;
         contact = created.contact;
       }
       if (!contact?.contact_id) throw new Error('Zoho Books customer could not be resolved');
+      if(capture){
+        const clean=value=>typeof value==='string'?value.trim():'';
+        const name=clean(contact.contact_name),email=clean(contact.email||contact.contact_persons?.find(p=>p.is_primary_contact)?.email),
+          phone=clean(contact.phone||contact.contact_persons?.find(p=>p.is_primary_contact)?.phone);
+        if(typeof contact.contact_id!=='string'||!/^\d{1,40}$/.test(contact.contact_id)
+          ||capture.expectedExternalCustomerId&&contact.contact_id!==capture.expectedExternalCustomerId
+          ||name&&name!==capture.name||capture.email&&email&&email!==capture.email||capture.phone&&phone&&phone!==capture.phone)
+          throw new AccountingError('ACCOUNTING_CUSTOMER_CONFLICT','Zoho customer conflicts with saved identity');
+      }
       const createUrl = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices`);
       createUrl.search = new URLSearchParams({organization_id: accountId}).toString();
       const payload = {customer_id: String(contact.contact_id), invoice_number: invoice.invoiceNumber, reference_number: invoice.localInvoiceId ? `cetld:${invoice.localInvoiceId}` : undefined, date: invoice.invoiceDate, due_date: invoice.dueDate, currency_code: invoice.currency, line_items: [{name: `Invoice ${invoice.invoiceNumber}`, description: invoice.notes || undefined, quantity: 1, rate: invoice.total}], notes: invoice.notes || undefined};
-      const create = body => providerFetch(fetchImpl, 'zoho_books', createUrl, {method: 'POST', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+      const create = body => {postCount++;return request(createUrl,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify(body)});};
       let response;
       try {
         response = await create(payload);
@@ -412,9 +441,17 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
         const {invoice_number, ...autoNumbered} = payload;
         response = await create(autoNumbered);
       }
-      const created = await jsonResponse(response, 'zoho_books');
+      const created = response;
       if (!created.invoice?.invoice_id) throw new Error('Zoho Books did not return an invoice ID');
-      return {externalId: String(created.invoice.invoice_id), duplicate: false};
+      if(capture&&(typeof created.invoice.invoice_id!=='string'||!/^\d{1,40}$/.test(created.invoice.invoice_id)
+        ||created.invoice.organization_id!=null&&created.invoice.organization_id!==accountId
+        ||created.invoice.customer_id!=null&&created.invoice.customer_id!==payload.customer_id
+        ||created.invoice.reference_number!=null&&created.invoice.reference_number!==payload.reference_number))
+        throw new AccountingError('ACCOUNTING_INVOICE_RESPONSE_CONFLICT','Zoho invoice response conflicts with the pinned request');
+      const result={externalId:String(created.invoice.invoice_id),duplicate:false};
+      const receipt=validateFreshZohoPost(result,{capture,token,accountId,invoice,body:created,contact,contactBody,exactContacts,contactLookupComplete:contactsBody.code===0&&Array.isArray(contactsBody.contacts)&&contactsBody.page_context?.has_more_page!==true,freshSearches,postCount});
+      if(receipt)freshCreateReceipts.set(result,receipt);
+      return result;
     },
   };
 }

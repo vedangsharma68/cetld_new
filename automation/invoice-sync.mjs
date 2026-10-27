@@ -46,6 +46,13 @@ export async function syncInvoiceRow({store, row, invoice, accounting, clock = (
     const saved = await updateState({...row.metadata,bookkeeping_sync_status:'not_configured'});
     return result(saved,saved.metadata?.bookkeeping_sync_status || 'not_configured');
   }
+  // New-cutover operations must start before the first caller-editable lease
+  // PATCH. This server-owned path completes linkage/result atomically and never
+  // invokes the ordinary metadata finisher. Noncandidates retain legacy export.
+  if(accounting.runNewZohoExportProtocol){
+    const completed=await accounting.runNewZohoExportProtocol({row,invoice,userId:store.userId,workspaceId:store.workspaceId});
+    if(completed)return completed;
+  }
   const previousAttempts = attemptCount(row.metadata);
   const attempts = (manualRetry && previousAttempts >= MAX_SYNC_ATTEMPTS ? 0 : previousAttempts) + 1;
   // Reserve the lease without spending an attempt on validation or credentials.

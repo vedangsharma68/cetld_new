@@ -50,6 +50,17 @@ function fixture({attempts=0}={}) {
       return Response.json([state.connection]);
     }
     const service=headers.get('authorization')===`Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`;
+    if(url.pathname==='/rest/v1/rpc/cetld_probe_zoho_capture_completion'){
+      assert.equal(service,true);assert.deepEqual(JSON.parse(options.body),{p_workspace_id:workspaceId,p_invoice_id:invoiceId});
+      return Response.json(null); // genuine pre-cutover fixture, never admitted by a read
+    }
+    if(url.pathname==='/rest/v1/rpc/cetld_zoho_capture_completion_protocol'){
+      assert.equal(service,true);
+      const args=JSON.parse(options.body);
+      assert.equal(args.p_action,'reserve');assert.equal(args.p_owner_id,ownerId);
+      assert.equal(args.p_workspace_id,workspaceId);assert.equal(args.p_invoice_id,invoiceId);
+      return Response.json({state:'not_admitted',originCaptured:false});
+    }
     if(url.pathname==='/rest/v1/rpc/cetld_zoho_operation_context'){
       assert.equal(service,true,'operation context is server-only');
       assert.equal(options.method,'POST');
