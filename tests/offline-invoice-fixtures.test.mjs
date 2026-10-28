@@ -1,6 +1,46 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {execFileSync} from 'node:child_process';
 import {parseOfflineInvoiceText} from '../ai/image-text.mjs';
+
+const uncertainFields = [
+  'invoiceNumber', 'customerName', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total',
+  'outstandingAmount', 'currency', 'clientPhone', 'clientPhoneRaw', 'clientEmail', 'notes', 'direction', 'lineItems',
+];
+const alwaysReviewWarnings = [
+  'Offline OCR is a draft. Review every extracted value against the image before saving.',
+  'Direction is uncertain; confirm whether your business issued this invoice.',
+];
+function assertConfidence(value) {
+  assert.equal(typeof value, 'number');
+  assert.ok(Number.isFinite(value) && value >= 0 && value <= .69, `invalid confidence: ${value}`);
+}
+function parseDraft(text, options = {}) {
+  const result = parseOfflineInvoiceText(text, options);
+  assert.equal(result.reviewRequired, true);
+  assert.equal(result.usedFallback, true);
+  assert.equal(result.model, 'tesseract.js-eng-offline');
+  assert.deepEqual(result.direction, {value:'uncertain', confidence:0});
+  assert.deepEqual(result.uncertainFields, uncertainFields);
+  for (const warning of alwaysReviewWarnings) assert.ok(result.warnings.includes(warning));
+  for (const name of uncertainFields) {
+    assert.ok(Object.hasOwn(result[name], 'value'), name);
+    assert.ok(Object.hasOwn(result[name], 'confidence'), name);
+    assertConfidence(result[name].confidence);
+    if (result[name].value === null) assert.equal(result[name].confidence, 0, name);
+  }
+  assert.ok(Array.isArray(result.lineItems.value));
+  for (const item of result.lineItems.value) {
+    assert.equal(typeof item.description, 'string');
+    for (const name of ['quantity', 'unitPrice', 'amount']) assert.ok(Number.isFinite(item[name]) && item[name] >= 0, name);
+    assert.ok(Object.hasOwn(item, 'confidence'));
+    assertConfidence(item.confidence);
+  }
+  const input = options.ocrConfidence;
+  assert.equal(result.ocr.confidence, Number.isFinite(input) && input >= 0 && input <= 100 ? input : null);
+  return result;
+}
+const itemValues = result => result.lineItems.value.map(({description, quantity, unitPrice, amount}) => ({description, quantity, unitPrice, amount}));
 
 // Literal OCR evidence wins over image-level expectations: inv2's number/date
 // are absent; inv4 prints 9 October, not 19 October. Never reconstruct either.
@@ -109,7 +149,7 @@ Open 8am - 10pm, all days`, {invoiceNumber:null, customerName:null, invoiceDate:
 
 for (const [name, text, expected] of fixtures) {
   test(`offline OCR fixture: ${name}`, () => {
-    const result = parseOfflineInvoiceText(text, {ocrConfidence:name.startsWith('inv4') ? 71 : 95});
+    const result = parseDraft(text, {ocrConfidence:name.startsWith('inv4') ? 71 : 95});
     for (const [key, value] of Object.entries(expected)) {
       assert.deepEqual(key === 'lineItems' ? result[key].value.length : result[key].value, value, key);
     }
@@ -118,33 +158,204 @@ for (const [name, text, expected] of fixtures) {
     assert.ok(result.warnings.some(warning => /Review every extracted value/.test(warning)));
     assert.ok(result.warnings.some(warning => /Direction is uncertain/.test(warning)));
     assert.equal(result.warnings.some(warning => /Currency code/.test(warning)), expected.currency === null);
-    for (const [key, value] of Object.entries(result)) {
-      if (value && typeof value === 'object' && 'confidence' in value && key !== 'ocr') assert.ok(value.confidence <= .69);
-    }
-    assert.ok(result.lineItems.value.every(item => item.confidence <= .69));
     assert.equal(result.ocr.text, text);
   });
 }
 
 test('bounded labels, valid dates, conflicting currencies and row shapes stay conservative', () => {
-  const result = parseOfflineInvoiceText(`NotSubtotal: 99\nInvoice Date: 2026-02-30\nDue Date: 2026-11-04\nTotal: USD 10.00\nBalance Due: INR 0.00\nDescription Qty Rate Amount\nFuel surcharge 630.00\nPacking 1 2.00 2.00`);
+  const result = parseDraft(`NotSubtotal: 99\nInvoice Date: 2026-02-30\nDue Date: 2026-11-04\nTotal: USD 10.00\nBalance Due: INR 0.00\nDescription Qty Rate Amount\nFuel surcharge 630.00\nPacking 1 2.00 2.00`);
   assert.equal(result.subtotal.value, null);
   assert.equal(result.invoiceDate.value, null);
   assert.equal(result.dueDate.value, '2026-11-04');
   assert.equal(result.currency.value, null);
   assert.equal(result.lineItems.value.length, 1);
-  assert.equal(parseOfflineInvoiceText('x'.repeat(100000) + '\nTotal: INR 99.00').total.value, null);
+  assert.equal(parseDraft('x'.repeat(100000) + '\nTotal: INR 99.00').total.value, null);
 });
 
 
-test('clean and paid fixtures preserve item amounts without deriving a balance', () => {
-  for (const [index, amounts] of [[0, [12000, 4750, 250]], [4, [18000, 7000]]]) {
-    const result = parseOfflineInvoiceText(fixtures[index][1], {ocrConfidence:95});
-    assert.deepEqual(result.lineItems.value.map(item => item.amount), amounts);
+test('every fixture pins exact item descriptions, quantities, prices and amounts', () => {
+  const expected = [
+    [
+      {description:'Cotton fabric roll', quantity:10, unitPrice:1200, amount:12000},
+      {description:'Polyester blend roll', quantity:5, unitPrice:950, amount:4750},
+      {description:'Packing', quantity:1, unitPrice:250, amount:250},
+    ],
+    [
+      {description:'Fabric transport Delhi-Jaipur', quantity:1, unitPrice:8500, amount:8500},
+      {description:'Loading/unloading', quantity:1, unitPrice:1500, amount:1500},
+    ],
+    [],
+    [
+      {description:'Basmati rice 25k9', quantity:2, unitPrice:2150, amount:4300},
+      {description:'sunflower oil SL', quantity:6, unitPrice:640, amount:3840},
+      {description:'Atta 4Ok9', quantity:3, unitPrice:420, amount:1260},
+    ],
+    [
+      {description:'Logo redesign', quantity:1, unitPrice:18000, amount:18000},
+      {description:'Brand guidelines', quantity:1, unitPrice:7000, amount:7000},
+    ],
+    [
+      {description:'Strategy workshop', quantity:8, unitPrice:150, amount:1200},
+      {description:'Follow-up analysis', quantity:4, unitPrice:125, amount:500},
+    ],
+    [],
+  ];
+  fixtures.forEach((fixture, index) => assert.deepEqual(itemValues(parseDraft(fixture[1], {ocrConfidence:95})), expected[index], fixture[0]));
+});
+
+test('complete monetary spans reject numeric prefixes, table columns and partial decimals', () => {
+  for (const text of ['Total: 1 20,000.00', 'Total: INR 1,20,000.000', 'Subtotal: 1 20.00', 'Tax: 1 20.00']) {
+    const result = parseDraft(text);
+    assert.equal(result.total.value, null);
+    assert.equal(result.subtotal.value, null);
+    assert.equal(result.tax.value, null);
   }
-  assert.equal(parseOfflineInvoiceText('Invoice Notes: sample').invoiceNumber.value, null);
-  assert.equal(parseOfflineInvoiceText('Invoice No. AB-123').invoiceNumber.value, 'AB-123');
-  assert.equal(parseOfflineInvoiceText('Due    Date: 2026-10-12').invoiceDate.value, null);
-  assert.equal(parseOfflineInvoiceText('Total: Rs. 9.00').total.value, 9);
-  assert.equal(parseOfflineInvoiceText('Total: USD 9.00').currency.value, 'USD');
+  assert.equal(parseDraft('Total: INR 1,20,000.00').total.value, 120000);
+  const row = parseDraft('Description Qty Rate Amount\nTotal 1 20.00 20.00');
+  assert.equal(row.total.value, null);
+  assert.deepEqual(itemValues(row), [{description:'Total', quantity:1, unitPrice:20, amount:20}]);
+  assert.equal(parseDraft('Description Qty Rate Amount\nTotal 1 20.00 20.00\nTotal: INR 20.00').total.value, 20);
+});
+
+test('shared-line labels retain independent amounts and contradictory totals remain unresolved', () => {
+  const shared = parseDraft('Subtotal: INR 100.00 Grand Total: INR 118.00');
+  assert.equal(shared.subtotal.value, 100);
+  assert.equal(shared.total.value, 118);
+  assert.equal(shared.currency.value, 'INR');
+  assert.equal(parseDraft('Subtotal: 100.00').total.value, null);
+  for (const separator of ['\n', ' ']) {
+    for (const amounts of [[100, 120], [120, 100]]) {
+      const result = parseDraft(`Total: INR ${amounts[0]}.00${separator}Grand Total: INR ${amounts[1]}.00\nAmount Due: INR 100.00`);
+      assert.equal(result.total.value, null);
+      assert.ok(result.warnings.some(warning => /Conflicting printed total/.test(warning)));
+    }
+    assert.equal(parseDraft(`Total: INR 100.00${separator}Grand Total: INR 100.00`).total.value, 100);
+  }
+  const due = parseDraft('Total Due: 120.00');
+  assert.equal(due.total.value, 120);
+  assert.equal(due.outstandingAmount.value, 120);
+});
+
+test('Balance Due wins over Amount Due in either order, including a paid zero', () => {
+  for (const separator of ['\n', ' ']) {
+    for (const amounts of [['Amount Due: INR 100.00', 'Balance Due: INR 0.00'], ['Balance Due: INR 0.00', 'Amount Due: INR 100.00']]) {
+      const result = parseDraft(amounts.join(separator));
+      assert.equal(result.outstandingAmount.value, 0);
+      assert.equal(result.total.value, 100);
+      assert.ok(result.warnings.some(warning => /Balance Due differs/.test(warning)));
+    }
+  }
+  const conflict = parseDraft('Balance Due: INR 0.00\nBalance Due: INR 50.00');
+  assert.equal(conflict.outstandingAmount.value, null);
+  assert.ok(conflict.warnings.some(warning => /Conflicting printed outstanding/.test(warning)));
+});
+
+test('all explicit currency occurrences contribute, including multiple occurrences per line', () => {
+  for (const text of [
+    'Total: USD 10.00 Balance Due: INR 0.00',
+    'Balance Due: INR 0.00 Total: USD 10.00',
+    'Currency: USD Currency: INR',
+    'Currency: INR\nCurrency: USD',
+    'Total: USD 10.00 INR 0.00',
+    'Currency: USD Total: INR 10.00',
+  ]) {
+    const result = parseDraft(text);
+    assert.equal(result.currency.value, null, text);
+    assert.ok(result.warnings.some(warning => /Currency code/.test(warning)));
+  }
+  assert.equal(parseDraft('Currency: INR Currency: INR Total: Rs. 10.00 Balance Due: INR 0.00').currency.value, 'INR');
+  assert.equal(parseDraft('Total: USD 9.00').currency.value, 'USD');
+  assert.equal(parseDraft('Total: Rs. 9.00').total.value, 9);
+});
+
+test('billing/customer labels take priority and bare To cannot select a shipping address', () => {
+  for (const text of [
+    'Ship To:\nWarehouse gate two\nBill To: Real Buyer',
+    'To:\n14 MG Road\nBill To: Real Buyer',
+    'To: Shipping Buyer\nBill To: Real Buyer',
+    'Ship To: Warehouse gate two\nClient: Real Buyer',
+    'Customer:\nPhone: 9876543210\nBill To: Real Buyer',
+  ]) assert.equal(parseDraft(text).customerName.value, 'Real Buyer', text);
+  for (const text of ['Ship To:\nWarehouse gate two', 'To:\n14 MG Road', 'To: Warehouse gate two']) assert.equal(parseDraft(text).customerName.value, null, text);
+  assert.equal(parseDraft('To: Radha Caterers').customerName.value, 'Radha Caterers');
+});
+
+test('invoice identifiers cannot consume next-line labels, address prose, GSTINs or phone numbers', () => {
+  for (const text of [
+    'Invoice No:\nGSTIN 29ABCDE1234F1Z5',
+    'Invoice No:\nPhone 9876543210',
+    '14 Invoice No. 23 Road, Delhi',
+    'Invoice No: GSTIN 29ABCDE1234F1Z5',
+    'Invoice No: Phone 9876543210',
+    'Invoice No: 29ABCDE1234F1Z5',
+    'Invoice No: 9876543210',
+    'Invoice No: 919876543210',
+    'Invoice Notes: sample',
+  ]) assert.equal(parseDraft(text).invoiceNumber.value, null, text);
+  assert.equal(parseDraft('Invoice No. AB-123').invoiceNumber.value, 'AB-123');
+  assert.equal(parseDraft('Invoice No: 12345').invoiceNumber.value, '12345', 'numeric invoice identifiers remain supported');
+  assert.equal(parseDraft('Invoice No:\nPhone 9876543210\nInvoice No: INV-123').invoiceNumber.value, 'INV-123');
+});
+
+test('qualified date labels cannot become a bare invoice Date', () => {
+  for (const label of ['Due-Date', 'Due - Date', 'Due    Date', 'Due\t\tDate']) {
+    const result = parseDraft(`${label}: 2026-11-04`);
+    assert.equal(result.dueDate.value, '2026-11-04', label);
+    assert.equal(result.invoiceDate.value, null, label);
+  }
+  for (const label of ['Payment Date', 'Payment-Date', 'Delivery Date', 'Shipment Date', 'Settlement Date']) {
+    const result = parseDraft(`${label}: 2026-11-04`);
+    assert.equal(result.invoiceDate.value, null, label);
+    assert.equal(result.dueDate.value, null, label);
+  }
+  const shared = parseDraft('Address 560001 Date: 2026-10-20 Due - Date: 2026-11-04 Payment Date: 2026-10-22');
+  assert.equal(shared.invoiceDate.value, '2026-10-20');
+  assert.equal(shared.dueDate.value, '2026-11-04');
+  assert.equal(parseDraft('Invoice-Date: 2026-10-20').invoiceDate.value, '2026-10-20');
+  assert.equal(parseDraft('Invoice Date: 2026-02-30').invoiceDate.value, null);
+});
+
+test('otherwise valid headerless rows stay unread; headers, continuations and the item cap remain bounded', () => {
+  const rows = 'Cotton fabric roll 10 1,200.00 12,000.00\nPacking 1 250.00 250.00';
+  assert.deepEqual(parseDraft(rows).lineItems.value, []);
+  assert.deepEqual(parseDraft(`Description Qty UnitPrice Amount\n${rows}\nFuel surcharge 630.00`).lineItems.value.map(item => item.description), ['Cotton fabric roll', 'Packing']);
+  const many = parseDraft('Description Qty Rate Amount\n' + 'Packing 1 2.00 2.00\n'.repeat(150), {ocrConfidence:100});
+  assert.equal(many.lineItems.value.length, 100);
+});
+
+test('all confidence inputs preserve the complete always-review contract', () => {
+  for (const ocrConfidence of [undefined, null, NaN, Infinity, -1, 0, 1, 71, 95, 100, 101, '95']) {
+    const result = parseDraft(fixtures[0][1], {ocrConfidence});
+    if (!(Number.isFinite(ocrConfidence) && ocrConfidence >= 0 && ocrConfidence <= 100)) {
+      for (const name of uncertainFields) assert.equal(result[name].confidence, 0, name);
+      assert.ok(result.lineItems.value.every(item => item.confidence === 0));
+    }
+  }
+});
+
+test('adversarial bounded OCR finishes under an external process deadline', () => {
+  // A synchronous regex cannot be interrupted by node:test or OCR timers.
+  // The subprocess timeout also catches a future event-loop blocking regression.
+  const parserUrl = new URL('../ai/image-text.mjs', import.meta.url).href;
+  const script = `
+    import assert from 'node:assert/strict';
+    import {parseOfflineInvoiceText} from ${JSON.stringify(parserUrl)};
+    const probes = [
+      'Taxable' + ' '.repeat(99990) + 'x',
+      'Taxable' + '\\t'.repeat(99990) + 'x',
+      'Total: ' + '9'.repeat(99990),
+      'Total: 1' + ','.repeat(99980) + 'x',
+      'Due' + ' '.repeat(99970) + 'Date: 2026-11-04',
+      'Description Qty Rate Amount\\n' + 'Item ' + '9'.repeat(99950) + ' x',
+      'Total: '.repeat(14000),
+    ];
+    for (const text of probes) {
+      const result = parseOfflineInvoiceText(text, {ocrConfidence:95});
+      assert.equal(result.reviewRequired, true);
+      assert.equal(result.direction.value, 'uncertain');
+      assert.ok(result.ocr.text.length <= 100000);
+      assert.equal(result.total.value, null);
+    }
+  `;
+  execFileSync(process.execPath, ['--input-type=module', '-e', script], {timeout:5000, stdio:'pipe'});
 });
