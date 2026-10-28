@@ -143,6 +143,8 @@ test('clean and paid fixtures preserve item amounts without deriving a balance',
     assert.deepEqual(result.lineItems.value.map(item => item.amount), amounts);
   }
   assert.equal(parseOfflineInvoiceText('Invoice Notes: sample').invoiceNumber.value, null);
+  assert.equal(parseOfflineInvoiceText('Invoice No. AB-123').invoiceNumber.value, 'AB-123');
+  assert.equal(parseOfflineInvoiceText('Due    Date: 2026-10-12').invoiceDate.value, null);
   assert.equal(parseOfflineInvoiceText('Total: Rs. 9.00').total.value, 9);
   assert.equal(parseOfflineInvoiceText('Total: USD 9.00').currency.value, 'USD');
 });

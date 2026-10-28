@@ -123,7 +123,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     labelledMoney('grand\\s+total|total(?:\\s+due)?'))
     ?? amountFromLine(lines, labelledMoney('amount\\s+due'));
   const outstandingAmount = amountFromLine(lines, labelledMoney('balance\\s+due|amount\\s+due|total\\s+due|outstanding(?:\\s+amount)?'));
-  const invoiceNumber = cleanText.match(/\binvoice\s*(?:no\.?\b|number\b|#)\s*[:#*=-]*\s*([a-z0-9][a-z0-9/_.-]{0,79})(?=\s|$)/i)?.[1] ?? null;
+  const invoiceNumber = cleanText.match(/\binvoice\s*(?:no\b\.?|number\b|#)\s*[:#*=-]*\s*([a-z0-9][a-z0-9/_.-]{0,79})(?=\s|$)/i)?.[1] ?? null;
   const customerLabel = /\b(?:bill(?:ed)?\s+to|customer|client|to)\s*:\s*(.*)/i;
   let customerName = null;
   for (let index = 0; index < lines.length; index++) {
@@ -146,7 +146,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     return null;
   };
   const dueDate = readDate('due(?:\\s+date)?');
-  const invoiceDate = readDate('invoice\\s+date|(?<!due\\s)date');
+  const invoiceDate = readDate('invoice\\s+date|(?<!due\\s+)date');
   const printedRounding = lines.map(line => line.match(/^\s*rounding\s*:?\s*[₹$€£]?\s*(-?\d[\d,]*(?:\.\d{1,2})?)\s*$/i)?.[1]).find(Boolean);
   const rounding = printedRounding === undefined ? null : Number(printedRounding.replaceAll(',', ''));
   const explicitCurrency = cleanText.match(/\bcurrency(?:\s+code)?\s*[:=-]\s*(INR|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF)\b/i)?.[1]?.toUpperCase() || null;
