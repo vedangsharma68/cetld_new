@@ -14,8 +14,8 @@ export const OFFLINE_CANCEL_REPLY = /^\s*(?:no|cancel|never mind|nevermind|disca
 // Deliberately narrower than conversational inference. A question, negation or
 // conditional is never evidence that the business issued this invoice.
 export function offlineDirectionEvidence(message) {
-  return !/[?'"“”`]|\b(?:not|never|didn't|did not|don't|if|maybe|whether|wasn't|could|would|someone|says|said|quoted|perhaps|might|later|tomorrow|next)\b/i.test(message)
-    && /\b(?:(?:we|i|our business|my business)\s+(?:have\s+)?(?:issued|sent|created|made)\s+(?:it|(?:(?:this|that|the)\s+)?invoice)\b|issued by (?:us|me|our business))\b/i.test(message);
+  return !/[?'"“”`]|\b(?:false|deny|denies|denied|not|never|didn't|did not|don't|if|maybe|whether|wasn't|could|would|someone|says|said|quoted|perhaps|might|later|tomorrow|next)\b/i.test(message)
+    && /(?:^|[.!;]\s*)(?:(?:we|i|our business|my business)\s+(?:have\s+)?(?:issued|sent|created|made)\s+(?:it|(?:(?:this|that|the)\s+)?invoice)\b|issued by (?:us|me|our business))\b/i.test(message);
 }
 
 export function resolveOfflineReview(action) {
@@ -95,6 +95,7 @@ export function offlineReviewClarification(action, {buttonsAvailable=false,maxLe
     let provenance = printed ? JSON.stringify(printed.value) === JSON.stringify(action.invoice?.[key])
       ? printed.value == null && printed.text ? ` (printed: ${printed.text.replace(/\n/g,'; ')})` : ' (printed)'
       : ` (printed: ${printed.value == null && printed.text ? printed.text.replace(/\n/g,'; ') : display(printed.value)})` : '';
+    if (action.unresolvedFields?.includes(field) && !corrected && printed?.text) provenance += `; unresolved printed evidence: ${printed.text.replace(/\n/g,'; ')}`;
     if (corrected) provenance += ' (owner supplied)';
     if (printed?.candidates?.length > 1) provenance += `; conflicting printed values: ${printed.candidates.join(', ')}`;
     if (field === 'currency' && printed?.value == null && printed?.text) provenance += `; printed evidence: ${printed.text.replace(/\n/g,'; ')}`;

@@ -404,7 +404,7 @@ export async function extractInvoiceOffline({bytes, mimeType, businessName, sign
   // Keep relevant source lines with each field; do not duplicate an entire
   // 100k-character OCR transcript for every candidate in the pending action.
   const evidenceLabels = {invoiceNumber:/invoice\s*(?:no|number|#)/i, customerName:/(?:bill(?:ed)?\s+to|customer|client|to)\s*:/i,
-    invoiceDate:/invoice\s+date|(?<!due\s+)date\s*:/i, dueDate:/due(?:\s+date)?\s*:/i,
+    invoiceDate:/invoice\s+date|(?<!due\s+)date\s*:/i, dueDate:/^\s*due(?:\s+date)?\b/i,
     subtotal:/subtotal|taxable/i, tax:/\b(?:tax|GST|CGST|SGST|IGST|VAT)\b/i,
     total:/\b(?:grand\s+total|total(?:\s+due)?|amount\s+due)\b/i,
     outstandingAmount:/balance|amount\s+due|outstanding|total\s+due/i,
@@ -433,6 +433,9 @@ export async function extractInvoiceOffline({bytes, mimeType, businessName, sign
   if (explicitCurrencies.size > 1) observations.currency=new Set([...explicitCurrencies].map(code=>JSON.stringify(code)));
   const unresolvedFields = ['dueDate','subtotal','tax','outstandingAmount']
     .filter(field=>result[field]?.value == null && printedEvidence[field]);
+  // A failed labelled occurrence is evidence even if another occurrence parsed.
+  if (sourceLines.some(line=>evidenceLabels.dueDate.test(line) && parseOfflineInvoiceText(line).dueDate.value == null)
+    && !unresolvedFields.includes('dueDate')) unresolvedFields.push('dueDate');
   if (!usedPdfParser) {
     const header = sourceLines.findIndex(line=>/\b(?:item|description)\b/i.test(line) && /\b(?:qty|quantity|hours)\b/i.test(line)
       && /\b(?:unit\s*price|rate)\b/i.test(line) && /\b(?:amount|total)\b/i.test(line));

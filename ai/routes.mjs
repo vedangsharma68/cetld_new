@@ -119,6 +119,10 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
           zenApiKey: env.OPENCODE_ZEN_API_KEY, cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN});
         return res.status(200).json({...await store.saveSettings({primary_model, fallback_model}), role:store.role});
       }
+      const rows=action==='assistant'&&conversation?await conversation.read():null;
+      const history=rows?rows.map(({role,content})=>({role,content})):body.history;
+      if(action==='assistant' && Array.isArray(history) && history.some(turn=>/\[cetld:offline-intake\]|Local invoice review\./.test(turn?.content||'')))
+        return res.status(200).json({answer:'This conversation contains local invoice information. Continue its review in WhatsApp; conversation summaries are unavailable.',pendingAction:null,readOnly:true});
       const settings = await store.getSettings();
       const provider = providerFactory({primaryModel: settings.primary_model, fallbackModel: settings.fallback_model,
         geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
@@ -152,8 +156,6 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
       // Owner history is server authoritative. A failed/missing migration blocks
       // the turn before planning or writes; browser history is never a fallback.
       if(typeof body.message!=='string'||!body.message.trim()||body.message.length>4000)throw new APIError(400,'INVALID_CONVERSATION');
-      const rows=conversation?await conversation.read():null;
-      const history=rows?rows.map(({role,content})=>({role,content})):body.history;
       const turnId=randomUUID();
       if(conversation)await conversation.append({key:`web:${turnId}:user`,role:'user',content:body.message});
       const decision=ownerActionDecision(body.message);

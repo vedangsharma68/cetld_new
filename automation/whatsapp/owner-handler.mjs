@@ -266,6 +266,12 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     if(historyReader===readSharedOwnerHistory&&!historyAvailable)return {answer:'Your business conversation is temporarily unavailable. Try again shortly. No action was taken.'};
     const {lifecycle,lifecyclePending,available:lifecycleAvailable}=lifecycleState;
     ownerStore=ownerStoreState;
+    // Markers are persisted in content so every history/recovery reader retains
+    // the provenance, including readers that project away optional metadata.
+    const offlineHistory = history.some(turn=>/\[cetld:offline-intake\]|Local invoice review\./.test(turn.content||''))
+      || /\[cetld:offline-intake\]|Local invoice review\./.test(JSON.stringify(scope.checkpoint||{}));
+    if (offlineHistory && (env.EXTRACTION_ROUTE !== 'offline' || !media && !mediaError && pendingAtStart?.action?.extractionRoute !== 'offline'))
+      return {offlineReview:true,answer:'This conversation contains local invoice information. Start a new local invoice review to continue; conversation summaries are unavailable.'};
     const offlineTurn=env.EXTRACTION_ROUTE==='offline' && (media || mediaError || pendingAtStart?.action?.extractionRoute==='offline' || /\b(?:change|chnge|chng|make|set|edit|modify|fix|update)\b/i.test(message));
     const menuEditValues=!offlineTurn&&!scope.interactionId&&!media&&!mediaError&&!scope.checkpoint?ownerMenuInvoiceEdit(message):null;
     let menuEditTarget=null;
@@ -655,7 +661,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         if(result?.answer&&!result.offlineReview)result.answer=ownerFailureGuidance(result.answer,{code:result.plannerFailure?.code,
           writeAttempted:activeTools?.getWriteAttempted?.()===true});
         if(result?.answer&&!result.offlineReview)result.answer=result.answer.replace(/\bworkspace\b/gi,'business');
-        if(conversation&&result?.answer&&!result?.deferred)await conversation.append({key:`wa:${scope.messageId}:assistant`,role:'assistant',content:result.answer.slice(0,4000)});
+        if(conversation&&result?.answer&&!result?.deferred)await conversation.append({key:`wa:${scope.messageId}:assistant`,role:'assistant',content:(result.offlineReview?'[cetld:offline-intake]\n':'')+result.answer.slice(0,3970)});
         if(result?.checkpoint)latestCheckpoint=result.checkpoint;
         if(replyStore&&result?.answer&&!result?.deferred&&await authorizeRequest(boundedScope)){
           try{return await replyStore.save(boundedScope,result);}

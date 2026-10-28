@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {createAIHandler} from '../ai/routes.mjs';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
@@ -35,7 +36,7 @@ const deny=()=>{assert.fail('No provider factory, model classifier, or external 
 const imageExtractor=printed=>request=>extractInvoiceFromImage({...request,preprocessor:async bytes=>bytes,
   workerFactory:async()=>({recognize:async()=>({data:{text:printed,confidence:99}}),terminate:async()=>{}})});
 
-async function fixture(){
+async function fixture({recording=false}={}){
   const f=await createOfflineSqlNetwork(),ownerId=randomUUID();
   await f.db.query('insert into auth.users(id) values($1)',[ownerId]);
   await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
@@ -47,8 +48,9 @@ async function fixture(){
   const scope={workspaceId,ownerId,customerId:binding.customer_id,phone};
   const pending=createWhatsAppPendingActionStore({supabase:f.supabase});
   let printed=text, pdfText=null;
-  const handler=createOwnerMessageHandler({supabase:f.supabase,env,logger,providerFactory:deny,fetchImpl:deny,
-    agentFactory:deny,replyStore:null,
+  const providerRecord={constructions:0,calls:0,requests:[]};
+  const handler=createOwnerMessageHandler({supabase:f.supabase,env,logger,providerFactory:recording?()=>{providerRecord.constructions++;return {async generate(request){providerRecord.calls++;providerRecord.requests.push(request);return {content:'Summary'};}};}:deny,fetchImpl:deny,
+    ...(recording?{}:{agentFactory:deny}),replyStore:null,
     toolsFactory:options=>createOwnerWorkspaceTools({...options,extractOfflineAttachment:request=>extractInvoiceOffline({...request,
       imageExtractor:imageExtractor(printed),pdfTextExtractor:async()=>pdfText})})});
   let sequence=0;
@@ -59,7 +61,7 @@ async function fixture(){
     return handler({...scope,message,messageId,media,interactionId});
   };
   const count=async()=>Number((await f.db.query('select count(*) n from invoices')).rows[0].n);
-  return {...f,scope,pending,turn,count,setPrinted:value=>{printed=value;},setPdfText:value=>{pdfText=value;}};
+  return {...f,scope,pending,turn,count,providerRecord,setPrinted:value=>{printed=value;},setPdfText:value=>{pdfText=value;}};
 }
 
 test('local owner review uses signed single-confirm buttons, preserves all printed values and keeps DB gates',async t=>{
@@ -318,4 +320,95 @@ test('every established CONFIRMATION_REPLY form accepts a complete visible local
     }
     assert.deepEqual(f.errors,[]);
   }finally{await f.close();}
+});
+
+
+test('expired local review history cannot construct a provider or reach generate on conversation summary',async()=>{
+  const f=await fixture({recording:true});try{
+    const reply=await f.turn('log invoice',{media:{bytes:png,mimeType:'image/png'}});
+    assert.match(reply.answer,/Kabir Textiles/);
+    await f.db.query("update whatsapp_pending_actions set expires_at=now()-interval '1 hour' where workspace_id=$1",[f.scope.workspaceId]);
+    const summary=await f.turn('Please summarize our conversation');
+    assert.match(summary.answer,/local invoice information/);
+    assert.deepEqual(f.providerRecord,{constructions:0,calls:0,requests:[]});
+    const history=await f.supabase.rpc('owner_assistant_history',{p_workspace_id:f.scope.workspaceId,p_owner_id:f.scope.ownerId});
+    assert.match(JSON.stringify(history.data),/cetld:offline-intake/);
+  }finally{await f.close();}
+});
+
+test('every printed due-date occurrence requires resolution and monetary due labels are excluded',async()=>{
+  const f=await fixture();try{
+    for(const pdfCase of [false,true])for(const due of ['Due Date 2026-11-04','Due Date: 2026-02-30\nDue Date: 2026-11-04']){
+      const printed=text.replace('Due Date: 2026-11-04',due);
+      f.setPrinted(printed);f.setPdfText(printed);
+      const reply=await f.turn('We issued this invoice',{media:{bytes:pdfCase?pdf:png,mimeType:pdfCase?'application/pdf':'image/png'}});
+      assert.equal(reply.buttons,undefined);assert.match(reply.answer,/2026-/);
+      const row=await f.pending.loadInvoiceReview(f.scope);
+      assert.ok(row.action.unresolvedFields.includes('dueDate'));
+      assert.equal(row.action.assumptions.some(a=>a.includes('due date was not shown')),false);
+    }
+    f.setPrinted(text.replace('Due Date: 2026-11-04\n','').replace('Balance Due: INR 20060','Balance Due: ???\nAmount Due: INR 20060'));
+    await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
+    const row=await f.pending.loadInvoiceReview(f.scope);
+    assert.equal(row.action.printedEvidence.dueDate,undefined);
+    assert.equal(row.action.unresolvedFields.includes('dueDate'),false);
+  }finally{await f.close();}
+});
+
+test('denial is not affirmative issuance in captions or SQL corrections',async()=>{
+  const f=await fixture();try{
+    for(const message of ['It is false that we issued this invoice','I deny that we issued this invoice','I refute the claim that we issued this invoice']){
+      const reply=await f.turn(message,{media:{bytes:png,mimeType:'image/png'}});
+      assert.equal(reply.buttons,undefined);
+      const row=await f.pending.loadInvoiceReview(f.scope);
+      assert.equal(row.action.invoice.direction,'uncertain');
+      const id='denial-'+Math.random();
+      await f.db.query("insert into whatsapp_messages(workspace_id,customer_id,phone,direction,audience,body,kind,status,provider_message_id,idempotency_key) values($1,$2,$3,'inbound','owner',$4,'normal','received',$5,$5)",[f.scope.workspaceId,f.scope.customerId,phone,message,id]);
+      const action=structuredClone(row.action);action.invoice.direction='receivable';action.ownerProvidedFacts.direction={value:'receivable',sourceMessageId:id};
+      await assert.rejects(f.pending.correctOfflineInvoiceReview({...row,...f.scope,action,sourceMessageId:id}));
+    }
+  }finally{await f.close();}
+});
+
+test('correction SQL rejects bare-yes forged values and reuse at the current version',async()=>{
+  const f=await fixture();try{
+    await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
+    const source=async(id,message)=>f.db.query("insert into whatsapp_messages(workspace_id,customer_id,phone,direction,audience,body,kind,status,provider_message_id,idempotency_key) values($1,$2,$3,'inbound','owner',$4,'normal','received',$5,$5)",[f.scope.workspaceId,f.scope.customerId,phone,message,id]);
+    let row=await f.pending.loadInvoiceReview(f.scope);
+    await source('forged-yes','yes');
+    let action=structuredClone(row.action);action.invoice.total=1;action.ownerProvidedFacts.total={value:1,sourceMessageId:'forged-yes'};
+    await assert.rejects(f.pending.correctOfflineInvoiceReview({...row,...f.scope,action,sourceMessageId:'forged-yes'}));
+    await source('valid-date','set due date to 2026-11-10');
+    action=correctOfflineReview(row.action,'set due date to 2026-11-10',{parseCorrection:parseInvoiceCorrection,messageId:'valid-date'});
+    row=await f.pending.correctOfflineInvoiceReview({...row,...f.scope,action,sourceMessageId:'valid-date'});
+    assert.ok(row);
+    action=structuredClone(row.action);action.invoice.dueDate='2026-11-11';action.ownerProvidedFacts.dueDate={value:'2026-11-11',sourceMessageId:'valid-date'};
+    await assert.rejects(f.pending.correctOfflineInvoiceReview({...row,...f.scope,action,sourceMessageId:'valid-date'}));
+    // Reuse is rejected even when the second value IS supported by the same
+    // text: total + currency can be supplied together, never in two replays.
+    await source('two-facts','set total to 20060 INR');
+    action=structuredClone(row.action);action.ownerProvidedFacts.total={value:20060,sourceMessageId:'two-facts'};
+    row=await f.pending.correctOfflineInvoiceReview({...row,...f.scope,action,sourceMessageId:'two-facts'});
+    assert.ok(row);
+    action=structuredClone(row.action);action.ownerProvidedFacts.currency={value:'INR',sourceMessageId:'two-facts'};action.currencySource='user';
+    await assert.rejects(f.pending.correctOfflineInvoiceReview({...row,...f.scope,action,sourceMessageId:'two-facts'}));
+    assert.equal(await f.count(),0);
+  }finally{await f.close();}
+});
+
+
+test('shared offline history also blocks web assistant provider construction',async()=>{
+  for(const content of ['[cetld:offline-intake]\nKabir Textiles','Local invoice review. Kabir Textiles']){
+    for(const serverHistory of [true,false]){
+      let constructions=0,calls=0,response;
+      const history=[{role:'assistant',content}];
+      const handler=createAIHandler({env:{},authorize:async()=>({role:serverHistory?'owner':'admin',
+        ...(serverHistory?{ownerConversation:{read:async()=>history}}:{}),getSettings:deny}),
+        providerFactory:()=>{constructions++;return {generate:async()=>{calls++;}};}});
+      const res={setHeader(){},status(code){assert.equal(code,200);return this;},json(value){response=value;}};
+      await handler({method:'POST',query:{action:'assistant'},body:{workspaceId:randomUUID(),message:'Please summarize our conversation',...(serverHistory?{}:{history})}},res);
+      assert.match(response.answer,/local invoice information/);
+      assert.equal(constructions,0);assert.equal(calls,0);
+    }
+  }
 });

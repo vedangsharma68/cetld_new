@@ -15,6 +15,8 @@ declare
   v_fact jsonb;
   v_changed boolean := false;
   v_message text;
+  v_match text[];
+  v_supported boolean;
 begin
   if p_id is null or p_version is null or p_workspace_id is null or p_customer_id is null
     or p_phone is null or p_phone !~ '^\+[1-9][0-9]{6,14}$'
@@ -33,6 +35,12 @@ begin
       and (m.customer_id is null or m.customer_id=p_customer_id) and m.audience='owner'
       and m.direction='inbound' and m.status in ('received','accepted') and m.created_at>=v_row.created_at;
   if v_message is null then raise exception 'offline correction lacks scoped owner source'; end if;
+  if coalesce(v_row.action->'appliedCorrectionSources','[]'::jsonb) @> jsonb_build_array(p_source_message_id)
+    or exists(select 1 from jsonb_each(coalesce(v_row.action->'ownerProvidedFacts','{}'::jsonb)) f
+      where f.value->>'sourceMessageId'=p_source_message_id) then
+    raise exception 'offline correction source already applied';
+  end if;
+
   if coalesce(p_action->>'stage','') not in ('incomplete','proposal')
     or jsonb_typeof(p_action->'invoice') is distinct from 'object'
     or jsonb_typeof(p_action->'ownerProvidedFacts') is distinct from 'object'
@@ -79,9 +87,33 @@ begin
         or v_fact->>'sourceMessageId' is distinct from p_source_message_id then
         raise exception 'invalid offline owner fact';
       end if;
+      v_supported := false;
+      if v_field='total' then
+        v_match:=regexp_match(v_message,'^(?:change|make|set|update|edit|modify|fix) (?:the )?(?:total|amount|amt|price|value) (?:to )?([0-9][0-9,]*(?:[.][0-9]{1,2})?)(?: [A-Za-z]{3})?[.!]?$','i');
+        v_supported:=v_match is not null and replace(v_match[1],',','')::numeric=(v_fact->>'value')::numeric;
+      elsif v_field in ('invoiceDate','dueDate') then
+        v_match:=regexp_match(v_message,case when v_field='dueDate' then '^(?:change|make|set) (?:the )?due date (?:to )?([0-9]{4}-[0-9]{2}-[0-9]{2})$'
+          else '^(?:change|make|set) (?:the )?(?:invoice|issue) date (?:to )?([0-9]{4}-[0-9]{2}-[0-9]{2})$' end,'i');
+        v_supported:=v_match is not null and v_match[1]=v_fact->>'value';
+      elsif v_field='customerName' then
+        v_match:=regexp_match(v_message,'^(?:change|set) (?:the )?customer (?:to )?(.+)$','i');
+        v_supported:=v_match is not null and trim(v_match[1])=v_fact->>'value';
+      elsif v_field='notes' then
+        v_match:=regexp_match(v_message,'^(?:change|set) (?:the )?notes? (?:to )?(.+)$','i');
+        v_supported:=v_match is not null and trim(v_match[1])=v_fact->>'value';
+      elsif v_field='invoiceNumber' then
+        v_match:=regexp_match(v_message,'^(?:set|change) invoice number (?:to )?([A-Za-z0-9][A-Za-z0-9/_.-]{0,99})$','i');
+        v_supported:=v_match is not null and v_match[1]=v_fact->>'value';
+      elsif v_field='currency' then
+        v_match:=regexp_match(trim(v_message),'^(?:currency (?:should be|to|is) )?([A-Za-z]{3})[.!]?$','i');
+        if v_match is null then v_match:=regexp_match(v_message,'^(?:change|make|set|update|edit|modify|fix) (?:the )?(?:total|amount|amt|price|value) (?:to )?[0-9][0-9,]*(?:[.][0-9]{1,2})? ([A-Za-z]{3})[.!]?$','i'); end if;
+        v_supported:=v_match is not null and upper(v_match[1])=v_fact->>'value';
+      elsif v_field='direction' then v_supported:=true;
+      end if;
+      if v_supported is not true then raise exception 'offline fact value is unsupported by owner source'; end if;
       if v_field='direction' and (v_fact->>'value' is distinct from 'receivable'
-        or v_message ~ '[?''"“”`]' or v_message ~* '\m(not|never|didn''t|don''t|if|maybe|whether|wasn''t|could|would|someone|says|said|quoted|perhaps|might|later|tomorrow|next)\M'
-        or v_message !~* '\m(we|i|our business|my business)[[:space:]]+(have[[:space:]]+)?(issued|sent|created|made)[[:space:]]+(it|((this|that|the)[[:space:]]+)?invoice)\M|\missued by (us|me|our business)\M') then
+        or v_message ~ '[?''"“”`]' or v_message ~* '\m(false|deny|denies|denied|not|never|didn''t|don''t|if|maybe|whether|wasn''t|could|would|someone|says|said|quoted|perhaps|might|later|tomorrow|next)\M'
+        or v_message !~* '(^|[.!;][[:space:]]*)(we|i|our business|my business)[[:space:]]+(have[[:space:]]+)?(issued|sent|created|made)[[:space:]]+(it|((this|that|the)[[:space:]]+)?invoice)\M|(^|[.!;][[:space:]]*)issued by (us|me|our business)\M') then
         raise exception 'offline direction requires explicit issuance';
       end if;
       v_changed := true;
@@ -106,7 +138,7 @@ begin
     or p_action->'invoice'->>'invoiceDate' is null or (p_action->'invoice'->>'total')::numeric<=0) then
     raise exception 'incomplete offline review cannot become proposal';
   end if;
-  return query update public.whatsapp_pending_actions p set action=p_action,version=p.version+1
+  return query update public.whatsapp_pending_actions p set action=p_action || jsonb_build_object('appliedCorrectionSources',coalesce(v_row.action->'appliedCorrectionSources','[]'::jsonb)||jsonb_build_array(p_source_message_id)),version=p.version+1
     where p.id=v_row.id and p.version=v_row.version returning p.id,p.version,p.generation,p.action,p.created_at,p.expires_at;
 end
 $function$;
