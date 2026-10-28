@@ -118,9 +118,9 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     'Offline OCR is a draft. Review every extracted value against the image before saving.',
     'Direction is uncertain; confirm whether your business issued this invoice.',
   ];
-  const labelPattern = /\b(labou?r total|parts? total|consumables? total|taxable(?: subtotal)?|subtotal|(?:CGST|SGST|IGST|GST|sales tax|tax|VAT)(?: \d{1,3}(?:\.\d{1,4})? ?%)?|grand total|total(?: due)?|balance due|amount due|outstanding(?: amount)?|rounding|currency(?: code)?)(?= |:|[₹$€£]|$)/gi;
+  const labelPattern = /(?:\b(labou?r total|parts? total|consumables? total|taxable(?: subtotal)?|subtotal|(?:CGST|SGST|IGST|GST|sales tax|tax|VAT)(?: \d{1,3}(?:\.\d{1,4})? ?%)?|grand total|total(?: due)?|balance due|amount due|outstanding(?: amount)?|rounding|currency(?: code)?|(?:invoice|due)(?: ?- ?| )date|invoice (?:no\.?|number)|phone)(?= |:|[₹$€£]|$)|([|]))/gi;
   const moneyPattern = /^(?:(?:INR|Rs\.?|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF) ?|[₹$€£] ?)?(-?\d[\d,]*(?:\.\d{1,2})?)$/i;
-  const totalLabels = ['grand total', 'total', 'total due'];
+  const totalLabels = ['grand total', 'total'];
   const dueLabels = ['amount due', 'total due', 'outstanding', 'outstanding amount'];
   const currencyEvidence = new Set();
   const spans = [];
@@ -128,7 +128,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     const labels = [...line.matchAll(labelPattern)];
     for (let index = 0; index < labels.length; index++) {
       const match = labels[index];
-      const label = match[1].toLowerCase().replace(/ \d.*$/, '');
+      const label = (match[1] ?? match[2]).toLowerCase().replace(/ \d.*$/, '');
       // A field ends at the next recognized label or the end of this OCR line.
       // Full-span validation rejects numeric columns, suffixes and partial decimals.
       const payload = line.slice(match.index + match[0].length, labels[index + 1]?.index ?? line.length)
@@ -153,7 +153,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     : amountFromLine(spans, ['gst', 'sales tax', 'tax', 'vat'], warnings, 'tax');
   const total = spans.some(span => totalLabels.includes(span.label) && span.value !== null && span.value >= 0)
     ? amountFromLine(spans, totalLabels, warnings, 'total')
-    : amountFromLine(spans, ['amount due'], warnings, 'total');
+    : amountFromLine(spans, ['amount due', 'total due'], warnings, 'total');
   // Balance Due is the more specific remaining balance, including a paid zero.
   const hasBalance = spans.some(span => span.label === 'balance due' && span.value !== null && span.value >= 0);
   const outstandingAmount = amountFromLine(spans, hasBalance ? ['balance due'] : dueLabels, warnings, 'outstanding');
@@ -178,19 +178,21 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     invoiceNumber = token;
     break;
   }
-  const readCustomer = pattern => {
+  const readCustomer = (pattern, bareTo = false) => {
     for (let index = 0; index < lines.length; index++) {
       const match = lines[index].match(pattern);
       if (!match) continue;
-      const value = match[1].trim() || lines[index + 1];
-      if (value && value.length <= 160 && /\p{L}/u.test(value) && !/^\d|[:@]/.test(value)
-        && !/\b(?:date|total|description|invoice|GSTIN|phone|mobile|road|street|warehouse|gate)\b/i.test(value)) return value;
+      const printed = match[1].trim() || lines[index + 1];
+      const value = printed?.split(/\b(?:invoice (?:date|no\.?|number)|due(?: ?- ?| )date|payment date|date|phone) ?:|[|]/i)[0].trim();
+      if (value && value.length <= 160 && /\p{L}/u.test(value) && !/[:@]/.test(value)
+        && !(bareTo && (/^\d/.test(value) || /\b(?:road|street|warehouse|gate)\b/i.test(value)))
+        && !/\b(?:date|total|description|invoice|GSTIN|phone|mobile)\b/i.test(value)) return value;
     }
     return null;
   };
   // Explicit billing labels anywhere take precedence over an anchored bare To.
   const customerName = readCustomer(/\b(?:bill(?:ed)? to|customer|client) ?: ?(.*)/i)
-    ?? readCustomer(/^to ?: ?(.*)/i);
+    ?? readCustomer(/^to ?: ?(.*)/i, true);
   const dates = {invoice: new Set(), bare: new Set(), due: new Set()};
   const dateLabels = /\b((?:invoice|due|payment|delivery|shipping|shipment|order|service|dispatch|paid|supply|purchase|transaction|issue)(?: ?- ?| )date|date|due) ?:/gi;
   for (const line of lines) {
@@ -198,8 +200,8 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
       const label = match[1].toLowerCase().replace(/ ?- ?/g, ' ');
       const kind = label === 'invoice date' ? 'invoice' : label === 'due date' || label === 'due' ? 'due' : label === 'date' ? 'bare' : null;
       if (!kind) continue;
-      // A bare Date after an unrecognized word qualifier is not an invoice date.
-      if (kind === 'bare' && /\p{L}[ -]$/u.test(line.slice(Math.max(0, match.index - 40), match.index))) continue;
+      // Known date qualifiers must not turn into a bare invoice Date.
+      if (kind === 'bare' && /\b(?:payment|due|delivery|shipping|shipment|order|service|dispatch|paid|supply|purchase|transaction|issue|settlement)[ -]$/i.test(line.slice(Math.max(0, match.index - 40), match.index))) continue;
       const printed = line.slice(match.index + match[0].length, match.index + match[0].length + 40)
         .match(/^ ?(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{4})(?= |$)/)?.[1];
       if (!printed) continue;
