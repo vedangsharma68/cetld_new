@@ -88,7 +88,7 @@ function amountFromLine(lines, labelPattern) {
 function parseLineItems(lines, confidence) {
   const excluded = /^(?:labour|labor|parts?|consumables?|subs*total|subtotal|tax|gst|vat|total|balance due|amount due|rounding)\s*total\b/i;
   const itemPattern = /^\s*(?<description>[\p{L}\p{N}][\p{L}\p{N} &'().,/+-]{0,119}?)\s+(?<quantity>\d+(?:\.\d{1,4})?)\s+\$?\s*(?<unitPrice>\d[\d,]*(?:\.\d{1,2})?)\s+\$?\s*(?<amount>\d[\d,]*(?:\.\d{1,2})?)\s*$/u;
-  const headerIndex = lines.findIndex(line => /\bitem\b/i.test(line) && /\bdescription\b/i.test(line) && /\bquantity\b/i.test(line) && /\bunit\s*price\b/i.test(line) && /\btotal\b/i.test(line));
+  const headerIndex = lines.findIndex(line => /\b(?:item|description)\b/i.test(line) && /\b(?:qty|quantity|hours)\b/i.test(line) && /\b(?:unit\s*price|rate)\b/i.test(line) && /\b(?:amount|total)\b/i.test(line));
   if (headerIndex < 0) return [];
   const output = [];
   for (const line of lines.slice(headerIndex + 1)) {
@@ -111,18 +111,49 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   const cleanText = text.replace(/\r\n?/g, '\n').slice(0, MAX_TEXT_CHARS);
   const lines = cleanText.split('\n');
   const confidence = safeConfidence(ocrConfidence);
-  const money = String.raw`[₹$€£]?\s*(-?\d[\d,]*(?:\.\d{1,2})?)`;
-  const subtotal = amountFromLine(lines, new RegExp(`^\\s*subtotal\\s*:?\\s*${money}\\s*$`, 'i'));
+  const money = String.raw`(?:(?:INR|Rs\.?|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF)\s*|[₹$€£]\s*)?(-?\d[\d,]*(?:\.\d{1,2})?)(?![\d.,])`;
+  const labelledMoney = label => new RegExp(`\\b(?:${label})\\s*:?\\s*${money}(?=\\s|$)`, 'i');
+  const subtotal = amountFromLine(lines, labelledMoney('taxable(?:\\s+subtotal)?|subtotal'));
   const components = ['CGST', 'SGST', 'IGST'].map(label => amountFromLine(lines,
-    new RegExp(`^\\s*${label}(?:\\s+\\d+(?:\\.\\d+)?\\s*%)?\\s*:?\\s*${money}\\s*$`, 'i'))).filter(value => value !== null);
+    labelledMoney(`${label}(?:\\s+\\d+(?:\\.\\d+)?\\s*%)?`))).filter(value => value !== null);
   const tax = components.length ? Math.round(components.reduce((sum, value) => sum + value, 0) * 100) / 100
-    : amountFromLine(lines, new RegExp(`^\\s*(?:GST|sales\\s+tax|tax|VAT)(?:\\s+\\d+(?:\\.\\d+)?\\s*%)?\\s*:?\\s*${money}\\s*$`, 'i'));
-  const total = amountFromLine(lines, new RegExp(`^\\s*total\\s*:?\\s*${money}\\s*$`, 'i'));
-  const outstandingAmount = amountFromLine(lines, new RegExp(`\\b(?:balance\\s+due|amount\\s+due|outstanding(?:\\s+amount)?)\\s*:?\\s*${money}`, 'i'));
+    : amountFromLine(lines, labelledMoney('GST|sales\\s+tax|tax|VAT'.split('|').map(label => `${label}(?:\\s+\\d+(?:\\.\\d+)?\\s*%)?`).join('|')));
+  // A plain total must not accidentally match a subtotal, tax section, or balance.
+  const total = amountFromLine(lines.filter(line => !/\b(?:subtotal|taxable|balance\s+due|amount\s+due|outstanding|(?:labour|labor|parts?|consumables?)\s+total)\b/i.test(line)),
+    labelledMoney('grand\\s+total|total(?:\\s+due)?'))
+    ?? amountFromLine(lines, labelledMoney('amount\\s+due'));
+  const outstandingAmount = amountFromLine(lines, labelledMoney('balance\\s+due|amount\\s+due|total\\s+due|outstanding(?:\\s+amount)?'));
+  const invoiceNumber = cleanText.match(/\binvoice\s*(?:no\.?\b|number\b|#)\s*[:#*=-]*\s*([a-z0-9][a-z0-9/_.-]{0,79})(?=\s|$)/i)?.[1] ?? null;
+  const customerLabel = /\b(?:bill(?:ed)?\s+to|customer|client|to)\s*:\s*(.*)/i;
+  let customerName = null;
+  for (let index = 0; index < lines.length; index++) {
+    const match = lines[index].match(customerLabel);
+    if (!match) continue;
+    const value = match[1].trim() || lines.slice(index + 1).find(line => line.trim())?.trim();
+    if (value && value.length <= 160 && /\p{L}/u.test(value) && !/[:@]|\b(?:date|total|description|invoice)\b/i.test(value)) customerName = value;
+    break;
+  }
+  const readDate = label => {
+    const pattern = new RegExp(`\\b(?:${label})\\s*:\\s*(\\d{4}-\\d{2}-\\d{2}|\\d{1,2}[/-]\\d{1,2}[/-]\\d{4})(?!\\d)`, 'i');
+    for (const line of lines) {
+      const printed = line.match(pattern)?.[1];
+      if (!printed) continue;
+      const parts = printed.split(/[/-]/).map(Number);
+      const [year, month, day] = parts[0] > 999 ? parts : [parts[2], parts[1], parts[0]];
+      const date = new Date(Date.UTC(year, month - 1, day));
+      if (year >= 1900 && date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day) return date.toISOString().slice(0, 10);
+    }
+    return null;
+  };
+  const dueDate = readDate('due(?:\\s+date)?');
+  const invoiceDate = readDate('invoice\\s+date|(?<!due\\s)date');
   const printedRounding = lines.map(line => line.match(/^\s*rounding\s*:?\s*[₹$€£]?\s*(-?\d[\d,]*(?:\.\d{1,2})?)\s*$/i)?.[1]).find(Boolean);
   const rounding = printedRounding === undefined ? null : Number(printedRounding.replaceAll(',', ''));
   const explicitCurrency = cleanText.match(/\bcurrency(?:\s+code)?\s*[:=-]\s*(INR|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF)\b/i)?.[1]?.toUpperCase() || null;
-  const currency = explicitCurrency && CURRENCIES.has(explicitCurrency) ? explicitCurrency : null;
+  const totalCurrency = lines.filter(line => /\b(?:total(?:\s+due)?|amount\s+due|balance\s+due)\s*:/i.test(line))
+    .map(line => line.match(/\b(?:total(?:\s+due)?|amount\s+due|balance\s+due)\s*:\s*(INR|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF|Rs\.?)\s*(?=\d)/i)?.[1]?.toUpperCase()).filter(Boolean);
+  const currencyEvidence = new Set([explicitCurrency, ...totalCurrency.map(code => /^RS\.?$/.test(code) ? 'INR' : code)].filter(Boolean));
+  const currency = currencyEvidence.size === 1 && CURRENCIES.has([...currencyEvidence][0]) ? [...currencyEvidence][0] : null;
   const lineItems = parseLineItems(lines, confidence);
   const warnings = [
     'Offline OCR is a draft. Review every extracted value against the image before saving.',
@@ -137,10 +168,10 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   if (lineItems.length === 0) warnings.push('No line items could be read reliably.');
 
   return {
-    invoiceNumber: field(null, confidence),
-    customerName: field(null, confidence),
-    invoiceDate: field(null, confidence),
-    dueDate: field(null, confidence),
+    invoiceNumber: field(invoiceNumber, confidence),
+    customerName: field(customerName, confidence),
+    invoiceDate: field(invoiceDate, confidence),
+    dueDate: field(dueDate, confidence),
     subtotal: field(subtotal, confidence),
     tax: field(tax, confidence),
     total: field(total, confidence),
