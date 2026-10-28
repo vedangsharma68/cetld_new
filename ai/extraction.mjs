@@ -1,7 +1,7 @@
 import {SUPPORTED_TWO_DECIMAL_CURRENCIES} from '../currency-contract.mjs';
 import {extractPdfText} from './pdf-text.mjs';
 import {parsePdfInvoiceText, parsePrintedInvoicePaymentStatus, printedInvoiceNumber, isPlaceholderInvoiceNumber} from './pdf-invoice-parser.mjs';
-import {extractInvoiceFromImage} from './image-text.mjs';
+import {extractInvoiceFromImage, parseOfflineInvoiceText} from './image-text.mjs';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const CONFIDENCE_THRESHOLD = 0.75;
@@ -365,6 +365,93 @@ export function validateInvoiceExtractionResponse(raw, {verifiedPrintedAdjustmen
     warnings: [...new Set(warnings)],
     reviewRequired: true,
   };
+}
+
+/** Explicit local-only extraction. No provider is accepted or constructed here. */
+export async function extractInvoiceOffline({bytes, mimeType, businessName, signal, deadlineAt,
+  imageExtractor = extractInvoiceFromImage, pdfTextExtractor = extractPdfText} = {}) {
+  const active = () => {
+    if (signal?.aborted || Number.isFinite(deadlineAt) && Date.now() >= deadlineAt)
+      throw Object.assign(new Error('Invoice extraction deadline expired'), {name:'AbortError'});
+  };
+  active();
+  const source = detectFormat(bytes, mimeType);
+  let result, text, usedPdfParser=false;
+  if (source.detected === 'application/pdf') {
+    text = await pdfTextExtractor(source.bytes, {signal, deadlineAt});
+    active();
+    if (!text?.trim()) throw Object.assign(new Error('This PDF has no readable text. Send a photo of the invoice instead.'), {code:'OFFLINE_PDF_NO_TEXT'});
+    const parsed = parsePdfInvoiceText(text, {businessName});
+    usedPdfParser = Boolean(parsed);
+    result = parsed ? validateInvoiceExtractionResponse(parsed, {verifiedPrintedAdjustments:true})
+      : parseOfflineInvoiceText(text);
+  } else {
+    result = await imageExtractor({bytes:source.bytes, mimeType:source.detected, signal, deadlineAt});
+    text = result?.ocr?.text || '';
+  }
+  active();
+  if (!usedPdfParser) {
+    const facts = Object.fromEntries([...FIELD_NAMES,'lineItems'].filter(field=>result?.[field]).map(field=>[field,result[field]]));
+    const validated = validateInvoiceExtractionResponse(facts);
+    result = {...result,...validated,warnings:[...new Set([...(result.warnings||[]),...validated.warnings])]};
+  }
+  const explicitCurrencies = new Set([...text.matchAll(/\b(INR|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF|Rs\.?)\b/gi)]
+    .map(match=>/^RS\.?$/i.test(match[1]) ? 'INR' : match[1].toUpperCase()));
+  // The PDF parser can infer INR from a rupee symbol. The local review route
+  // requires an explicit currency code or Rs evidence, as the OCR parser does.
+  if (result.currency?.value && !explicitCurrencies.has(result.currency.value)) result.currency={value:null,confidence:0};
+  const payment = parsePrintedInvoicePaymentStatus(text);
+  // Keep relevant source lines with each field; do not duplicate an entire
+  // 100k-character OCR transcript for every candidate in the pending action.
+  const evidenceLabels = {invoiceNumber:/invoice\s*(?:no|number|#)/i, customerName:/(?:bill(?:ed)?\s+to|customer|client|to)\s*:/i,
+    invoiceDate:/invoice\s+date|(?<!due\s+)date\s*:/i, dueDate:/due(?:\s+date)?\s*:/i,
+    subtotal:/subtotal|taxable/i, tax:/\b(?:tax|GST|CGST|SGST|IGST|VAT)\b/i,
+    total:/\b(?:grand\s+total|total(?:\s+due)?|amount\s+due)\b/i,
+    outstandingAmount:/balance|amount\s+due|outstanding|total\s+due/i,
+    currency:/\b(?:currency|INR|Rs|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF)\b|[₹$€£]/i};
+  const sourceLines = text.split(/\r?\n/);
+  const printedEvidence = {};
+  for (const [field, fact] of Object.entries(result)) {
+    if (!fact || !Object.hasOwn(fact,'value')) continue;
+    const lines = evidenceLabels[field] ? sourceLines.filter(line=>evidenceLabels[field].test(line)) : [];
+    if (fact.value != null && !lines.length) {
+      const values = Array.isArray(fact.value) ? fact.value.map(item=>item.description) : [String(fact.value)];
+      lines.push(...sourceLines.filter(line=>values.some(value=>line.includes(value))));
+    }
+    if (lines.length) printedEvidence[field] = lines.join('\n');
+  }
+  // Repeated labelled facts with different values must not become a single
+  // apparently resolved candidate. Parse each source line independently.
+  const observations = {};
+  for (const line of text.split(/\r?\n/)) {
+    const facts = parseOfflineInvoiceText(line);
+    for (const field of ['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','total','outstandingAmount','currency']) {
+      const value = facts[field]?.value;
+      if (value != null) (observations[field] ||= new Set()).add(JSON.stringify(value));
+    }
+  }
+  if (explicitCurrencies.size > 1) observations.currency=new Set([...explicitCurrencies].map(code=>JSON.stringify(code)));
+  const unresolvedFields = ['dueDate','subtotal','tax','outstandingAmount']
+    .filter(field=>result[field]?.value == null && printedEvidence[field]);
+  if (!usedPdfParser) {
+    const header = sourceLines.findIndex(line=>/\b(?:item|description)\b/i.test(line) && /\b(?:qty|quantity|hours)\b/i.test(line)
+      && /\b(?:unit\s*price|rate)\b/i.test(line) && /\b(?:amount|total)\b/i.test(line));
+    if (header >= 0) {
+      const items = result.lineItems?.value || [];
+      for (const line of sourceLines.slice(header+1).map(line=>line.trim().replace(/[ \t]+/g,' ')).filter(Boolean)) {
+        if (/^(?:subtotal|taxable|tax|[ICS]?GST|VAT|grand\s+total|total|balance|amount\s+due)\b/i.test(line)) break;
+        if (!items.some(item=>line.startsWith(item.description) || line.replace(/^\d+[.)]?\s+/,'').startsWith(item.description))) {
+          unresolvedFields.push('lineItems'); printedEvidence.lineItems=sourceLines.slice(header).join('\n'); break;
+        }
+      }
+    }
+  }
+  const conflictingFields = Object.keys(observations).filter(field => observations[field].size > 1);
+  const conflictingValues = Object.fromEntries(conflictingFields.map(field=>[field,[...observations[field]].map(value=>JSON.parse(value))]));
+  return {...result, extractionRoute:'offline', direction:{value:'uncertain',confidence:0}, printedEvidence, conflictingFields, conflictingValues, unresolvedFields,
+    ...(payment ? {paymentStatus:{value:payment.status,confidence:payment.confidence},
+      paymentStatusEvidence:{value:payment.text,confidence:payment.confidence}} : {}),
+    reviewRequired:true, model:source.detected === 'application/pdf' ? 'offline-pdf-text' : result.model};
 }
 
 /** Extract an invoice from trusted, already-downloaded bytes; this function never stores it. */
