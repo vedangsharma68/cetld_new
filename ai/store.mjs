@@ -44,6 +44,7 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
     if (!Array.isArray(rows) || rows.some(r => r.workspace_id !== workspaceId)) throw new APIError(502, 'WORKSPACE_SCOPE_VIOLATION');
     return rows;
   }
+  let provenanceSettings;
   const store = {
     workspaceId, userId, role,
     async createTestInvoice(requestId) {
@@ -59,9 +60,11 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
       return row;
     },
     async offlineProvenance() {
-      const value=await request('/rest/v1/rpc/owner_assistant_offline_provenance',{method:'POST',body:JSON.stringify({p_workspace_id:workspaceId,p_owner_id:userId})});
-      if(typeof value!=='boolean')throw new APIError(503,'OWNER_CONVERSATION_UNAVAILABLE');
-      return value;
+      // Reuse the model-settings read that immediately precedes provider setup.
+      // The private marker is mirrored here by the offline migration.
+      const settings=await store.getSettings();
+      provenanceSettings=settings;
+      return settings.offlineProvenance===true;
     },
     ownerConversation: createOwnerConversation({workspaceId,ownerId:userId,
       readReminderInvoice:async id=>(await store.query('invoices',{select:'*',filters:{id:`eq.${uuid(id)}`},limit:1}))[0],
@@ -167,11 +170,13 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
       return rows[0];
     },
     async getSettings() {
-      const rows = checkRows(await request('/rest/v1/workspace_ai_settings?' + new URLSearchParams({workspace_id: `eq.${workspaceId}`, select: 'workspace_id,primary_model,fallback_model', limit: '1'})));
+      if(provenanceSettings){const settings=provenanceSettings;provenanceSettings=null;return settings;}
+      const rows = checkRows(await request('/rest/v1/workspace_ai_settings?' + new URLSearchParams({workspace_id: `eq.${workspaceId}`, select: '*', limit: '1'})));
       const row = rows[0];
       if (!row) return {workspace_id: workspaceId, primary_model: DEFAULT_MODEL, fallback_model: DEFAULT_FALLBACK_MODEL};
       const models = sanitizeModelSettings({primaryModel: row.primary_model, fallbackModel: row.fallback_model});
-      return {...row, primary_model: models.primaryModel, fallback_model: models.fallbackModel};
+      return Object.defineProperty({workspace_id:row.workspace_id, primary_model: models.primaryModel, fallback_model: models.fallbackModel},
+        'offlineProvenance',{value:row.offline_invoice_provenance===true});
     },
     async saveSettings({primary_model, fallback_model}) {
       if (!['owner', 'admin'].includes(role)) throw new APIError(403, 'SETTINGS_ADMIN_REQUIRED');

@@ -1346,9 +1346,10 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
           message:'I could not verify an existing invoice for this attachment. No changes were made.'});
         if(!media||mediaError)return unavailable('UNAVAILABLE');
         try{
-          const settings=await supabase.from('workspace_settings').select('business_name').eq('workspace_id',scope.workspaceId).maybeSingle();
+          const settings=await supabase.from('workspace_settings').select('*').eq('workspace_id',scope.workspaceId).maybeSingle();
           if(settings?.error)return unavailable('UNAVAILABLE');
-          if(await offlineProvenance({supabase,workspaceId:scope.workspaceId,mark:env?.EXTRACTION_ROUTE==='offline'}) && env?.EXTRACTION_ROUTE!=='offline')
+          if(env?.EXTRACTION_ROUTE==='offline')await offlineProvenance({supabase,workspaceId:scope.workspaceId,mark:true});
+          if(settings?.data?.offline_invoice_provenance===true && env?.EXTRACTION_ROUTE!=='offline')
             return {ok:false,code:'UNAVAILABLE',message:'This business contains local invoice information. Continue with local invoice review.'};
           const extractionProvider=env?.EXTRACTION_ROUTE==='offline'?null:providerFactory({primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL,
             requestPurpose:'extraction',geminiApiKey:env?.GEMINI_API_KEY,openRouterApiKey:env?.OPENROUTER_API_KEY,
@@ -1375,10 +1376,11 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         await active();
         if(!media&&!mediaError)return {ok:false,code:'INVALID',message:'There is no image or PDF attached to this message.'};
         if(mediaError)return {ok:false,code:'UNAVAILABLE',message:'I couldn’t load the attachment. Send the photo or PDF again. Nothing was saved.'};
-        const settings=await supabase.from('workspace_settings').select('business_name')
+        const settings=await supabase.from('workspace_settings').select('*')
           .eq('workspace_id',scope.workspaceId).maybeSingle();
         if(settings?.error)throw Object.assign(new Error(),{code:'UNAVAILABLE'});
-        if(await offlineProvenance({supabase,workspaceId:scope.workspaceId,mark:env?.EXTRACTION_ROUTE==='offline'}) && env?.EXTRACTION_ROUTE!=='offline')
+        if(env?.EXTRACTION_ROUTE==='offline')await offlineProvenance({supabase,workspaceId:scope.workspaceId,mark:true});
+        if(settings?.data?.offline_invoice_provenance===true && env?.EXTRACTION_ROUTE!=='offline')
           return {ok:false,code:'UNAVAILABLE',message:'This business contains local invoice information. Continue with local invoice review.'};
         const extractionProvider=env?.EXTRACTION_ROUTE==='offline'?null:providerFactory({primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL,
           requestPurpose:'extraction',geminiApiKey:env?.GEMINI_API_KEY,openRouterApiKey:env?.OPENROUTER_API_KEY,

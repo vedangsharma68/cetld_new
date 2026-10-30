@@ -42,6 +42,10 @@ async function createFixtureDatabase(excludeMigrations){
 }
 
 export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[]}={}){
+  // Historical reminder fixtures install shared owner history later themselves;
+  // its offline provenance extension must not create that function prematurely.
+  if(excludeMigrations.includes('20261023061702_shared_owner_assistant.sql'))
+    excludeMigrations=[...excludeMigrations,'20261028030825_offline_invoice_review_corrections.sql'];
   if(excludeMigrations.some(file=>['20261026090000_contain_unproven_external_reminders.sql','20261026110000_zoho_prospective_operation_foundation.sql'].includes(file)))
     excludeMigrations=[...excludeMigrations,'20261026141000_zoho_capture_completion_protocol.sql'];
   if(excludeMigrations.includes('20261026141000_zoho_capture_completion_protocol.sql'))

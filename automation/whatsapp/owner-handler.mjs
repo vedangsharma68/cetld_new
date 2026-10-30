@@ -184,8 +184,9 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         let history=await timedContextRead(logger,'conversation_history',()=>historyReader({supabase,workspaceId,ownerId,phone,customerId:null,audience:'owner'}));
         // The inbound worker records this received message before invoking us.
         // Do not repeat the current turn when durable history already ends in it.
+        const offlineHistory=history.offlineProvenance===true;
         if(history.at(-1)?.role==='user'&&history.at(-1)?.content===message)history=history.slice(0,-1);
-        return {history,available:true};
+        return {history,offlineHistory,available:true};
       }catch(error){
         logger?.error?.('WhatsApp owner conversation history read failed',{code:String(error?.code||'HISTORY_UNAVAILABLE').slice(0,60)});
         return {history:[],available:false};
@@ -267,8 +268,10 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     if(historyReader===readSharedOwnerHistory&&!historyAvailable)return {answer:'Your business conversation is temporarily unavailable. Try again shortly. No action was taken.'};
     const {lifecycle,lifecyclePending,available:lifecycleAvailable}=lifecycleState;
     ownerStore=ownerStoreState;
-    const offlineHistory = await offlineProvenance({supabase,workspaceId,ownerId,
-      mark:env.EXTRACTION_ROUTE==='offline' && Boolean(media || mediaError)});
+    // Default turns use provenance carried by the existing scoped history read;
+    // they do not acquire a dependency on the offline-only RPC.
+    const offlineHistory = historyState.offlineHistory || (env.EXTRACTION_ROUTE==='offline'
+      && await offlineProvenance({supabase,workspaceId,ownerId,mark:Boolean(media || mediaError)}));
     if (offlineHistory && (env.EXTRACTION_ROUTE !== 'offline' || !media && !mediaError && pendingAtStart?.action?.extractionRoute !== 'offline'))
       return {offlineReview:true,answer:'This conversation contains local invoice information. Start a new local invoice review to continue; conversation summaries are unavailable.'};
     const offlineTurn=env.EXTRACTION_ROUTE==='offline' && (media || mediaError || pendingAtStart?.action?.extractionRoute==='offline' || /\b(?:change|chnge|chng|make|set|edit|modify|fix|update)\b/i.test(message));

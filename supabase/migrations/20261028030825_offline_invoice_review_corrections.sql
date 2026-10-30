@@ -40,6 +40,53 @@ end $$;
 revoke all on function public.owner_assistant_offline_provenance(uuid,uuid,boolean) from public,anon;
 grant execute on function public.owner_assistant_offline_provenance(uuid,uuid,boolean) to authenticated,service_role;
 
+-- Default owner turns already read scoped history. Carry server-owned metadata
+-- in that response even when every retained turn has been pruned/deleted.
+create or replace function public.owner_assistant_history(p_workspace_id uuid,p_owner_id uuid) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare history jsonb;
+begin
+ if not app.owner_assistant_authorized(p_workspace_id,p_owner_id) then raise exception 'owner required' using errcode='42501';end if;
+ select coalesce(jsonb_agg(to_jsonb(t) order by t.id),'[]'::jsonb) into history from
+   (select id,event_key,role,content,channel,pending_action,created_at,source_message_id from public.owner_assistant_turns
+    where workspace_id=p_workspace_id and owner_id=p_owner_id order by id desc limit 20) t;
+ if exists(select 1 from app.offline_invoice_businesses where workspace_id=p_workspace_id) then
+   history:=history||jsonb_build_array(jsonb_build_object('offline_provenance',true));
+ end if;
+ return history;
+end $$;
+
+-- Attachment tools already read workspace settings. Mirror the private marker
+-- there atomically, without making it owner-editable or another RPC dependency.
+alter table public.workspace_settings add column offline_invoice_provenance boolean not null default false;
+alter table public.workspace_ai_settings add column offline_invoice_provenance boolean not null default false;
+update public.workspace_settings s set offline_invoice_provenance=true
+ where exists(select 1 from app.offline_invoice_businesses b where b.workspace_id=s.workspace_id);
+insert into public.workspace_ai_settings(workspace_id,offline_invoice_provenance)
+ select workspace_id,true from app.offline_invoice_businesses
+ on conflict(workspace_id) do update set offline_invoice_provenance=true;
+create function app.offline_invoice_settings_provenance() returns trigger
+language plpgsql security definer set search_path='' as $$
+begin
+ new.offline_invoice_provenance:=exists(select 1 from app.offline_invoice_businesses where workspace_id=new.workspace_id);
+ return new;
+end $$;
+create trigger offline_invoice_settings_provenance before insert or update on public.workspace_settings
+ for each row execute function app.offline_invoice_settings_provenance();
+create trigger offline_invoice_ai_settings_provenance before insert or update on public.workspace_ai_settings
+ for each row execute function app.offline_invoice_settings_provenance();
+create function app.offline_invoice_settings_mark() returns trigger
+language plpgsql security definer set search_path='' as $$
+begin
+ update public.workspace_settings set offline_invoice_provenance=true where workspace_id=new.workspace_id;
+ insert into public.workspace_ai_settings(workspace_id,offline_invoice_provenance) values(new.workspace_id,true)
+ on conflict(workspace_id) do update set offline_invoice_provenance=true;
+ return new;
+end $$;
+create trigger offline_invoice_settings_mark after insert on app.offline_invoice_businesses
+ for each row execute function app.offline_invoice_settings_mark();
+revoke all on function app.offline_invoice_settings_provenance(),app.offline_invoice_settings_mark() from public,anon,authenticated,service_role;
+
 create function app.offline_review_date(v text) returns boolean language plpgsql immutable set search_path='' as $$
 begin
   return v ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' and to_char(v::date,'YYYY-MM-DD')=v;

@@ -147,6 +147,7 @@ export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallba
   };
 
   Object.defineProperty(tables,'owner_assistant_turns',{value:[],enumerable:false});
+  let offlineProvenance=false;
   const rpc = async (name,args={}) => {
     rpcCalls.push({name,args:clone(args)});
     const ws=OWNER_CHAT_SCOPE.workspaceId;
@@ -157,7 +158,16 @@ export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallba
       if(!turns.some(t=>t.event_key===args.p_event_key))turns.push({id:turns.length+1,event_key:args.p_event_key,workspace_id:ws,owner_id:args.p_owner_id,channel:args.p_channel,role:args.p_role,content:args.p_content,created_at:new Date().toISOString()});
       return {data:{id:turns.length}};
     }
-    if(name==='owner_assistant_history')return {data:tables.owner_assistant_turns.slice(-20)};
+    if(name==='owner_assistant_offline_provenance'){
+      if(args.p_owner_id!=null&&args.p_owner_id!==OWNER_CHAT_SCOPE.ownerId)return {error:{code:'DENIED'}};
+      if(args.p_mark===true){
+        offlineProvenance=true;
+        tables.workspace_settings[0].offline_invoice_provenance=true;
+        if(tables.workspace_ai_settings[0])tables.workspace_ai_settings[0].offline_invoice_provenance=true;
+      }
+      return {data:offlineProvenance};
+    }
+    if(name==='owner_assistant_history')return {data:[...tables.owner_assistant_turns.slice(-20),...(offlineProvenance?[{offline_provenance:true}]:[])]};
     if(name==='owner_assistant_pending')return {data:null};
     if (name === 'whatsapp_load_pending_action_state') {
       const action=currentPending(args);

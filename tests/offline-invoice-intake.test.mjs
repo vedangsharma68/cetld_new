@@ -5,6 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
+import {createOwnerSafetyTools} from '../automation/whatsapp/owner-agent.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistant-handler.mjs';
 import {extractInvoiceOffline} from '../ai/extraction.mjs';
@@ -520,6 +521,11 @@ test('default web route treats history phrases as ordinary text with byte-identi
 test('default owner route ignores local-review phrases in ordinary server history',async()=>{
   const f=await fixture({recording:true});try{
     delete f.routeEnv.EXTRACTION_ROUTE;
+    const rpc=f.supabase.rpc.bind(f.supabase);
+    f.supabase.rpc=(name,args)=>{
+      assert.notEqual(name,'owner_assistant_offline_provenance','Default owner turns must not call the offline RPC');
+      return rpc(name,args);
+    };
     const answers=[];
     for(const content of ['Ordinary conversation','I saw the words Local invoice review. in the manual.','[cetld:offline-intake] is documentation']){
       await f.db.query('delete from owner_assistant_turns where workspace_id=$1',[f.scope.workspaceId]);
@@ -541,7 +547,103 @@ test('durable business provenance blocks shared intake after route changes and f
     for(const request of [{message:'Summarize our conversation'},{message:'Read this',media:{bytes:png,mimeType:'image/png'}},{message:'set total to 100 INR'}]){
       assert.match(await handler({...f.scope,messageId:'changed-route',...request}),/local invoice information/);
     }
-    const broken=createWhatsAppBoundMessageHandler({supabase:{from:f.supabase.from.bind(f.supabase),rpc:async()=>({error:{code:'UNAVAILABLE'}})},env:{},providerFactory:deny,authorizeScope:async()=>true,logger});
+    const broken=createWhatsAppBoundMessageHandler({supabase:{from:f.supabase.from.bind(f.supabase),rpc:async()=>({error:{code:'UNAVAILABLE'}})},env:{EXTRACTION_ROUTE:'offline'},providerFactory:deny,authorizeScope:async()=>true,logger});
     await assert.rejects(broken({...f.scope,message:'Summarize'}),/provenance unavailable/);
+  }finally{await f.close();}
+});
+test('offline route without a provenance record permits ordinary owner planning and distinguishes lookup failure',async()=>{
+  const f=await fixture({recording:true});try{
+    assert.equal((await f.supabase.rpc('owner_assistant_offline_provenance',{p_workspace_id:f.scope.workspaceId})).data,false);
+    assert.equal((await f.turn('Please summarize our conversation')).answer,'Summary');
+    assert.equal(f.providerRecord.constructions,1);assert.ok(f.providerRecord.calls>0);
+    const before={...f.providerRecord};
+    const rpc=f.supabase.rpc.bind(f.supabase);
+    f.supabase.rpc=(name,args)=>name==='owner_assistant_offline_provenance'?Promise.resolve({error:{code:'DATABASE_UNAVAILABLE'}}):rpc(name,args);
+    const failed=await f.turn('Please summarize our conversation');
+    assert.equal(failed.plannerFailure.code,'FEATURE_UNAVAILABLE');
+    assert.equal(f.providerRecord.constructions,before.constructions);assert.equal(f.providerRecord.calls,before.calls);
+  }finally{await f.close();}
+});
+
+test('offline provenance survives corrected and derived replies across all pruning and recovery variants',async()=>{
+  for(const greetings of [0,3,25,48]){
+    const f=await fixture({recording:true});try{
+      await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
+      await f.turn('set customer to Fresh Caption Customer');
+      const corrected=await f.turn('set notes to Private caption detail');
+      assert.equal(corrected.buttons.length,2);
+      await f.turn('Confirm',{interactionId:corrected.buttons[0].id});
+      await f.turn('+919876543210');
+      for(let n=0;n<greetings;n++)await f.turn('hi');
+      await f.db.query('delete from owner_assistant_turns where workspace_id=$1',[f.scope.workspaceId]);
+      await f.db.query('delete from whatsapp_pending_actions where workspace_id=$1',[f.scope.workspaceId]);
+      // The mirrored metadata cannot be cleared by settings changes.
+      await f.db.query('update workspace_settings set offline_invoice_provenance=false where workspace_id=$1',[f.scope.workspaceId]);
+      assert.equal((await f.db.query('select offline_invoice_provenance from workspace_settings where workspace_id=$1',[f.scope.workspaceId])).rows[0].offline_invoice_provenance,true);
+      delete f.routeEnv.EXTRACTION_ROUTE;f.restart();
+      const rpc=f.supabase.rpc.bind(f.supabase);
+      f.supabase.rpc=(name,args)=>{
+        assert.notEqual(name,'owner_assistant_offline_provenance','Default turns use their existing history read');
+        return rpc(name,args);
+      };
+      const reply=await f.turn('Please summarize our conversation',{checkpoint:{phase:'planning',reply:'Fresh Caption Customer Private caption detail 20060'}});
+      assert.match(reply.answer,/local invoice information/);
+      const tools=createOwnerSafetyTools({supabase:f.supabase,scope:f.scope,env:{},authorize:async()=>true,ownerStore:{query:deny},
+        media:{bytes:png,mimeType:'image/png'},providerFactory:deny,logger});
+      for(const name of ['readInvoiceAttachment','checkInvoiceAttachmentDuplicate']){
+        const result=await tools.execute(name,{});
+        assert.equal(result.ok,false);assert.match(result.message,/local invoice information/);
+      }
+      assert.deepEqual(f.providerRecord,{constructions:0,calls:0,requests:[]});
+    }finally{await f.close();}
+  }
+});
+test('real web owner and admin stores reuse settings/history metadata without the offline RPC',async()=>{
+  const f=await fixture({recording:true});try{
+    let userId=f.scope.ownerId,constructions=0,calls=0;
+    const handler=createAIHandler({env:{NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_PUBLISHABLE_KEY:'fixture-key'},logger,
+      fetchImpl:async(url,options)=>{
+        const path=new URL(url).pathname;
+        assert.notEqual(path,'/rest/v1/rpc/owner_assistant_offline_provenance');
+        return path==='/auth/v1/user'?Response.json({id:userId}):f.fetchImpl(url,options);
+      },providerFactory:()=>{constructions++;return {generate:async()=>{calls++;return {content:'Summary'};}};}});
+    const ask=async(action='assistant')=>{
+      let response;
+      await handler({method:action==='assistant'?'POST':'GET',headers:{authorization:'Bearer fixture-owner-token'},query:{action,workspaceId:f.scope.workspaceId},
+        body:{workspaceId:f.scope.workspaceId,message:'Please summarize our conversation'}},
+        {setHeader(){},status(code){assert.equal(code,200);return this;},json(value){response=value;}});
+      return response;
+    };
+    const settingsReads=()=>f.requests.filter(r=>new URL(r.url).pathname==='/rest/v1/workspace_ai_settings').length;
+    const before=settingsReads();
+    assert.doesNotMatch((await ask()).answer,/local invoice information/);
+    assert.equal(constructions,1);assert.ok(calls>0);assert.equal(settingsReads(),before+1);
+    await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
+    const recorded={constructions,calls};
+    assert.match((await ask()).answer,/local invoice information/);
+    const persisted=(await ask('assistant-history')).turns;
+    assert.ok(persisted.every(turn=>['user','assistant'].includes(turn.role)&&typeof turn.content==='string'));
+    assert.equal(JSON.stringify(persisted).includes('offline_provenance'),false);
+    userId=randomUUID();await f.db.query('insert into auth.users(id) values($1)',[userId]);
+    await f.db.query("insert into workspace_members(workspace_id,user_id,role) values($1,$2,'admin')",[f.scope.workspaceId,userId]);
+    assert.match((await ask()).answer,/local invoice information/);
+    assert.deepEqual({constructions,calls},recorded);
+  }finally{await f.close();}
+});
+test('shared offline route permits ordinary chat without provenance and isolates later derived context',async()=>{
+  const f=await fixture();try{
+    let constructions=0,calls=0;
+    const handler=createWhatsAppBoundMessageHandler({supabase:f.supabase,env:{EXTRACTION_ROUTE:'offline'},logger,authorizeScope:async()=>true,
+      providerFactory:()=>{constructions++;return {generate:async()=>{calls++;return {content:'Ordinary answer'};}};}});
+    const ask=(message='Analyze payment trends')=>handler({...f.scope,message,messageId:'shared-summary'});
+    const ordinary=await ask();
+    assert.doesNotMatch(typeof ordinary==='string'?ordinary:ordinary.answer,/local invoice information/);
+    assert.equal(constructions,1);assert.ok(calls>0,JSON.stringify(ordinary));
+    await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
+    await f.db.query('delete from whatsapp_pending_actions where workspace_id=$1',[f.scope.workspaceId]);
+    const before={constructions,calls};
+    assert.match(await ask(),/local invoice information/);
+    assert.match(await ask('Please summarize our conversation'),/local invoice information/);
+    assert.deepEqual({constructions,calls},before);
   }finally{await f.close();}
 });

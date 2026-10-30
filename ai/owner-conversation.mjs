@@ -4,6 +4,7 @@ import {hasExternalReminderLedger} from '../automation/external-reminder-verific
 // Both transports supply a server-verified owner identity. Never derive this
 // identity from customer metadata, a phone number alone, or browser history.
 export function createOwnerConversation({rpc, workspaceId, ownerId, channel = 'web', readProposal, readReminderInvoice}) {
+  let historyProvenance;
   const reminderPreflight = async proposal => {
     if(proposal?.type!=='owner_reminder')return;
     if(!readReminderInvoice)throw new APIError(503,'external_accounting_required');
@@ -17,11 +18,17 @@ export function createOwnerConversation({rpc, workspaceId, ownerId, channel = 'w
     return result?.data;
   };
   return Object.freeze({
-    offlineProvenance: () => call('owner_assistant_offline_provenance'),
+    async offlineProvenance() {
+      if(historyProvenance===undefined)await this.read();
+      return historyProvenance;
+    },
     async read() {
       const rows=await call('owner_assistant_history');
       if(!Array.isArray(rows))throw new APIError(503,'OWNER_CONVERSATION_UNAVAILABLE');
-      return rows;
+      historyProvenance=rows.some(row=>row.offline_provenance===true);
+      const history=rows.filter(row=>row.offline_provenance!==true);
+      if(historyProvenance)history.offlineProvenance=true;
+      return history;
     },
     async append({key, role, content, pendingAction = null}) {
       const receipt=await call('owner_assistant_append', {
@@ -52,5 +59,8 @@ export function createOwnerConversation({rpc, workspaceId, ownerId, channel = 'w
 export async function readSharedOwnerHistory({supabase, workspaceId, ownerId}) {
   const rows = await createOwnerConversation({rpc:(name,args)=>supabase.rpc(name,args), workspaceId, ownerId, channel:'whatsapp'}).read();
   if (!Array.isArray(rows)) throw new APIError(503, 'OWNER_CONVERSATION_UNAVAILABLE');
-  return rows.map(({role,content,created_at,source_message_id,event_key,channel})=>({role,content,createdAt:created_at||null,providerMessageId:source_message_id||(channel==='whatsapp'&&role==='user'&&event_key?.startsWith('wa:')?event_key.slice(3,-5):null)}));
+  const history=rows.map(({role,content,created_at,source_message_id,event_key,channel})=>({role,content,createdAt:created_at||null,providerMessageId:source_message_id||(channel==='whatsapp'&&role==='user'&&event_key?.startsWith('wa:')?event_key.slice(3,-5):null)}));
+  // Server metadata is independent of bounded/pruned conversation text.
+  if(rows.offlineProvenance===true)history.offlineProvenance=true;
+  return history;
 }

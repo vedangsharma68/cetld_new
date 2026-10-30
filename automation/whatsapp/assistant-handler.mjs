@@ -282,14 +282,17 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       return 'Only the business owner can create or change invoices. Contact the business for help.';
     }
     const {data: settings, error} = await supabase.from('workspace_ai_settings')
-      .select('primary_model,fallback_model').eq('workspace_id', workspaceId).maybeSingle();
+      .select('*').eq('workspace_id', workspaceId).maybeSingle();
     if (error) throw error;
     const models = sanitizeModelSettings({primaryModel: settings?.primary_model,
       fallbackModel: settings?.fallback_model});
     const offline = env.EXTRACTION_ROUTE === 'offline';
-    const localBusiness = await offlineProvenance({supabase,workspaceId,mark:offline && Boolean(media || mediaError)});
+    const localBusiness = offline
+      ? await offlineProvenance({supabase,workspaceId,mark:Boolean(media || mediaError)})
+      : settings?.offline_invoice_provenance===true;
     if(localBusiness && !offline) return 'This conversation contains local invoice information. Start a new local invoice review to continue; conversation summaries are unavailable.';
-    const provider = offline ? null : providerFactory({...models, geminiApiKey: env.GEMINI_API_KEY,
+    const offlineTurn=offline && (localBusiness || media || mediaError || /\b(?:change|chnge|chng|make|set|edit|modify|fix|update)\b/i.test(message||''));
+    const provider = offlineTurn ? null : providerFactory({...models, geminiApiKey: env.GEMINI_API_KEY,
       openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
       cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN,
       fetchImpl, timeoutMs: 8000, maxAttempts: 1});
@@ -321,7 +324,6 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         // Media extraction is deliberately independent of the workspace's chat
         // model choice. This preserves conversational behavior while using the
         // vision-capable extraction chain and its separately configured keys.
-        if(!offline && await offlineProvenance({supabase,workspaceId})) return 'This conversation contains local invoice information. Continue with local invoice review.';
         const extractionProvider = offline ? null : providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
           fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, requestPurpose: 'extraction', geminiApiKey: env.GEMINI_API_KEY,
           openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
@@ -475,6 +477,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       }
       return offlineReviewClarification(action);
     }
+    if(localBusiness)return 'This conversation contains local invoice information. Continue with local invoice review.';
     let effective = message;
     if (/^\s*INV-[A-Z0-9-]+\s*[.!]?\s*$/i.test(message)) {
       try {
@@ -533,7 +536,6 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         const known = await intentStore.findInvoices({limit: 50});
         let history = [];
         try { history = await readConversationHistory({supabase, workspaceId, phone,customerId,audience}); } catch { /* optional context */ }
-        if(await offlineProvenance({supabase,workspaceId})) return 'This conversation contains local invoice information. Continue with local invoice review.';
         const intentProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
           fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, requestPurpose: 'extraction', geminiApiKey: env.GEMINI_API_KEY,
           openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
@@ -644,7 +646,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       }
       if (currency && action.stage === 'proposal') return proposalSummary(action.invoice);
     }
-    if (offline) return 'What would you like to change, and what should the new value be?';
+    if (offlineTurn) return 'What would you like to change, and what should the new value be?';
     let history = [];
     try { history = await readConversationHistory({supabase, workspaceId, phone,customerId,audience}); }
     catch (memoryError) {
