@@ -112,23 +112,79 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   const cleanText = text.replace(/\r\n?/g, '\n').slice(0, MAX_TEXT_CHARS);
   // Collapse horizontal whitespace once, before matching. Keep raw OCR untouched.
   // This prevents adjacent optional separators from partitioning long whitespace runs.
-  const lines = cleanText.split('\n').map(line => line.replace(/[^\S\n]+/g, ' ').trim()).filter(Boolean);
+  const rawLines = cleanText.split('\n');
+  const normalize = line => line.replace(/[^\S\n]+/g, ' ').trim();
+  const lines = rawLines.map(normalize).filter(Boolean);
+  // Retain layout boundaries separately: collapsing them into punctuation would
+  // break labels such as "Bill  To" and ordinary item-table whitespace.
+  const fieldLines = rawLines.map(raw => {
+    let text = '';
+    const starts = [];
+    for (const match of raw.matchAll(/\S+|[^\S\n]+/g)) {
+      if (/^\s/.test(match[0])) {
+        if (!text) continue;
+        text += ' ';
+        if (match[0].length > 1 || match[0].includes('\t')) starts.push(text.length);
+      } else text += match[0];
+    }
+    return {text: text.trimEnd(), starts};
+  }).filter(line => line.text);
   const confidence = safeConfidence(ocrConfidence);
   const warnings = [
     'Offline OCR is a draft. Review every extracted value against the image before saving.',
     'Direction is uncertain; confirm whether your business issued this invoice.',
   ];
   const dateQualifierSource = 'valid (?:until|through|till)|tax point|invoice|due|until|through|till|supply|order|receipt|expiry|expiration|print|printed|point|shipping|delivery|payment|dispatch|purchase|paid|received|service|transaction|posting|quote|quotation|validity|settlement|inspection|manufacturing|production|despatch|document|effective|approval|statement|billing|booking|value|renewal|shipment|audit|review';
-  const dateLabelSource = `(?:(?:${dateQualifierSource})(?: ?- ?| )date|[a-z]+ ?- ?date|date)`;
+  const dateWordSource = `${dateQualifierSource}|actual|expected|estimated|original|revised|scheduled|requested|promised|planned|confirmed|final|initial|ship|completion`;
+  const dateLabelSource = `(?:(?:(?:${dateWordSource})(?: ?- ?| ))+date|[a-z]+ ?- ?date|date)`;
   const boundarySource = `(?:${dateLabelSource}|invoice (?:no\\.?|number|#)|bill(?:ed)? to|ship to|customer|client|(?:(?:billing|shipping|delivery|registered) )?address|GSTIN|GST no\\.?|phone|mobile)`;
-  const labelPattern = new RegExp(`\\b(labou?r total|parts? total|consumables? total|taxable(?: subtotal)?|subtotal|(?:CGST|SGST|IGST|GST|sales tax|tax|VAT)(?: \\d{1,3}(?:\\.\\d{1,4})? ?%)?|grand total|total(?: due)?|balance due|amount due|outstanding(?: amount)?|rounding|currency(?: code)?|${boundarySource})(?= |:|[₹$€£]|$)`, 'gi');
+  const labelPattern = new RegExp(`\\b(${boundarySource}|labou?r total|parts? total|consumables? total|taxable(?: subtotal)?|subtotal|(?:CGST|SGST|IGST|GST|sales tax|tax|VAT)(?: \\d{1,3}(?:\\.\\d{1,4})? ?%)?|grand total|total(?: due)?|balance due|amount due|outstanding(?: amount)?|rounding|currency(?: code)?)(?= |:|[₹$€£]|$)`, 'gi');
+  // Whitespace alone is not evidence of a new field inside a printed name.
+  // Undelimited identifiers/phones have recognizable payloads; other labels
+  // need their explicit field delimiter.
+  const fieldLabels = (line, starts = []) => {
+    const known = [...line.matchAll(labelPattern)];
+    const strongStarts = [...line.matchAll(/[|;] */g)].map(match => match.index + match[0].length);
+    const layoutStarts = [...new Set([...starts, ...strongStarts])].sort((left, right) => left - right);
+    const explicit = [];
+    const lastColon = line.lastIndexOf(':');
+    for (const start of layoutStarts) {
+      if (start > lastColon) continue;
+      // Complete labels outrank their internal OCR spacing, including unknown
+      // phrases introduced by a pipe, semicolon or column gap.
+      if ([...known, ...explicit].some(label => label.index < start && start < label.index + label[0].length)) continue;
+      const match = line.slice(start).match(/^([a-z][a-z0-9 _./#()-]*?) *:(?= *\S)/i);
+      if (!match) continue;
+      const label = [match[1], match[1]];
+      label.index = start;
+      explicit.push(label);
+    }
+    const candidates = [...explicit, ...known.filter(match =>
+      !explicit.some(label => match.index >= label.index && match.index < label.index + label[0].length))]
+      .sort((left, right) => left.index - right.index);
+    const labels = [];
+    for (let index = candidates.length - 1; index >= 0; index--) {
+      const match = candidates[index];
+      const tail = line.slice(match.index + match[0].length, labels[0]?.index ?? line.length);
+      const payload = tail.trim().replace(/(?: *[|;] *)+$/, '').trim();
+      const structured = /^(?:GSTIN|GST no\.?)$/i.test(match[0])
+        ? /^\d{2}[a-z]{5}\d{4}[a-z][a-z0-9]Z[a-z0-9]$/i.test(payload)
+        : /^(?:phone|mobile)$/i.test(match[0])
+          ? /^\+?\d[\d ()-]{8,}$/.test(payload)
+          : /^currency(?: code)?$/i.test(match[0])
+            ? CURRENCIES.has(payload.toUpperCase())
+            : moneyPattern.test(payload);
+      if (/^ *:/.test(tail) || structured) labels.unshift(match);
+    }
+    return labels;
+  };
   const moneyPattern = /^(?:(?:INR|Rs\.?|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF) ?|[₹$€£] ?)?(-?\d[\d,]*(?:\.\d{1,2})?)$/i;
   const totalLabels = ['grand total', 'total'];
   const dueLabels = ['amount due', 'total due', 'outstanding', 'outstanding amount'];
   const currencyEvidence = new Set();
   const spans = [];
-  for (const line of lines) {
-    const labels = [...line.matchAll(labelPattern)];
+  for (const {text: line, starts} of fieldLines) {
+    const labels = fieldLabels(line, starts);
     for (let index = 0; index < labels.length; index++) {
       const match = labels[index];
       const label = (match[1] ?? match[2]).toLowerCase().replace(/ \d.*$/, '');
@@ -182,32 +238,49 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     break;
   }
   const readCustomer = (pattern, bareTo = false) => {
-    for (let index = 0; index < lines.length; index++) {
-      const match = lines[index].match(pattern);
+    for (let index = 0; index < fieldLines.length; index++) {
+      const match = fieldLines[index].text.match(pattern);
       if (!match) continue;
-      const printed = match[1].trim() || lines[index + 1];
-      const value = printed?.split(new RegExp(`${labelPattern.source}(?: ?:| +)|[|;]`, 'i'))[0].trim();
+      const ownLine = Boolean(match[1].trim());
+      const source = fieldLines[index + (ownLine ? 0 : 1)];
+      const printed = ownLine ? match[1].trim() : source?.text;
+      const offset = ownLine ? source.text.length - match[1].trimStart().length : 0;
+      const starts = source?.starts.filter(start => start >= offset).map(start => start - offset);
+      const boundary = printed ? fieldLabels(printed, starts)[0]?.index : undefined;
+      const value = printed?.slice(0, boundary).split(/[|;]/)[0].trim();
       if (value && value.length <= 160 && /\p{L}/u.test(value) && !/[:@]/.test(value)
-        && !(bareTo && (/^\d/.test(value) || /\b(?:road|street|warehouse|gate)\b/i.test(value)))
-        && !/\b(?:date|total|description|invoice|GSTIN|phone|mobile)\b/i.test(value)) return value;
+        && !(bareTo && (/^\d/.test(value) || /\b(?:road|street|warehouse|gate)\b/i.test(value)))) return value;
     }
     return null;
   };
   // Explicit billing labels anywhere take precedence over an anchored bare To.
   const customerName = readCustomer(/\b(?:bill(?:ed)? to|customer|client) ?: ?(.*)/i)
     ?? readCustomer(/^to ?: ?(.*)/i, true);
+  // Header vocabulary is the explicit exception for unseparated business text.
+  // Date qualifiers themselves are not enumerated: any remaining prefix makes
+  // this a qualified label, including unknown and hyphenated phrases.
+  const businessHeaderSource = String.raw`(?:(?:seller|business|company)(?: name| \d+)?|(?:[a-z0-9&'().-]+ )*(?:ltd\.?|limited|llp|llc|inc\.?|corp\.?|corporation|company|co\.?|enterprises|industries|textiles|trading|traders|fabrics|exports|imports|services|solutions|consultants|associates|partners|logistics|studio|retail))`;
+  const businessHeader = new RegExp(`^${businessHeaderSource}$`, 'i');
+  const positiveHeader = prefix => !prefix || businessHeader.test(prefix)
+    || /^[A-Z][A-Z0-9&]{1,}$/.test(prefix)
+    || /^(?:\d+ [\p{L}\p{N} .,'™/-]+, |[\p{L} . '™/-]+, [\p{L} . '™/-]+, )[\p{L} . '™/-]+ \d{5,6}$/u.test(prefix);
   const dates = {invoice: new Set(), bare: new Set(), due: new Set()};
   const dateLabels = /\b(date|due) ?:/gi;
-  for (const line of lines) {
+  for (const {text: line, starts} of fieldLines) {
+    const labels = fieldLabels(line, starts);
     for (const match of line.matchAll(dateLabels)) {
-      const prefix = line.slice(0, match.index);
-      const qualifier = (prefix.match(new RegExp(`\\b(${dateQualifierSource})(?: ?- ?| )$`, 'i'))
-        || prefix.match(/([a-z]+) ?- ?$/i))?.[1]?.toLowerCase();
-      // Ordinary header words do not qualify Date. Exclude complete known
-      // date labels, including multiword qualifiers, in any header position.
-      const label = match[1].toLowerCase() === 'date' && qualifier
-        ? `${qualifier} date` : match[1].toLowerCase();
-      const kind = label === 'invoice date' ? 'invoice' : label === 'due date' || label === 'due' ? 'due' : label === 'date' ? 'bare' : null;
+      const complete = labels.find(label => label.index + label[0].length === match.index + match[1].length);
+      const recognized = complete?.[0].toLowerCase().replace(/ *- */g, ' ').replace(/ +/g, ' ');
+      let kind = recognized === 'invoice date' ? 'invoice'
+        : recognized === 'due date' || match[1].toLowerCase() === 'due' ? 'due' : null;
+      if (kind && complete && complete.index > 0
+        && !labels.some(label => label.index < complete.index)
+        && !positiveHeader(line.slice(0, complete.index).trim())) kind = null;
+      if (!kind) {
+        const prefix = line.slice(0, match.index).split(/[|;:]/).at(-1).trim();
+        // Only positive header evidence can make an unseparated Date bare.
+        if (positiveHeader(prefix)) kind = 'bare';
+      }
       if (!kind) continue;
       const printed = line.slice(match.index + match[0].length, match.index + match[0].length + 40)
         .match(/^ ?(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{4})(?= |$)/)?.[1];
