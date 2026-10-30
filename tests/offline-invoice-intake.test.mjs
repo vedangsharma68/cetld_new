@@ -32,6 +32,20 @@ const env={EXTRACTION_ROUTE:'offline',WHATSAPP_APP_SECRET:'offline-test-buttons-
 const logger={info(){},warn(){},error(){}};
 const deny=()=>{assert.fail('No provider factory, model classifier, or external fetch may run');};
 
+test('F1 real owner handler cannot confirm a PAYMENT DATE as invoice issuance', async () => {
+  const f=await fixture();
+  try {
+    f.setPrinted(text.replace('Invoice Date: 2026-10-20','PAYMENT DATE: 2026-10-20'));
+    const reply=await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
+    const review=await f.pending.loadInvoiceReview(f.scope);
+    assert.equal(review.action.invoice.invoiceDate,null);
+    assert.equal(review.action.stage,'incomplete');
+    assert.ok(review.action.missingFields.includes('invoiceDate'));
+    assert.equal(reply.buttons,undefined);
+    assert.equal(await f.count(),0);
+  } finally { await f.close(); }
+});
+
 // Exercise the real image extractor with a local OCR worker fixture. The
 // preprocessing/recognition boundaries are local; all downstream parsing is real.
 const imageExtractor=printed=>request=>extractInvoiceFromImage({...request,preprocessor:async bytes=>bytes,
