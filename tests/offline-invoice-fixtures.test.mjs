@@ -402,3 +402,36 @@ test('v3 ordinary header text permits bare Date while genuine qualifiers stay ex
     assert.equal(parseDraft(`${label}: 2026-11-04`).invoiceDate.value, null, label);
   }
 });
+
+
+test('complete monetary fields retain numeric pipe continuations', () => {
+  for (const text of ['Description Qty Rate Amount\nTotal 1 | 20.00 | 20.00', 'Total: 1 |20,000.00', 'Total: INR 12.00 || 3.00', 'Total: 8 | 9 Invoice No: X-1']) {
+    assert.equal(parseOfflineInvoiceText(text).total.value, null, text);
+  }
+  const draft = parseOfflineInvoiceText('Total: INR 118.00 | Balance Due: INR 0.00');
+  assert.equal(draft.total.value, 118);
+  assert.equal(draft.outstandingAmount.value, 0);
+});
+
+test('date qualifiers use invoice-label allowlist semantics', () => {
+  for (const label of ['Expiry Date', 'Print Date', 'Tax Point Date', 'Shipping Date', 'Delivery Date', 'Payment Date', 'Inspection Date', 'Renewal-Date']) {
+    assert.equal(parseOfflineInvoiceText(`Acme Ltd\n${label}: 2026-10-20`).invoiceDate.value, null, label);
+  }
+  assert.equal(parseOfflineInvoiceText('Acme Ltd Date: 2026-10-20').invoiceDate.value, '2026-10-20');
+});
+
+test('customer boundaries consume complete date and identity labels', () => {
+  for (const label of ['Shipping Date', 'Delivery Date', 'Invoice-Date', 'Tax Point Date', 'Inspection Date', 'Invoice #']) {
+    assert.equal(parseOfflineInvoiceText(`Bill To: Real Buyer ${label}: 2026-10-20`).customerName.value, 'Real Buyer', label);
+  }
+});
+
+test('all date and invoice identity boundaries preserve total conflicts', () => {
+  for (const label of ['Date', 'Payment Date', 'Invoice #', 'Invoice No', 'Inspection Date']) {
+    const single = parseOfflineInvoiceText(`Total: INR 118.00 ${label}: INV-1`);
+    assert.equal(single.total.value, 118, label);
+    const conflict = parseOfflineInvoiceText(`Total: INR 100.00\nGrand Total: INR 120.00 ${label}: 2026-10-20`);
+    assert.equal(conflict.total.value, null, label);
+    assert.ok(conflict.warnings.some(w => /Conflicting printed total/.test(w)), label);
+  }
+});
