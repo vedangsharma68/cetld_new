@@ -3,6 +3,47 @@ import test from 'node:test';
 import {execFileSync} from 'node:child_process';
 import {parseOfflineInvoiceText} from '../ai/image-text.mjs';
 
+test('F1 uppercase qualified dates stay uncertain alone and inside complete documents', () => {
+  for (const qualifier of ['REVERSAL','DISBURSEMENT','PAYMENT','PRINT','SHIPPING','AUDIT','CANCELLATION','BANK','REFUND']) {
+    for (const label of [qualifier, qualifier.toLowerCase(), qualifier[0] + qualifier.slice(1).toLowerCase()]) {
+      for (const prefix of ['', 'Invoice No: Q-19\nBill To: Arbor Partners\nTotal: INR 118.00\n']) {
+        const result = parseDraft(`${prefix}${label} DATE: 2026-10-20`);
+        assert.equal(result.invoiceDate.value, null, label);
+        assert.ok(result.uncertainFields.includes('invoiceDate'));
+      }
+    }
+  }
+});
+
+test('F2 OCR gaps inside names cannot invent labels spanning a recognized colon label', () => {
+  for (const [name, suffix] of [
+    ['Cedar Grove   Distribution','GSTIN: 29ABCDE1234F1Z5'],
+    ['Willow\tValley  Cooperative','Phone: 9876543210'],
+    ['Summit  Ridge\tGroup','Address: 17 Park Lane'],
+    ['Pinnacle  Supply Chain','GSTIN: 29ABCDE1234F1Z5'],
+    ['Meadow  Valley Partners','Phone: 9876543210'],
+    ['Riverbend\tSupply Partners','Address: 15 Lake Road'],
+  ]) {
+    const result = parseDraft(`Bill To: ${name} ${suffix}`);
+    assert.equal(result.customerName.value, name.replace(/\s+/g, ' '), name);
+    assert.ok(result.uncertainFields.includes('customerName'));
+  }
+});
+
+test('F3 bare numeric endings stay in labelled names even beside identifiers and phones', () => {
+  for (const name of ['Regional VAT 2031','Atelier GST 37','Balance 82','Amount 56','National Tax 2026','Studio Tax 24','Total 24']) {
+    for (const suffix of ['', ' GSTIN 29ABCDE1234F1Z5', ' Phone 9876543210', ' GSTIN: 29ABCDE1234F1Z5', ' Phone: 9876543210']) {
+      for (const label of ['Bill To', 'Billed To', 'Customer', 'Client', 'To']) {
+        const result = parseDraft(`${label}: ${name}${suffix}`);
+        assert.equal(result.customerName.value, name, label + ': ' + name + suffix);
+        assert.equal(result.tax.value, null, name + ' is not a tax field');
+        assert.equal(result.total.value, null, name + ' is not a total field');
+        assert.ok(result.uncertainFields.includes('customerName'));
+      }
+    }
+  }
+});
+
 const uncertainFields = [
   'invoiceNumber', 'customerName', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'total',
   'outstandingAmount', 'currency', 'clientPhone', 'clientPhoneRaw', 'clientEmail', 'notes', 'direction', 'lineItems',

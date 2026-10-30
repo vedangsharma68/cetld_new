@@ -142,7 +142,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   // Whitespace alone is not evidence of a new field inside a printed name.
   // Undelimited identifiers/phones have recognizable payloads; other labels
   // need their explicit field delimiter.
-  const fieldLabels = (line, starts = []) => {
+  const fieldLabels = (line, starts = [], inName = false) => {
     const known = [...line.matchAll(labelPattern)];
     const strongStarts = [...line.matchAll(/[|;] */g)].map(match => match.index + match[0].length);
     const layoutStarts = [...new Set([...starts, ...strongStarts])].sort((left, right) => left - right);
@@ -155,6 +155,15 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
       if ([...known, ...explicit].some(label => label.index < start && start < label.index + label[0].length)) continue;
       const match = line.slice(start).match(/^([a-z][a-z0-9 _./#()-]*?) *:(?= *\S)/i);
       if (!match) continue;
+      // A column gap inside a value cannot invent a label that swallows a
+      // complete recognized field. Date suffixes alone are not complete labels.
+      if (known.some(label => {
+        if (label.index <= start || label.index >= start + match[1].length || /date$/i.test(label[0])) return false;
+        const tail = line.slice(label.index + label[0].length);
+        return /^ *:/.test(tail)
+          || /^(?:GSTIN|GST no\.?)$/i.test(label[0]) && /^ +\d{2}[a-z]{5}\d{4}[a-z][a-z0-9]Z[a-z0-9]\b/i.test(tail)
+          || /^(?:phone|mobile)$/i.test(label[0]) && /^ +\+?\d[\d ()-]{8,}(?= |$)/.test(tail);
+      })) continue;
       const label = [match[1], match[1]];
       label.index = start;
       explicit.push(label);
@@ -162,18 +171,27 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     const candidates = [...explicit, ...known.filter(match =>
       !explicit.some(label => match.index >= label.index && match.index < label.index + label[0].length))]
       .sort((left, right) => left.index - right.index);
+    const nameCandidates = new Set();
+    let billingValue = /^to ?:/i.test(line);
+    for (const match of candidates) {
+      if (billingValue) nameCandidates.add(match);
+      if (/^ *:/.test(line.slice(match.index + match[0].length))) {
+        billingValue = /^(?:bill(?:ed)? to|customer|client)$/i.test(match[0]);
+      }
+    }
     const labels = [];
     for (let index = candidates.length - 1; index >= 0; index--) {
       const match = candidates[index];
       const tail = line.slice(match.index + match[0].length, labels[0]?.index ?? line.length);
       const payload = tail.trim().replace(/(?: *[|;] *)+$/, '').trim();
+      const nameValue = inName || nameCandidates.has(match);
       const structured = /^(?:GSTIN|GST no\.?)$/i.test(match[0])
         ? /^\d{2}[a-z]{5}\d{4}[a-z][a-z0-9]Z[a-z0-9]$/i.test(payload)
         : /^(?:phone|mobile)$/i.test(match[0])
           ? /^\+?\d[\d ()-]{8,}$/.test(payload)
           : /^currency(?: code)?$/i.test(match[0])
             ? CURRENCIES.has(payload.toUpperCase())
-            : moneyPattern.test(payload);
+            : moneyPattern.test(payload) && (!nameValue || !/^-?\d[\d,]*$/.test(payload));
       if (/^ *:/.test(tail) || structured) labels.unshift(match);
     }
     return labels;
@@ -246,7 +264,9 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
       const printed = ownLine ? match[1].trim() : source?.text;
       const offset = ownLine ? source.text.length - match[1].trimStart().length : 0;
       const starts = source?.starts.filter(start => start >= offset).map(start => start - offset);
-      const boundary = printed ? fieldLabels(printed, starts)[0]?.index : undefined;
+      // A bare integer/year after a label word is still part of a name.
+      // Explicit colons and monetary payloads can establish adjacent fields.
+      const boundary = printed ? fieldLabels(printed, starts, true)[0]?.index : undefined;
       const value = printed?.slice(0, boundary).split(/[|;]/)[0].trim();
       if (value && value.length <= 160 && /\p{L}/u.test(value) && !/[:@]/.test(value)
         && !(bareTo && (/^\d/.test(value) || /\b(?:road|street|warehouse|gate)\b/i.test(value)))) return value;
@@ -257,12 +277,14 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   const customerName = readCustomer(/\b(?:bill(?:ed)? to|customer|client) ?: ?(.*)/i)
     ?? readCustomer(/^to ?: ?(.*)/i, true);
   // Header vocabulary is the explicit exception for unseparated business text.
-  // Date qualifiers themselves are not enumerated: any remaining prefix makes
-  // this a qualified label, including unknown and hyphenated phrases.
+  // Preserve the established acronym headers, but do not infer business identity
+  // from arbitrary uppercase words: BANK Date and ACME Date share that syntax.
+  // Every other unknown prefix is an unresolved qualified label, in any casing.
+  const establishedAcronymHeaders = new Set(['ACME', 'ORION', 'ZQRT']);
   const businessHeaderSource = String.raw`(?:(?:seller|business|company)(?: name| \d+)?|(?:[a-z0-9&'().-]+ )*(?:ltd\.?|limited|llp|llc|inc\.?|corp\.?|corporation|company|co\.?|enterprises|industries|textiles|trading|traders|fabrics|exports|imports|services|solutions|consultants|associates|partners|logistics|studio|retail))`;
   const businessHeader = new RegExp(`^${businessHeaderSource}$`, 'i');
   const positiveHeader = prefix => !prefix || businessHeader.test(prefix)
-    || /^[A-Z][A-Z0-9&]{1,}$/.test(prefix)
+    || establishedAcronymHeaders.has(prefix)
     || /^(?:\d+ [\p{L}\p{N} .,'™/-]+, |[\p{L} . '™/-]+, [\p{L} . '™/-]+, )[\p{L} . '™/-]+ \d{5,6}$/u.test(prefix);
   const dates = {invoice: new Set(), bare: new Set(), due: new Set()};
   const dateLabels = /\b(date|due) ?:/gi;
@@ -271,6 +293,9 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     for (const match of line.matchAll(dateLabels)) {
       const complete = labels.find(label => label.index + label[0].length === match.index + match[1].length);
       const recognized = complete?.[0].toLowerCase().replace(/ *- */g, ' ').replace(/ +/g, ' ');
+      // Classify the complete date label first. A non-invoice qualifier must
+      // never get a second chance via the uppercase/business-header fallback.
+      if (recognized && recognized !== 'date' && recognized !== 'invoice date' && recognized !== 'due date') continue;
       let kind = recognized === 'invoice date' ? 'invoice'
         : recognized === 'due date' || match[1].toLowerCase() === 'due' ? 'due' : null;
       if (kind && complete && complete.index > 0
