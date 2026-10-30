@@ -308,7 +308,7 @@ test('qualified date labels cannot become a bare invoice Date', () => {
     assert.equal(result.invoiceDate.value, null, label);
     assert.equal(result.dueDate.value, null, label);
   }
-  const shared = parseDraft('Address 560001 Date: 2026-10-20 Due - Date: 2026-11-04 Payment Date: 2026-10-22');
+  const shared = parseDraft('Acme Ltd Date: 2026-10-20 Due - Date: 2026-11-04 Payment Date: 2026-10-22');
   assert.equal(shared.invoiceDate.value, '2026-10-20');
   assert.equal(shared.dueDate.value, '2026-11-04');
   assert.equal(parseDraft('Invoice-Date: 2026-10-20').invoiceDate.value, '2026-10-20');
@@ -358,4 +358,80 @@ test('adversarial bounded OCR finishes under an external process deadline', () =
     }
   `;
   execFileSync(process.execPath, ['--input-type=module', '-e', script], {timeout:5000, stdio:'pipe'});
+});
+
+
+test('v3 money boundaries preserve adjacent identity/date labels and pipe-separated fields', () => {
+  for (const suffix of ['Due Date: 2026-11-04', 'Invoice No: INV-1', '| Balance Due: INR 0.00']) {
+    assert.equal(parseDraft(`Total: INR 118.00 ${suffix}`).total.value, 118, suffix);
+  }
+  const conflict = parseDraft('Total: INR 100.00\nGrand Total: INR 120.00 Due Date: 2026-11-04');
+  assert.equal(conflict.total.value, null);
+  assert.ok(conflict.warnings.some(warning => /Conflicting printed total/.test(warning)));
+  assert.equal(parseDraft('Total: 1 20,000.00 Due Date: 2026-11-04').total.value, null);
+  assert.equal(parseDraft('Description Qty Rate Amount\nTotal 1 20.00 20.00').total.value, null);
+});
+
+test('v3 explicit billing names allow company digits/road words and stop at the next field', () => {
+  for (const name of ['3M India Ltd', 'Road Runner Logistics']) {
+    assert.equal(parseDraft(`Bill To: ${name}`).customerName.value, name);
+  }
+  const shared = parseDraft('Bill To: Real Buyer Invoice Date: 2026-10-20');
+  assert.equal(shared.customerName.value, 'Real Buyer');
+  assert.equal(shared.invoiceDate.value, '2026-10-20');
+  assert.equal(parseDraft('Ship To:\nWarehouse gate two\nBill To: Real Buyer').customerName.value, 'Real Buyer');
+  assert.equal(parseDraft('To:\n14 MG Road').customerName.value, null);
+});
+
+test('v3 invoice totals remain independent of remaining due values', () => {
+  for (const dueLabel of ['Total Due', 'Amount Due']) {
+    const result = parseDraft(`Total: INR 100.00\n${dueLabel}: INR 50.00\nBalance Due: INR 50.00`);
+    assert.equal(result.total.value, 100);
+    assert.equal(result.outstandingAmount.value, 50);
+    assert.ok(!result.warnings.some(warning => /conflict|differs/i.test(warning)));
+  }
+  assert.equal(parseDraft('Total Due: INR 50.00').total.value, 50);
+  const conflict = parseDraft('Total: INR 100.00\nGrand Total: INR 120.00\nTotal Due: INR 50.00');
+  assert.equal(conflict.total.value, null);
+  assert.ok(conflict.warnings.some(warning => /Conflicting printed total/.test(warning)));
+});
+
+test('v3 ordinary header text permits bare Date while genuine qualifiers stay excluded', () => {
+  assert.equal(parseDraft('Acme Ltd Date: 2026-10-20').invoiceDate.value, '2026-10-20');
+  for (const label of ['Payment Date', 'Delivery Date', 'Due-Date', 'Due - Date', 'Settlement Date']) {
+    assert.equal(parseDraft(`${label}: 2026-11-04`).invoiceDate.value, null, label);
+  }
+});
+
+
+test('complete monetary fields retain numeric pipe continuations', () => {
+  for (const text of ['Description Qty Rate Amount\nTotal 1 | 20.00 | 20.00', 'Total: 1 |20,000.00', 'Total: INR 12.00 || 3.00', 'Total: 8 | 9 Invoice No: X-1']) {
+    assert.equal(parseOfflineInvoiceText(text).total.value, null, text);
+  }
+  const draft = parseOfflineInvoiceText('Total: INR 118.00 | Balance Due: INR 0.00');
+  assert.equal(draft.total.value, 118);
+  assert.equal(draft.outstandingAmount.value, 0);
+});
+
+test('date qualifiers use invoice-label allowlist semantics', () => {
+  for (const label of ['Expiry Date', 'Print Date', 'Tax Point Date', 'Shipping Date', 'Delivery Date', 'Payment Date', 'Inspection Date', 'Renewal-Date']) {
+    assert.equal(parseOfflineInvoiceText(`Acme Ltd\n${label}: 2026-10-20`).invoiceDate.value, null, label);
+  }
+  assert.equal(parseOfflineInvoiceText('Acme Ltd Date: 2026-10-20').invoiceDate.value, '2026-10-20');
+});
+
+test('customer boundaries consume complete date and identity labels', () => {
+  for (const label of ['Shipping Date', 'Delivery Date', 'Invoice-Date', 'Tax Point Date', 'Inspection Date', 'Invoice #']) {
+    assert.equal(parseOfflineInvoiceText(`Bill To: Real Buyer ${label}: 2026-10-20`).customerName.value, 'Real Buyer', label);
+  }
+});
+
+test('all date and invoice identity boundaries preserve total conflicts', () => {
+  for (const label of ['Date', 'Payment Date', 'Invoice #', 'Invoice No', 'Inspection Date']) {
+    const single = parseOfflineInvoiceText(`Total: INR 118.00 ${label}: INV-1`);
+    assert.equal(single.total.value, 118, label);
+    const conflict = parseOfflineInvoiceText(`Total: INR 100.00\nGrand Total: INR 120.00 ${label}: 2026-10-20`);
+    assert.equal(conflict.total.value, null, label);
+    assert.ok(conflict.warnings.some(w => /Conflicting printed total/.test(w)), label);
+  }
 });
