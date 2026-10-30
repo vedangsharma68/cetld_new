@@ -35,7 +35,7 @@ export function createAutomationRuntime({env=process.env,fetchImpl=fetch,store,p
   store ||= new CoreAutomationStore({url:required(env,'SUPABASE_URL'),key:required(env,'SUPABASE_SERVICE_ROLE_KEY'),fetchImpl,now:clock});
   async function read(scope) { const invoice=await store.getInvoice(scope);if(!invoice)throw new HttpError(404,'Invoice unavailable');return invoice; }
   function makeEngine(reminders) {
-    if(reminders)return new FollowUpEngine({store,provider:reminders.provider,clock,paymentChecker:reminders.paymentChecker});
+    if(reminders)return new FollowUpEngine({store:reminders.store||store,provider:reminders.provider,clock,paymentChecker:reminders.paymentChecker});
     const sender=provider || createWhatsAppProvider({mode:required(env,'WHATSAPP_PROVIDER'),environment:env.NODE_ENV});
     return new FollowUpEngine({store,provider:sender,clock,paymentChecker:async ({invoice,ownerId,workspaceId})=>{
       if (env.WHATSAPP_PROVIDER==='mock' && env.NODE_ENV!=='production' && !invoice.bookkeeping_record_id) return {paidMinor:Number(invoice.paidMinor ?? invoice.paid_minor)};
@@ -97,7 +97,7 @@ export function createAutomationRuntime({env=process.env,fetchImpl=fetch,store,p
       let reminders;
       if(env.WHATSAPP_PROVIDER==='first_party_meta'){
         if(!firstPartyReminderEnabled(env))return {processed:0,results:[],disabled:true,summary:summary.enabled?{day:summary.day,counts:summary.counts}:null};
-        reminders=createFirstPartyReminderRuntime({env,scope,store,supabase,accounting,fetchImpl,clock});
+        reminders=createFirstPartyReminderRuntime({env,scope,store,supabase,accounting:()=>accounting||createAccountingRuntime({env,fetchImpl}),fetchImpl,clock});
         if(test.mode==='test'){
           if(await reminders.testGate.consumed())return {processed:0,results:[],test:true,alreadyAttempted:true};
           await reminders.testGate.review();

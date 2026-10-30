@@ -1,5 +1,5 @@
 import {assertTestReminderDelivery,TEST_TEMPLATE_BLOCK_MESSAGE} from './test-reminder-policy.mjs';
-import {reminderPaymentRpc,localReminderStatusPayable,hasExternalReminderLedger} from '../external-reminder-verification.mjs';
+import {boundOwnerReminderEligible,reminderPaymentRpc,localReminderStatusPayable,hasExternalReminderLedger} from '../external-reminder-verification.mjs';
 import {PHONE_FORMAT_GUIDANCE} from './owner-phone.mjs';
 import {ownerConsentFailure} from './owner-consent.mjs';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
@@ -142,7 +142,7 @@ export function createOwnerReminderRuntime({supabase,scope,message='',messageId,
           assertAuthorized:()=>check(ctx),assertLive:()=>ctx?.assertLive?.()});
         if(!found.ok)return refuse(found.code);
         const invoice=found.row;
-        if(hasExternalReminderLedger(invoice))return refuse('external_accounting_required');
+        if(hasExternalReminderLedger(invoice)&&!await boundOwnerReminderEligible({supabase,ownerId:scope.ownerId,workspaceId:scope.workspaceId,invoiceId:invoice.id}))return refuse('external_accounting_required');
         const settings=unwrap(await supabase.from('workspace_settings').select('business_name,default_timezone,follow_up_preferences,updated_at').eq('workspace_id',scope.workspaceId).maybeSingle());
         const customer=unwrap(await supabase.from('customers').select('id,name,phone,reminder_tone').eq('workspace_id',scope.workspaceId).eq('id',invoice.customer_id).maybeSingle());
         customerName=customer?.name?.trim()||null;
