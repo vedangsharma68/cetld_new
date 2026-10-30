@@ -17,6 +17,7 @@ export function createOwnerConversation({rpc, workspaceId, ownerId, channel = 'w
     return result?.data;
   };
   return Object.freeze({
+    offlineProvenance: () => call('owner_assistant_offline_provenance'),
     async read() {
       const rows=await call('owner_assistant_history');
       if(!Array.isArray(rows))throw new APIError(503,'OWNER_CONVERSATION_UNAVAILABLE');

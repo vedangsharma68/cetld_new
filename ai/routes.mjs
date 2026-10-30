@@ -121,7 +121,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
       }
       const rows=action==='assistant'&&conversation?await conversation.read():null;
       const history=rows?rows.map(({role,content})=>({role,content})):body.history;
-      if(action==='assistant' && Array.isArray(history) && history.some(turn=>/\[cetld:offline-intake\]|Local invoice review\./.test(turn?.content||'')))
+      if(await (store.offlineProvenance?.() ?? conversation?.offlineProvenance?.()))
         return res.status(200).json({answer:'This conversation contains local invoice information. Continue its review in WhatsApp; conversation summaries are unavailable.',pendingAction:null,readOnly:true});
       const settings = await store.getSettings();
       const provider = providerFactory({primaryModel: settings.primary_model, fallbackModel: settings.fallback_model,
@@ -195,3 +195,4 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
     }
   };
 }
+

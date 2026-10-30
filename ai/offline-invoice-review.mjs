@@ -14,8 +14,15 @@ export const OFFLINE_CANCEL_REPLY = /^\s*(?:no|cancel|never mind|nevermind|disca
 // Deliberately narrower than conversational inference. A question, negation or
 // conditional is never evidence that the business issued this invoice.
 export function offlineDirectionEvidence(message) {
-  return !/[?'"“”`]|\b(?:false|deny|denies|denied|not|never|didn't|did not|don't|if|maybe|whether|wasn't|could|would|someone|says|said|quoted|perhaps|might|later|tomorrow|next)\b/i.test(message)
-    && /(?:^|[.!;]\s*)(?:(?:we|i|our business|my business)\s+(?:have\s+)?(?:issued|sent|created|made)\s+(?:it|(?:(?:this|that|the)\s+)?invoice)\b|issued by (?:us|me|our business))\b/i.test(message);
+  // Accept a complete closed assertion, optionally followed by a closed intake
+  // request. Unconsumed prefix/interposed/suffix prose cannot authorize saving.
+  return /^\s*(?:(?:we|i|our business|my business)\s+(?:have\s+)?(?:issued|sent|created|made)\s+(?:it|(?:(?:this|that|the)\s+)?invoice)|issued by (?:us|me|our business))[.!]?\s*(?:(?:please )?(?:log|save|record) (?:it|this invoice)[.!]?)?\s*$/i.test(message);
+}
+
+function offlineDirectionWithdrawal(message) {
+  // A mention of the issuance proposition outside the complete affirmative
+  // grammar cannot preserve a prior endorsement, even inside a mixed edit.
+  return !offlineDirectionEvidence(message) && /\b(?:issu(?:e|ed|ance)|sen(?:d|t)|creat(?:e|ed)|ma(?:ke|de)|statement|claim|retract(?:ed)?)\b/i.test(message);
 }
 
 export function resolveOfflineReview(action) {
@@ -122,16 +129,43 @@ export function offlineReviewClarification(action, {buttonsAvailable=false,maxLe
   return rendered.length > maxLength ? 'This invoice has too much printed detail for one WhatsApp review. Nothing was saved. Send an invoice with fewer line items or review it in cetld.' : rendered;
 }
 
+export function offlineCorrectionInputIssue(message, {parseCorrection,clock}={}) {
+  if(offlineDirectionWithdrawal(message))return null;
+  const changes=parseCorrection(message,clock)?.changes;
+  if(!changes)return null;
+  const text=String(message).trim();
+  for(const key of Object.keys(changes)) {
+    const patterns={
+      total:/^(?:change|make|set|update|edit|modify|fix) (?:the )?(?:total|amount|amt|price|value) (?:to )?[0-9][0-9,]*(?:[.][0-9]{1,2})?(?: [A-Za-z]{3})?[.!]?$/i,
+      dueDate:/^(?:change|make|set) (?:the )?due date (?:to )?[0-9]{4}-[0-9]{2}-[0-9]{2}$/i,
+      invoiceDate:/^(?:change|make|set) (?:the )?(?:invoice|issue) date (?:to )?[0-9]{4}-[0-9]{2}-[0-9]{2}$/i,
+      clientName:/^(?:change|set) (?:the )?customer (?:to )?.+$/i,
+      notes:/^(?:change|set) (?:the )?notes? (?:to )?.+$/i,
+      currency:/^(?:currency (?:should be|to|is) )?[A-Za-z]{3}[.!]?$/i,
+    };
+    if(key==='currency' && changes.total!=null && patterns.total.test(text))continue;
+    if(!patterns[key]?.test(text))return key==='dueDate'||key==='invoiceDate'
+      ? 'Use a full date in YYYY-MM-DD format, for example "set due date to 2026-11-10". Nothing was changed.'
+      : 'Use a complete correction such as "set total to 100 INR", "set customer to Acme", or "set notes to reviewed". Nothing was changed.';
+  }
+  return null;
+}
+
 // parseCorrection is the established closed grammar, passed in to avoid a
 // dependency cycle with the handler. No model or inferred edit is accepted.
 export function correctOfflineReview(action, message, {parseCorrection, clock, messageId} = {}) {
   if (!['incomplete','proposal'].includes(action.stage) || /\b(?:sql|run|execute|select|delete|drop|table|script)\b/i.test(message)) return null;
-  let changes = parseCorrection(message, clock)?.changes;
+  if(offlineCorrectionInputIssue(message,{parseCorrection,clock}))return null;
+  let changes = offlineDirectionWithdrawal(message)
+    ? action.invoice.direction==='receivable' ? {direction:'uncertain'} : null
+    : parseCorrection(message, clock)?.changes;
   const currency = String(message).trim().toUpperCase().replace(/[.!]$/, '');
   if (!changes && isSupportedCurrency(currency)) changes = {currency};
-  if (!changes && /^\s*(?:set|change)\s+invoice\s+number\s+(?:to\s+)?[A-Za-z0-9][A-Za-z0-9/_.-]{0,99}\s*$/i.test(message))
+  if (!changes && /^(?:set|change) invoice number (?:to )?[A-Za-z0-9][A-Za-z0-9/_.-]{0,99}$/i.test(message))
     changes = {invoiceNumber:message.trim().split(/\s+/).at(-1)};
   if (offlineDirectionEvidence(message)) changes = {...changes, direction:'receivable'};
+  else if(!changes && action.invoice.direction==='receivable' && !OFFLINE_CONFIRMATION_REPLY.test(message) && !OFFLINE_CANCEL_REPLY.test(message))
+    changes={direction:'uncertain'};
   if (!changes || Object.keys(changes).some(key => !Object.values(keys).includes(key))
     || Object.values(changes).some(value => value == null || value === '')) return null;
   const invoice = {...action.invoice, ...changes};
@@ -145,3 +179,4 @@ export function correctOfflineReview(action, message, {parseCorrection, clock, m
   return resolveOfflineReview({...action, invoice, ownerProvidedFacts,
     currencySource:changes.currency ? 'user' : action.currencySource});
 }
+

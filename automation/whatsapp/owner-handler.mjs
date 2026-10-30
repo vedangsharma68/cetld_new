@@ -1,4 +1,5 @@
-import {offlineReviewClarification, correctOfflineReview, OFFLINE_CANCEL_REPLY, OFFLINE_CONFIRMATION_REPLY} from '../../ai/offline-invoice-review.mjs';
+import {offlineProvenance} from '../../ai/offline-provenance.mjs';
+import {offlineReviewClarification, correctOfflineReview, offlineCorrectionInputIssue, OFFLINE_CANCEL_REPLY, OFFLINE_CONFIRMATION_REPLY} from '../../ai/offline-invoice-review.mjs';
 import {ownerWriteConfirmation} from './owner-write-confirmation.mjs';
 import {receivableBalanceLabel} from '../../invoice/receivables.mjs';
 import {answerDebtorPhone, createWhatsAppBoundMessageHandler, parseInvoiceCorrection} from './assistant-handler.mjs';
@@ -266,10 +267,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     if(historyReader===readSharedOwnerHistory&&!historyAvailable)return {answer:'Your business conversation is temporarily unavailable. Try again shortly. No action was taken.'};
     const {lifecycle,lifecyclePending,available:lifecycleAvailable}=lifecycleState;
     ownerStore=ownerStoreState;
-    // Markers are persisted in content so every history/recovery reader retains
-    // the provenance, including readers that project away optional metadata.
-    const offlineHistory = history.some(turn=>/\[cetld:offline-intake\]|Local invoice review\./.test(turn.content||''))
-      || /\[cetld:offline-intake\]|Local invoice review\./.test(JSON.stringify(scope.checkpoint||{}));
+    const offlineHistory = await offlineProvenance({supabase,workspaceId,ownerId,
+      mark:env.EXTRACTION_ROUTE==='offline' && Boolean(media || mediaError)});
     if (offlineHistory && (env.EXTRACTION_ROUTE !== 'offline' || !media && !mediaError && pendingAtStart?.action?.extractionRoute !== 'offline'))
       return {offlineReview:true,answer:'This conversation contains local invoice information. Start a new local invoice review to continue; conversation summaries are unavailable.'};
     const offlineTurn=env.EXTRACTION_ROUTE==='offline' && (media || mediaError || pendingAtStart?.action?.extractionRoute==='offline' || /\b(?:change|chnge|chng|make|set|edit|modify|fix|update)\b/i.test(message));
@@ -312,6 +311,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     onToolsReady(tools);
     if (offlineTurn) {
       const reviewAction = pendingAtStart?.action;
+      const inputIssue=reviewAction?.extractionRoute==='offline' && offlineCorrectionInputIssue(message,{parseCorrection:parseInvoiceCorrection,clock});
+      if(inputIssue)return {offlineReview:true,answer:inputIssue};
       let result;
       if (scope.interactionId) {
         const choice = verifyOwnerActionButton({id:scope.interactionId,scope:{workspaceId,phone},action:pendingAtStart,env,clock});
@@ -714,3 +715,4 @@ export function createOwnerWorkspacePlanner({provider,message,history=[],timezon
     return result.data;
   };
 }
+

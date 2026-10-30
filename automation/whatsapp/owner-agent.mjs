@@ -1,4 +1,5 @@
-import {offlineReviewDraft, offlineReviewClarification, correctOfflineReview, resolveOfflineReview, OFFLINE_CONFIRMATION_REPLY, OFFLINE_CANCEL_REPLY} from '../../ai/offline-invoice-review.mjs';
+import {offlineProvenance} from '../../ai/offline-provenance.mjs';
+import {offlineReviewDraft, offlineReviewClarification, correctOfflineReview, offlineCorrectionInputIssue, resolveOfflineReview, OFFLINE_CONFIRMATION_REPLY, OFFLINE_CANCEL_REPLY} from '../../ai/offline-invoice-review.mjs';
 import {receivablesReadAnswer,receivableBalanceLabel} from '../../invoice/receivables.mjs';
 import {parseTextInvoice,textInvoiceFailure,textInvoiceClarification,isTextInvoiceValidationFailure} from './text-invoice.mjs';
 import {personalNoteReply} from '../../ai/personal-note.mjs';
@@ -688,6 +689,8 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     if(!pendingStoreAvailable||!pending||typeof pending.loadInvoiceReview!=='function'
       ||typeof pending.transitionInvoiceReview!=='function')return {ok:false,code:'UNAVAILABLE',message:SAFE_ERRORS.UNAVAILABLE};
     if (env?.EXTRACTION_ROUTE === 'offline' && currentAction?.extractionRoute === 'offline') {
+      const inputIssue=offlineCorrectionInputIssue(message,{parseCorrection:parseInvoiceCorrection,clock});
+      if(inputIssue)return {ok:false,code:'INVALID',message:inputIssue};
       const next = correctOfflineReview(currentAction, message, {parseCorrection:parseInvoiceCorrection,clock,messageId});
       if (!next) return {ok:false,code:'INVALID',message:offlineReviewClarification(currentAction)};
       await active();
@@ -1345,6 +1348,8 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         try{
           const settings=await supabase.from('workspace_settings').select('business_name').eq('workspace_id',scope.workspaceId).maybeSingle();
           if(settings?.error)return unavailable('UNAVAILABLE');
+          if(await offlineProvenance({supabase,workspaceId:scope.workspaceId,mark:env?.EXTRACTION_ROUTE==='offline'}) && env?.EXTRACTION_ROUTE!=='offline')
+            return {ok:false,code:'UNAVAILABLE',message:'This business contains local invoice information. Continue with local invoice review.'};
           const extractionProvider=env?.EXTRACTION_ROUTE==='offline'?null:providerFactory({primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL,
             requestPurpose:'extraction',geminiApiKey:env?.GEMINI_API_KEY,openRouterApiKey:env?.OPENROUTER_API_KEY,
             zenApiKey:env?.OPENCODE_ZEN_API_KEY,cfAccountId:env?.CLOUDFLARE_ACCOUNT_ID,cfApiToken:env?.CLOUDFLARE_API_TOKEN,
@@ -1373,6 +1378,8 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         const settings=await supabase.from('workspace_settings').select('business_name')
           .eq('workspace_id',scope.workspaceId).maybeSingle();
         if(settings?.error)throw Object.assign(new Error(),{code:'UNAVAILABLE'});
+        if(await offlineProvenance({supabase,workspaceId:scope.workspaceId,mark:env?.EXTRACTION_ROUTE==='offline'}) && env?.EXTRACTION_ROUTE!=='offline')
+          return {ok:false,code:'UNAVAILABLE',message:'This business contains local invoice information. Continue with local invoice review.'};
         const extractionProvider=env?.EXTRACTION_ROUTE==='offline'?null:providerFactory({primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL,
           requestPurpose:'extraction',geminiApiKey:env?.GEMINI_API_KEY,openRouterApiKey:env?.OPENROUTER_API_KEY,
           zenApiKey:env?.OPENCODE_ZEN_API_KEY,cfAccountId:env?.CLOUDFLARE_ACCOUNT_ID,cfApiToken:env?.CLOUDFLARE_API_TOKEN,
@@ -2762,3 +2769,4 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     signal?.removeEventListener('abort',abortFromCaller);
   }
 }
+

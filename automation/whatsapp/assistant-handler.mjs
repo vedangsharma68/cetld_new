@@ -1,4 +1,5 @@
-import {offlineReviewDraft, offlineReviewClarification, correctOfflineReview, OFFLINE_CANCEL_REPLY, OFFLINE_CONFIRMATION_REPLY} from '../../ai/offline-invoice-review.mjs';
+import {offlineProvenance} from '../../ai/offline-provenance.mjs';
+import {offlineReviewDraft, offlineReviewClarification, correctOfflineReview, offlineCorrectionInputIssue, OFFLINE_CANCEL_REPLY, OFFLINE_CONFIRMATION_REPLY} from '../../ai/offline-invoice-review.mjs';
 import {normalizeOwnerPhone,PHONE_FORMAT_GUIDANCE} from './owner-phone.mjs';
 import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL,
   sanitizeModelSettings} from '../../ai/provider.mjs';
@@ -286,6 +287,8 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
     const models = sanitizeModelSettings({primaryModel: settings?.primary_model,
       fallbackModel: settings?.fallback_model});
     const offline = env.EXTRACTION_ROUTE === 'offline';
+    const localBusiness = await offlineProvenance({supabase,workspaceId,mark:offline && Boolean(media || mediaError)});
+    if(localBusiness && !offline) return 'This conversation contains local invoice information. Start a new local invoice review to continue; conversation summaries are unavailable.';
     const provider = offline ? null : providerFactory({...models, geminiApiKey: env.GEMINI_API_KEY,
       openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
       cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN,
@@ -318,6 +321,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         // Media extraction is deliberately independent of the workspace's chat
         // model choice. This preserves conversational behavior while using the
         // vision-capable extraction chain and its separately configured keys.
+        if(!offline && await offlineProvenance({supabase,workspaceId})) return 'This conversation contains local invoice information. Continue with local invoice review.';
         const extractionProvider = offline ? null : providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
           fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, requestPurpose: 'extraction', geminiApiKey: env.GEMINI_API_KEY,
           openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
@@ -462,6 +466,8 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         const response = await channel.ask({workspaceId,customerId,phone,message,history:[]});
         return response.answer;
       }
+      const inputIssue=offlineCorrectionInputIssue(message,{parseCorrection:parseInvoiceCorrection,clock});
+      if(inputIssue)return inputIssue;
       const next = correctOfflineReview(action, message, {parseCorrection:parseInvoiceCorrection,clock,messageId});
       if (next) {
         const stored = await pending.correctOfflineInvoiceReview({...current,workspaceId,customerId,phone,action:next,sourceMessageId:messageId});
@@ -527,6 +533,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         const known = await intentStore.findInvoices({limit: 50});
         let history = [];
         try { history = await readConversationHistory({supabase, workspaceId, phone,customerId,audience}); } catch { /* optional context */ }
+        if(await offlineProvenance({supabase,workspaceId})) return 'This conversation contains local invoice information. Continue with local invoice review.';
         const intentProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
           fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, requestPurpose: 'extraction', geminiApiKey: env.GEMINI_API_KEY,
           openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
@@ -667,3 +674,4 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
     return {answer, plannerFailure: response?.evidence?.plannerFailure || null};
   };
 }
+

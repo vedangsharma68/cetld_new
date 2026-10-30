@@ -58,6 +58,11 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
         || row.external_provider || row.external_invoice_id || row.metadata?.bookkeeping_record_id) throw new APIError(503, 'TEST_INVOICE_NOT_SAVED');
       return row;
     },
+    async offlineProvenance() {
+      const value=await request('/rest/v1/rpc/owner_assistant_offline_provenance',{method:'POST',body:JSON.stringify({p_workspace_id:workspaceId,p_owner_id:userId})});
+      if(typeof value!=='boolean')throw new APIError(503,'OWNER_CONVERSATION_UNAVAILABLE');
+      return value;
+    },
     ownerConversation: createOwnerConversation({workspaceId,ownerId:userId,
       readReminderInvoice:async id=>(await store.query('invoices',{select:'*',filters:{id:`eq.${uuid(id)}`},limit:1}))[0],
       readProposal:async id=>{
