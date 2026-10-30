@@ -118,8 +118,9 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     'Offline OCR is a draft. Review every extracted value against the image before saving.',
     'Direction is uncertain; confirm whether your business issued this invoice.',
   ];
-  const dateLabelSource = '(?:(?:tax point|[a-z]+)(?: ?- ?| )date|date)';
-  const boundarySource = `(?:${dateLabelSource}|invoice (?:no\\.?|number|#)|phone)`;
+  const dateQualifierSource = 'valid (?:until|through|till)|tax point|invoice|due|until|through|till|supply|order|receipt|expiry|expiration|print|printed|point|shipping|delivery|payment|dispatch|purchase|paid|received|service|transaction|posting|quote|quotation|validity|settlement|inspection|manufacturing|production|despatch|document|effective|approval|statement|billing|booking|value|renewal|shipment|audit|review';
+  const dateLabelSource = `(?:(?:${dateQualifierSource})(?: ?- ?| )date|[a-z]+ ?- ?date|date)`;
+  const boundarySource = `(?:${dateLabelSource}|invoice (?:no\\.?|number|#)|bill(?:ed)? to|ship to|customer|client|(?:(?:billing|shipping|delivery|registered) )?address|GSTIN|GST no\\.?|phone|mobile)`;
   const labelPattern = new RegExp(`\\b(labou?r total|parts? total|consumables? total|taxable(?: subtotal)?|subtotal|(?:CGST|SGST|IGST|GST|sales tax|tax|VAT)(?: \\d{1,3}(?:\\.\\d{1,4})? ?%)?|grand total|total(?: due)?|balance due|amount due|outstanding(?: amount)?|rounding|currency(?: code)?|${boundarySource})(?= |:|[₹$€£]|$)`, 'gi');
   const moneyPattern = /^(?:(?:INR|Rs\.?|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF) ?|[₹$€£] ?)?(-?\d[\d,]*(?:\.\d{1,2})?)$/i;
   const totalLabels = ['grand total', 'total'];
@@ -134,7 +135,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
       // A field ends at the next recognized label or the end of this OCR line.
       // Full-span validation rejects numeric columns, suffixes and partial decimals.
       const payload = line.slice(match.index + match[0].length, labels[index + 1]?.index ?? line.length)
-        .trim().replace(/^: ?/, '').replace(/(?: *\| *)+$/, '').trim();
+        .trim().replace(/^: ?/, '').replace(/(?: *[|;] *)+$/, '').trim();
       const printed = payload.match(moneyPattern)?.[1];
       const amount = printed === undefined ? null : Number(printed.replaceAll(',', ''));
       const value = amount !== null && Number.isFinite(amount) && Number.isSafeInteger(Math.round(amount * 100)) ? amount : null;
@@ -185,7 +186,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
       const match = lines[index].match(pattern);
       if (!match) continue;
       const printed = match[1].trim() || lines[index + 1];
-      const value = printed?.split(new RegExp(`${labelPattern.source} ?:|\\b(?:bill(?:ed)? to|ship to|customer|client|GSTIN|mobile) ?:|[|]`, 'i'))[0].trim();
+      const value = printed?.split(new RegExp(`${labelPattern.source}(?: ?:| +)|[|;]`, 'i'))[0].trim();
       if (value && value.length <= 160 && /\p{L}/u.test(value) && !/[:@]/.test(value)
         && !(bareTo && (/^\d/.test(value) || /\b(?:road|street|warehouse|gate)\b/i.test(value)))
         && !/\b(?:date|total|description|invoice|GSTIN|phone|mobile)\b/i.test(value)) return value;
@@ -200,10 +201,11 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   for (const line of lines) {
     for (const match of line.matchAll(dateLabels)) {
       const prefix = line.slice(0, match.index);
-      const qualifier = prefix.match(/([a-z]+)(?: ?- ?| )$/i)?.[1]?.toLowerCase();
-      // Bare Date is allowed at a field boundary or after an ordinary company
-      // header. Every other qualifier is excluded unless explicitly recognized.
-      const label = match[1].toLowerCase() === 'date' && qualifier && !/^(?:ltd|limited|inc|llc|corp|company)$/i.test(qualifier)
+      const qualifier = (prefix.match(new RegExp(`\\b(${dateQualifierSource})(?: ?- ?| )$`, 'i'))
+        || prefix.match(/([a-z]+) ?- ?$/i))?.[1]?.toLowerCase();
+      // Ordinary header words do not qualify Date. Exclude complete known
+      // date labels, including multiword qualifiers, in any header position.
+      const label = match[1].toLowerCase() === 'date' && qualifier
         ? `${qualifier} date` : match[1].toLowerCase();
       const kind = label === 'invoice date' ? 'invoice' : label === 'due date' || label === 'due' ? 'due' : label === 'date' ? 'bare' : null;
       if (!kind) continue;

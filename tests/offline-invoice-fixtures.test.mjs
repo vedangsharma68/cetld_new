@@ -435,3 +435,40 @@ test('all date and invoice identity boundaries preserve total conflicts', () => 
     assert.ok(conflict.warnings.some(w => /Conflicting printed total/.test(w)), label);
   }
 });
+test('complete adjacent labels preserve amounts and expose conflicting totals without truncating numeric columns', () => {
+  for (const suffix of ['Bill To: Real Buyer', 'Billed To: Another Buyer', 'Valid Until Date: 2026-10-20',
+    '; Balance Due: INR 0.00', ';; Balance Due: INR 0.00', '|; Balance Due: INR 0.00',
+    'Address: 14 MG Road', 'Billing Address: 14 MG Road', 'Valid Through Date: 2026-10-20', 'GSTIN 29ABCDE1234F1Z5', 'Tax Point Date: 2026-10-20']) {
+    const standalone = parseOfflineInvoiceText(`Total: INR 118.00 ${suffix}`);
+    assert.equal(standalone.total.value, 118, suffix);
+    const conflict = parseOfflineInvoiceText(`Total: INR 100.00\nGrand Total: INR 120.00 ${suffix}`);
+    assert.equal(conflict.total.value, null, suffix);
+    assert.ok(conflict.warnings.some(w => /Conflicting printed total/.test(w)), suffix);
+  }
+  for (const suffix of ['|20,000.00', ';20,000.00', '|| 20.00 | 20.00', ';; 20.00 ; 20.00', '|; 20.00']) {
+    assert.equal(parseOfflineInvoiceText(`Total: 1 ${suffix}`).total.value, null, suffix);
+  }
+});
+
+test('billing names stop before complete adjacent labels with and without colons', () => {
+  for (const suffix of ['Date: 2026-10-20', 'Address: 14 MG Road', 'Shipping Address: 14 MG Road', 'Valid Until Date: 2026-10-20', 'GSTIN 29ABCDE1234F1Z5',
+    'GSTIN: 29ABCDE1234F1Z5', 'Tax Point Date: 2026-10-20', 'Shipping Date: 2026-10-20',
+    'Delivery Date: 2026-10-20', 'Invoice-Date: 2026-10-20', 'Phone 9876543210', 'Ship To: Warehouse']) {
+    assert.equal(parseOfflineInvoiceText(`Bill To: Real Buyer ${suffix}`).customerName.value, 'Real Buyer', suffix);
+  }
+});
+
+test('bare Date accepts ordinary headers while complete qualified date labels remain excluded', () => {
+  for (const header of ['Acme Textiles', 'ACME', 'Seller Name', 'North Star Trading', 'Acme Ltd', 'Seller 42']) {
+    assert.equal(parseOfflineInvoiceText(`${header} Date: 2026-10-20`).invoiceDate.value, '2026-10-20', header);
+  }
+  assert.equal(parseOfflineInvoiceText('Custom-Event-Date: 2026-10-20').invoiceDate.value, null);
+  for (const label of ['Valid Until', 'Valid Through', 'Supply', 'Order', 'Receipt', 'Expiry', 'Print', 'Tax Point',
+    'Shipping', 'Delivery', 'Payment', 'Dispatch', 'Purchase', 'Transaction', 'Posting', 'Audit', 'Review']) {
+    for (const separator of [' ', '-', ' - ']) {
+      for (const header of ['', 'Acme Textiles ']) {
+        assert.equal(parseOfflineInvoiceText(`${header}${label}${separator}Date: 2026-10-20`).invoiceDate.value, null, `${header}${label}${separator}Date`);
+      }
+    }
+  }
+});
