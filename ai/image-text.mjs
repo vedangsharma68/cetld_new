@@ -185,7 +185,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
       const match = lines[index].match(pattern);
       if (!match) continue;
       const printed = match[1].trim() || lines[index + 1];
-      const value = printed?.split(new RegExp(`\\b${boundarySource} ?:|[|]`, 'i'))[0].trim();
+      const value = printed?.split(new RegExp(`${labelPattern.source} ?:|\\b(?:bill(?:ed)? to|ship to|customer|client|GSTIN|mobile) ?:|[|]`, 'i'))[0].trim();
       if (value && value.length <= 160 && /\p{L}/u.test(value) && !/[:@]/.test(value)
         && !(bareTo && (/^\d/.test(value) || /\b(?:road|street|warehouse|gate)\b/i.test(value)))
         && !/\b(?:date|total|description|invoice|GSTIN|phone|mobile)\b/i.test(value)) return value;
