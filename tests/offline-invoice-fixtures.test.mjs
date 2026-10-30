@@ -472,3 +472,71 @@ test('bare Date accepts ordinary headers while complete qualified date labels re
     }
   }
 });
+
+test('ordinary words inside explicit customer names are never field boundaries', () => {
+  for (const name of ['Acme Tax Advisors','Acme Currency Exchange','Client First Ltd','Customer Success Partners',
+    'Fresh GST Consultants','Harbor Shipping Address Services','North Invoice Design','Phone House Trading',
+    'Mobile Works Ltd','Total Care Partners','Delivery Date Planners','Address Book Company','VAT Consulting Group','Tax 2026 Advisors','Total 24 Care Ltd','Tax 2026 Address Services']) {
+    assert.equal(parseOfflineInvoiceText(`Bill To: ${name}`).customerName.value,name,name);
+    for (const suffix of ['GSTIN 29ABCDE1234F1Z5','Phone 9876543210','Mobile: +919876543210','Tax: INR 18.00','Currency INR']) {
+      assert.equal(parseOfflineInvoiceText(`Bill To: ${name} ${suffix}`).customerName.value,name,`${name} / ${suffix}`);
+    }
+  }
+});
+
+test('recognized multiword labels retain both total candidates in every shared-line order', () => {
+  for (const label of ['Payment Received Date','Expected Delivery Date','Original Invoice Date','Estimated Ship Date',
+    'Revised Payment Received Date','Actual Service Completion Date','Scheduled Dispatch Date','Requested Delivery Date']) {
+    for (const separator of [' ',' | ',' ; ']) for (const reverse of [false,true]) {
+      const amounts = [`Total: INR 100.00`, `Grand Total: INR 120.00${separator}${label}: 2026-10-20`];
+      const result = parseOfflineInvoiceText((reverse ? amounts.reverse() : amounts).join('\n'));
+      assert.equal(result.total.value,null,label);
+      assert.ok(result.warnings.some(w=>/Conflicting printed total/.test(w)),label);
+      assert.equal(parseOfflineInvoiceText(`Total: INR 118.00${separator}${label}: 2026-10-20`).total.value,118,label);
+    }
+  }
+});
+
+test('recognized multiword labels consume their complete phrase after customer spans', () => {
+  for (const name of ['Real Buyer','Customer Success Partners','Tax Exchange Shipping Ltd']) {
+    for (const label of ['Payment Received Date','Expected Delivery Date','Original Invoice Date','Estimated Ship Date',
+      'Revised Payment Received Date','Actual Service Completion Date','Scheduled Dispatch Date','Requested Delivery Date']) {
+      assert.equal(parseOfflineInvoiceText(`Bill To: ${name} ${label}: 2026-10-20`).customerName.value,name,label);
+    }
+  }
+});
+
+test('unknown complete labels use explicit layout separators and preserve money and customer spans', () => {
+  for (const label of ['Unlisted Warranty Window','Novel Fulfilment Checkpoint','Custom Event Date','Warehouse Intake Reference','Warehouse Stage 2 Reference','Warehouse Ref. #2','Custom Stage/Phase_2']) {
+    for (const separator of [' | ',' ; ','  ','\t']) {
+      const result=parseOfflineInvoiceText(`Total: INR 100.00\nGrand Total: INR 120.00${separator}${label}: abc-2026`);
+      assert.equal(result.total.value,null,label);
+      assert.ok(result.warnings.some(w=>/Conflicting printed total/.test(w)),label);
+      assert.equal(parseOfflineInvoiceText(`Total: INR 118.00${separator}${label}: abc-2026`).total.value,118,label);
+      assert.equal(parseOfflineInvoiceText(`Bill To: Real Buyer${separator}${label}: abc-2026`).customerName.value,'Real Buyer',label);
+      const spaced=label.replaceAll(' ','  ');
+      assert.equal(parseOfflineInvoiceText(`Total: INR 118.00${separator}${spaced}: abc-2026`).total.value,118,spaced);
+      assert.equal(parseOfflineInvoiceText(`Bill To: Real Buyer${separator}${spaced}: abc-2026`).customerName.value,'Real Buyer',spaced);
+    }
+  }
+});
+
+test('qualified dates never promote through a bare Date suffix while business headers remain valid', () => {
+  for (const qualifier of ['Cancellation','Bank','Estimated Ship','Reconciliation','Provisional Settlement',
+    'Vendor Audit','Unlisted Retention','Original Invoice','Payment Received','Zorblax','Provisional42','Unlisted Invoice','Provisional Event Invoice']) {
+    for (const separator of [' ','-',' - ']) {
+      const label=qualifier.split(' ').join(separator)+separator+'Date';
+      assert.equal(parseOfflineInvoiceText(`${label}: 2026-10-20`).invoiceDate.value,null,label);
+      if (qualifier.includes(' ') && !qualifier.endsWith('Invoice')) assert.equal(parseOfflineInvoiceText(`${label.toUpperCase()}: 2026-10-20`).invoiceDate.value,null,label);
+      assert.equal(parseOfflineInvoiceText(`Seller: Acme Ltd | ${label}: 2026-10-20`).invoiceDate.value,null,label);
+      for (const boundary of [' | ',' ; ','  ','\t']) {
+        assert.equal(parseOfflineInvoiceText(`Bill To: Real Buyer${boundary}${label}: 2026-10-20`).invoiceDate.value,null,label);
+      }
+    }
+  }
+  for (const header of ['', 'Acme Textiles ', 'ACME ', 'Seller Name ', 'North Star Trading ', 'Seller 42 ', 'Blue Finch Consultants ', 'Meridian Industries ', 'Hill View LLP ', 'ZQRT ', 'Business Name ', '18 Harbour Road, Chennai 600001 ']) {
+    assert.equal(parseOfflineInvoiceText(`${header}Date: 2026-10-20`).invoiceDate.value,'2026-10-20',header);
+  }
+  assert.equal(parseOfflineInvoiceText('Invoice Date: 2026-10-20').invoiceDate.value,'2026-10-20');
+  assert.equal(parseOfflineInvoiceText('Due Date: 2026-10-20').invoiceDate.value,null);
+});

@@ -60,6 +60,24 @@ end $$;
 -- there atomically, without making it owner-editable or another RPC dependency.
 alter table public.workspace_settings add column offline_invoice_provenance boolean not null default false;
 alter table public.workspace_ai_settings add column offline_invoice_provenance boolean not null default false;
+-- Reminder approvals bind to workspace_settings.updated_at. Internal mirrors,
+-- including this migration's backfill, must not change that business version.
+-- Compare every other column so future settings retain invalidation semantics.
+create function app.workspace_settings_business_updated_at() returns trigger
+language plpgsql set search_path=pg_catalog,public as $$
+begin
+ if (to_jsonb(new)-'updated_at'-'offline_invoice_provenance')
+    is distinct from (to_jsonb(old)-'updated_at'-'offline_invoice_provenance') then
+   new.updated_at:=now();
+ else
+   new.updated_at:=old.updated_at;
+ end if;
+ return new;
+end $$;
+revoke all on function app.workspace_settings_business_updated_at() from public,anon,authenticated,service_role;
+drop trigger workspace_settings_updated_at on public.workspace_settings;
+create trigger workspace_settings_updated_at before update on public.workspace_settings
+ for each row execute function app.workspace_settings_business_updated_at();
 update public.workspace_settings s set offline_invoice_provenance=true
  where exists(select 1 from app.offline_invoice_businesses b where b.workspace_id=s.workspace_id);
 insert into public.workspace_ai_settings(workspace_id,offline_invoice_provenance)
