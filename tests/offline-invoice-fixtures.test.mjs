@@ -421,7 +421,7 @@ test('date qualifiers use invoice-label allowlist semantics', () => {
 });
 
 test('customer boundaries consume complete date and identity labels', () => {
-  for (const label of ['Shipping Date', 'Delivery Date', 'Invoice-Date', 'Tax Point Date', 'Inspection Date', 'Invoice #']) {
+  for (const label of ['Shipping Date', 'Delivery Date', 'Invoice-Date', 'Tax Point Date', 'Inspection Date', 'Invoice #', 'Total', 'Subtotal', 'Currency', 'Phone', 'GSTIN']) {
     assert.equal(parseOfflineInvoiceText(`Bill To: Real Buyer ${label}: 2026-10-20`).customerName.value, 'Real Buyer', label);
   }
 });
