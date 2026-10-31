@@ -32,6 +32,57 @@ const env={EXTRACTION_ROUTE:'offline',WHATSAPP_APP_SECRET:'offline-test-buttons-
 const logger={info(){},warn(){},error(){}};
 const deny=()=>{assert.fail('No provider factory, model classifier, or external fetch may run');};
 
+test('round4 owner handler exposes separated total conflicts and blocks signed confirmation', async () => {
+  for (const separator of [' | ', ' ; ', ' / ']) {
+    const f=await fixture();
+    try {
+      f.setPrinted(text.replace('Bill to: Kabir Textiles', `Bill to: Kabir Textiles${separator}Grand Total 21000`));
+      const reply=await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
+      const {action}=await f.pending.loadInvoiceReview(f.scope);
+      assert.equal(action.invoice.total,null);
+      assert.equal(action.stage,'incomplete');
+      assert.ok(action.conflictingFields.includes('total'));
+      assert.deepEqual([...action.printedEvidence.total.candidates].sort((a,b)=>a-b),[20060,21000]);
+      assert.equal(reply.buttons,undefined);
+      assert.match(reply.answer,/21000/);
+      assert.match(reply.answer,/20060/);
+      assert.equal(await f.count(),0);
+    } finally {await f.close();}
+  }
+});
+
+test('round4 owner handler blocks unknown shared-line qualified invoice dates', async () => {
+  for (const qualifier of ['CLEARANCE','Reassessment','warehouse release']) {
+    const f=await fixture();
+    try {
+      f.setPrinted(text.replace('Bill to: Kabir Textiles\nInvoice Date:',`Bill to: Kabir Textiles ${qualifier} INVOICE DATE:`));
+      const reply=await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
+      const {action}=await f.pending.loadInvoiceReview(f.scope);
+      assert.equal(action.invoice.invoiceDate,null);
+      assert.equal(action.stage,'incomplete');
+      assert.ok(action.missingFields.includes('invoiceDate'));
+      assert.equal(reply.buttons,undefined);
+      assert.equal(await f.count(),0);
+    } finally {await f.close();}
+  }
+});
+
+test('round4 owner handler preserves OCR-spaced names before payment date fields', async () => {
+  for (const name of ['Acme  Trading Co','Birch Hollow\tSupply Co','Maple   Ridge Works']) {
+    const f=await fixture();
+    try {
+      f.setPrinted(text.replace('Bill to: Kabir Textiles',`Bill to: ${name} PAYMENT DATE: 2026-10-15`));
+      const reply=await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
+      const {action}=await f.pending.loadInvoiceReview(f.scope);
+      assert.equal(action.invoice.clientName,name.replace(/\s+/g,' '));
+      assert.equal(action.invoice.invoiceDate,'2026-10-20');
+      assert.equal(action.stage,'proposal');
+      assert.equal(reply.buttons.length,2);
+      assert.equal(await f.count(),0);
+    } finally {await f.close();}
+  }
+});
+
 test('F1 real owner handler cannot confirm a PAYMENT DATE as invoice issuance', async () => {
   const f=await fixture();
   try {

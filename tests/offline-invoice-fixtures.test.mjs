@@ -3,6 +3,53 @@ import test from 'node:test';
 import {execFileSync} from 'node:child_process';
 import {parseOfflineInvoiceText} from '../ai/image-text.mjs';
 
+test('round4 separators end name protection for all subsequent monetary fields', () => {
+  for (const billing of ['Bill To', 'Billed To', 'Customer', 'Client', 'To']) {
+    for (const separator of [' / ', ' ; ', ' | ']) {
+      for (const [label, field, amount] of [
+        ['Subtotal', 'subtotal', 100], ['Amount Due', 'outstandingAmount', 118],
+        ['VAT', 'tax', 18], ['Outstanding Amount', 'outstandingAmount', 0],
+        ['Total', 'total', 118], ['Grand Total', 'total', 118],
+        ['Tax', 'tax', 18], ['Balance Due', 'outstandingAmount', 0],
+      ]) {
+        const result = parseDraft(`${billing}: Northbridge Works${separator}${label} ${amount}`);
+        assert.equal(result.customerName.value, 'Northbridge Works');
+        assert.equal(result[field].value, amount, `${billing}${separator}${label}`);
+      }
+      const conflict = parseDraft(`Total: INR 100\n${billing}: Northbridge Works${separator}Grand Total 120`);
+      assert.equal(conflict.total.value, null);
+      assert.ok(conflict.warnings.some(w => /Conflicting printed total/.test(w)));
+    }
+  }
+});
+
+test('round4 unseen qualified invoice dates cannot promote on shared lines', () => {
+  for (const qualifier of ['REASSESSMENT', 'COUNTERSIGNATURE', 'WAREHOUSE RELEASE', 'QUARANTINE',
+    'CLEARANCE', 'ARCHIVAL', 'RECONCILIATION', 'CUSTOMS', 'FILING']) {
+    const phrase = `${qualifier} INVOICE DATE`;
+    for (const label of [phrase, phrase.toLowerCase(), phrase.replace(/\w+/g, w => w[0] + w.slice(1).toLowerCase())]) {
+      for (const prefix of ['', 'Bill To: Real Buyer ', 'Invoice No: X-4 ', 'Total: INR 118 ']) {
+        const result = parseDraft(`${prefix}${label}: 2026-10-20`);
+        assert.equal(result.invoiceDate.value, null, prefix + label);
+        assert.ok(result.uncertainFields.includes('invoiceDate'));
+      }
+    }
+  }
+});
+
+test('round4 OCR name gaps before date fields never silently shorten names', () => {
+  for (const name of ['Birch Hollow\tSupply Co', 'Maple   Ridge Works', 'Silver\tBrook  Collective',
+    'Acme  Trading Co', 'Sharma\tIndustries Pvt', 'National   Textile Mills']) {
+    for (const label of ['Invoice Date', 'Payment Date', 'Due Date', 'CLEARANCE DATE', 'WAREHOUSE RELEASE DATE']) {
+      const result = parseDraft(`Bill To: ${name} ${label}: 2026-10-20`);
+      assert.ok(result.customerName.value === name.replace(/\s+/g, ' ') || result.customerName.value === null,
+        `${name} / ${label}: ${result.customerName.value}`);
+      assert.ok(result.uncertainFields.includes('customerName'));
+      if (result.customerName.value === null) assert.ok(result.warnings.some(w => /ambiguous.*name/i.test(w)));
+    }
+  }
+});
+
 test('F1 uppercase qualified dates stay uncertain alone and inside complete documents', () => {
   for (const qualifier of ['REVERSAL','DISBURSEMENT','PAYMENT','PRINT','SHIPPING','AUDIT','CANCELLATION','BANK','REFUND']) {
     for (const label of [qualifier, qualifier.toLowerCase(), qualifier[0] + qualifier.slice(1).toLowerCase()]) {
@@ -419,7 +466,12 @@ test('v3 explicit billing names allow company digits/road words and stop at the 
   }
   const shared = parseDraft('Bill To: Real Buyer Invoice Date: 2026-10-20');
   assert.equal(shared.customerName.value, 'Real Buyer');
-  assert.equal(shared.invoiceDate.value, '2026-10-20');
+  assert.equal(shared.invoiceDate.value, null);
+  assert.ok(shared.warnings.some(w => /Ambiguous customer name and qualified date boundary/.test(w)));
+  for (const prefix of ['Bill To: Real Buyer | ', 'Bill To: Real Buyer ; ', 'Bill To: Real Buyer / ',
+    'Invoice No: X-4 ', 'Total: INR 118 ']) {
+    assert.equal(parseDraft(`${prefix}Invoice Date: 2026-10-20`).invoiceDate.value, '2026-10-20', prefix);
+  }
   assert.equal(parseDraft('Ship To:\nWarehouse gate two\nBill To: Real Buyer').customerName.value, 'Real Buyer');
   assert.equal(parseDraft('To:\n14 MG Road').customerName.value, null);
 });
