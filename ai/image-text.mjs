@@ -78,21 +78,22 @@ function field(value, confidence) {
   return {value, confidence: confidence === null ? 0 : Math.min(FIELD_CONFIDENCE_CAP, Math.max(0.2, confidence / 100))};
 }
 
-function amountFromLine(lines, labelPattern) {
-  const match = lines.map(line => line.match(labelPattern)).find(Boolean);
-  if (!match) return null;
-  const value = Number(match[1].replaceAll(',', ''));
-  return Number.isFinite(value) && value >= 0 && Number.isSafeInteger(Math.round(value * 100)) ? value : null;
+function amountFromLine(spans, labels, warnings, fieldName) {
+  const values = new Set(spans.filter(span => labels.includes(span.label) && span.value !== null && span.value >= 0)
+    .map(span => span.value));
+  if (values.size > 1) warnings.push(`Conflicting printed ${fieldName} amounts; confirm the value against the image.`);
+  return values.size === 1 ? [...values][0] : null;
 }
 
 function parseLineItems(lines, confidence) {
   const excluded = /^(?:labour|labor|parts?|consumables?|subs*total|subtotal|tax|gst|vat|total|balance due|amount due|rounding)\s*total\b/i;
   const itemPattern = /^\s*(?<description>[\p{L}\p{N}][\p{L}\p{N} &'().,/+-]{0,119}?)\s+(?<quantity>\d+(?:\.\d{1,4})?)\s+\$?\s*(?<unitPrice>\d[\d,]*(?:\.\d{1,2})?)\s+\$?\s*(?<amount>\d[\d,]*(?:\.\d{1,2})?)\s*$/u;
-  const headerIndex = lines.findIndex(line => /\bitem\b/i.test(line) && /\bdescription\b/i.test(line) && /\bquantity\b/i.test(line) && /\bunit\s*price\b/i.test(line) && /\btotal\b/i.test(line));
+  const headerIndex = lines.findIndex(line => /\b(?:item|description)\b/i.test(line) && /\b(?:qty|quantity|hours)\b/i.test(line) && /\b(?:unit\s*price|rate)\b/i.test(line) && /\b(?:amount|total)\b/i.test(line));
   if (headerIndex < 0) return [];
   const output = [];
   for (const line of lines.slice(headerIndex + 1)) {
-    const match = line.match(itemPattern);
+    const row = /\bsr\b/i.test(lines[headerIndex]) ? line.replace(/^\d+ /, '') : line;
+    const match = row.match(itemPattern);
     if (!match || excluded.test(match.groups.description.trim())) continue;
     const quantity = Number(match.groups.quantity);
     const unitPrice = Number(match.groups.unitPrice.replaceAll(',', ''));
@@ -109,25 +110,243 @@ function parseLineItems(lines, confidence) {
 export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   if (typeof text !== 'string') fail('OCR text must be a string');
   const cleanText = text.replace(/\r\n?/g, '\n').slice(0, MAX_TEXT_CHARS);
-  const lines = cleanText.split('\n');
+  // Collapse horizontal whitespace once, before matching. Keep raw OCR untouched.
+  // This prevents adjacent optional separators from partitioning long whitespace runs.
+  const rawLines = cleanText.split('\n');
+  const normalize = line => line.replace(/[^\S\n]+/g, ' ').trim();
+  const lines = rawLines.map(normalize).filter(Boolean);
+  // Retain layout boundaries separately: collapsing them into punctuation would
+  // break labels such as "Bill  To" and ordinary item-table whitespace.
+  const fieldLines = rawLines.map(raw => {
+    let text = '';
+    const starts = [];
+    for (const match of raw.matchAll(/\S+|[^\S\n]+/g)) {
+      if (/^\s/.test(match[0])) {
+        if (!text) continue;
+        text += ' ';
+        if (match[0].length > 1 || match[0].includes('\t')) starts.push(text.length);
+      } else text += match[0];
+    }
+    return {text: text.trimEnd(), starts};
+  }).filter(line => line.text);
   const confidence = safeConfidence(ocrConfidence);
-  const money = String.raw`[₹$€£]?\s*(-?\d[\d,]*(?:\.\d{1,2})?)`;
-  const subtotal = amountFromLine(lines, new RegExp(`^\\s*subtotal\\s*:?\\s*${money}\\s*$`, 'i'));
-  const components = ['CGST', 'SGST', 'IGST'].map(label => amountFromLine(lines,
-    new RegExp(`^\\s*${label}(?:\\s+\\d+(?:\\.\\d+)?\\s*%)?\\s*:?\\s*${money}\\s*$`, 'i'))).filter(value => value !== null);
-  const tax = components.length ? Math.round(components.reduce((sum, value) => sum + value, 0) * 100) / 100
-    : amountFromLine(lines, new RegExp(`^\\s*(?:GST|sales\\s+tax|tax|VAT)(?:\\s+\\d+(?:\\.\\d+)?\\s*%)?\\s*:?\\s*${money}\\s*$`, 'i'));
-  const total = amountFromLine(lines, new RegExp(`^\\s*total\\s*:?\\s*${money}\\s*$`, 'i'));
-  const outstandingAmount = amountFromLine(lines, new RegExp(`\\b(?:balance\\s+due|amount\\s+due|outstanding(?:\\s+amount)?)\\s*:?\\s*${money}`, 'i'));
-  const printedRounding = lines.map(line => line.match(/^\s*rounding\s*:?\s*[₹$€£]?\s*(-?\d[\d,]*(?:\.\d{1,2})?)\s*$/i)?.[1]).find(Boolean);
-  const rounding = printedRounding === undefined ? null : Number(printedRounding.replaceAll(',', ''));
-  const explicitCurrency = cleanText.match(/\bcurrency(?:\s+code)?\s*[:=-]\s*(INR|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF)\b/i)?.[1]?.toUpperCase() || null;
-  const currency = explicitCurrency && CURRENCIES.has(explicitCurrency) ? explicitCurrency : null;
-  const lineItems = parseLineItems(lines, confidence);
   const warnings = [
     'Offline OCR is a draft. Review every extracted value against the image before saving.',
     'Direction is uncertain; confirm whether your business issued this invoice.',
   ];
+  const dateQualifierSource = 'valid (?:until|through|till)|tax point|invoice|due|until|through|till|supply|order|receipt|expiry|expiration|print|printed|point|shipping|delivery|payment|dispatch|purchase|paid|received|service|transaction|posting|quote|quotation|validity|settlement|inspection|manufacturing|production|despatch|document|effective|approval|statement|billing|booking|value|renewal|shipment|audit|review';
+  const dateWordSource = `${dateQualifierSource}|actual|expected|estimated|original|revised|scheduled|requested|promised|planned|confirmed|final|initial|ship|completion`;
+  const dateLabelSource = `(?:(?:(?:${dateWordSource})(?: ?- ?| ))+date|[a-z]+ ?- ?date|date)`;
+  const boundarySource = `(?:${dateLabelSource}|invoice (?:no\\.?|number|#)|bill(?:ed)? to|ship to|customer|client|(?:(?:billing|shipping|delivery|registered) )?address|GSTIN|GST no\\.?|phone|mobile)`;
+  const labelPattern = new RegExp(`\\b(${boundarySource}|labou?r total|parts? total|consumables? total|taxable(?: subtotal)?|subtotal|(?:CGST|SGST|IGST|GST|sales tax|tax|VAT)(?: \\d{1,3}(?:\\.\\d{1,4})? ?%)?|grand total|total(?: due)?|balance due|amount due|outstanding(?: amount)?|rounding|currency(?: code)?)(?= |:|[₹$€£]|$)`, 'gi');
+  // Whitespace alone is not evidence of a new field inside a printed name.
+  // Undelimited identifiers/phones have recognizable payloads; other labels
+  // need their explicit field delimiter.
+  const fieldLabels = (line, starts = [], inName = false) => {
+    const known = [...line.matchAll(labelPattern)];
+    const strongStarts = [...line.matchAll(/[|;/] */g)].map(match => match.index + match[0].length);
+    const layoutStarts = [...new Set([...starts, ...strongStarts])].sort((left, right) => left - right);
+    const explicit = [];
+    const lastColon = line.lastIndexOf(':');
+    for (const start of layoutStarts) {
+      if (start > lastColon) continue;
+      // Complete labels outrank their internal OCR spacing, including unknown
+      // phrases introduced by a pipe, semicolon or column gap.
+      if ([...known, ...explicit].some(label => label.index < start && start < label.index + label[0].length)) continue;
+      const match = line.slice(start).match(/^([a-z][a-z0-9 _./#()-]*?) *:(?= *\S)/i);
+      if (!match) continue;
+      // A column gap inside a value cannot invent a label that swallows a
+      // complete recognized field. Date suffixes alone are not complete labels.
+      if (known.some(label => {
+        if (label.index <= start || label.index >= start + match[1].length || /^date$/i.test(label[0])) return false;
+        const tail = line.slice(label.index + label[0].length);
+        return /^ *:/.test(tail)
+          || /^(?:GSTIN|GST no\.?)$/i.test(label[0]) && /^ +\d{2}[a-z]{5}\d{4}[a-z][a-z0-9]Z[a-z0-9]\b/i.test(tail)
+          || /^(?:phone|mobile)$/i.test(label[0]) && /^ +\+?\d[\d ()-]{8,}(?= |$)/.test(tail);
+      })) continue;
+      const label = [match[1], match[1]];
+      label.index = start;
+      explicit.push(label);
+    }
+    const candidates = [...explicit, ...known.filter(match =>
+      !explicit.some(label => match.index >= label.index && match.index < label.index + label[0].length))]
+      .sort((left, right) => left.index - right.index);
+    const nameCandidates = new Set();
+    let billingValue = /^to ?:/i.test(line);
+    let segmentStart = 0;
+    for (const match of candidates) {
+      if (/[|;/]/.test(line.slice(segmentStart, match.index))) billingValue = false;
+      if (billingValue) nameCandidates.add(match);
+      segmentStart = match.index + match[0].length;
+      if (/^ *:/.test(line.slice(match.index + match[0].length))) {
+        billingValue = /^(?:bill(?:ed)? to|customer|client)$/i.test(match[0]);
+      }
+    }
+    const labels = [];
+    for (let index = candidates.length - 1; index >= 0; index--) {
+      const match = candidates[index];
+      const tail = line.slice(match.index + match[0].length, labels[0]?.index ?? line.length);
+      const payload = tail.trim().replace(/(?: *[|;/] *)+$/, '').trim();
+      const nameValue = inName && !/[|;/]/.test(line.slice(0, match.index)) || nameCandidates.has(match);
+      const structured = /^(?:GSTIN|GST no\.?)$/i.test(match[0])
+        ? /^\d{2}[a-z]{5}\d{4}[a-z][a-z0-9]Z[a-z0-9]$/i.test(payload)
+        : /^(?:phone|mobile)$/i.test(match[0])
+          ? /^\+?\d[\d ()-]{8,}$/.test(payload)
+          : /^currency(?: code)?$/i.test(match[0])
+            ? CURRENCIES.has(payload.toUpperCase())
+            : moneyPattern.test(payload) && (!nameValue || !/^-?\d[\d,]*$/.test(payload));
+      if (/^ *:/.test(tail) || structured) labels.unshift(match);
+    }
+    return labels;
+  };
+  const moneyPattern = /^(?:(?:INR|Rs\.?|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF) ?|[₹$€£] ?)?(-?\d[\d,]*(?:\.\d{1,2})?)$/i;
+  const totalLabels = ['grand total', 'total'];
+  const dueLabels = ['amount due', 'total due', 'outstanding', 'outstanding amount'];
+  const currencyEvidence = new Set();
+  const spans = [];
+  for (const {text: line, starts} of fieldLines) {
+    const labels = fieldLabels(line, starts);
+    for (let index = 0; index < labels.length; index++) {
+      const match = labels[index];
+      const label = (match[1] ?? match[2]).toLowerCase().replace(/ \d.*$/, '');
+      // A field ends at the next recognized label or the end of this OCR line.
+      // Full-span validation rejects numeric columns, suffixes and partial decimals.
+      const payload = line.slice(match.index + match[0].length, labels[index + 1]?.index ?? line.length)
+        .trim().replace(/^: ?/, '').replace(/(?: *[|;/] *)+$/, '').trim();
+      const printed = payload.match(moneyPattern)?.[1];
+      const amount = printed === undefined ? null : Number(printed.replaceAll(',', ''));
+      const value = amount !== null && Number.isFinite(amount) && Number.isSafeInteger(Math.round(amount * 100)) ? amount : null;
+      spans.push({label, value});
+      if (totalLabels.includes(label) || dueLabels.includes(label) || label === 'balance due' || label.startsWith('currency')) {
+        for (const code of payload.matchAll(/\b(INR|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF|Rs\.?)(?= |\d|$)/gi)) {
+          currencyEvidence.add(/^Rs\.?$/i.test(code[1]) ? 'INR' : code[1].toUpperCase());
+        }
+      }
+    }
+  }
+  const subtotal = amountFromLine(spans, ['subtotal', 'taxable', 'taxable subtotal'], warnings, 'subtotal');
+  const components = ['cgst', 'sgst', 'igst'].map(label => amountFromLine(spans, [label], warnings, label.toUpperCase()));
+  const conflictingComponent = ['cgst', 'sgst', 'igst'].some((label, index) => components[index] === null
+    && spans.some(span => span.label === label && span.value !== null && span.value >= 0));
+  const tax = conflictingComponent ? null : components.some(value => value !== null)
+    ? Math.round(components.reduce((sum, value) => sum + (value ?? 0), 0) * 100) / 100
+    : amountFromLine(spans, ['gst', 'sales tax', 'tax', 'vat'], warnings, 'tax');
+  const total = spans.some(span => totalLabels.includes(span.label) && span.value !== null && span.value >= 0)
+    ? amountFromLine(spans, totalLabels, warnings, 'total')
+    : amountFromLine(spans, ['amount due', 'total due'], warnings, 'total');
+  // Balance Due is the more specific remaining balance, including a paid zero.
+  const hasBalance = spans.some(span => span.label === 'balance due' && span.value !== null && span.value >= 0);
+  const outstandingAmount = amountFromLine(spans, hasBalance ? ['balance due'] : dueLabels, warnings, 'outstanding');
+  if (hasBalance && outstandingAmount !== null && spans.some(span => dueLabels.includes(span.label)
+    && span.value !== null && span.value >= 0 && span.value !== outstandingAmount)) {
+    warnings.push('Printed Balance Due differs from other due amounts; review the balance.');
+  }
+  const rounding = spans.find(span => span.label === 'rounding' && span.value !== null)?.value ?? null;
+  const currency = currencyEvidence.size === 1 && CURRENCIES.has([...currencyEvidence][0]) ? [...currencyEvidence][0] : null;
+
+  let invoiceNumber = null;
+  for (const line of lines) {
+    // Invoice identifiers must be on the same line as their label.
+    const label = line.match(/\binvoice ?(?:no\b\.?|number\b|#) ?[:#*=-]* ?/i);
+    if (!label) continue;
+    const tail = line.slice(label.index + label[0].length);
+    const token = tail.match(/^([a-z0-9][a-z0-9/_.-]{0,79})(?= |$)/i)?.[1];
+    if (!token || /^(?:GSTIN|phone|mobile|tel|date|due|invoice|customer|client|address|bill|ship|to)$/i.test(token)) continue;
+    if (/^\d{2}[a-z]{5}\d{4}[a-z][a-z0-9]Z[a-z0-9]$/i.test(token) || /^(?:91)?[6-9]\d{9}$/.test(token)) continue;
+    if (/^ ?(?:road|rd\.?|street|st\.?|lane|avenue|floor|building|plot)\b/i.test(tail.slice(token.length))) continue;
+    if (/^\d/.test(line) && /\b(?:road|street|lane|avenue|floor|building|plot)\b/i.test(line)) continue;
+    invoiceNumber = token;
+    break;
+  }
+  const readCustomer = (pattern, bareTo = false) => {
+    for (let index = 0; index < fieldLines.length; index++) {
+      const match = fieldLines[index].text.match(pattern);
+      if (!match) continue;
+      const ownLine = Boolean(match[1].trim());
+      const source = fieldLines[index + (ownLine ? 0 : 1)];
+      const printed = ownLine ? match[1].trim() : source?.text;
+      const offset = ownLine ? source.text.length - match[1].trimStart().length : 0;
+      const starts = source?.starts.filter(start => start >= offset).map(start => start - offset);
+      // A bare integer/year after a label word is still part of a name.
+      // Explicit colons and monetary payloads can establish adjacent fields.
+      const next = printed ? fieldLabels(printed, starts, true)[0] : undefined;
+      // A layout gap can introduce an unknown date label or occur inside a
+      // name. Without a complete recognized label these splits are ambiguous.
+      if (next && /date$/i.test(next[0]) && !new RegExp(`^${dateLabelSource}$`, 'i').test(next[0])
+        && /^ *: *\d/.test(printed.slice(next.index + next[0].length))) {
+        warnings.push('Ambiguous customer name boundary before a qualified date; confirm the full name.');
+        return null;
+      }
+      const boundary = next?.index;
+      const value = printed?.slice(0, boundary).split(/[|;/]/)[0].trim();
+      if (value && value.length <= 160 && /\p{L}/u.test(value) && !/[:@]/.test(value)
+        && !(bareTo && (/^\d/.test(value) || /\b(?:road|street|warehouse|gate)\b/i.test(value)))) return value;
+    }
+    return null;
+  };
+  // Explicit billing labels anywhere take precedence over an anchored bare To.
+  const customerName = readCustomer(/\b(?:bill(?:ed)? to|customer|client) ?: ?(.*)/i)
+    ?? readCustomer(/^to ?: ?(.*)/i, true);
+  // Header vocabulary is the explicit exception for unseparated business text.
+  // Preserve the established acronym headers, but do not infer business identity
+  // from arbitrary uppercase words: BANK Date and ACME Date share that syntax.
+  // Every other unknown prefix is an unresolved qualified label, in any casing.
+  const establishedAcronymHeaders = new Set(['ACME', 'ORION', 'ZQRT']);
+  const businessHeaderSource = String.raw`(?:(?:seller|business|company)(?: name| \d+)?|(?:[a-z0-9&'().-]+ )*(?:ltd\.?|limited|llp|llc|inc\.?|corp\.?|corporation|company|co\.?|enterprises|industries|textiles|trading|traders|fabrics|exports|imports|services|solutions|consultants|associates|partners|logistics|studio|retail))`;
+  const businessHeader = new RegExp(`^${businessHeaderSource}$`, 'i');
+  const positiveHeader = prefix => !prefix || businessHeader.test(prefix)
+    || establishedAcronymHeaders.has(prefix)
+    || /^(?:\d+ [\p{L}\p{N} .,'™/-]+, |[\p{L} . '™/-]+, [\p{L} . '™/-]+, )[\p{L} . '™/-]+ \d{5,6}$/u.test(prefix);
+  const dates = {invoice: new Set(), bare: new Set(), due: new Set()};
+  const dateLabels = /\b(date|due) ?:/gi;
+  for (const {text: line, starts} of fieldLines) {
+    const labels = fieldLabels(line, starts);
+    for (const match of line.matchAll(dateLabels)) {
+      const complete = labels.find(label => label.index + label[0].length === match.index + match[1].length);
+      const recognized = complete?.[0].toLowerCase().replace(/ *- */g, ' ').replace(/ +/g, ' ');
+      // Classify the complete date label first. A non-invoice qualifier must
+      // never get a second chance via the uppercase/business-header fallback.
+      if (recognized && recognized !== 'date' && recognized !== 'invoice date' && recognized !== 'due date') continue;
+      let kind = recognized === 'invoice date' ? 'invoice'
+        : recognized === 'due date' || match[1].toLowerCase() === 'due' ? 'due' : null;
+      if (kind === 'due' && complete && complete.index > 0
+        && !labels.some(label => label.index < complete.index)
+        && !positiveHeader(line.slice(0, complete.index).trim())) kind = null;
+      if (kind === 'invoice' && complete && complete.index > 0) {
+        const previous = labels.filter(label => label.index < complete.index).at(-1);
+        const prefix = line.slice(previous ? previous.index + previous[0].length : 0, complete.index)
+          .replace(/^ *: */, '').trim();
+        const segment = prefix.split(/[|;/]/).at(-1).trim();
+        // A prior field is not evidence that the immediately preceding words
+        // belong to its value. Apply the same qualifier check in every segment.
+        const boundedValue = previous && (moneyPattern.test(segment)
+          || /^invoice (?:no\.?|number|#)$/i.test(previous[0]) && /^[a-z0-9/_.-]+$/i.test(segment));
+        if (!positiveHeader(segment) && !boundedValue) {
+          kind = null;
+          if (previous && /^(?:bill(?:ed)? to|customer|client)$/i.test(previous[0])) {
+            warnings.push('Ambiguous customer name and qualified date boundary; confirm the full name and date.');
+          }
+        }
+      }
+      if (!kind) {
+        const prefix = line.slice(0, match.index).split(/[|;/:]/).at(-1).trim();
+        // Only positive header evidence can make an unseparated Date bare.
+        if (positiveHeader(prefix)) kind = 'bare';
+      }
+      if (!kind) continue;
+      const printed = line.slice(match.index + match[0].length, match.index + match[0].length + 40)
+        .match(/^ ?(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{4})(?= |$)/)?.[1];
+      if (!printed) continue;
+      const parts = printed.split(/[/-]/).map(Number);
+      const [year, month, day] = parts[0] > 999 ? parts : [parts[2], parts[1], parts[0]];
+      const date = new Date(Date.UTC(year, month - 1, day));
+      if (year >= 1900 && date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day) dates[kind].add(date.toISOString().slice(0, 10));
+    }
+  }
+  const invoiceDates = dates.invoice.size ? dates.invoice : dates.bare;
+  const invoiceDate = invoiceDates.size === 1 ? [...invoiceDates][0] : null;
+  const dueDate = dates.due.size === 1 ? [...dates.due][0] : null;
+  const lineItems = parseLineItems(lines, confidence);
   if (currency === null) warnings.push('Currency code was not explicitly printed; confirm the currency.');
   if (subtotal !== null && tax !== null && total !== null && Math.abs(Math.round(subtotal * 100) + Math.round(tax * 100) - Math.round(total * 100)) > 100) {
     warnings.push(rounding !== null && Number.isFinite(rounding) && Math.abs(subtotal + tax + rounding - total) < 0.005
@@ -137,10 +356,10 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   if (lineItems.length === 0) warnings.push('No line items could be read reliably.');
 
   return {
-    invoiceNumber: field(null, confidence),
-    customerName: field(null, confidence),
-    invoiceDate: field(null, confidence),
-    dueDate: field(null, confidence),
+    invoiceNumber: field(invoiceNumber, confidence),
+    customerName: field(customerName, confidence),
+    invoiceDate: field(invoiceDate, confidence),
+    dueDate: field(dueDate, confidence),
     subtotal: field(subtotal, confidence),
     tax: field(tax, confidence),
     total: field(total, confidence),
@@ -240,3 +459,4 @@ export async function extractInvoiceFromImage({bytes, mimeType, workerFactory, p
   parsed.ocr.mimeType = detected;
   return parsed;
 }
+
