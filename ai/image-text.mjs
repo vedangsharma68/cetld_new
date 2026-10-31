@@ -144,7 +144,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   // need their explicit field delimiter.
   const fieldLabels = (line, starts = [], inName = false) => {
     const known = [...line.matchAll(labelPattern)];
-    const strongStarts = [...line.matchAll(/[|;] */g)].map(match => match.index + match[0].length);
+    const strongStarts = [...line.matchAll(/[|;/] */g)].map(match => match.index + match[0].length);
     const layoutStarts = [...new Set([...starts, ...strongStarts])].sort((left, right) => left - right);
     const explicit = [];
     const lastColon = line.lastIndexOf(':');
@@ -158,7 +158,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
       // A column gap inside a value cannot invent a label that swallows a
       // complete recognized field. Date suffixes alone are not complete labels.
       if (known.some(label => {
-        if (label.index <= start || label.index >= start + match[1].length || /date$/i.test(label[0])) return false;
+        if (label.index <= start || label.index >= start + match[1].length || /^date$/i.test(label[0])) return false;
         const tail = line.slice(label.index + label[0].length);
         return /^ *:/.test(tail)
           || /^(?:GSTIN|GST no\.?)$/i.test(label[0]) && /^ +\d{2}[a-z]{5}\d{4}[a-z][a-z0-9]Z[a-z0-9]\b/i.test(tail)
@@ -173,8 +173,11 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
       .sort((left, right) => left.index - right.index);
     const nameCandidates = new Set();
     let billingValue = /^to ?:/i.test(line);
+    let segmentStart = 0;
     for (const match of candidates) {
+      if (/[|;/]/.test(line.slice(segmentStart, match.index))) billingValue = false;
       if (billingValue) nameCandidates.add(match);
+      segmentStart = match.index + match[0].length;
       if (/^ *:/.test(line.slice(match.index + match[0].length))) {
         billingValue = /^(?:bill(?:ed)? to|customer|client)$/i.test(match[0]);
       }
@@ -183,8 +186,8 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     for (let index = candidates.length - 1; index >= 0; index--) {
       const match = candidates[index];
       const tail = line.slice(match.index + match[0].length, labels[0]?.index ?? line.length);
-      const payload = tail.trim().replace(/(?: *[|;] *)+$/, '').trim();
-      const nameValue = inName || nameCandidates.has(match);
+      const payload = tail.trim().replace(/(?: *[|;/] *)+$/, '').trim();
+      const nameValue = inName && !/[|;/]/.test(line.slice(0, match.index)) || nameCandidates.has(match);
       const structured = /^(?:GSTIN|GST no\.?)$/i.test(match[0])
         ? /^\d{2}[a-z]{5}\d{4}[a-z][a-z0-9]Z[a-z0-9]$/i.test(payload)
         : /^(?:phone|mobile)$/i.test(match[0])
@@ -209,7 +212,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
       // A field ends at the next recognized label or the end of this OCR line.
       // Full-span validation rejects numeric columns, suffixes and partial decimals.
       const payload = line.slice(match.index + match[0].length, labels[index + 1]?.index ?? line.length)
-        .trim().replace(/^: ?/, '').replace(/(?: *[|;] *)+$/, '').trim();
+        .trim().replace(/^: ?/, '').replace(/(?: *[|;/] *)+$/, '').trim();
       const printed = payload.match(moneyPattern)?.[1];
       const amount = printed === undefined ? null : Number(printed.replaceAll(',', ''));
       const value = amount !== null && Number.isFinite(amount) && Number.isSafeInteger(Math.round(amount * 100)) ? amount : null;
@@ -266,8 +269,16 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
       const starts = source?.starts.filter(start => start >= offset).map(start => start - offset);
       // A bare integer/year after a label word is still part of a name.
       // Explicit colons and monetary payloads can establish adjacent fields.
-      const boundary = printed ? fieldLabels(printed, starts, true)[0]?.index : undefined;
-      const value = printed?.slice(0, boundary).split(/[|;]/)[0].trim();
+      const next = printed ? fieldLabels(printed, starts, true)[0] : undefined;
+      // A layout gap can introduce an unknown date label or occur inside a
+      // name. Without a complete recognized label these splits are ambiguous.
+      if (next && /date$/i.test(next[0]) && !new RegExp(`^${dateLabelSource}$`, 'i').test(next[0])
+        && /^ *: *\d/.test(printed.slice(next.index + next[0].length))) {
+        warnings.push('Ambiguous customer name boundary before a qualified date; confirm the full name.');
+        return null;
+      }
+      const boundary = next?.index;
+      const value = printed?.slice(0, boundary).split(/[|;/]/)[0].trim();
       if (value && value.length <= 160 && /\p{L}/u.test(value) && !/[:@]/.test(value)
         && !(bareTo && (/^\d/.test(value) || /\b(?:road|street|warehouse|gate)\b/i.test(value)))) return value;
     }
@@ -298,11 +309,27 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
       if (recognized && recognized !== 'date' && recognized !== 'invoice date' && recognized !== 'due date') continue;
       let kind = recognized === 'invoice date' ? 'invoice'
         : recognized === 'due date' || match[1].toLowerCase() === 'due' ? 'due' : null;
-      if (kind && complete && complete.index > 0
+      if (kind === 'due' && complete && complete.index > 0
         && !labels.some(label => label.index < complete.index)
         && !positiveHeader(line.slice(0, complete.index).trim())) kind = null;
+      if (kind === 'invoice' && complete && complete.index > 0) {
+        const previous = labels.filter(label => label.index < complete.index).at(-1);
+        const prefix = line.slice(previous ? previous.index + previous[0].length : 0, complete.index)
+          .replace(/^ *: */, '').trim();
+        const segment = prefix.split(/[|;/]/).at(-1).trim();
+        // A prior field is not evidence that the immediately preceding words
+        // belong to its value. Apply the same qualifier check in every segment.
+        const boundedValue = previous && (moneyPattern.test(segment)
+          || /^invoice (?:no\.?|number|#)$/i.test(previous[0]) && /^[a-z0-9/_.-]+$/i.test(segment));
+        if (!positiveHeader(segment) && !boundedValue) {
+          kind = null;
+          if (previous && /^(?:bill(?:ed)? to|customer|client)$/i.test(previous[0])) {
+            warnings.push('Ambiguous customer name and qualified date boundary; confirm the full name and date.');
+          }
+        }
+      }
       if (!kind) {
-        const prefix = line.slice(0, match.index).split(/[|;:]/).at(-1).trim();
+        const prefix = line.slice(0, match.index).split(/[|;/:]/).at(-1).trim();
         // Only positive header evidence can make an unseparated Date bare.
         if (positiveHeader(prefix)) kind = 'bare';
       }
