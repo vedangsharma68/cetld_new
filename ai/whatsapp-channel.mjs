@@ -260,11 +260,13 @@ export function createWhatsAppAssistantChannel({
         const key = `wa_invoice_${createHash('sha256').update(`${scope.workspaceId}:${scope.customerId}:${scope.phone}:${review.id}`).digest('hex').slice(0, 32)}`;
         try {
           const saved = await saveInvoice({store: await createInvoiceStore(scope), invoice: review.action.invoice,
-            confirmed: true, idempotencyKey: key, accounting: null});
+            confirmed: true, idempotencyKey: key, accounting: null,
+            ...(review.action.extractionRoute === 'offline' ? {allowMissingDueDate:true} : {})});
           if (saved?.needsInput) throw new TypeError('review proposal became incomplete');
           const invoice = {...saved.invoice, clientName: saved.invoice?.clientName || review.action.invoice.clientName};
           await transitionInvoiceReview({...claimed, ...scope, fromStage: 'saving',
-            action: {...review.action, stage: 'saved'}});
+            action: {...review.action, stage: 'saved',
+              ...(review.action.extractionRoute === 'offline' ? {ownerReviewConfirmation:{kind:'text',confirmedInvoice:review.action.invoice}} : {})}});
           return {answer: `Saved invoice ${invoice.invoiceNumber} for ${invoice.clientName || 'Customer'}: ${invoice.currency} ${invoice.total.toLocaleString('en-IN')}, due ${invoice.dueDate || 'not set'}.`,
             pendingAction: null, saved: true, idempotent: saved.idempotent === true};
         } catch (error) {

@@ -104,7 +104,7 @@ test('bound media extracts and presents a review without saving', async () => {
   const providerOptions = [];
   const values = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-7',customerName:'Buyer Co',invoiceDate:'2026-09-30',dueDate:'2026-10-30',subtotal:100,tax:0,total:100,outstandingAmount:100,currency:'INR',direction:'receivable'})[name] ?? null, confidence: .99}]));
-  const supabase = {from(table) { return {select() { return this; }, eq() { return this; }, async maybeSingle() {
+  const supabase = {rpc:async()=>({data:false}),from(table) { return {select() { return this; }, eq() { return this; }, async maybeSingle() {
     if (table === 'workspace_ai_settings') return {data: {primary_model: CF_QWEN_MODEL, fallback_model: 'gemini-3.5-flash-lite'}};
     if (table === 'workspace_settings') return {data: {business_name: 'Seller'}};
     throw new Error(table);
@@ -128,7 +128,7 @@ test('production extraction advances an incomplete OCR draft to vision and propo
     .map(name => [name, {value: ({invoiceNumber:'INV-10',customerName:'Buyer Co',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:18,total:118,currency:'INR',direction:'receivable'})[name] ?? null, confidence: .98}]));
   raw.lineItems = {value: [], confidence: .8};
   const provider = {generateStructured: async ({validate}) => { visionCalls++; return {data: validate({...invoiceWire(raw), imageContent:'single_invoice'}), model: 'vision', usedFallback: false}; }};
-  const supabase = {from(table) { return {select() { return this; }, eq() { return this; }, async maybeSingle() {
+  const supabase = {rpc:async()=>({data:false}),from(table) { return {select() { return this; }, eq() { return this; }, async maybeSingle() {
     if (table === 'workspace_ai_settings') return {data: {primary_model: 'space-bunny-free', fallback_model: null}};
     if (table === 'workspace_settings') return {data: {business_name: 'Seller'}};
     throw new Error(table);
@@ -148,7 +148,7 @@ test('production extraction advances an incomplete OCR draft to vision and propo
 
 test('incomplete media asks for missing facts and retains an incomplete review without a proposal', async () => {
   let stored = 0, visionCalls = 0, retained;
-  const supabase = {from(table) { return {select() { return this; }, eq() { return this; }, async maybeSingle() {
+  const supabase = {rpc:async()=>({data:false}),from(table) { return {select() { return this; }, eq() { return this; }, async maybeSingle() {
     if (table === 'workspace_ai_settings') return {data: {primary_model: 'space-bunny-free', fallback_model: null}};
     if (table === 'workspace_settings') return {data: {business_name: 'Seller'}};
     throw new Error(table);
@@ -189,7 +189,7 @@ test('photo review preserves printed identity and leaves file storage until conf
   const transitions=[]; const files=[];
   const values=Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name=>[name,{value:({invoiceNumber:'INV-2026-0720',customerName:'Global Dynamics Inc.',invoiceDate:'2026-09-30',dueDate:'2026-10-30',subtotal:100,tax:0,total:100,outstandingAmount:100,currency:'USD',direction:'receivable'})[name]??null,confidence:.99}]));
-  const db={from(table){return {select(){return this},eq(){return this},async maybeSingle(){return {data:table==='workspace_ai_settings'?{primary_model:'space-bunny-free',fallback_model:null}:{business_name:'Seller'}}}}}};
+  const db={rpc:async()=>({data:false}),from(table){return {select(){return this},eq(){return this},async maybeSingle(){return {data:table==='workspace_ai_settings'?{primary_model:'space-bunny-free',fallback_model:null}:{business_name:'Seller'}}}}}};
   const make=keepInvoiceFile=>createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase:db,providerFactory:()=>({}),channelFactory:()=>({ask(){throw Error('unused')}}),
     pendingActionStoreFactory:()=>mediaReviewStore(transitions),invoiceStoreFactory:()=>({keepInvoiceFile}),extract:async()=>({...values,lineItems:{value:[],confidence:.99}}),
     saveInvoice:async({invoice})=>({saved:true,invoice:{...invoice,id:'saved-invoice',invoiceNumber:'INV-2026-0001'}}),logger:{error(){}}});

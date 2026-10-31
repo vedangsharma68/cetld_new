@@ -1,10 +1,12 @@
+import {offlineProvenance} from '../../ai/offline-provenance.mjs';
+import {offlineReviewDraft, offlineReviewClarification, correctOfflineReview, offlineCorrectionInputIssue, OFFLINE_CANCEL_REPLY, OFFLINE_CONFIRMATION_REPLY} from '../../ai/offline-invoice-review.mjs';
 import {normalizeOwnerPhone,PHONE_FORMAT_GUIDANCE} from './owner-phone.mjs';
 import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL,
   sanitizeModelSettings} from '../../ai/provider.mjs';
 import {createWhatsAppAssistantChannel} from '../../ai/whatsapp-channel.mjs';
 import {getSendEligibility} from './consent.mjs';
 import {readConversationHistory, writeConversationTurn} from './conversation-memory.mjs';
-import {extractInvoice, INVOICE_IMAGE_REPLIES} from '../../ai/extraction.mjs';
+import {extractInvoice, extractInvoiceOffline, INVOICE_IMAGE_REPLIES} from '../../ai/extraction.mjs';
 import {createWhatsAppPendingActionStore} from './pending-actions.mjs';
 import {createWhatsAppInvoiceStore} from './invoice-store.mjs';
 import {validateAssistantInvoice} from '../../ai/invoice-ops.mjs';
@@ -19,6 +21,8 @@ const fieldLabels = {invoiceNumber: 'invoice number', customerName: 'customer na
   direction: 'confirmation that your business issued the invoice'};
 
 export function invoiceReviewClarification(action) {
+  if (action.failureCode === 'OFFLINE_PDF_NO_TEXT') return 'This PDF has no readable text. Send a photo of the invoice instead.';
+  if (action.extractionRoute === 'offline' && !action.failureCode?.includes('UNAVAILABLE')) return offlineReviewClarification(action);
   if (Object.hasOwn(INVOICE_IMAGE_REPLIES, action.failureCode || '')) return INVOICE_IMAGE_REPLIES[action.failureCode];
   if (action.failureCode === 'EXTRACTION_UNAVAILABLE') {
     return action.failureReason === 'TIMEOUT'
@@ -264,7 +268,7 @@ export async function answerDebtorPhone({pending, storeFactory, scope, message, 
 /** Create an inbound assistant handler only after the webhook has verified Meta. */
 export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl = fetch, supabase,
   providerFactory = options => new AIProvider(options), channelFactory = createWhatsAppAssistantChannel,
-  extract = extractInvoice, pendingActionStoreFactory = createWhatsAppPendingActionStore,
+  extract = extractInvoice, extractOffline = extractInvoiceOffline, pendingActionStoreFactory = createWhatsAppPendingActionStore,
   invoiceStoreFactory = createWhatsAppInvoiceStore,
   clock = () => new Date(), logger = console, authorizeScope, audience='customer'} = {}) {
   if (!supabase?.from) throw new TypeError('A server-side Supabase client is required');
@@ -278,11 +282,17 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       return 'Only the business owner can create or change invoices. Contact the business for help.';
     }
     const {data: settings, error} = await supabase.from('workspace_ai_settings')
-      .select('primary_model,fallback_model').eq('workspace_id', workspaceId).maybeSingle();
+      .select('*').eq('workspace_id', workspaceId).maybeSingle();
     if (error) throw error;
     const models = sanitizeModelSettings({primaryModel: settings?.primary_model,
       fallbackModel: settings?.fallback_model});
-    const provider = providerFactory({...models, geminiApiKey: env.GEMINI_API_KEY,
+    const offline = env.EXTRACTION_ROUTE === 'offline';
+    const localBusiness = offline
+      ? await offlineProvenance({supabase,workspaceId,mark:Boolean(media || mediaError)})
+      : settings?.offline_invoice_provenance===true;
+    if(localBusiness && !offline) return 'This conversation contains local invoice information. Start a new local invoice review to continue; conversation summaries are unavailable.';
+    const offlineTurn=offline && (localBusiness || media || mediaError || /\b(?:change|chnge|chng|make|set|edit|modify|fix|update)\b/i.test(message||''));
+    const provider = offlineTurn ? null : providerFactory({...models, geminiApiKey: env.GEMINI_API_KEY,
       openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
       cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN,
       fetchImpl, timeoutMs: 8000, maxAttempts: 1});
@@ -314,16 +324,22 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         // Media extraction is deliberately independent of the workspace's chat
         // model choice. This preserves conversational behavior while using the
         // vision-capable extraction chain and its separately configured keys.
-        const extractionProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
+        const extractionProvider = offline ? null : providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
           fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, requestPurpose: 'extraction', geminiApiKey: env.GEMINI_API_KEY,
           openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
           fetchImpl, timeoutMs: 12_000, maxAttempts: 1});
         // Reserve invocation time for validation, pending-action persistence,
         // the scoped reply claim/send, and durable completion.
         const extractionDeadlineAt = Math.min(Number.isFinite(deadlineAt) ? deadlineAt : Infinity, Date.now() + 28_000);
-        extracted = await extract({provider: extractionProvider, ...media,
+        extracted = await (offline ? extractOffline : extract)({provider: extractionProvider, ...media,
           businessName: workspace?.business_name || '', signal, deadlineAt: extractionDeadlineAt, logger});
         active();
+        if (offline) {
+          review = offlineReviewDraft(extracted, messageId, {ownerMessage:audience === 'owner' ? message : ''});
+          const stored = await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone,
+            fromStage:'extracting', action:review});
+          return stored ? offlineReviewClarification(review) : 'A newer photo replaced this review. Nothing from this photo was saved.';
+        }
         if (audience !== 'owner' && extracted?.direction?.value === 'payable' && extracted.direction.confidence >= 0.75) {
           await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
             action: {...reviewDraft(extracted,messageId), stage: 'canceled'}});
@@ -413,12 +429,12 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         return proposalSummary(validatedInvoice);
 
       } catch (error) {
-        const failureCode = Object.hasOwn(INVOICE_IMAGE_REPLIES, error?.code || '') ? error.code
+        const failureCode = error?.code === 'OFFLINE_PDF_NO_TEXT' || Object.hasOwn(INVOICE_IMAGE_REPLIES, error?.code || '') ? error.code
           : extracted ? 'INVOICE_REVIEW_UNAVAILABLE' : 'EXTRACTION_UNAVAILABLE';
         const failureReason = error?.code === 'TIMEOUT' || error?.name === 'AbortError' ? 'TIMEOUT' : 'UNAVAILABLE';
         const failureStatus = failureReason === 'TIMEOUT' ? 504
           : Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : null;
-        const failedReview = {...(review || reviewDraft(extracted, messageId)), stage: 'canceled', failureCode,
+        const failedReview = {...(review || reviewDraft(extracted, messageId)), ...(offline ? {extractionRoute:'offline'} : {}), stage: 'canceled', failureCode,
           failureReason, failureStatus};
         logger?.error?.('WhatsApp invoice review failed', {workspaceId, code: failureCode,
           reason: failureReason, status: failureStatus});
@@ -440,6 +456,28 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       }
     }
     const current = await pending.loadInvoiceReview({workspaceId, customerId, phone});
+    if (offline && current?.action?.extractionRoute === 'offline') {
+      if (!authorizeScope || !await authorizeScope({workspaceId,customerId,phone})) return 'Only the business owner can create or change invoices.';
+      const action = current.action;
+      if (OFFLINE_CANCEL_REPLY.test(message) && ['incomplete','proposal'].includes(action.stage)) {
+        const canceled = await pending.transitionInvoiceReview({...current,workspaceId,customerId,phone,fromStage:action.stage,action:{...action,stage:'canceled'}});
+        return canceled ? 'Invoice review canceled. Nothing was saved.' : 'That review changed. Check the current review.';
+      }
+      if (OFFLINE_CONFIRMATION_REPLY.test(message)) {
+        if (action.stage !== 'proposal' && action.stage !== 'saved') return action.stage === 'incomplete' ? offlineReviewClarification(action) : 'That review cannot be confirmed. Send a new photo.';
+        const response = await channel.ask({workspaceId,customerId,phone,message,history:[]});
+        return response.answer;
+      }
+      const inputIssue=offlineCorrectionInputIssue(message,{parseCorrection:parseInvoiceCorrection,clock});
+      if(inputIssue)return inputIssue;
+      const next = correctOfflineReview(action, message, {parseCorrection:parseInvoiceCorrection,clock,messageId});
+      if (next) {
+        const stored = await pending.correctOfflineInvoiceReview({...current,workspaceId,customerId,phone,action:next,sourceMessageId:messageId});
+        return stored ? offlineReviewClarification(next) : 'That review changed. Check the current review.';
+      }
+      return offlineReviewClarification(action);
+    }
+    if(localBusiness)return 'This conversation contains local invoice information. Continue with local invoice review.';
     let effective = message;
     if (/^\s*INV-[A-Z0-9-]+\s*[.!]?\s*$/i.test(message)) {
       try {
@@ -493,6 +531,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
     }
     if (!correction && editLike && !FILE_REQUEST.test(message)) {
       try {
+        if (!offline) {
         const intentStore = await invoiceStoreFactory({supabase, workspaceId, customerId});
         const known = await intentStore.findInvoices({limit: 50});
         let history = [];
@@ -506,6 +545,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           correction = {changes: {[modelIntent.field]: modelIntent.value,
             ...(modelIntent.currency && modelIntent.field === 'total' ? {currency: modelIntent.currency} : {})},
             ...(modelIntent.customerHint ? {hint: modelIntent.customerHint} : {})};
+        }
         }
       } catch (intentError) {
         logger?.error?.('WhatsApp intent classification failed', {workspaceId,
@@ -606,6 +646,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       }
       if (currency && action.stage === 'proposal') return proposalSummary(action.invoice);
     }
+    if (offlineTurn) return 'What would you like to change, and what should the new value be?';
     let history = [];
     try { history = await readConversationHistory({supabase, workspaceId, phone,customerId,audience}); }
     catch (memoryError) {
@@ -635,3 +676,4 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
     return {answer, plannerFailure: response?.evidence?.plannerFailure || null};
   };
 }
+
