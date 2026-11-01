@@ -4,7 +4,7 @@ import {readFile,mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {runReleaseGate,writeReleaseManifest} from '../scripts/check-owner-chat-gate.mjs';
+import {runReleaseGate,writeReleaseManifest,releaseTestEnvironment} from '../scripts/check-owner-chat-gate.mjs';
 
 test('release evidence fingerprints the custom-field renderer and scoped record interface',async()=>{
   const directory=await mkdtemp(path.join(tmpdir(),'cetld-manifest-'));
@@ -30,7 +30,7 @@ test('production releases never run the live battery, even when requested',async
   try {
     const calls=[];
     await runReleaseGate({live:true,run:async name=>calls.push(name)});
-    assert.deepEqual(calls,['test:owner-chat','typecheck','test']);
+    assert.deepEqual(calls,['test:owner-chat','typecheck','test','test:offline-route']);
   } finally {
     if(previous===undefined)delete process.env.VERCEL_ENV;
     else process.env.VERCEL_ENV=previous;
@@ -38,7 +38,7 @@ test('production releases never run the live battery, even when requested',async
 });
 test('preview and local release gates run the fast battery, type check and complete test suite',async()=>{
   const calls=[];await runReleaseGate({run:async name=>calls.push(name)});
-  assert.deepEqual(calls,['test:owner-chat','typecheck','test']);
+  assert.deepEqual(calls,['test:owner-chat','typecheck','test','test:offline-route']);
 });
 test('Vercel and GitHub run the same mandatory release gate',async()=>{
   const config=JSON.parse(await readFile(new URL('../vercel.json',import.meta.url),'utf8'));
@@ -47,4 +47,23 @@ test('Vercel and GitHub run the same mandatory release gate',async()=>{
   assert.equal(config.outputDirectory,'.','the static app lives at the repository root after the verification build');
   assert.equal(config.installCommand,'npm ci --include=dev');
   assert.match(workflow,/push:/);assert.match(workflow,/pull_request:/);assert.match(workflow,/npm run check:release/);
+});
+
+test('release children isolate provider routing and explicitly activate the offline check',async()=>{
+  const source={EXTRACTION_ROUTE:'offline',GEMINI_API_KEY:'production-secret',PATH:'/bin'};
+  const provider=releaseTestEnvironment(source);
+  assert.equal(provider.EXTRACTION_ROUTE,undefined);
+  assert.equal(provider.GEMINI_API_KEY,undefined);
+  assert.equal(provider.PATH,'/bin');
+  assert.equal(source.EXTRACTION_ROUTE,'offline');
+  const calls=[];
+  await runReleaseGate({run:async(name,overrides)=>calls.push({name,env:releaseTestEnvironment(source,overrides)})});
+  assert.ok(calls.slice(0,3).every(call=>call.env.EXTRACTION_ROUTE===undefined));
+  assert.equal(calls[3].name,'test:offline-route');
+  assert.equal(calls[3].env.EXTRACTION_ROUTE,'offline');
+});
+test('offline activation failure blocks the release',async()=>{
+  await assert.rejects(runReleaseGate({run:async name=>{
+    if(name==='test:offline-route')throw Error('Offline route broken');
+  }}),/Offline route broken/);
 });

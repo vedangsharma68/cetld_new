@@ -12,11 +12,20 @@ export async function runReleaseGate({run=runCommand}={}) {
   await run('test:owner-chat');
   await run('typecheck');
   await run('test');
+  await run('test:offline-route',{EXTRACTION_ROUTE:'offline'});
 }
-function runCommand(script) {
-  const env={...process.env,NODE_ENV:'test'};
+export function releaseTestEnvironment(source=process.env,overrides={}) {
+  const env={...source,NODE_ENV:'test'};
+  // Provider suites must not inherit the deployment's opt-in invoice route.
+  // Offline suites inject their own route; the activation check below inherits
+  // it from its child process environment, just like production handlers do.
+  delete env.EXTRACTION_ROUTE;
   for(const key of Object.keys(env))if(/^(?:WHATSAPP_|SUPABASE_|CLOUDFLARE_|GEMINI_|OPENROUTER_|OPENCODE_|ZOHO_|QUICKBOOKS_|ACCOUNTING_|CRON_SECRET|AUTOMATION_)/.test(key)
     ||/(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY|SERVICE_ROLE|API_KEY|DATABASE_URL)/i.test(key))delete env[key];
+  return {...env,...overrides};
+}
+function runCommand(script,overrides) {
+  const env=releaseTestEnvironment(process.env,overrides);
   // npm exposes its actual JS entrypoint, avoiding shell quoting on Windows.
   const npm=process.env.npm_execpath;
   const child=npm?spawn(process.execPath,[npm,'run',script],{stdio:'inherit',env})
@@ -68,7 +77,7 @@ export async function writeReleaseManifest({outputPath='owner-chat-build.json'}=
   const files={};for(const path of paths)files[path]=createHash('sha256').update(await readFile(path)).digest('hex');
   let commit=process.env.VERCEL_GIT_COMMIT_SHA||process.env.GITHUB_SHA;
   if(!commit)try{commit=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();}catch{commit=null;}
-  await writeFile(outputPath,JSON.stringify({version:1,commit,files,checks:['owner-chat-fast','typecheck','full-suite']})+'\n');
+  await writeFile(outputPath,JSON.stringify({version:1,commit,files,checks:['owner-chat-fast','typecheck','full-suite','offline-route']})+'\n');
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href) {
   const fixtureCacheDir=await mkdtemp(path.join(tmpdir(),'cetld-release-sql-'));
