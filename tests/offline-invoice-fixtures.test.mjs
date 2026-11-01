@@ -34,7 +34,7 @@ test('round5 trailing unknown segments cannot hide competing monetary candidates
       }
     }
   }
-  for (const continuation of ['20.00', 'INR 20.00', 'USD 20.00']) {
+  for (const continuation of ['20.00', 'INR 20.00', 'USD 20.00', 'INR20.00', 'USD20.00', 'Rs20.00']) {
     for (const separator of [' / ', ' | ', ' ; ']) {
       assert.equal(parseDraft(`Total: 1${separator}${continuation}`).total.value, null);
     }
