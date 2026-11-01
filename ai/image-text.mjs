@@ -148,8 +148,8 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   const monetarySegment = tail => {
     for (const boundary of tail.matchAll(/[|;/] */g)) {
       const next = tail.slice(boundary.index + boundary[0].length).split(/[|;/]/)[0].trim();
-      if (/^[a-z]/i.test(next) && !CURRENCIES.has(next.split(' ')[0].toUpperCase())
-        && !/^Rs\.?(?: |$)/i.test(next)) return tail.slice(0, boundary.index);
+      if (/^[a-z]/i.test(next) && !CURRENCIES.has(next.match(/^[a-z]+/i)[0].toUpperCase())
+        && !/^Rs\.?(?= |\d|$)/i.test(next)) return tail.slice(0, boundary.index);
     }
     return tail;
   };
