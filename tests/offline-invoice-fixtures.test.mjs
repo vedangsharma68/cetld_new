@@ -3,6 +3,44 @@ import test from 'node:test';
 import {execFileSync} from 'node:child_process';
 import {parseOfflineInvoiceText} from '../ai/image-text.mjs';
 
+test('round5 generic colon labels stay inside slash segments', () => {
+  for (const name of ['Acme  Trading Co', 'Sharma\tIndustries Pvt', 'National   Textile Mills']) {
+    for (const separator of [' / ', ' | ', ' ; ']) {
+      assert.equal(parseDraft(`Bill To: ${name}${separator}Packing Credit: 5`).customerName.value,
+        name.replace(/\s+/g, ' '));
+    }
+  }
+  for (const unknown of ['Handling Reserve', 'Packing Credit', 'Retention Adjustment', 'Discount', 'Shipping', 'Amount Paid']) {
+    for (const left of [' / ', ' | ', ' ; ']) for (const right of [' / ', ' | ', ' ; ']) {
+      for (const suffix of [`${unknown}: 5`, `${unknown} 5`]) {
+        const after = parseDraft(`Bill To: Fern Works${left}Total 118${right}${suffix}`);
+        assert.equal(after.total.value, 118, `${left}Total${right}${suffix}`);
+        const before = parseDraft(`Bill To: Fern Works${left}${suffix}${right}Total 118`);
+        assert.equal(before.total.value, 118, `before: ${suffix}`);
+      }
+    }
+  }
+});
+
+test('round5 trailing unknown segments cannot hide competing monetary candidates', () => {
+  for (const unknown of ['Handling Reserve', 'Packing Credit', 'Retention Adjustment', 'Discount', 'Shipping', 'Amount Paid']) {
+    for (const left of [' / ', ' | ', ' ; ']) for (const right of [' / ', ' | ', ' ; ']) {
+      for (const suffix of [`${unknown} 5`, `${unknown}: 5`]) {
+        for (const fields of [`Grand Total 120${right}${suffix}`, `${suffix}${right}Grand Total 120`]) {
+          const result = parseDraft(`Total: INR 100\nBill To: Fern Works${left}${fields}`);
+          assert.equal(result.total.value, null, `${left}${fields}`);
+          assert.ok(result.warnings.some(w => /Conflicting printed total/.test(w)), fields);
+        }
+      }
+    }
+  }
+  for (const continuation of ['20.00', 'INR 20.00', 'USD 20.00']) {
+    for (const separator of [' / ', ' | ', ' ; ']) {
+      assert.equal(parseDraft(`Total: 1${separator}${continuation}`).total.value, null);
+    }
+  }
+});
+
 test('round4 separators end name protection for all subsequent monetary fields', () => {
   for (const billing of ['Bill To', 'Billed To', 'Customer', 'Client', 'To']) {
     for (const separator of [' / ', ' ; ', ' | ']) {

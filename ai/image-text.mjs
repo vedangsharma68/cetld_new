@@ -142,6 +142,17 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   // Whitespace alone is not evidence of a new field inside a printed name.
   // Undelimited identifiers/phones have recognizable payloads; other labels
   // need their explicit field delimiter.
+  // Unknown fields in a later segment cannot invalidate a completed amount.
+  // Numeric/currency continuations still belong to the full monetary span and
+  // must fail validation rather than accepting a table column's numeric prefix.
+  const monetarySegment = tail => {
+    for (const boundary of tail.matchAll(/[|;/] */g)) {
+      const next = tail.slice(boundary.index + boundary[0].length).split(/[|;/]/)[0].trim();
+      if (/^[a-z]/i.test(next) && !CURRENCIES.has(next.split(' ')[0].toUpperCase())
+        && !/^Rs\.?(?: |$)/i.test(next)) return tail.slice(0, boundary.index);
+    }
+    return tail;
+  };
   const fieldLabels = (line, starts = [], inName = false) => {
     const known = [...line.matchAll(labelPattern)];
     const strongStarts = [...line.matchAll(/[|;/] */g)].map(match => match.index + match[0].length);
@@ -153,7 +164,12 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
       // Complete labels outrank their internal OCR spacing, including unknown
       // phrases introduced by a pipe, semicolon or column gap.
       if ([...known, ...explicit].some(label => label.index < start && start < label.index + label[0].length)) continue;
-      const match = line.slice(start).match(/^([a-z][a-z0-9 _./#()-]*?) *:(?= *\S)/i);
+      const segment = line.slice(start).split(/[|;/]/)[0];
+      const match = segment.match(/^([a-z][a-z0-9 _.#()-]*?) *:(?= *\S)/i)
+        // A column-introduced unknown segment can itself precede another
+        // segment. Preserve that boundary without making a compound label.
+        ?? (line[start + segment.length] === '/' && !/\s$/.test(segment)
+          && !known.some(label => label.index === start) && segment.match(/^([a-z][a-z0-9 _.#()-]*?)$/i));
       if (!match) continue;
       // A column gap inside a value cannot invent a label that swallows a
       // complete recognized field. Date suffixes alone are not complete labels.
@@ -194,8 +210,8 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
           ? /^\+?\d[\d ()-]{8,}$/.test(payload)
           : /^currency(?: code)?$/i.test(match[0])
             ? CURRENCIES.has(payload.toUpperCase())
-            : moneyPattern.test(payload) && (!nameValue || !/^-?\d[\d,]*$/.test(payload));
-      if (/^ *:/.test(tail) || structured) labels.unshift(match);
+            : moneyPattern.test(monetarySegment(payload).trim()) && (!nameValue || !/^-?\d[\d,]*$/.test(monetarySegment(payload).trim()));
+      if (explicit.includes(match) || /^ *:/.test(tail) || structured) labels.unshift(match);
     }
     return labels;
   };
@@ -208,10 +224,10 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     const labels = fieldLabels(line, starts);
     for (let index = 0; index < labels.length; index++) {
       const match = labels[index];
-      const label = (match[1] ?? match[2]).toLowerCase().replace(/ \d.*$/, '');
-      // A field ends at the next recognized label or the end of this OCR line.
+      const label = (match[1] ?? match[2]).toLowerCase().replace(/ \d{1,3}(?:\.\d{1,4})? ?%$/, '');
+      // A monetary field also ends before an unknown non-numeric segment.
       // Full-span validation rejects numeric columns, suffixes and partial decimals.
-      const payload = line.slice(match.index + match[0].length, labels[index + 1]?.index ?? line.length)
+      const payload = monetarySegment(line.slice(match.index + match[0].length, labels[index + 1]?.index ?? line.length))
         .trim().replace(/^: ?/, '').replace(/(?: *[|;/] *)+$/, '').trim();
       const printed = payload.match(moneyPattern)?.[1];
       const amount = printed === undefined ? null : Number(printed.replaceAll(',', ''));
