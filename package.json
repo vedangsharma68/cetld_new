@@ -5,6 +5,7 @@
   "scripts": {
     "test": "node --import tsx --test --test-concurrency=2 tests/*.test.ts tests/*.test.mjs",
     "test:ai": "node --test tests/ai-*.test.mjs",
+    "test:offline-route": "node --test tests/release/offline-route.test.mjs",
     "test:ai:live": "node scripts/ai-smoke.mjs",
     "typecheck": "tsc --noEmit",
     "test:owner-chat": "node scripts/owner-chat-battery.mjs --fast",
