@@ -32,6 +32,13 @@ export function createWhatsAppPendingActionStore({supabase} = {}) {
         .eq('action->>sourceMessageId',sourceMessageId)
         .order('created_at',{ascending:false}).limit(1).maybeSingle(),'load saved review')||null;
     },
+    async correctOfflineInvoiceReview({id, version, workspaceId, customerId, phone, action, sourceMessageId}) {
+      const row = data(await supabase.rpc('whatsapp_correct_offline_invoice_review', {
+        p_id:id, p_version:version, p_workspace_id:workspaceId, p_customer_id:customerId, p_phone:phone,
+        p_action:action, p_source_message_id:sourceMessageId,
+      }), 'correct offline invoice review');
+      return (Array.isArray(row) ? row[0] : row) || null;
+    },
     async transitionInvoiceReview({id, version, workspaceId, customerId, phone, fromStage, action}) {
       const row = data(await supabase.rpc('whatsapp_transition_invoice_review', {
         p_id: id, p_version: version, p_workspace_id: workspaceId, p_customer_id: customerId,

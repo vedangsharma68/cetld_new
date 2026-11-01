@@ -1,5 +1,8 @@
+import {offlineProvenance} from '../../ai/offline-provenance.mjs';
+import {offlineReviewClarification, correctOfflineReview, offlineCorrectionInputIssue, OFFLINE_CANCEL_REPLY, OFFLINE_CONFIRMATION_REPLY} from '../../ai/offline-invoice-review.mjs';
+import {ownerWriteConfirmation} from './owner-write-confirmation.mjs';
 import {receivableBalanceLabel} from '../../invoice/receivables.mjs';
-import {answerDebtorPhone} from './assistant-handler.mjs';
+import {answerDebtorPhone, createWhatsAppBoundMessageHandler, parseInvoiceCorrection} from './assistant-handler.mjs';
 import {normalizeOwnerPhone,saveOwnerPhone,PHONE_FORMAT_GUIDANCE,recentPhoneSubject} from './owner-phone.mjs';
 import {resolveWorkspaceRecord} from './workspace-records.mjs';
 import {ownerReminderRequest} from './owner-reminders.mjs';
@@ -181,8 +184,9 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         let history=await timedContextRead(logger,'conversation_history',()=>historyReader({supabase,workspaceId,ownerId,phone,customerId:null,audience:'owner'}));
         // The inbound worker records this received message before invoking us.
         // Do not repeat the current turn when durable history already ends in it.
+        const offlineHistory=history.offlineProvenance===true;
         if(history.at(-1)?.role==='user'&&history.at(-1)?.content===message)history=history.slice(0,-1);
-        return {history,available:true};
+        return {history,offlineHistory,available:true};
       }catch(error){
         logger?.error?.('WhatsApp owner conversation history read failed',{code:String(error?.code||'HISTORY_UNAVAILABLE').slice(0,60)});
         return {history:[],available:false};
@@ -264,7 +268,14 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     if(historyReader===readSharedOwnerHistory&&!historyAvailable)return {answer:'Your business conversation is temporarily unavailable. Try again shortly. No action was taken.'};
     const {lifecycle,lifecyclePending,available:lifecycleAvailable}=lifecycleState;
     ownerStore=ownerStoreState;
-    const menuEditValues=!scope.interactionId&&!media&&!mediaError&&!scope.checkpoint?ownerMenuInvoiceEdit(message):null;
+    // Default turns use provenance carried by the existing scoped history read;
+    // they do not acquire a dependency on the offline-only RPC.
+    const offlineHistory = historyState.offlineHistory || (env.EXTRACTION_ROUTE==='offline'
+      && await offlineProvenance({supabase,workspaceId,ownerId,mark:Boolean(media || mediaError)}));
+    if (offlineHistory && (env.EXTRACTION_ROUTE !== 'offline' || !media && !mediaError && pendingAtStart?.action?.extractionRoute !== 'offline'))
+      return {offlineReview:true,answer:'This conversation contains local invoice information. Start a new local invoice review to continue; conversation summaries are unavailable.'};
+    const offlineTurn=env.EXTRACTION_ROUTE==='offline' && (media || mediaError || pendingAtStart?.action?.extractionRoute==='offline' || /\b(?:change|chnge|chng|make|set|edit|modify|fix|update)\b/i.test(message));
+    const menuEditValues=!offlineTurn&&!scope.interactionId&&!media&&!mediaError&&!scope.checkpoint?ownerMenuInvoiceEdit(message):null;
     let menuEditTarget=null;
     if(menuEditValues){
       try{menuEditTarget=await loadOwnerMenuEditTarget({supabase,scope,authorize:authorizeTurn,clock});}
@@ -278,7 +289,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     const config=configurationSource==='workspace'
       ?sanitizeModelSettings({primaryModel:settings.primary_model,fallbackModel:settings.fallback_model})
       :sanitizeModelSettings({primaryModel:CF_PRIMARY_MODEL,fallbackModel:GEMINI_FALLBACK_MODEL});
-    const provider=isOwnerNextButton(scope.interactionId)?null:providerFactory({...config,geminiApiKey:env.GEMINI_API_KEY,openRouterApiKey:env.OPENROUTER_API_KEY,
+    const provider=offlineTurn||isOwnerNextButton(scope.interactionId)?null:providerFactory({...config,geminiApiKey:env.GEMINI_API_KEY,openRouterApiKey:env.OPENROUTER_API_KEY,
       zenApiKey:env.OPENCODE_ZEN_API_KEY,cfAccountId:env.CLOUDFLARE_ACCOUNT_ID,cfApiToken:env.CLOUDFLARE_API_TOKEN,
       fetchImpl,timeoutMs:15000,maxAttempts:2,healthStore});
     // Store adapters invoke authorize() without arguments. Always authorize the
@@ -301,6 +312,42 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         async execute(){return {ok:false,code:'UNAVAILABLE',message:'I can’t access your records right now. Try again shortly.'};},setServedModel(){},getMedia(){return null;}};
     }
     onToolsReady(tools);
+    if (offlineTurn) {
+      const reviewAction = pendingAtStart?.action;
+      const inputIssue=reviewAction?.extractionRoute==='offline' && offlineCorrectionInputIssue(message,{parseCorrection:parseInvoiceCorrection,clock});
+      if(inputIssue)return {offlineReview:true,answer:inputIssue};
+      let result;
+      if (scope.interactionId) {
+        const choice = verifyOwnerActionButton({id:scope.interactionId,scope:{workspaceId,phone},action:pendingAtStart,env,clock});
+        if (!choice.valid) return {offlineReview:true,answer:'That choice has expired or changed. Review the current invoice.'};
+        result = await tools.decideButton({interactionId:scope.interactionId,decision:choice.decision,pending:pendingAtStart});
+      } else if (media || mediaError) {
+        result = await tools.execute('workspaceData',{operation:'analyzeAttachment'},{signal});
+      } else if (reviewAction?.extractionRoute === 'offline') {
+        if (reviewAction.stage === 'canceled') return {offlineReview:true,answer:'That review was canceled. Send a new photo to start again.'};
+        if (OFFLINE_CANCEL_REPLY.test(message)) result = await tools.execute('workspaceData',{operation:'cancel'},{signal});
+        else if (OFFLINE_CONFIRMATION_REPLY.test(message) && ['proposal','saving'].includes(reviewAction.stage))
+          result = await tools.execute('workspaceData',{operation:'confirm'},{signal});
+        else if (correctOfflineReview(reviewAction,message,{parseCorrection:parseInvoiceCorrection,clock,messageId}))
+          result = await tools.execute('workspaceData',{operation:'reviewAttachment',table:'invoices',values:{notes:message}},{signal});
+        else return {offlineReview:true,answer:offlineReviewClarification(reviewAction)};
+      } else {
+        const handler = createWhatsAppBoundMessageHandler({supabase,env,fetchImpl,providerFactory,
+          pendingActionStoreFactory:()=>pending,invoiceStoreFactory:invoiceStore,authorizeScope:reauthorize,audience:'owner',clock,logger});
+        return {offlineReview:true,answer:await handler({...scope,message})};
+      }
+      if (!await authorizeTurn(scope)) return '';
+      const receipt = ownerWriteConfirmation(result);
+      if (receipt) return {offlineReview:true,answer:receipt};
+      if (result?.outcome === 'review_canceled') return {offlineReview:true,answer:'Invoice review canceled. Nothing was saved.'};
+      if (result?.ok === false) return {offlineReview:true,answer:result.message || 'The invoice could not be reviewed. Nothing was saved.'};
+      const row = await pending.loadInvoiceReview(scope);
+      if (row?.action?.extractionRoute !== 'offline') return {offlineReview:true,answer:result?.message || 'No invoice was saved.'};
+      const buttons = offlineReviewClarification(row.action,{buttonsAvailable:true}).length <= 1024
+        ? createOwnerActionButtons({scope:{workspaceId,phone},action:row,env,clock}) : [];
+      return {offlineReview:true,answer:offlineReviewClarification(row.action,{buttonsAvailable:buttons.length > 0}),
+        ...(buttons.length ? {buttons,ownerActionRef:{pendingId:row.id,pendingVersion:row.version}} : {})};
+    }
     if(isOwnerNextButton(scope.interactionId)){
       const blocked=pendingBlocksOwnerNextActions(pendingAtStart)||Boolean(lifecyclePending?.pending)||!pendingStoreAvailable||!lifecycleAvailable;
       const result=await runOwnerNextAction({supabase,scope,env,clock,authorize,tools,pending:blocked});
@@ -580,7 +627,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         if(replyStore){
           try{
             const saved=await replyStore.find(boundedScope);
-            if(saved?.answer&&await authorizeRequest(boundedScope))return {...saved,answer:ownerFailureGuidance(saved.answer,{code:saved.plannerFailure?.code}),replayed:true,
+            if(saved?.answer&&await authorizeRequest(boundedScope))return {...saved,answer:env.EXTRACTION_ROUTE==='offline'&&saved.answer.startsWith('Local invoice review.')
+              ?saved.answer:ownerFailureGuidance(saved.answer,{code:saved.plannerFailure?.code}),replayed:true,
               agentDiagnostics:{rounds:0,toolRounds:0,cacheHits:0,safetyRejects:[]}};
           }catch{logger?.warn?.('WhatsApp owner reply receipt lookup failed',{code:'OWNER_REPLY_STORE_FAILED'});}
         }
@@ -614,10 +662,10 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
           ?standaloneOwnerGreeting(scope.message):null;
         const result=basic?{answer:basic,agentDiagnostics:{rounds:0,toolRounds:0,cacheHits:0,safetyRejects:[]}}
           :await processTurn({...boundedScope,ownerConversation:conversation},tools=>{activeTools=tools;},()=>{},authorizeRequest);
-        if(result?.answer)result.answer=ownerFailureGuidance(result.answer,{code:result.plannerFailure?.code,
+        if(result?.answer&&!result.offlineReview)result.answer=ownerFailureGuidance(result.answer,{code:result.plannerFailure?.code,
           writeAttempted:activeTools?.getWriteAttempted?.()===true});
-        if(result?.answer)result.answer=result.answer.replace(/\bworkspace\b/gi,'business');
-        if(conversation&&result?.answer&&!result?.deferred)await conversation.append({key:`wa:${scope.messageId}:assistant`,role:'assistant',content:result.answer.slice(0,4000)});
+        if(result?.answer&&!result.offlineReview)result.answer=result.answer.replace(/\bworkspace\b/gi,'business');
+        if(conversation&&result?.answer&&!result?.deferred)await conversation.append({key:`wa:${scope.messageId}:assistant`,role:'assistant',content:(result.offlineReview?'[cetld:offline-intake]\n':'')+result.answer.slice(0,3970)});
         if(result?.checkpoint)latestCheckpoint=result.checkpoint;
         if(replyStore&&result?.answer&&!result?.deferred&&await authorizeRequest(boundedScope)){
           try{return await replyStore.save(boundedScope,result);}
@@ -670,3 +718,4 @@ export function createOwnerWorkspacePlanner({provider,message,history=[],timezon
     return result.data;
   };
 }
+

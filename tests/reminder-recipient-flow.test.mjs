@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,createHmac} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {CoreAutomationStore} from '../automation/core-store.mjs';
 import {createAutomationRuntime} from '../automation/runtime.mjs';
@@ -32,9 +33,9 @@ function hasResultValue(value,expected){
   return value===expected||(typeof expected==='number'&&typeof value==='string'&&/^\d+(?:\.\d+)?$/.test(value)&&Number(value)===expected);
 }
 
-async function setup(){
+async function setup(excludeMigrations=[]){
   let modelArgs={},modelMode='read',graphMode='accepted',reminderMode='accepted',graphCalls=[],modelCalls=[],hook=null;
-  const f=await createOfflineSqlNetwork({externalFetch:async(url,options)=>{
+  const f=await createOfflineSqlNetwork({excludeMigrations,externalFetch:async(url,options)=>{
     if(url.origin==='https://graph.facebook.com'){
       const payload=JSON.parse(options.body);graphCalls.push(payload);
       if(hook)await hook(payload);
@@ -237,5 +238,61 @@ test('recipient response lost after Graph transmission retains unknown receipt a
     await f.receive('What is my invoice status?','fixture-recipient-uncertain');
     assert.equal(f.graphCalls.length,sends);assert.equal(f.modelCalls.length,models);
     assert.equal((await f.db.query("select status from whatsapp_inbound_events where provider_message_id='fixture-recipient-uncertain'")).rows[0].status,'done');
+  }finally{await f.close();}
+});
+
+for (const order of ['marker-first','settings-first']) {
+  test(`provenance preserves approval and real settings still invalidate it (${order})`,async()=>{
+    const f=await setup();try{
+      const timestamp=async()=> (await f.db.query('select updated_at::text as v from workspace_settings where workspace_id=$1',[f.scope.workspaceId])).rows[0].v;
+      const approve=async()=>{
+        await f.db.query("update invoices set metadata=metadata||jsonb_build_object('followup_state','approved','approved_reminder_text',E'Invoice update for the fixture recipient.\\n\\nFixture studio','approved_preferences_updated_at',(select updated_at from workspace_settings where workspace_id=$1)),next_follow_up_at=now()-interval '1 minute' where id=$2",[f.scope.workspaceId,f.scope.invoiceId]);
+      };
+      const mark=async()=>{
+        await f.db.exec("set request.jwt.claim.role='service_role'");
+        const result=await f.supabase.rpc('owner_assistant_offline_provenance',{p_workspace_id:f.scope.workspaceId,p_mark:true});
+        assert.equal(result.error,null);assert.equal(result.data,true);
+        // Repeated bookkeeping and attempted mirror clearing also cannot edit preferences.
+        await f.db.query('update workspace_settings set offline_invoice_provenance=false where workspace_id=$1',[f.scope.workspaceId]);
+        await f.db.query('update workspace_settings set offline_invoice_provenance=true where workspace_id=$1',[f.scope.workspaceId]);
+      };
+      const business=async()=>{
+        // Currency exercises timestamp-based claims independently of the
+        // preferences trigger, which also clears the invoice's approval state.
+        for (const change of ["default_currency='EUR'", "follow_up_preferences=follow_up_preferences||'{\"maxReminders\":4}'::jsonb"]) {
+          const before=await timestamp();
+          await f.db.query(`update workspace_settings set ${change} where workspace_id=$1`,[f.scope.workspaceId]);
+          assert.notEqual(await timestamp(),before);
+          const sends=f.reminderCalls.length;
+          assert.deepEqual(await f.store.claimDueFollowups({...f.scope,now:new Date().toISOString(),limit:1}),[]);
+          await f.runtime.tick(f.scope);
+          assert.equal(f.reminderCalls.length,sends);
+          if(change.startsWith('default_currency'))await approve();
+        }
+      };
+      if(order==='settings-first'){await business();await approve();}
+      const before=await timestamp();await mark();assert.equal(await timestamp(),before);
+      assert.ok((await f.runtime.tick(f.scope)).results.some(r=>r.status==='sent'));
+      assert.equal(f.reminderCalls.length,1);
+      if(order==='marker-first'){
+        await approve();await business();
+        const changed=await timestamp();await mark();assert.equal(await timestamp(),changed);
+        assert.deepEqual(await f.store.claimDueFollowups({...f.scope,now:new Date().toISOString(),limit:1}),[]);
+        await f.runtime.tick(f.scope);
+        assert.equal(f.reminderCalls.length,1);
+      }
+    }finally{await f.close();}
+  });
+}
+
+test('provenance migration backfill preserves existing approval timestamp and sends',async()=>{
+  const migration='20261028030825_offline_invoice_review_corrections.sql';
+  const f=await setup([migration]);try{
+    const before=(await f.db.query('select updated_at::text as v from workspace_settings where workspace_id=$1',[f.scope.workspaceId])).rows[0].v;
+    await f.db.query("insert into whatsapp_pending_actions(workspace_id,customer_id,phone,source,action,expires_at) values($1,$2,$3,'whatsapp','{\"extractionRoute\":\"offline\"}',now()+interval '1 hour')",[f.scope.workspaceId,f.customerId,phone]);
+    await f.db.exec(await readFile(new URL('../supabase/migrations/'+migration,import.meta.url),'utf8'));
+    const row=(await f.db.query('select updated_at::text as v,offline_invoice_provenance from workspace_settings where workspace_id=$1',[f.scope.workspaceId])).rows[0];
+    assert.equal(row.offline_invoice_provenance,true);assert.equal(row.v,before);
+    assert.ok((await f.runtime.tick(f.scope)).results.some(r=>r.status==='sent'));assert.equal(f.reminderCalls.length,1);
   }finally{await f.close();}
 });
