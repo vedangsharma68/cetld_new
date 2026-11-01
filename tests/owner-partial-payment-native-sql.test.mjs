@@ -1,3 +1,4 @@
+import {cloudflarePartsResponse,cloudflareToolResults} from './fixtures/cloudflare-wire.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -5,7 +6,7 @@ import {pathToFileURL} from 'node:url';
 const baseline=process.env.CETLD_PAYMENT_BASELINE||process.env.CETLD_PAYMENT_LEADING_BASELINE;
 const base=baseline?pathToFileURL(baseline+'/'):new URL('../',import.meta.url);
 const {createOfflineSqlNetwork}=await import(new URL('tests/fixtures/offline-sql-network.mjs',base));
-const {createOwnerMessageHandler}=await import(new URL('automation/whatsapp/owner-handler.mjs',base));
+const {createOwnerMessageHandler}=await import(new URL('tests/fixtures/owner-engine.mjs',base));
 const {AIProvider}=await import(new URL('ai/provider.mjs',base));
 const {createOwnerWorkspaceTools}=await import(new URL('automation/whatsapp/owner-workspace-tools.mjs',base));
 const prompt='Record a USD 500 test payment against invoice SB-10442 for Northwind Systems LLC. This is only a dummy bookkeeping entry. Keep customer messages and reminders off.';
@@ -41,21 +42,21 @@ async function fixture(options={}){
 }
 function handlerFor(f,{readTwice=false,readOnce=false,readTarget=target,operation=proposal,confirmation=false,repairPlan=null,planningMessage=null,keepReading=false,finalFunctionCall=false,transformToolResult=null,boundedPayment=true}={}){
  let calls=0;const outputs=[],requests=[],planningRequests=[];
- const response=parts=>Response.json({candidates:[{content:{parts},finishReason:'STOP'}]});
+ const response=cloudflarePartsResponse;
  const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated'},logger:{info(){},warn(){},error(){}},toolsFactory:options=>{
   const tools=createOwnerWorkspaceTools(options);
   return {...tools,supportsBoundedPaymentProposal:boundedPayment&&tools.supportsBoundedPaymentProposal,async execute(name,args,context){
    const actual=await tools.execute(name,args,context),result=transformToolResult?transformToolResult(actual,args):actual;
    outputs.push(result);return result;
   }};
- },providerFactory:options=>new AIProvider({...options,primaryModel:'gemini-3.5-flash-lite',fallbackModel:null}),fetchImpl:async(url,init)=>{
-  assert.equal(new URL(url).hostname,'generativelanguage.googleapis.com');const body=JSON.parse(init.body);calls++;requests.push(body);
-  if(body.generationConfig?.responseMimeType==='application/json'){
+ },providerFactory:options=>new AIProvider({...options,primaryModel:'@cf/meta/llama-3.3-70b-instruct-fp8-fast',cfAccountId:'isolated',cfApiToken:'isolated',fallbackModel:null}),fetchImpl:async(url,init)=>{
+  assert.equal(new URL(url).hostname,'api.cloudflare.com');const body=JSON.parse(init.body);calls++;requests.push(body);
+  if(body.response_format?.type==='json_schema'){
    planningRequests.push(body);assert.ok(repairPlan,'Unexpected planning request');
    const wire=JSON.stringify(body);assert.match(wire,/BATCH_SHAPE/);assert.ok(wire.includes(planningMessage));assert.match(wire,/payments/);assert.match(wire,/currency/);assert.match(wire,/amount/);
    return response([{text:JSON.stringify(repairPlan)}]);
   }
-  const tools=body.contents.flatMap(row=>row.parts).flatMap(part=>part.functionResponse?[part.functionResponse.response]:[]),last=tools.at(-1);
+  const tools=cloudflareToolResults(body),last=tools.at(-1);
   if(!body.tools&&finalFunctionCall)return response([{functionCall:{name:'workspaceData',args:{operation:'read',table:'invoices',filters:readTarget}}}]);
   if(!body.tools)return response([{text:last?.completed?`Recorded USD ${last.paymentAmount||500} payment. The remaining balance is USD ${last.outstandingAmount??451.52}. Reminders are paused.`:last?.proposal?'Proposed a USD 500 payment. The remaining balance would be USD 451.52. Reply yes to confirm or cancel.':'No changes were made.'}]);
   if(confirmation)return response([{functionCall:{name:'workspaceData',args:{operation:'confirm'}}}]);

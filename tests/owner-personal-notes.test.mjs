@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
 import {answerWorkspaceQuestion} from '../ai/assistant.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {parseTextInvoice} from '../automation/whatsapp/text-invoice.mjs';
 import {ownerMenuInvoiceEdit} from '../automation/whatsapp/owner-next-actions.mjs';
 import {personalNoteReply} from '../ai/personal-note.mjs';

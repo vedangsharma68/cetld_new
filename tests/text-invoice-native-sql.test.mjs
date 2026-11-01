@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {createDirectOwnerWriteAdapter} from '../automation/whatsapp/direct-owner-write.mjs';
 import {ownerCalendar} from '../automation/whatsapp/workspace-records.mjs';
 import {CF_PRIMARY_MODEL} from '../ai/provider.mjs';

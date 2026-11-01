@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {resolveOwnerBinding} from '../automation/whatsapp/owner-binding.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {CF_QWEN_MODEL} from '../ai/provider.mjs';
 import {createOwnerChatDatabase,OWNER_CHAT_SCOPE,DEFAULT_NOW} from './fixtures/owner-chat-battery.mjs';
 

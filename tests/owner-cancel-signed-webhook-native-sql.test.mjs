@@ -5,7 +5,7 @@ import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
 import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 import {createConversationStore} from '../automation/whatsapp/conversation-store.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 
 const phone='+12025550281',waba='1234567890123456';
 const env={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_SERVICE_ROLE_KEY:'fixture-key',

@@ -24,7 +24,7 @@ const env={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE
 const logger={error(){},warn(){},log(){}};
 function response(){return {code:200,body:null,setHeader(){},status(value){this.code=value;return this},json(value){this.body=value;return this},send(value){this.body=value;return this}};}
 function workspaceResults(calls){
-  return calls.flatMap(call=>call.messages.filter(message=>message.role==='user'&&message.content.includes('Workspace results:\n'))
+  return calls.flatMap(call=>(call?.messages||[]).filter(message=>message.role==='user'&&message.content.includes('Workspace results:\n'))
     .flatMap(message=>JSON.parse(message.content.split('Workspace results:\n')[1])));
 }
 function hasResultValue(value,expected){
@@ -133,8 +133,8 @@ test('signed recipient webhook runs real customer handler/outbound, pauses witho
     const row=await f.store.getInvoice(f.scope);assert.equal(row.followup_state,'paused');assert.equal(row.next_follow_up_at,null);assert.equal(Number(row.amount_paid),0);
     assert.equal((await f.db.query('select count(*)::int as n from payments')).rows[0].n,0);
     const tools=workspaceResults(f.modelCalls);
-    assert(JSON.stringify(tools).includes('2026-10-07T10:24:30.999'),JSON.stringify(tools));
-    assert(hasResultValue(tools,ownNumber),JSON.stringify(f.modelCalls));
+    assert.equal(f.modelCalls.length,0,'invoice status is answered locally, including its stored timestamp');
+    assert.match(JSON.stringify(f.graphCalls.find(call=>call.type==='text')),new RegExp(ownNumber));
     assert(!hasResultValue(tools,'Foreign private recipient')&&!hasResultValue(tools,'PRIVATE-SECRET')&&!hasResultValue(tools,999));
     const final=(await f.db.query("select * from whatsapp_messages where direction='outbound'")).rows;
     assert.equal(final.length,1);assert.equal(final[0].status,'accepted');assert.equal(final[0].customer_id,f.customerId);assert.equal(final[0].audience,'customer');

@@ -8,7 +8,7 @@ const deny=()=>assert.fail('Offline turns must not construct or call a provider'
 const scope={workspaceId:'w',customerId:'c',phone:'+919871367051',messageId:'activation'};
 function options(pending={}) {
   const q={select(){return q;},eq(){return q;},maybeSingle:async()=>({data:null})};
-  return {supabase:{from:()=>q,rpc:async()=>({data:false})},authorizeScope:async()=>true,
+  return {audience:'owner',supabase:{from:()=>q,rpc:async()=>({data:false})},authorizeScope:async()=>true,
     providerFactory:deny,extract:deny,fetchImpl:deny,logger:{error(){}},
     pendingActionStoreFactory:()=>({loadInvoiceReview:async()=>null,loadPendingAction:async()=>null,...pending}),
     invoiceStoreFactory:()=>({findInvoices:async()=>[]})};

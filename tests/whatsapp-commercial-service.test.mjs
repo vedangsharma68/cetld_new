@@ -9,7 +9,7 @@ import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs'
 import {createInboundRuntime,SupabaseInboundInbox} from '../automation/whatsapp/cloud-inbound.mjs';
 import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 import {createConversationStore} from '../automation/whatsapp/conversation-store.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 
 const OWNER='+12025550198',CUSTOMER='+12025550199',OTHER='+12025550197';
 const logger={log(){},info(){},warn(){},error(){}};

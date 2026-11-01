@@ -1,9 +1,11 @@
+import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
+import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 
 const captions=[
   ['Log this sample invoice for testing. Do not send any customer reminders.','image/jpeg'],
@@ -47,43 +49,28 @@ for(const [caption,mimeType,declined=false] of captions)test(`default native att
     const facts={invoiceNumber:'PRINTED-118',customerName:'Fixture customer',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:18,total:118,outstandingAmount:118,currency:'USD',clientPhone:null,clientPhoneRaw:null,clientEmail:null,notes:null,direction:'receivable',currencySource:null,addressHint:null,paymentTerms:null};
     if(mimeType==='application/pdf')Object.assign(facts,{invoiceNumber:'INV-R-1048',customerName:'Northlake Foods',invoiceDate:'2026-09-01',dueDate:null,currency:'INR'});
     const wire={...Object.fromEntries(Object.entries(facts).flatMap(([k,v])=>[[k,v],[k+'Confidence',v===null?0:.99]])),lineItems:[{description:'Service',quantity:1,unitPrice:100,amount:100,confidence:.99}],lineItemsConfidence:.99};
-    const requests=[],results=[],logs=[];let firstContract=null;
-    const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
-      logger:{info(label,data){logs.push({label,data});},warn(){},error(){}},fetchImpl:async(url,init)=>{
-        const parsed=new URL(url),body=JSON.parse(init.body);requests.push(parsed.hostname);
-        if(parsed.hostname==='generativelanguage.googleapis.com'){
-          assert.ok(body.contents[0].parts.some(part=>mimeType==='application/pdf'?part.text?.includes('INV-R-1048'):part.inlineData?.mimeType===mimeType));
-          return Response.json({candidates:[{content:{parts:[{text:JSON.stringify({...wire,...(mimeType.startsWith('image/')?{imageContent:'single_invoice'}:{})})}]},finishReason:'STOP'}]});
-        }
-        assert.equal(parsed.hostname,'api.cloudflare.com');
-        const tool=body.messages.findLast(item=>item.role==='tool');
-        if(!firstContract)firstContract={choice:body.tool_choice,tools:body.tools};
-        const result=tool?JSON.parse(tool.content):null;if(result)results.push(result);
-        // Reproduce the generic invoice-create arguments, rather than script
-        // the desired saveAttachment call. The server must bind the operation.
-        const message=!result||result.code==='INVALID'&&requests.length<=6
-          ?{content:'',tool_calls:[{id:`generic-${requests.length}`,type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'create',table:'invoices',values:{invoice_number:'INVENTED',customer_name:'Invented customer',total_amount:1,...(declined?{currency:'USD'}:{status:'unpaid'}),custom_fields:{},...(requests.length>3?{notes:'invented'}:{})}})}}]}
-          :{content:result.completed?`Saved invoice ${result.review.invoice.invoiceNumber} for ${result.review.invoice.clientName}, ${result.review.invoice.currency} 118.`:'The sample invoice was not logged.'};
-        return Response.json({choices:[{message,finish_reason:message.tool_calls?'tool_calls':'stop'}]});
-      }});
+    const requests=[],results=[],logs=[],operations=[];
+    const handler=createOwnerMessageHandler({supabase,localExtraction:async()=>localExtraction(wire),env:{NODE_ENV:'test'},
+      logger:{info(label,data){logs.push({label,data});},warn(){},error(){}},
+      toolsFactory:options=>{const tools=createOwnerWorkspaceTools(options);return {...tools,async execute(name,args,context){
+        operations.push(args.operation);const result=await tools.execute(name,args,context);results.push(result);return result;
+      }};},providerFactory:()=>{requests.push('provider');throw Error('document routing must be local');}});
     const input={workspaceId,ownerId,customerId,phone,messageId,message:caption,media:{bytes,mimeType,fileName:mimeType==='application/pdf'?'fixture.pdf':'fixture.jpg'}};
     const reply=await handler(input);
     assert.equal(reply.plannerFailure,undefined,JSON.stringify({reply,logs}));
     if(declined){
-      assert.doesNotMatch(reply.answer,/Saved invoice/);assert.equal(firstContract.choice,'auto');
-      assert.equal(results[0]?.validationCode,'ATTACHMENT_REVIEW_REQUIRED');assert.equal(results[0]?.writeAttempted,false);
+      assert.doesNotMatch(reply.answer,/Saved invoice/);assert.deepEqual(operations,['analyzeAttachment']);
+      assert.equal(results[0]?.analysisOnly,true);assert.equal(results[0]?.completed,undefined);
       assert.equal(requests.filter(host=>host==='generativelanguage.googleapis.com').length,0);
       for(const table of ['invoices','invoice_files','payments','whatsapp_owner_action_receipts','whatsapp_direct_write_receipts'])
         assert.equal((await db.query(`select count(*)::int n from ${table} where workspace_id=$1`,[workspaceId])).rows[0].n,0,table);
-      assert.equal((await db.query("select count(*)::int n from whatsapp_pending_actions where workspace_id=$1 and action->>'stage'!='canceled'",[workspaceId])).rows[0].n,0);
+      assert.equal((await db.query("select count(*)::int n from whatsapp_pending_actions where workspace_id=$1 and action->>'stage' in ('saved','saving')",[workspaceId])).rows[0].n,0);
       assert.equal((await db.query("select count(*)::int n from whatsapp_messages where workspace_id=$1 and audience='customer'",[workspaceId])).rows[0].n,0);
       assert.deepEqual(f.errors,[]);return;
     }
     assert.match(reply.answer,/Reply yes/);
     assert.ok(reply.answer.includes(mimeType==='application/pdf'?'INV-R-1048':'PRINTED-118'));
-    assert.equal(firstContract.choice,'required');assert.deepEqual(firstContract.tools.map(t=>t.function.name),['workspaceData']);
-    assert.deepEqual(firstContract.tools[0].function.parameters.properties.operation.enum,['saveAttachment']);
-    assert.equal(results.length,0,'review must bypass model final prose');
+    assert.deepEqual(operations,['saveAttachment']);assert.equal(results.length,1);assert.equal(requests.length,0,'review must bypass the provider entirely');
     assert.equal(logs.filter(row=>row.label==='WhatsApp owner tool call'&&row.data.validationCode==='INVALID_FIELDS').length,0);
     const invoice=(await db.query('select * from invoices where workspace_id=$1',[workspaceId])).rows;
     assert.equal(invoice.length,0);
@@ -91,7 +78,7 @@ for(const [caption,mimeType,declined=false] of captions)test(`default native att
     assert.equal((await db.query("select count(*)::int n from whatsapp_pending_actions where workspace_id=$1 and action->>'sourceMessageId'=$2 and action->>'stage'='proposal'",[workspaceId,messageId])).rows[0].n,1);
     assert.equal((await db.query('select count(*)::int n from payments where workspace_id=$1',[workspaceId])).rows[0].n,0);
     assert.equal((await db.query("select count(*)::int n from whatsapp_messages where workspace_id=$1 and audience='customer'",[workspaceId])).rows[0].n,0);
-    assert.equal(requests.filter(host=>host==='generativelanguage.googleapis.com').length,1);
+    assert.equal(requests.length,0);
     const count=requests.length,replay=await handler(input);assert.equal(replay.replayed,true);assert.equal(replay.answer,reply.answer);assert.equal(requests.length,count);
     assert.deepEqual(f.errors,[]);
   }finally{await f.close();}

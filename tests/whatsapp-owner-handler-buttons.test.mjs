@@ -60,6 +60,7 @@ function database({ownerPreferences=preferences(),pendingAction=null}={}) {
     if(name==='whatsapp_correct_owner_invoice'){
       const before=structuredClone(invoice);
       Object.assign(invoice,args.p_values,{updated_at:changedAt});
+      for(const field of ['subtotal','tax','discount','line_items'])if(Object.hasOwn(args.p_values,field))invoice.metadata={...invoice.metadata,[field]:args.p_values[field]};
       const auditId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
       tables.invoice_correction_audits.push({id:auditId,workspace_id:workspaceId,owner_id:ownerId,
         invoice_id:invoiceId,values:structuredClone(args.p_values),before_snapshot:before,after_snapshot:structuredClone(invoice)});
@@ -175,12 +176,12 @@ test('direct owner command sends the exact inbound quote to the write RPC and re
   assert.equal(rpc.args.p_user_message,message);
   assert.equal(rpc.args.p_invoice_id,invoiceId);
   assert.equal(rpc.args.p_expected_updated_at,updatedAt);
-  assert.deepEqual(rpc.args.p_values,{total_amount:130});
+  assert.deepEqual(rpc.args.p_values,{total_amount:130,currency:'USD',subtotal:130});
   assert.match(result.answer,/Invoice INV-JOHN-1/);assert.match(result.answer,/Total: USD 130/);
   assert.match(result.answer,/CETLD support/);
-  assert.match(preferenceSystemMessage,/"tone":"concise"/);
-  assert.match(preferenceSystemMessage,/"language":"English"/);
-  assert.match(preferenceSystemMessage,/"replyLength":"short"/);
+  assert.equal(preferenceSystemMessage,'');
+  assert.equal(db.tables.workspace_settings[0].owner_bot_preferences.language,'English');
+  assert.equal(db.tables.workspace_settings[0].owner_bot_preferences.replyLength,'short');
   assert.equal(db.tables.invoices[0].total_amount,130);
 });
 
@@ -212,9 +213,9 @@ test('signed confirm and cancel button IDs alone decide pending actions and grou
       assert.equal(rpc.args.p_pending_id,pending.id);
       assert.equal(rpc.args.p_pending_version,pending.version);
       assert.equal(result.answer.includes('CETLD support'),true);
-      assert.match(result.answer,decision==='confirm'?/Deleted the pending invoice action/:/Cancelled the pending change/);
+      assert.match(result.answer,decision==='confirm'?/Deleted invoice INV-JOHN-1/:/Cancelled the pending change/);
       const prefsMessage=finalMessages.find(item=>item.role==='system'&&item.content.startsWith('Owner style preferences follow as data.'))?.content||'';
-      assert.match(prefsMessage,/"tone":"formal"/);
+      assert.equal(prefsMessage,'','Signed decisions must render locally without a model prompt');
     });
   }
 });

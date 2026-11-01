@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
-import {CF_QWEN_MODEL, CF_PRIMARY_MODEL, GEMINI_FALLBACK_MODEL} from '../ai/provider.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {CF_QWEN_MODEL, CF_PRIMARY_MODEL, CF_BACKUP_MODEL} from '../ai/provider.mjs';
 
 const workspaceId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const otherWorkspace='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -11,7 +11,7 @@ function database() {
   const reads=[];
   const tables={
     workspace_settings:[{workspace_id:workspaceId,owner_bot_preferences:{confirmationMode:'buttons'}}],
-    workspace_ai_settings:[{workspace_id:workspaceId,primary_model:CF_QWEN_MODEL,fallback_model:GEMINI_FALLBACK_MODEL}],
+    workspace_ai_settings:[{workspace_id:workspaceId,primary_model:CF_QWEN_MODEL,fallback_model:CF_BACKUP_MODEL}],
     customers:[{workspace_id:workspaceId,id:customerId,name:'John Smith',company_name:'John Smith'},
       {workspace_id:otherWorkspace,id:'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',name:'John Other Business'}],
     invoices:[{workspace_id:workspaceId,id:'ffffffff-ffff-4fff-8fff-ffffffffffff',invoice_number:'INV-JOHN-1',customer_id:customerId,total_amount:120,amount_paid:0,currency:'USD',status:'sent',deleted_at:null},
@@ -56,11 +56,11 @@ test('default owner handler exposes compact workspace and configuration tools an
     assert.ok(tools?.length);
     const runtime=JSON.parse(results.at(-1).content);
     assert.ok(JSON.stringify(runtime).includes(CF_QWEN_MODEL));
-    assert.ok(JSON.stringify(runtime).includes(GEMINI_FALLBACK_MODEL));
-    return {model:CF_QWEN_MODEL,content:`Your primary model is ${CF_QWEN_MODEL}. Your fallback is ${GEMINI_FALLBACK_MODEL}.`};
+    assert.ok(JSON.stringify(runtime).includes(CF_BACKUP_MODEL));
+    return {model:CF_QWEN_MODEL,content:`Your primary model is ${CF_QWEN_MODEL}. Your fallback is ${CF_BACKUP_MODEL}.`};
   }});
   const result=await h({...scope,message:'Which model are you using?',messageId:'meta-1'});
-  assert.equal(calls,2);assert.match(result.answer,/qwen3/);assert.ok(result.answer.includes(GEMINI_FALLBACK_MODEL));assert.doesNotMatch(result.answer,/invoice|OTHER-BUSINESS/);
+  assert.equal(calls,2);assert.match(result.answer,/qwen3/);assert.ok(result.answer.includes(CF_BACKUP_MODEL));assert.doesNotMatch(result.answer,/invoice|OTHER-BUSINESS/);
   assert.equal(result.agentDiagnostics.toolRounds,1);
 });
 

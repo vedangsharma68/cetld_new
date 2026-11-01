@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 import {normalizeProviderToolCalls,internalToolEnvelope} from '../ai/tool-calls.mjs';
-import {createOwnerMessageHandler,standaloneOwnerGreeting} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler,standaloneOwnerGreeting} from './fixtures/owner-engine.mjs';
 import {ownerReplySafetyIssue,runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
 import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as scope,DEFAULT_NOW,JOHN_CUSTOMER_ID} from './fixtures/owner-chat-battery.mjs';

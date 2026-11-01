@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {createOwnerActionButtons} from '../automation/whatsapp/owner-action-buttons.mjs';
 import {FollowUpEngine} from '../automation/engine.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
@@ -69,7 +69,7 @@ test('owner intake repairs and exact proposal buttons run through real handler, 
    const row=await draft({...base,stage:'proposal'});
    const tools=createOwnerWorkspaceTools({supabase,scope,message:'Log this invoice',messageId:'new-extraction',pending,pendingAtStart:row,
     media:{bytes:Buffer.from('isolated PDF fixture'),mimeType:'application/pdf',fileName:'fixture.pdf'},
-    extractAttachment:async()=>structuredClone(extracted),providerFactory:()=>provider,
+    extractOfflineAttachment:async()=>structuredClone(extracted),providerFactory:()=>provider,
     pendingStoreAvailable:true,interactiveAvailable:true,env,clock:()=>new Date(),authorize:async()=>true,
     botPreferences:{confirmationMode:'direct'},ownerStore:{query:async()=>[]}});
    const result=await tools.execute('workspaceData',{operation:'saveAttachment'});

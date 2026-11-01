@@ -1,8 +1,9 @@
-import {offlineProvenance} from '../../ai/offline-provenance.mjs';
+import {createPrivateChatMemory} from '../../ai/private-chat-memory.mjs';
+import {createPrivateChatProvider, localReviewTurn, privateChatTopic, PRIVATE_CHAT_REPLY, CHAT_UNAVAILABLE_REPLY} from '../../ai/private-chat.mjs';
+import {invoiceReadQuestion, invoiceRowsAnswer, customerInvoiceRows} from './private-invoice-read.mjs';
 import {offlineReviewDraft, offlineReviewClarification, correctOfflineReview, offlineCorrectionInputIssue, OFFLINE_CANCEL_REPLY, OFFLINE_CONFIRMATION_REPLY} from '../../ai/offline-invoice-review.mjs';
 import {normalizeOwnerPhone,PHONE_FORMAT_GUIDANCE} from './owner-phone.mjs';
-import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL,
-  sanitizeModelSettings} from '../../ai/provider.mjs';
+import {AIProvider, sanitizeModelSettings} from '../../ai/provider.mjs';
 import {createWhatsAppAssistantChannel} from '../../ai/whatsapp-channel.mjs';
 import {getSendEligibility} from './consent.mjs';
 import {readConversationHistory, writeConversationTurn} from './conversation-memory.mjs';
@@ -13,7 +14,6 @@ import {validateAssistantInvoice} from '../../ai/invoice-ops.mjs';
 import {createHash} from 'node:crypto';
 import {CURRENCY_SUPPORT_MESSAGE, isSupportedCurrency} from '../../currency-contract.mjs';
 import {deriveInvoiceDueDate, inferInvoiceCurrency, todayInKolkata} from '../../ai/invoice-photo-inference.mjs';
-import {classifyIntent} from './intent.mjs';
 
 const requiredInvoiceFields = ['invoiceNumber','customerName','invoiceDate','total','currency','direction'];
 const fieldLabels = {invoiceNumber: 'invoice number', customerName: 'customer name', invoiceDate: 'invoice date',
@@ -278,29 +278,28 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       if (signal?.aborted || (Number.isFinite(deadlineAt) && Date.now() >= deadlineAt)) throw Object.assign(new Error('Inbound processing deadline expired'), {name: 'AbortError'});
     };
     active();
-    if(!authorizeScope&&(media||mediaError||/\b(?:change|chnge|set|edit|modify|fix|update|mark)\b/i.test(message||''))){
-      return 'Only the business owner can create or change invoices. Contact the business for help.';
+    if(audience!=='owner'&&(media||mediaError||/\b(?:change|chnge|set|edit|modify|fix|update|mark)\b/i.test(message||''))){
+      return media||mediaError ? 'Payment receipts cannot be recorded from customer photos here. Ask the business owner to verify and record the payment. Nothing was changed.' : 'Only the business owner can create or change invoices. Contact the business for help.';
     }
     const {data: settings, error} = await supabase.from('workspace_ai_settings')
       .select('*').eq('workspace_id', workspaceId).maybeSingle();
     if (error) throw error;
     const models = sanitizeModelSettings({primaryModel: settings?.primary_model,
       fallbackModel: settings?.fallback_model});
-    const offline = env.EXTRACTION_ROUTE === 'offline';
-    const localBusiness = offline
-      ? await offlineProvenance({supabase,workspaceId,mark:Boolean(media || mediaError)})
-      : settings?.offline_invoice_provenance===true;
-    if(localBusiness && !offline) return 'This conversation contains local invoice information. Start a new local invoice review to continue; conversation summaries are unavailable.';
-    const offlineTurn=offline && (localBusiness || media || mediaError || /\b(?:change|chnge|chng|make|set|edit|modify|fix|update)\b/i.test(message||''));
-    const provider = offlineTurn ? null : providerFactory({...models, geminiApiKey: env.GEMINI_API_KEY,
-      openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
-      cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN,
-      fetchImpl, timeoutMs: 8000, maxAttempts: 1});
+    const offline = true; // Invoice extraction is always local, with either flag setting.
+    const offlineTurn=Boolean(media || mediaError);
+    const provider=createPrivateChatProvider({providerFactory,message,memory:createPrivateChatMemory({supabase,scope:{workspaceId,customerId,phone,messageId,audience}}),options:{...models,
+      cfAccountId:env.CLOUDFLARE_ACCOUNT_ID,cfApiToken:env.CLOUDFLARE_API_TOKEN,
+      fetchImpl,timeoutMs:8000,maxAttempts:1}});
     const pending = pendingActionStoreFactory({supabase});
     const eligible=async()=>authorizeScope?{allowed:await authorizeScope({workspaceId,customerId,phone}),customer:{id:customerId}}
       :getSendEligibility({supabase,workspaceId,phone,category:'invoice_updates'});
-    const channel = channelFactory({supabase, provider,allowInvoiceWrites:Boolean(authorizeScope),
+    const channel = channelFactory({supabase, provider,allowInvoiceWrites:audience==='owner'&&Boolean(authorizeScope),
       ...pending,
+      answer:async({provider,message})=>{
+        const result=await provider.generate({signal,deadlineAt});
+        return {answer:result.content,model:result.model,usedFallback:result.usedFallback};
+      },
       createInvoiceStore: scope => invoiceStoreFactory({supabase, workspaceId: scope.workspaceId, customerId: scope.customerId}),
       authorizeChannel: async scope => {
         const eligibility = await eligible();
@@ -309,6 +308,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       },
     });
     if (media || mediaError) {
+      if(!authorizeScope || !await authorizeScope({workspaceId,customerId,phone})) return 'Only the business owner can create or change invoices.';
       // This durable tombstone is written before extraction. Its row/version
       // token prevents an older extraction or currency reply from reviving a
       // review replaced by this photo.
@@ -321,112 +321,31 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         const {data: workspace, error: workspaceError} = await supabase.from('workspace_settings').select('business_name,default_currency')
           .eq('workspace_id', workspaceId).maybeSingle();
         if (workspaceError) throw workspaceError;
-        // Media extraction is deliberately independent of the workspace's chat
-        // model choice. This preserves conversational behavior while using the
-        // vision-capable extraction chain and its separately configured keys.
-        const extractionProvider = offline ? null : providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
-          fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, requestPurpose: 'extraction', geminiApiKey: env.GEMINI_API_KEY,
-          openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
-          fetchImpl, timeoutMs: 12_000, maxAttempts: 1});
         // Reserve invocation time for validation, pending-action persistence,
         // the scoped reply claim/send, and durable completion.
         const extractionDeadlineAt = Math.min(Number.isFinite(deadlineAt) ? deadlineAt : Infinity, Date.now() + 28_000);
-        extracted = await (offline ? extractOffline : extract)({provider: extractionProvider, ...media,
+        extracted = await extractOffline({provider:null, ...media,
           businessName: workspace?.business_name || '', signal, deadlineAt: extractionDeadlineAt, logger});
         active();
-        if (offline) {
-          review = offlineReviewDraft(extracted, messageId, {ownerMessage:audience === 'owner' ? message : ''});
-          const stored = await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone,
-            fromStage:'extracting', action:review});
-          return stored ? offlineReviewClarification(review) : 'A newer photo replaced this review. Nothing from this photo was saved.';
-        }
-        if (audience !== 'owner' && extracted?.direction?.value === 'payable' && extracted.direction.confidence >= 0.75) {
-          await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
-            action: {...reviewDraft(extracted,messageId), stage: 'canceled'}});
-          return 'This looks like a bill your business owes, so nothing was saved.';
-        }
-        const currencyResult = inferInvoiceCurrency(extracted, extracted?.rawText || '', workspace?.default_currency || 'INR');
-        if (currencyResult.unsupportedCurrency) {
-          await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone, fromStage: 'extracting',
-            action: {...reviewDraft(extracted,messageId), stage: 'canceled'}});
-          return `The invoice uses ${currencyResult.unsupportedCurrency}, which cannot be saved. ${CURRENCY_SUPPORT_MESSAGE} Nothing was saved.`;
-        }
-        const assumptions = [];
-        const invoiceDate = extracted?.invoiceDate?.value && extracted.invoiceDate.confidence >= 0.75
-          ? extracted.invoiceDate.value : todayInKolkata(clock());
-        if (invoiceDate !== extracted?.invoiceDate?.value) assumptions.push('invoice date was not shown, so today in Asia/Kolkata was used');
-        const due = audience === 'owner'
-          ? {dueDate: extracted?.dueDate?.confidence >= .75 ? extracted.dueDate.value : null,
-            source: extracted?.dueDate?.value && extracted.dueDate.confidence >= .75 ? 'printed' : 'not shown'}
-          : deriveInvoiceDueDate(invoiceDate,
-          extracted?.dueDate?.confidence >= 0.75 ? extracted.dueDate.value : null,
-          extracted?.paymentTerms?.value || extracted?.notes?.value || '');
-        if (due.source.startsWith('derived')) assumptions.push(`due date ${due.source}`);
-        if (currencyResult.assumed && audience !== 'owner') assumptions.push(currencyResult.source);
-        if (audience !== 'owner' && (extracted?.direction?.value !== 'receivable' || extracted.direction.confidence < 0.75)) {
-          assumptions.push('direction assumed to be an invoice you issued');
-        }
-        const invoice = {invoiceNumber: extracted?.invoiceNumber?.value || null, clientName: extracted?.customerName?.value ?? null,
-          clientEmail: extracted?.clientEmail?.value ?? null, clientPhone: extracted?.clientPhone?.value ?? null,
-          clientPhoneRaw: extracted?.clientPhoneRaw?.value ?? null,
-          invoiceDate, dueDate: due.dueDate, subtotal: extracted?.subtotal?.value ?? null,
-          tax: extracted?.tax?.value ?? null, total: extracted?.total?.value ?? null,
-          outstanding: extracted?.outstandingAmount?.value ?? extracted?.total?.value ?? null,
-          currency: currencyResult.currency, notes: extracted?.notes?.value ?? null, alreadyPaid: false,
-          direction: 'receivable', lineItems: extracted?.lineItems?.value || []};
-        // An unusable printed contact must not block saving the invoice itself.
-        try { invoice.clientPhone = normalizeOwnerPhone(invoice.clientPhone); }
-        catch { invoice.clientPhone = null; }
-        const validationIssues = extractionValidationIssues(extracted);
-        const missing = ['invoiceNumber', 'customerName', 'total'].filter(field => extracted?.[field]?.value == null
-          || extracted[field].confidence < 0.75 || field === 'total' && extracted[field].value <= 0);
-        let validatedInvoice;
-        try { validatedInvoice = approvedInvoice(invoice); }
-        catch (validationError) {
-          // Successful extraction with incomplete or conflicting invoice facts
-          // is a review outcome, not an unavailable extraction provider.
-          if (validationError?.status !== 422) throw validationError;
-          const field = {CLIENT_REQUIRED:'customerName', INVOICE_NUMBER_REQUIRED:'invoiceNumber',
-            INVOICE_DATE_REQUIRED:'invoiceDate', INVALID_DUE_DATE:'dueDate', CURRENCY_REQUIRED:'currency',
-            INVOICE_TOTAL_REQUIRED:'total', INVOICE_TOTAL_MUST_BE_POSITIVE:'total',
-            INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX:'total'}[validationError.code];
-          if (field && !missing.includes(field)) missing.push(field);
-          if (!field || validationError.code === 'INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX') {
-            validationIssues.push(validationError.code);
+        review = extracted?.extractionRoute === 'offline' || env?.EXTRACTION_ROUTE === 'offline'
+          ? offlineReviewDraft(extracted, messageId, {ownerMessage:audience === 'owner' ? message : ''}) : reviewDraft(extracted, messageId);
+        // A normalized local reader must pass the same strict invoice checks.
+        // The production reader always supplies offline provenance and evidence.
+        if (review.extractionRoute !== 'offline') {
+          review.currencyEvidence = inferInvoiceCurrency(extracted, extracted?.rawText || '', workspace?.default_currency || 'INR').source;
+          try {
+            // Direction uncertainty still blocks a proposal; validate its money independently.
+            const validated=approvedInvoice({...review.invoice,direction:review.invoice.direction==='uncertain'?'receivable':review.invoice.direction});
+            if (!review.missingFields.length && !review.validationIssues.length) review = {...review, invoice:validated, stage:'proposal'};
+          } catch (error) {
+            if (error.code==='INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX'&&!review.missingFields.includes('total'))review.missingFields.push('total');
+            if (error.code && /AMOUNT|TOTAL|SUBTOTAL|TAX|LINE_ITEM|BALANCE|PAYMENT_RECORD/.test(error.code) && !review.validationIssues.includes(error.code)) review.validationIssues.push(error.code);
           }
+          if (review.stage === 'incomplete') review.failureCode = 'INVOICE_REVIEW_INCOMPLETE';
         }
-        if (audience === 'owner') {
-          // An attached bill/ambiguous dollar symbol needs owner clarification,
-          // not cancellation or an inferred receivable/currency. Keep source
-          // facts in the same review; continuation still requires owner evidence.
-          const unresolved = reviewDraft(extracted, messageId).missingFields;
-          if (unresolved.includes('currency')) {
-            missing.push('currency'); invoice.currency = extracted?.currency?.value ?? null;
-          }
-          if (unresolved.includes('direction')) {
-            missing.push('direction'); invoice.direction = extracted?.direction?.value ?? 'uncertain';
-          }
-        }
-        if (missing.length || validationIssues.length) {
-          review = {...reviewDraft(extracted, messageId), invoice, missingFields: [...new Set(missing)],
-            validationIssues: [...new Set(validationIssues)], failureCode: 'INVOICE_REVIEW_INCOMPLETE',
-            currencySource: missing.includes('currency') ? null : 'photo', currencyEvidence: missing.includes('currency') ? null : currencyResult.source,
-            dueDateSource: due.source, assumptions, warnings: extracted?.warnings || []};
-          const stored = await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone,
-            fromStage: 'extracting', action: review});
-          return stored ? invoiceReviewClarification(review) : 'A newer photo replaced this review. Nothing from this photo was saved.';
-        }
-        active();
-        // The database only allows extracting -> proposal -> saving, and requires
-        // currencySource to be the marker 'photo' or 'user'. The readable evidence
-        // is kept separately for the reply.
-        const proposal = {type: 'invoice_review_draft', stage: 'proposal', invoice: validatedInvoice,sourceMessageId:messageId,
-          missingFields: [], currencySource: 'photo', currencyEvidence: currencyResult.source,
-          dueDateSource: due.source, assumptions};
-        const proposed = await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone,
-          fromStage: 'extracting', action: proposal});
-        if (!proposed) return 'A newer photo replaced this review. Nothing from this photo was saved.';
-        return proposalSummary(validatedInvoice);
+        const stored = await pending.transitionInvoiceReview({...token, workspaceId, customerId, phone,
+          fromStage:'extracting', action:review});
+        return stored ? review.stage === 'proposal' ? proposalSummary(review.invoice) : invoiceReviewClarification(review) : 'A newer photo replaced this review. Nothing from this photo was saved.';
 
       } catch (error) {
         const failureCode = error?.code === 'OFFLINE_PDF_NO_TEXT' || Object.hasOwn(INVOICE_IMAGE_REPLIES, error?.code || '') ? error.code
@@ -456,7 +375,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       }
     }
     const current = await pending.loadInvoiceReview({workspaceId, customerId, phone});
-    if (offline && current?.action?.extractionRoute === 'offline') {
+    if (localReviewTurn(current?.action,message)) {
       if (!authorizeScope || !await authorizeScope({workspaceId,customerId,phone})) return 'Only the business owner can create or change invoices.';
       const action = current.action;
       if (OFFLINE_CANCEL_REPLY.test(message) && ['incomplete','proposal'].includes(action.stage)) {
@@ -477,7 +396,6 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       }
       return offlineReviewClarification(action);
     }
-    if(localBusiness)return 'This conversation contains local invoice information. Continue with local invoice review.';
     let effective = message;
     if (/^\s*INV-[A-Z0-9-]+\s*[.!]?\s*$/i.test(message)) {
       try {
@@ -530,28 +448,6 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       return 'Only the business owner can record payments. Ask them to record this in cetld or their linked WhatsApp chat.';
     }
     if (!correction && editLike && !FILE_REQUEST.test(message)) {
-      try {
-        if (!offline) {
-        const intentStore = await invoiceStoreFactory({supabase, workspaceId, customerId});
-        const known = await intentStore.findInvoices({limit: 50});
-        let history = [];
-        try { history = await readConversationHistory({supabase, workspaceId, phone,customerId,audience}); } catch { /* optional context */ }
-        const intentProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL,
-          fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL, requestPurpose: 'extraction', geminiApiKey: env.GEMINI_API_KEY,
-          openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
-          fetchImpl, timeoutMs: 8000, maxAttempts: 1});
-        modelIntent = await classifyIntent({provider: intentProvider, message: effective, history, invoices: known, signal, deadlineAt});
-        if (modelIntent.action === 'correct_invoice' && modelIntent.confidence >= 0.75) {
-          correction = {changes: {[modelIntent.field]: modelIntent.value,
-            ...(modelIntent.currency && modelIntent.field === 'total' ? {currency: modelIntent.currency} : {})},
-            ...(modelIntent.customerHint ? {hint: modelIntent.customerHint} : {})};
-        }
-        }
-      } catch (intentError) {
-        logger?.error?.('WhatsApp intent classification failed', {workspaceId,
-          message: String(intentError?.message || '').slice(0, 200)});
-        correction = parseInvoiceCorrection(effective, clock);
-      }
       const strongEdit = /\b(?:change|chnge|chng|set|edit|modify|fix|update)\b/i.test(effective);
       if (!correction && (!modelIntent ? strongEdit : (modelIntent.action === 'unknown' || modelIntent.confidence < 0.75) && strongEdit)) {
         return askNumber('What would you like to change, and what should the new value be?');
@@ -646,6 +542,15 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       }
       if (currency && action.stage === 'proposal') return proposalSummary(action.invoice);
     }
+    if (invoiceReadQuestion(message)) {
+      const eligibility=await eligible();
+      if(!eligibility.allowed||eligibility.customer?.id!==customerId)return 'Verify your number in cetld to discuss account details.';
+      try {
+        const rows=customerInvoiceRows(await invoiceStoreFactory({supabase,workspaceId,customerId}).findInvoices({limit:50}));
+        return invoiceRowsAnswer(message,{ok:true,readOnly:true,operation:'read',table:'invoices',rows,truncated:rows.length>=50,offset:0});
+      } catch { return 'I could not verify your invoice records right now. Try again shortly.'; }
+    }
+    if (privateChatTopic(message)) return PRIVATE_CHAT_REPLY;
     if (offlineTurn) return 'What would you like to change, and what should the new value be?';
     let history = [];
     try { history = await readConversationHistory({supabase, workspaceId, phone,customerId,audience}); }
@@ -664,7 +569,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
     try { response = await channel.ask(input); }
     catch (error) {
       logger?.error?.('WhatsApp assistant ask failed', {workspaceId, name: error?.name, message: String(error?.message || '').slice(0, 200)});
-      return 'I hit a hiccup. Send that again in a minute. Nothing was changed.';
+      return CHAT_UNAVAILABLE_REPLY;
     }
     // Planner failures are safe, read-only fallbacks. Retry only this narrowly
     // identified class, once, to absorb transient free-tier provider failures.

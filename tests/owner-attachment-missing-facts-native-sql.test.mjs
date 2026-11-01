@@ -1,8 +1,9 @@
+import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 import {authorizeOwnerPhone} from '../automation/whatsapp/owner-binding.mjs';
@@ -34,7 +35,7 @@ test('native missing-field follow-ups read matching reviews and never invent fac
       lineItems:[{description:'Synthetic QA service',quantity:1,unitPrice:100,amount:100,confidence:.99}]};
     const wire={...Object.fromEntries(Object.entries(facts).flatMap(([key,value])=>[[key,value],[key+'Confidence',value==null?0:.99]])),lineItemsConfidence:.99};
     let chatCalls=0,extractionCalls=0;const logs=[];
-    const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test'},logger:{info(label,data){logs.push({label,data});},warn(){},error(){}},
+    const handler=createOwnerMessageHandler({supabase,localExtraction:async input=>{extractionCalls++;return localExtraction(wire);},env:{NODE_ENV:'test'},logger:{info(label,data){logs.push({label,data});},warn(){},error(){}},
       providerFactory:options=>options.requestPurpose==='extraction'?{async generateStructured(call){
         extractionCalls++;return {data:call.validate({...structuredClone(wire),imageContent:'single_invoice'}),model:'fixture-extraction'};
       }}:{async generate({messages}){

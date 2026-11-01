@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {createInboundRuntime, parseMetaMessages} from '../automation/whatsapp/cloud-inbound.mjs';
 import {createWhatsAppAssistantChannel} from '../ai/whatsapp-channel.mjs';
 import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistant-handler.mjs';
-import {extractInvoice} from '../ai/extraction.mjs';
+import {extractInvoiceOffline} from '../ai/extraction.mjs';
 import {parseOfflineInvoiceText} from '../ai/image-text.mjs';
 import {CF_QWEN_MODEL} from '../ai/provider.mjs';
 
@@ -109,20 +109,18 @@ test('bound media extracts and presents a review without saving', async () => {
     if (table === 'workspace_settings') return {data: {business_name: 'Seller'}};
     throw new Error(table);
   }}; }};
-  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase, providerFactory: options => { providerOptions.push(options); return {}; },
+  const handler = createWhatsAppBoundMessageHandler({audience:'owner',authorizeScope:async()=>true,supabase, providerFactory: options => { providerOptions.push(options); return {}; },
     channelFactory: () => ({ask() { throw new Error('not used'); }}), pendingActionStoreFactory: () => mediaReviewStore(saved),
     saveInvoice: async ({invoice}) => ({saved: true, invoice}), invoiceStoreFactory: () => ({}),
-    extract: async () => ({...values, lineItems: {value: [], confidence: .99}})});
+    extractOffline: async () => ({...values, lineItems: {value: [], confidence: .99}})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/jpeg', fileName: 'invoice.jpg'}});
   assert.match(answer, /^Invoice INV-7[\s\S]*INR/);
   assert.match(answer, /reply yes/i);
   assert.deepEqual(saved.map(item => item.action.stage), ['proposal']);
-  assert.equal(providerOptions[0].primaryModel, CF_QWEN_MODEL, 'chat keeps the configured conversational model');
-  assert.equal(providerOptions[1].primaryModel, 'gemini-3.5-flash-lite', 'media uses the vision extraction model');
-  assert.equal(providerOptions[1].requestPurpose, 'extraction', 'media extraction uses its bounded provider policy');
+  assert.equal(providerOptions.length,0,'local review cannot construct a chat or extraction provider');
 });
 
-test('production extraction advances an incomplete OCR draft to vision and proposes a confident invoice', async () => {
+test('production extraction retains uncertain OCR locally without invoking vision', async () => {
   let visionCalls = 0, stored = 0;
   const raw = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-10',customerName:'Buyer Co',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:18,total:118,currency:'INR',direction:'receivable'})[name] ?? null, confidence: .98}]));
@@ -133,17 +131,16 @@ test('production extraction advances an incomplete OCR draft to vision and propo
     if (table === 'workspace_settings') return {data: {business_name: 'Seller'}};
     throw new Error(table);
   }}; }};
-  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase, providerFactory: () => provider,
+  const handler = createWhatsAppBoundMessageHandler({audience:'owner',authorizeScope:async()=>true,supabase, providerFactory: () => provider,
     channelFactory: () => ({ask() { throw new Error('not used'); }}),
     pendingActionStoreFactory: () => mediaReviewStore({push() { stored++; }}),
     saveInvoice: async ({invoice}) => ({saved: true, invoice}), invoiceStoreFactory: () => ({}),
-    extract: options => extractInvoice({...options, imageExtractor: async () =>
+    extractOffline: options => extractInvoiceOffline({...options, imageExtractor: async () =>
       parseOfflineInvoiceText('Subtotal 100.00\nTax 18.00\nTotal 118.00', {ocrConfidence: 95})})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([137,80,78,71,13,10,26,10,0]), mimeType: 'image/png'}});
-  assert.equal(visionCalls, 1);
+  assert.equal(visionCalls,0);
   assert.equal(stored, 1);
-  assert.match(answer, /^Invoice INV-10/);
-  assert.match(answer,/Reply yes/);
+  assert.match(answer,/Local invoice review/);assert.match(answer,/118/);assert.match(answer,/Nothing was saved/);
 });
 
 test('incomplete media asks for missing facts and retains an incomplete review without a proposal', async () => {
@@ -161,18 +158,18 @@ test('incomplete media asks for missing facts and retains an incomplete review w
     visionCalls++;
     return {data: validate({...invoiceWire(incomplete), imageContent:'single_invoice'}), model: 'vision', usedFallback: false};
   }};
-  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase, providerFactory: () => provider,
+  const handler = createWhatsAppBoundMessageHandler({audience:'owner',authorizeScope:async()=>true,supabase, providerFactory: () => provider,
     channelFactory: () => ({ask: async () => ({answer: 'text reply'})}),
     pendingActionStoreFactory: () => mediaReviewStore({push(input) { stored++; retained=input.action; }}),
-    extract: options => extractInvoice({...options, imageExtractor: async () =>
+    extractOffline: options => extractInvoiceOffline({...options, imageExtractor: async () =>
       parseOfflineInvoiceText('Subtotal 100.00\nTotal 100.00', {ocrConfidence: 92})})});
   const answer = await handler({...scope, message: '', media: {bytes: Buffer.from([137,80,78,71,13,10,26,10,0]),
     mimeType: 'image/png', fileName: 'unclear.png'}});
-  assert.match(answer, /confirm the invoice number, customer name, total.*Nothing was saved/i);
-  assert.equal(visionCalls, 1);
+  assert.match(answer,/invoice number: not shown/);assert.match(answer,/Nothing was saved/);
+  assert.equal(visionCalls,0);
   assert.equal(stored, 1);
   assert.equal(retained.stage,'incomplete');
-  assert.deepEqual(retained.missingFields,['invoiceNumber','customerName','total']);
+  assert.ok(retained.missingFields.includes('invoiceNumber'));assert.ok(retained.missingFields.includes('customerName'));assert.equal(retained.invoice.total,100);
   assert.equal(retained.invoice.invoiceNumber,null);
 });
 
@@ -190,8 +187,8 @@ test('photo review preserves printed identity and leaves file storage until conf
   const values=Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name=>[name,{value:({invoiceNumber:'INV-2026-0720',customerName:'Global Dynamics Inc.',invoiceDate:'2026-09-30',dueDate:'2026-10-30',subtotal:100,tax:0,total:100,outstandingAmount:100,currency:'USD',direction:'receivable'})[name]??null,confidence:.99}]));
   const db={rpc:async()=>({data:false}),from(table){return {select(){return this},eq(){return this},async maybeSingle(){return {data:table==='workspace_ai_settings'?{primary_model:'space-bunny-free',fallback_model:null}:{business_name:'Seller'}}}}}};
-  const make=keepInvoiceFile=>createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase:db,providerFactory:()=>({}),channelFactory:()=>({ask(){throw Error('unused')}}),
-    pendingActionStoreFactory:()=>mediaReviewStore(transitions),invoiceStoreFactory:()=>({keepInvoiceFile}),extract:async()=>({...values,lineItems:{value:[],confidence:.99}}),
+  const make=keepInvoiceFile=>createWhatsAppBoundMessageHandler({audience:'owner',authorizeScope:async()=>true,supabase:db,providerFactory:()=>({}),channelFactory:()=>({ask(){throw Error('unused')}}),
+    pendingActionStoreFactory:()=>mediaReviewStore(transitions),invoiceStoreFactory:()=>({keepInvoiceFile}),extractOffline:async()=>({...values,lineItems:{value:[],confidence:.99}}),
     saveInvoice:async({invoice})=>({saved:true,invoice:{...invoice,id:'saved-invoice',invoiceNumber:'INV-2026-0001'}}),logger:{error(){}}});
   const media={bytes:Buffer.from([1,2,3]),mimeType:'image/jpeg',fileName:'real.jpg'};
   const kept=await make(async input=>files.push(input))({...scope,message:'',messageId:'wamid-photo',media});

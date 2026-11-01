@@ -4,7 +4,7 @@ import {AIProvider, CF_BACKUP_MODEL, CF_PRIMARY_MODEL, CF_QWEN_MODEL, GEMINI_FAL
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from '../tests/fixtures/owner-engine.mjs';
 import {simulateHeavyOwnerJob,simulateLongOwnerJob} from '../tests/fixtures/owner-job.mjs';
 import {
   createOwnerChatDatabase, DEFAULT_NOW, OWNER_CHAT_SCOPE, OTHER_WORKSPACE_ID,
@@ -172,7 +172,7 @@ const FAST_SCENARIOS = [
     const elapsed=Date.now()-started;
     if(elapsed>=10_000)throw new Error(`meta response exceeded 10 seconds (${elapsed}ms)`);
     if(result.agentDiagnostics?.toolRounds!==1)throw new Error(`expected one configuration tool round, got ${result.agentDiagnostics?.toolRounds}`);
-    if(!result.answer.includes(CF_PRIMARY_MODEL)||!result.answer.includes(GEMINI_FALLBACK_MODEL))throw new Error('reply omitted current primary/fallback configuration');
+    if(!result.answer.includes(CF_PRIMARY_MODEL)||!result.answer.includes(CF_BACKUP_MODEL))throw new Error('reply omitted current primary/fallback configuration');
     assertNoForeignData(harness.db);
     return {elapsedMs:elapsed,diagnostics:result.agentDiagnostics};
   }),
@@ -730,8 +730,8 @@ const FAST_SCENARIOS = [
     if(result.answer!==expected)throw new Error(`quota failure returned the wrong owner reply: ${JSON.stringify(result.answer)}`);
     if(result.plannerFailure?.code!=='OWNER_AI_QUOTA_EXHAUSTED')throw new Error(`quota reply had unexpected failure code: ${result.plannerFailure?.code}`);
     if(elapsed>=3_000)throw new Error(`all-provider quota response exceeded 3 seconds (${elapsed}ms)`);
-    if(!requests.some(item=>item.provider==='cloudflare')||!requests.some(item=>item.provider==='google'))
-      throw new Error(`quota simulation did not exercise both Cloudflare and Gemini: ${JSON.stringify(requests)}`);
+    if(requests.length!==2||requests.some(item=>item.provider!=='cloudflare'))
+      throw new Error(`quota simulation must use Cloudflare only: ${JSON.stringify(requests)}`);
     const legs=requests.map(item=>`${item.provider}:${item.model}`);
     if(new Set(legs).size!==legs.length)throw new Error(`a quota-dead provider leg was retried in the same turn: ${JSON.stringify(requests)}`);
     if(JSON.stringify(before)!==JSON.stringify(Object.fromEntries(protectedTables.map(table=>[table,db.tables[table]]))))

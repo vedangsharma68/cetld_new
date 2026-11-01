@@ -1,8 +1,9 @@
+import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,createHash} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {authorizeOwnerPhone} from '../automation/whatsapp/owner-binding.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
@@ -41,11 +42,8 @@ async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseRep
     authorize:input=>{assert.ok(input?.workspaceId&&input?.ownerId&&input?.customerId&&input?.phone);
       return authorizeOwnerPhone({supabase:f.supabase,...input});},
     toolsFactory:options=>{const tools=createOwnerWorkspaceTools({...options,
-      attachmentIngestFactory:input=>createWhatsAppBoundMessageHandler({...input,extract:async request=>{
-        extractions++;
-        return extractionWire?extractInvoice({...request,imageExtractor:async()=>null,
-          provider:{async generateStructured(call){return {data:call.validate({...structuredClone(extractionWire),...(call.schema.properties.imageContent?{imageContent:'single_invoice'}:{})}),model:'gemini-3.5-flash-lite'};}}}):structuredClone(extracted);
-      }})});return {...tools,async execute(...args){const result=await tools.execute(...args);results.push(result);return result;}};},
+      extractAttachment:async()=>{extractions++;return extractionWire?localExtraction(extractionWire):structuredClone(extracted);},
+      extractOfflineAttachment:async()=>{extractions++;return extractionWire?localExtraction(extractionWire):structuredClone(extracted);}});return {...tools,async execute(...args){const result=await tools.execute(...args);results.push(result);return result;}};},
     providerFactory:()=>nativeWire?new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,
       cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,logger:{info(){},warn(){},error(){}},
       fetchImpl:async(_url,input)=>{
@@ -216,7 +214,7 @@ for(const caption of ['log this','please save it','record the attached'])test(`c
 
 test('actual extraction wire and default owner toolset retain contradictory amounts and replace a false outage reply with the review reason',async()=>{
   const facts={invoiceNumber:'0852',customerName:'Fixture customer',invoiceDate:'2026-10-01',dueDate:'2026-10-01',subtotal:100,tax:10,total:115,
-    outstandingAmount:115,currency:null,direction:'receivable',clientEmail:null,clientPhone:null,clientPhoneRaw:null,notes:'Shipping 5',currencySource:null,addressHint:null,paymentTerms:'Due on receipt'};
+    outstandingAmount:115,currency:'USD',direction:'receivable',clientEmail:null,clientPhone:null,clientPhoneRaw:null,notes:'Shipping 5',currencySource:null,addressHint:null,paymentTerms:'Due on receipt'};
   const extractionWire={...Object.fromEntries(Object.entries(facts).flatMap(([name,value])=>[[name,value],[name+'Confidence',value===null?0:.99]])),
     lineItems:[{description:'Printed service',quantity:1,unitPrice:100,amount:100,confidence:.99}],lineItemsConfidence:.99};
   const f=await fixture({nativeWire:true,extractionWire});try{

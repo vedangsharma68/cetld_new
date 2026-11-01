@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {reviewDraft} from '../automation/whatsapp/assistant-handler.mjs';
 import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
 import {createOwnerSafetyTools as createOwnerAgentTools, runOwnerAgent, ownerReplySafetyIssue} from '../automation/whatsapp/owner-agent.mjs';
-import {AIError,CF_QWEN_MODEL} from '../ai/provider.mjs';
+import {AIError,CF_BACKUP_MODEL,CF_QWEN_MODEL} from '../ai/provider.mjs';
 import {createInvoiceLifecycleService} from '../ai/invoice-lifecycle.mjs';
 import {installVerifiedOwnerRpc} from './fixtures/verified-owner-rpc.mjs';
 
@@ -151,7 +151,7 @@ test('standalone greeting skips inference while meta, thanks, yes and media ente
     fallbackModel:metaToolResult.fallbackModel,fallbackProvider:metaToolResult.fallbackProvider,
     planningModel:metaToolResult.planningModel,planningProvider:metaToolResult.planningProvider,
     servedModel:metaToolResult.servedModel,servedProvider:metaToolResult.servedProvider},
-  {primaryModel:CF_QWEN_MODEL,primaryProvider:'cloudflare',fallbackModel:'gemini-3.5-flash-lite',fallbackProvider:'google',
+  {primaryModel:CF_QWEN_MODEL,primaryProvider:'cloudflare',fallbackModel:CF_BACKUP_MODEL,fallbackProvider:'cloudflare',
     planningModel:CF_QWEN_MODEL,planningProvider:'cloudflare',
     servedModel:CF_QWEN_MODEL,servedProvider:'cloudflare'});
   assert.equal(JSON.stringify(metaToolResult).includes('API_KEY'),false);
@@ -1030,7 +1030,7 @@ for(const lookup of ['consumed','missing','throws','row-missing'])test(`attachme
   const provider={async generate(){modelCalls++;if(modelCalls>1)return {content:'No invoice was logged.'};
     return {toolCalls:[{id:'ingest',type:'function',function:{name:'ingestInvoiceAttachment',arguments:'{}'}}]};}};
   const result=await runOwnerAgent({provider,tools,message:'Log this invoice',attachmentDescriptor:{available:true,mimeType:'image/jpeg'}});
-  assert.equal(modelCalls,1,'no model may compose the post-operation reply');
+  assert.equal(modelCalls,0,'attachment operation and receipt must remain model-free');
   assert.equal(savedLookups,2);
   if(lookup==='consumed'){
     assert.equal(activeLookups,0,'consumed saved receipt does not depend on active-review RPC');

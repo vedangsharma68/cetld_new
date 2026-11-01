@@ -1,8 +1,10 @@
+import {cloudflarePartsResponse,cloudflareToolResults} from './fixtures/cloudflare-wire.mjs';
+import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {createWhatsAppInvoiceStore} from '../automation/whatsapp/invoice-store.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 
@@ -19,17 +21,16 @@ async function fixture({badDuplicateReply=false,storeWrap=store=>store}={}){
  const facts={invoiceNumber:'SB-10442',customerName:'Northwind Systems LLC',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:879,tax:72.52,total:951.52,outstandingAmount:951.52,currency:'USD',direction:'payable',clientPhone:null,clientPhoneRaw:null,clientEmail:null,notes:'Net 30',currencySource:'photo',addressHint:null,paymentTerms:null,paymentStatus:null,paymentStatusEvidence:null};
  const wire={...Object.fromEntries(Object.entries(facts).flatMap(([key,value])=>[[key,value],[key+'Confidence',value==null?0:.99]])),lineItems:[{description:'Service',quantity:1,unitPrice:879,amount:879,confidence:.99}],lineItemsConfidence:.99};
  const bytes=Buffer.from([255,216,255,0,0,0]),results=[];let current='',providerCalls=0,extractions=0,falseSuccessDrafts=0;
- const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
+ const handler=createOwnerMessageHandler({supabase,localExtraction:async input=>{extractions++;return localExtraction(wire);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
   toolsFactory:options=>{const tools=createOwnerWorkspaceTools(options);return {...tools,async execute(...args){
    const result=await tools.execute(...args);results.push(result);return result;
   }};},
   invoiceStoreFactory:verified=>storeWrap(createWhatsAppInvoiceStore({supabase,...verified,audience:'owner'})),logger:{info(){},warn(){},error(){}},fetchImpl:async(url,init)=>{
    providerCalls++;const body=JSON.parse(init.body);
-   if(new URL(url).hostname==='api.cloudflare.com')return Response.json({error:{message:'isolated primary unavailable'}},{status:503});
-   assert.equal(new URL(url).hostname,'generativelanguage.googleapis.com');
-   const native=parts=>Response.json({candidates:[{content:{role:'model',parts},finishReason:'STOP'}]});
+   assert.equal(new URL(url).hostname,'api.cloudflare.com');
+   const native=cloudflarePartsResponse;
    if(body.generationConfig?.responseMimeType==='application/json'){extractions++;return native([{text:JSON.stringify({...wire,imageContent:'single_invoice'})}]);}
-   const tool=body.contents.flatMap(item=>item.parts||[]).findLast(part=>part.functionResponse)?.functionResponse;
+   const resultFromWire=cloudflareToolResults(body).at(-1);const tool=resultFromWire?{response:resultFromWire}:null;
    if(!tool)return native([{functionCall:{name:'workspaceData',args:current==='yes'?{operation:'confirm'}:current.includes('my business issued')?{operation:'reviewAttachment',table:'invoices',values:{invoice_direction:'receivable'}}:{operation:'create',table:'invoices',values:{customer_name:'Invented',total_amount:1,currency:'USD'}}},thoughtSignature:'fixture-native-signature'}]);
    const result=tool.response;
    if(result.code==='DUPLICATE_INVOICE'&&badDuplicateReply)falseSuccessDrafts++;

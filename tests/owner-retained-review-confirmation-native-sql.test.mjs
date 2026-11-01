@@ -1,9 +1,10 @@
+import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 
 const caption='Log this public sample invoice for testing. Keep customer messages and reminders off.';
@@ -28,7 +29,7 @@ async function fixture({throwAfterConfirm=false,mutateBeforeConfirm=null}={}){
  const wire={...Object.fromEntries(Object.entries(facts).flatMap(([key,value])=>[[key,value],[key+'Confidence',value==null?0:.99]])),
   lineItems:[{description:'Web Design',quantity:1,unitPrice:85,amount:85,confidence:.99}],lineItemsConfidence:.99};
  const providerCalls=[],executions=[];let currentMessage='';let confirmationFaultArmed=throwAfterConfirm;
- const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
+ const handler=createOwnerMessageHandler({supabase,localExtraction:async input=>{return localExtraction(wire);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
   logger:{info(){},warn(){},error(){}},toolsFactory:options=>{
    const tools=createOwnerWorkspaceTools(options);
    return {...tools,async execute(name,args,context){

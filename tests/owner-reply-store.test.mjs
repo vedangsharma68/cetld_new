@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createOwnerReplyStore} from '../automation/whatsapp/owner-reply-store.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {createOwnerActionButtons} from '../automation/whatsapp/owner-action-buttons.mjs';
 
 const now=new Date('2026-10-02T18:00:00Z');

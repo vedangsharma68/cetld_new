@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {CF_PRIMARY_MODEL, CF_BACKUP_MODEL, GEMINI_FALLBACK_MODEL} from '../ai/provider.mjs';
 
 const scope = {workspaceId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',ownerId:'11111111-1111-4111-8111-111111111111',
@@ -32,17 +32,17 @@ test('owner bot uses the saved dashboard primary and fallback models', async()=>
   assert.equal((await handler(scope)).answer,'The largest outstanding balance is 500.');
   assert.equal(handler.modelCalls(),1);
   assert.equal(options.primaryModel,'@cf/qwen/qwen3-30b-a3b-fp8');
-  assert.equal(options.fallbackModel,'gemini-3.5-flash-lite');
+  assert.equal(options.fallbackModel,CF_BACKUP_MODEL);
 });
 
 
-test('owner bot keeps its existing Cloudflare and Gemini defaults when workspace settings are absent', async()=>{
+test('owner bot keeps its Cloudflare primary and backup defaults when workspace settings are absent', async()=>{
   let options;
   const handler=handlerFor(null,value=>options=value);
   await handler(scope);
   assert.equal(handler.modelCalls(),1);
   assert.equal(options.primaryModel,CF_PRIMARY_MODEL);
-  assert.equal(options.fallbackModel,GEMINI_FALLBACK_MODEL);
+  assert.equal(options.fallbackModel,CF_BACKUP_MODEL);
 });
 
 test('owner bot repairs a saved duplicate fallback to a distinct Cloudflare backup', async()=>{
@@ -61,5 +61,5 @@ test('an unreadable workspace-model setting still enters AI with the explicit ow
   assert.equal(result.answer,'The largest outstanding balance is 500.');
   assert.equal(handler.modelCalls(),1);
   assert.equal(options.primaryModel,CF_PRIMARY_MODEL);
-  assert.equal(options.fallbackModel,GEMINI_FALLBACK_MODEL);
+  assert.equal(options.fallbackModel,CF_BACKUP_MODEL);
 });

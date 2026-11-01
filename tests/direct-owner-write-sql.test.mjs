@@ -104,7 +104,7 @@ test('external ledger guard preserves historical local receipt replay and permit
 import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
-import {createOwnerWorkspacePlanner} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerWorkspacePlanner} from './fixtures/owner-engine.mjs';
 import {createOwnerActionButtons,verifyOwnerActionButton} from '../automation/whatsapp/owner-action-buttons.mjs';
 
 const owner='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';

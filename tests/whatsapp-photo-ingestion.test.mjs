@@ -12,7 +12,7 @@ import {proposalSummary} from '../automation/whatsapp/assistant-handler.mjs';
 import {createOwnerWorkspaceTools as createTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 import {AIProvider} from '../ai/provider.mjs';
-import {extractInvoice, INVOICE_IMAGE_REPLIES} from '../ai/extraction.mjs';
+import {extractInvoiceOffline, INVOICE_IMAGE_REPLIES} from '../ai/extraction.mjs';
 import {extractInvoiceFromImage} from '../ai/image-text.mjs';
 
 const phone='+919871367051';
@@ -30,9 +30,9 @@ function invoiceWire(imageContent='single_invoice') {
 }
 
 // This fixture exercises the signed webhook, Graph download, Supabase SDK,
-// real SQL inbox/claims, owner handler/tools, local OCR, AIProvider wire
-// validation, review transitions, invoice/file stores and outbound reply.
-// The planner and vision response are scripted; no external request is made.
+// real SQL inbox/claims, production owner handler/tools, local OCR,
+// review transitions, invoice/file stores and outbound reply.
+// Only Graph download and outbound delivery are mocked; no model is allowed.
 async function fixture({bytes=sample,classification='single_invoice',caption='log this invoice',type='image',downloadFails=false,staleHistory=false,stalePending=false}={}) {
   const f=await createOfflineSqlNetwork(),ownerId=randomUUID();
   await f.db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -57,7 +57,7 @@ async function fixture({bytes=sample,classification='single_invoice',caption='lo
   const sent=[],graph=[],vision=[],toolResults=[];
   let ocrCalls=0,chatCalls=0;
   const env={WHATSAPP_PHONE_NUMBER_ID:'qa-number',WHATSAPP_WABA_ID:'qa-waba',WHATSAPP_GRAPH_API_VERSION:'v24.0',
-    WHATSAPP_ACCESS_TOKEN:'offline-fixture-only',WHATSAPP_APP_SECRET:'offline-fixture-only',GEMINI_API_KEY:'offline-fixture-only'};
+    WHATSAPP_ACCESS_TOKEN:'offline-fixture-only',WHATSAPP_APP_SECRET:'offline-fixture-only',EXTRACTION_ROUTE:'offline'};
   const fetchImpl=async(input,options={})=>{
     const url=new URL(String(input));
     if(url.hostname==='graph.facebook.com'){
@@ -66,43 +66,18 @@ async function fixture({bytes=sample,classification='single_invoice',caption='lo
       return Response.json({url:'https://qa-media.test/invoice.jpg',mime_type:'image/jpeg'});
     }
     if(url.hostname==='qa-media.test')return new Response(bytes,{headers:{'content-type':'image/jpeg'}});
-    if(url.hostname==='generativelanguage.googleapis.com'){
-      const request=JSON.parse(options.body);
-      const inline=request.contents[0].parts.find(part=>part.inlineData)?.inlineData;
-      assert.equal(inline.mimeType,'image/jpeg');assert.deepEqual(Buffer.from(inline.data,'base64'),bytes);
-      const schema=request.generationConfig.responseJsonSchema;
-      assert.ok(schema.required.includes('imageContent'));
-      vision.push(request);
-      const wire=invoiceWire(classification);
-      if(classification==='missing')delete wire.imageContent;
-      return Response.json({candidates:[{content:{parts:[{text:JSON.stringify(wire)}]},finishReason:'STOP'}]});
-    }
     throw Error(`Unexpected external request: ${url.hostname}`);
   };
   const owner=createOwnerMessageHandler({supabase:f.supabase,env,logger:quiet,
-    providerFactory:options=>options.requestPurpose==='extraction'
-      ?new AIProvider({...options,geminiApiKey:env.GEMINI_API_KEY,fetchImpl})
-      :{async generate(){
-        chatCalls++;
-        // A stale-context planner tries to look up the earlier text customer.
-        // A captionless image must be handled before this can be consulted.
-        return {model:'offline-planner',toolCalls:[{id:'stale-customer',type:'function',function:{name:'workspaceData',
-          arguments:JSON.stringify({operation:'read',table:'invoices',filters:[{column:'customer_name',operator:'eq',value:'QA Emoji Customer'}]})}}]};
-      }},
+    providerFactory:()=>{chatCalls++;throw Error('invoice photos must never construct a provider');},
     toolsFactory:asyncOptions=>{
       // Inject only the OCR observer into the real workspace tool adapter.
-      const tools=createTools({...asyncOptions,extractAttachment:options=>extractInvoice({...options,
+      const tools=createTools({...asyncOptions,extractOfflineAttachment:options=>extractInvoiceOffline({...options,
         imageExtractor:async input=>{ocrCalls++;return extractInvoiceFromImage(input);}})});
       const execute=tools.execute;
       return {...tools,async execute(...args){const result=await execute(...args);toolResults.push(result);return result;}};
     },
-    agentFactory:async options=>{
-      const {tools,message}=options;
-      if(!message)return runOwnerAgent(options);
-      const result=await tools.execute('workspaceData',{operation:message?'saveAttachment':'analyzeAttachment'});
-      if(result.outcome==='review_ready'&&result.review?.stage==='proposal')return {answer:proposalSummary(result.review.invoice)};
-      return {answer:result.message||(result.analysisOnly?'I read the attached invoice. Nothing was saved.':'Invoice processing finished.')};
-    }});
+    });
   const runtime=createInboundRuntime({supabase:f.supabase,env,fetchImpl,logger:quiet,onOwnerMessage:owner,
     outbound:{async sendTypingIndicator(){},async sendServiceReply(input){assert.equal(input.to,phone);sent.push(input);return {status:'accepted'};}}});
   const webhook=createWhatsAppWebhookHandler({runtime,env,logger:quiet});
@@ -142,12 +117,12 @@ test('bundled sample JPEG is actually legible to the offline OCR engine',async()
 test('sample JPEG traverses signed webhook, media storage and real OCR into review before save',async()=>{
   const f=await fixture();
   try{
-    assert.equal(f.ocrCalls,1);assert.equal(f.vision.length,1);assert.equal(f.graph.length,1);
+    assert.equal(f.ocrCalls,1);assert.equal(f.vision.length,0);assert.equal(f.graph.length,1);
     assert.equal(f.toolResults[0].ok,true);
     const invoices=(await f.db.query('select total_amount,currency,metadata from invoices')).rows;
     assert.equal(invoices.length,0);
-    assert.match(f.answer,/Invoice QA-PHOTO-001 for QA Sample Buyer: INR 118, due 2026-11-17/);
-    assert.match(f.answer,/Reply yes/);
+    assert.match(f.answer,/Local invoice review/);assert.match(f.answer,/QA Sample Buyer/);assert.match(f.answer,/118/);
+    assert.match(f.answer,/Nothing was saved/);
     assert.equal((await f.db.query('select count(*)::int n from invoice_files')).rows[0].n,0);
     assert.equal((await f.db.query('select count(*)::int n from payments')).rows[0].n,0);
     const stored=(await f.db.query('select bytes from whatsapp_inbound_media')).rows[0].bytes;
@@ -157,16 +132,16 @@ test('sample JPEG traverses signed webhook, media storage and real OCR into revi
 
 test('captionless JPEG reaches owner analysis without authorizing invoice creation',async()=>{
   const f=await fixture({caption:''});
-  try{assert.equal(f.vision.length,1);assert.equal(f.chatCalls,0);assert.match(f.answer,/Customer: QA Sample Buyer.*Total: INR 118.00.*Nothing was saved/);assert.deepEqual(await snapshot(f.db),f.before);}
+  try{assert.equal(f.vision.length,0);assert.equal(f.chatCalls,0);assert.match(f.answer,/QA Sample Buyer[\s\S]*118[\s\S]*Nothing was saved/);assert.deepEqual(await snapshot(f.db),f.before);}
   finally{await f.close();}
 });
 
 test('captionless JPEG after unrelated text and pending customer reads only the new image',async()=>{
   const f=await fixture({caption:'',staleHistory:true,stalePending:true});
   try{
-    assert.equal(f.chatCalls,0);assert.equal(f.vision.length,1);assert.equal(f.ocrCalls,1);
-    assert.equal(f.toolResults.length,1);assert.equal(f.toolResults[0].analysisOnly,true);
-    assert.equal(f.toolResults[0].fields.customerName,'QA Sample Buyer');
+    assert.equal(f.chatCalls,0);assert.equal(f.vision.length,0);assert.equal(f.ocrCalls,1);
+    assert.equal(f.toolResults.length,1);assert.equal(f.toolResults[0].review.stage,'incomplete');
+    assert.equal(f.toolResults[0].review.invoice.clientName,'QA Sample Buyer');
     assert.match(f.answer,/QA Sample Buyer/);assert.doesNotMatch(f.answer,/QA Emoji|999|could not be found/);
     assert.deepEqual(await snapshot(f.db),f.before);
     const review=(await f.db.query('select action from whatsapp_pending_actions where consumed_at is null')).rows[0].action;
@@ -189,7 +164,7 @@ test('download failure asks for a resend and makes no business changes',async()=
   finally{await f.close();}
 });
 
-test('image rejection replies survive real AIProvider validation and cannot save even high-confidence invoice fields',async t=>{
+test('local image variants retain a review or fail safely with no model and no business writes',async t=>{
   const half=await sharp(sample).resize(450,550).toBuffer();
   const variants=[
     ['blurry',await sharp(sample).resize(12,15).resize(900,1100).blur(15).jpeg().toBuffer(),'unreadable','IMAGE_UNREADABLE'],
@@ -202,19 +177,16 @@ test('image rejection replies survive real AIProvider validation and cannot save
   for(const [name,bytes,classification,code] of variants)await t.test(name,async()=>{
     const f=await fixture({bytes,classification});
     try{
-      assert.equal(f.vision.length,1,'valid rejection must not trigger model failover');
+      assert.equal(f.vision.length,0,'valid rejection must not trigger model failover');
       assert.equal(f.ocrCalls,1);
-      if(code){
-        assert.equal(f.answer,INVOICE_IMAGE_REPLIES[code]);
-        assert.deepEqual(await snapshot(f.db),f.before);
-        const pending=(await f.db.query('select action from whatsapp_pending_actions order by id desc limit 1')).rows[0].action;
-        assert.equal(pending.stage,'canceled');assert.equal(pending.failureCode,code);
-      }else{
-        assert.equal(f.toolResults[0].ok,true);
-        assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,0);
-        assert.equal(f.toolResults[0].review.invoice.total,118);
-        assert.match(f.answer,/Reply yes/);
-      }
+      assert.equal(f.chatCalls,0);
+      assert.deepEqual(await snapshot(f.db),f.before);
+      const pending=(await f.db.query('select action from whatsapp_pending_actions order by id desc limit 1')).rows[0].action;
+      assert.ok(['incomplete','canceled'].includes(pending.stage));
+      assert.equal(pending.extractionRoute,'offline');
+      assert.match(f.answer,/Nothing was saved|clearer photo/i);
+      if(name==='rotated')assert.equal(pending.stage,'incomplete','uncertain rotated text must require owner correction');
+
     }finally{await f.close();}
   });
 });

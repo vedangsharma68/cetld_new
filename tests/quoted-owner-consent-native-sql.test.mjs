@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID,createHmac} from 'node:crypto';
 import {Readable} from 'node:stream';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {createOwnerReplyStore} from '../automation/whatsapp/owner-reply-store.mjs';
 import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 import {SupabaseInboundInbox,parseMetaMessages,createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';

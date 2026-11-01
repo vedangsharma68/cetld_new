@@ -6,7 +6,7 @@ import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {applyNoFooterMigration} from './fixtures/no-footer-reminders.mjs';
 import {createAccountingActionToken} from '../ai/accounting-actions.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {createAssistantClient} from '../assistant-client.js';
 import {selectInvoiceReminderTemplate} from '../automation/whatsapp/reminder-templates.mjs';
 import {buildDefaultInvoiceReminderDraft} from '../automation/whatsapp/reminder-parameters.mjs';

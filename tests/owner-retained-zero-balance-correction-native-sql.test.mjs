@@ -1,3 +1,5 @@
+import {cloudflarePartsResponse,cloudflareToolResults} from './fixtures/cloudflare-wire.mjs';
+import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -5,7 +7,7 @@ import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createOwnerSafetyTools} from '../automation/whatsapp/owner-agent.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {invoiceReviewUnpaidResolution} from '../automation/whatsapp/invoice-review-payment-resolution.mjs';
 import {originalRetainedUnpaidInstruction,retainedUnpaidWordingCases,retainedUnpaidWordingNegatives} from './fixtures/retained-unpaid-wording.mjs';
@@ -71,20 +73,19 @@ for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF'
   // No original image was supplied for this regression. These fixture bytes
   // travel through the native image request with the reported extraction facts.
   const bytes=Buffer.from([255,216,255,0,0,0]),results=[],contracts=[];let providerCalls=0,extractions=0,confirming=false;
-  const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
+  const handler=createOwnerMessageHandler({supabase,localExtraction:async input=>{extractions++;return localExtraction(wire);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
    logger:{info(){},warn(){},error(){}},toolsFactory:options=>{
     const tools=createOwnerWorkspaceTools(options);
     return {...tools,async execute(name,args,context){const result=await tools.execute(name,args,context);results.push(result);return result;}};
    },fetchImpl:async(url,init)=>{
     providerCalls++;const body=JSON.parse(init.body);
-    if(new URL(url).hostname==='api.cloudflare.com')return Response.json({error:{message:'isolated primary unavailable'}},{status:503});
-    assert.equal(new URL(url).hostname,'generativelanguage.googleapis.com');
-    const native=parts=>Response.json({candidates:[{content:{role:'model',parts},finishReason:'STOP'}]});
+    assert.equal(new URL(url).hostname,'api.cloudflare.com');
+    const native=cloudflarePartsResponse;
     if(body.generationConfig?.responseMimeType==='application/json'){
      extractions++;assert.equal(body.contents.flatMap(item=>item.parts||[]).find(part=>part.inlineData)?.inlineData.data,bytes.toString('base64'));
      return native([{text:JSON.stringify({...wire,imageContent:'single_invoice'})}]);
     }
-    const tool=body.contents.flatMap(item=>item.parts||[]).findLast(part=>part.functionResponse)?.functionResponse;
+    const resultFromWire=cloudflareToolResults(body).at(-1);const tool=resultFromWire?{response:resultFromWire}:null;
     if(!tool){contracts.push(body.tools);return native([{functionCall:{name:'workspaceData',args:confirming?{operation:'confirm'}:
      {operation:'create',table:'invoices',values:{invoice_number:'INVENTED',customer_name:'Invented customer',total_amount:1,currency:'USD',status:'unpaid'}}},thoughtSignature:'fixture-native-signature'}]);}
     results.push(tool.response);

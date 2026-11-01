@@ -7,78 +7,67 @@ the user's token, RLS, and an explicit workspace filter. No service-role key.
 
 ## Configuration
 
-Server environment: `GEMINI_API_KEY`, `OPENCODE_ZEN_API_KEY`,
-`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `SUPABASE_URL`,
-`SUPABASE_PUBLISHABLE_KEY`. Never prefix the AI key with a public/client variable
-prefix or put it in a database, URL, request from a browser, or source file.
-Rotate any key previously shared in chat before configuring hosting secrets.
+WhatsApp chat uses server-only `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`.
+The primary is `@cf/meta/llama-3.3-70b-instruct-fp8-fast`; the existing Cloudflare
+Scout model is the default backup. Saved Cloudflare choices remain usable.
+Legacy non-Cloudflare WhatsApp selections resolve to these existing free models
+without rewriting saved settings. No new provider or paid tier is required.
 
-## Fixed Gemini diagnostic
+Gemini generation, fallback, model verification and enabled extraction routes
+make no Google requests, even when an old `GEMINI_API_KEY` is configured. The
+legacy Settings diagnostic is disabled by withholding its credential; its
+response shape remains available. Saved legacy model IDs are preserved for
+compatibility, but Gemini cannot be selected for new settings or returned as an
+available model. Legacy standalone diagnostic/codec fixtures are unit tests,
+not enabled routes. Other existing dashboard model settings remain unchanged.
 
-Workspace owners and admins may explicitly run the Settings diagnostic. The
-server sends four sequential, fixed requests to `gemini-3.5-flash-lite`: tiny
-text, a bundled readable PNG, a small structured response, and the current
-exported invoice extraction schema with that PNG. It never uses workspace
-invoices, accepts no prompt/file/model/URL input, invokes no fallback provider,
-and performs no writes or outbound messaging. Reports contain only the model,
-stage/status, HTTP status, finite categories, recognized Google ErrorInfo
-metadata, and allowlisted field paths; provider messages and bodies are
-discarded.
+Cloudflare failures retain bounded retries and the existing circuit breaker.
+When its available models are exhausted, WhatsApp says chat is temporarily
+unavailable, asks the user to retry, and states that nothing was lost: invoice
+records and local reviews remain saved. Invoice reads, menus and review actions
+continue locally without relying on provider availability.
 
-The probe has a 45-second total budget, bounded response reads, cancellation,
-and a per-user server cooldown. A successful HTTP response with an invoice
-payload that fails local validation is reported separately as
-`contract_invalid`; it is not treated as an HTTP rejection.
+## WhatsApp invoice containment and conversational memory
 
-Unit tests use mocked provider contracts and the bundled fixture. They do not
-contact Google, so this change does **not** identify the production HTTP 400
-root cause. An authorized owner/admin must run the deployed probe and review
-its finite report before drawing that conclusion.
+Invoice photos/PDFs always use the local reader, with `EXTRACTION_ROUTE=offline`
+set or unset. The flag remains supported for the direct owner review route.
+Images use bundled Tesseract OCR; PDFs use local selectable text and parsers.
+Unreadable documents require a clearer upload or manual input, with no model
+fallback. Customer receipt photos/PDFs receive a deterministic explanation to
+ask the business owner to verify and record payment. They never start an owner
+review, mark the workspace, or create invoices/payments.
 
-Apply the AI settings migrations, including
-`supabase/migrations/20260928110000_zen_primary_gemini_fallback.sql`, to
-the target **non-production** database before integration testing. The forward
-migration normalizes legacy rows before enforcing the provider-specific model
-contract. This branch does not apply migrations remotely or deploy production.
+Provider chat receives the last **20 eligible ordinary messages**, scoped by
+workspace, phone, audience and owner/customer identity, from the server-owned
+`whatsapp_provider_memory` table. Only successfully completed ordinary chat
+pairs enter that store. Invoice intake, extracted fields, corrections, reviews,
+confirmations and deterministic invoice replies remain in the local audit and
+are excluded. Caller history, summaries, profiles, response schemas, media,
+checkpoints and unissued tool transcripts cannot supply provider context.
+Only registered static tools and results from tool calls issued in that turn
+can enter a non-invoice tool loop; private results stop that loop locally.
 
-Workspace answers use the saved primary and fallback models. Existing Cloudflare
-and Gemini active defaults remain unchanged. OpenCode Zen also supports the
-free aliases `mimo-v2.6-flash-free` and `muse-spark-1.3-contributor-free`.
-MiMo uses `/zen/v1/chat/completions`; Muse uses `/zen/v1/responses`.
-Zen credential-presence checks do not verify live model availability or
-generation. Retired saved LongCat selections may remain visible as unavailable;
-generation skips retired entries and fails closed if only retired choices remain.
-Both pickers also offer Cloudflare Llama 3.3, Llama 4 Scout, Mistral Small 3.1,
-GPT OSS 20B, Qwen3 30B A3B, GLM 4.7 Flash, and Gemini 3.5 Flash and Flash Lite.
-The browser labels for GPT OSS, Qwen3, and GLM map to their canonical Cloudflare
-IDs; those full IDs are stored, not the shorthand labels. Unknown IDs are
-rejected at the API and provider boundaries. The models endpoint and settings
-writes check Cloudflare and Gemini catalogs; legacy Zen checks require its
-server credential. These checks do not prove successful live generation.
-A retryable provider failure receives bounded
-retries before the configured fallback is tried. A 429 is surfaced as a safe
-temporary rate-limit error after those attempts; no key or provider response
-body is returned. Cloudflare failures continue through the existing Gemini
-recovery chain, and the Cloudflare circuit breaker remains active. Invoice
-extraction continues to use its dedicated Gemini configuration. The Zen model
-IDs can be overridden server-side with `ZEN_PRIMARY_MODEL` and
-`ZEN_FALLBACK_MODEL`. The example leaves the fallback override blank so it does
-not introduce a new default model.
+`whatsapp_private_invoice_terms` retains local field/evidence terms across
+review replacement, cancellation, history pruning and invoice/customer updates.
+Provider memory and current messages are screened for quotations of those terms,
+including previously ordinary messages that later become invoice-bearing. Both
+new tables have RLS and service-only access. Storage failure fails closed for
+that chat attempt without forwarding raw history. Historical audit rows have
+unknown provenance and are not copied into provider memory; ordinary memory
+starts accumulating after deployment. Existing history remains available locally.
 
-Provider references: [Cloudflare model catalog](https://developers.cloudflare.com/workers-ai/models/),
-[Cloudflare OpenAI compatibility](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/),
-and [Cloudflare model search API](https://developers.cloudflare.com/api/resources/ai/subresources/models/methods/list/).
-MiMo image understanding is described in [Xiaomi's usage guide](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/multimodal-understanding/image-understanding),
-with [Meta's model documentation](https://dev.meta.ai/docs/models) and
-[OpenCode Zen documentation](https://opencode.ai/docs/zen/). Vision support is
-based on documented model capabilities; gateway image requests have not been
-live-tested.
+The old permanent workspace provenance mark remains intact for existing data
+and other callers. WhatsApp no longer uses it as a global functionality wall.
+Invoice questions use verified database reads and deterministic receivables
+rendering, separating drafts, issued receivables and currencies. Incomplete or
+unsupported questions receive an honest local refusal, never a model-invented
+balance. Reminder dispatch, Zoho provenance and commercial-send gates are unchanged.
 
-`AIProvider.generate()` / `generateStructured()` are the shared server abstraction
-for extraction and assistant planning. Authentication errors advance to the
-next model without retrying the rejected leg.
-Financial answers are **deterministically rendered tool results**, not LLM prose.
-The model selects tools; it cannot supply authoritative financial values.
+Apply `supabase/migrations/20261101120327_private_whatsapp_chat_memory.sql` before
+deploying the application. It adds private memory/term tables, retention triggers
+and a local backfill; it does not unmark or rewrite pre-existing data. Rollback
+can revert application usage and detach the new triggers while retaining the
+new tables/data. Do not deploy the old unsafe provider path as a privacy rollback.
 
 ## Workspace model settings
 
@@ -110,8 +99,7 @@ during temporary provider outages; saving other settings does not replace them.
 WhatsApp owner chat reads the same `workspace_ai_settings.primary_model` and
 `fallback_model` columns. No separate `owner_provider` or `owner_model` columns
 are needed. With no settings row, owner chat keeps its current Cloudflare Llama
-3.3 primary and Gemini Flash fallback. An explicitly disabled fallback remains
-disabled as a user selection; provider safety recovery follows its existing policy.
+3.3 primary and Cloudflare Scout fallback. WhatsApp chooses only existing Cloudflare models; saved settings are not rewritten.
 
 The direct workspace settings path supports the free Zen aliases documented
 above. The existing WhatsApp proposal SQL path has a separate older model
@@ -130,12 +118,10 @@ the direct settings path.
   Maximum decoded size 3 MiB, below the serverless JSON payload limit. No URL
   inputs. This lets the upload UI prefill a draft before any invoice is saved.
 
-PDF, PNG, JPEG, WebP only, with MIME/signature validation. Images and PDFs are
-sent to Gemini as inline media; if Gemini fails retryably, the configured
-OpenCode Zen fallback chain receives the same bounded input. Scanned/poor-quality
-PDFs may require another image upload or manual entry; model support is not a
-guarantee of OCR accuracy. Provide the appropriate privacy disclosure before
-enabling uploads.
+PDF, PNG, JPEG, WebP only, with MIME/signature validation. This endpoint parses
+locally and constructs no model provider. PDFs without readable text and images
+that cannot be verified require another upload or manual entry. Source documents
+and extracted fields never enter an extraction-provider request.
 
 Response fields: `direction` (`receivable`, `payable`, or `uncertain`), `invoiceNumber`, `customerName`, `invoiceDate`, `dueDate`,
 `subtotal`, `tax`, `total`, `outstandingAmount`, `currency`, `clientPhone`,
@@ -149,9 +135,7 @@ Assistant invoice actions. Amounts with more than two decimal places are rejecte
 without rounding. Existing rows in unsupported currencies remain readable with
 their stored decimal value labeled as unsupported; repricing and payment
 recording are blocked, so create a corrected invoice in a supported currency.
-Confidence is model-reported, not calibrated probability. The extractor receives
-the workspace business name to classify whether the business issued the invoice
-or owes it. The UI displays uncertainty and warnings and requires an explicit
+Confidence describes local parser evidence, not a calibrated probability. WhatsApp requires the verified owner to state issuance; the local reader never infers it from a seller name. The UI displays uncertainty and warnings and requires an explicit
 direction choice. Only confirmed receivables can enter the collections ledger;
 payables and uncertain invoices remain unsaved. Zero totals, subtotal plus tax
 differences greater than one minor unit, and partial outstanding amounts are

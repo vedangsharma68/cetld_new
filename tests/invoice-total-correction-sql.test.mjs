@@ -74,6 +74,7 @@ test('audited total corrections preserve net receipts and reversals across real 
    assert.match(amount.answer,/What should the new total/);assert.match(amount.answer,/history will stay intact/);assert.match(amount.answer,/overpayment/);
    assert.deepEqual(await read(id),before);assert.deepEqual(await history(id),original);
    assert.equal((await db.query('select count(*)::int n from invoice_correction_audits where invoice_id=$1',[id])).rows[0].n,0);
+   await replies.save({...scope,messageId:'paid-amount-prompt'},amount);
    await inbound(messageId,message);const outputs=[];let correctionValues={total_amount:80,currency:'USD'};
    const handler=createOwnerMessageHandler({supabase,env,logger:{info(){},warn(){},error(){}},
     authorize:input=>authorizeOwnerPhone({supabase,...input}),
@@ -85,8 +86,9 @@ test('audited total corrections preserve net receipts and reversals across real 
      return {model:'fixture',content:value.completed?'Invoice total corrected to USD 80. Payments remain USD 100; overpayment USD 20.':'The invoice correction failed.'};
     }})});
    const response=await handler({...scope,message,messageId});
-   assert.equal(outputs.at(-1)?.completed,true,JSON.stringify({response,outputs,errors:f.errors}));
-   assert.match(response.answer,/overpayment USD 20/);projection(await read(id),80,100);assert.deepEqual(await history(id),original);
+   assert.equal(response.plannerFailure,undefined,JSON.stringify({response,outputs,errors:f.errors}));
+   assert.equal(outputs.length,0,'Audited correction must not send invoice results to a provider');
+   assert.match(response.answer,/Overpayment: USD 20.00/);projection(await read(id),80,100);assert.deepEqual(await history(id),original);
    assert.ok(f.requests.some(request=>request.url.endsWith('/rpc/whatsapp_correct_owner_invoice')));
    assert.equal((await db.query('select count(*)::int n from invoice_correction_audits where invoice_id=$1',[id])).rows[0].n,1);
    const requestCount=f.requests.filter(request=>request.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length;
@@ -94,8 +96,8 @@ test('audited total corrections preserve net receipts and reversals across real 
    assert.equal(f.requests.filter(request=>request.url.endsWith('/rpc/whatsapp_correct_owner_invoice')).length,requestCount);assert.deepEqual(await history(id),original);
    const corrected=await read(id);correctionValues={currency:'INR'};
    await inbound('handler-protected-currency','Change its currency to INR');
-   await handler({...scope,message:'Change its currency to INR',messageId:'handler-protected-currency'});
-   assert.equal(outputs.at(-1).code,'PAYMENT_GUARD');assert.deepEqual(await read(id),corrected);assert.deepEqual(await history(id),original);
+   const refused=await handler({...scope,message:'Change its currency to INR',messageId:'handler-protected-currency'});
+   assert.match(refused.answer,/verified records|cannot safely|could not/);assert.equal(outputs.length,0);assert.deepEqual(await read(id),corrected);assert.deepEqual(await history(id),original);
   });
   await t.test('full payment and itemization correction retains original payment and protects currency/classification',async()=>{
    const id=await invoice('FULL',{paid:100,metadata:{subtotal:100,tax:0,line_items:[{description:'Original',amount:100}]}}),original=await history(id);

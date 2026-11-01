@@ -1,3 +1,4 @@
+import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -5,7 +6,7 @@ import {readFile} from 'node:fs/promises';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import {createCanvas} from '@napi-rs/canvas';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 
@@ -42,7 +43,7 @@ async function fixture(){
     lineItems:[{description:'Web Design',quantity:1,unitPrice:85,amount:85,confidence:.99}],lineItemsConfidence:.99});
   let extractionOverride=null,failExtraction=false,currentMessage='';
   const calls={executions:[],extractions:[],planner:[]};
-  const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
+  const handler=createOwnerMessageHandler({supabase,localExtraction:async input=>{calls.extractions.push({source:'local',message:currentMessage});if(failExtraction)throw Error('fixture local extraction unavailable');return localExtraction({...extractedWire(),...(extractionOverride||{})});},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
     logger:{info(){},warn(){},error(){}},toolsFactory:options=>{
       const tools=createOwnerWorkspaceTools(options);
       return {...tools,async execute(name,args,context){calls.executions.push({name,args});return tools.execute(name,args,context);}};

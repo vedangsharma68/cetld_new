@@ -1,9 +1,10 @@
 import {previewReminderReview,approveReminderReview} from './reminder-review.mjs';
 import {deadlineFetch} from '../automation/invoice-sync.mjs';
 import {APIError, object, requestBody, sendError, uuid} from './http.mjs';
-import {AIProvider, DEFAULT_EXTRACTION_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL, OPENROUTER_FREE_MODEL, VERIFIED_MODELS, isFallbackModelId, isPrimaryModelId, verifyModel} from './provider.mjs';
+import {AIProvider, OPENROUTER_FREE_MODEL, VERIFIED_MODELS, isFallbackModelId, isPrimaryModelId, verifyModel} from './provider.mjs';
 import {authorizeAIWorkspace} from './store.mjs';
-import {extractInvoice} from './extraction.mjs';
+import {extractInvoiceOffline} from './extraction.mjs';
+import {CF_PRIMARY_MODEL, CF_BACKUP_MODEL, isGeminiModelId} from './provider.mjs';
 import {answerWorkspaceQuestion, shouldLoadAccountingConnection} from './assistant.mjs';
 import {saveAssistantInvoice, retryAssistantInvoiceSync} from './invoice-ops.mjs';
 import {createAccountingTools} from './accounting-tools.mjs';
@@ -32,13 +33,13 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
       const methods = ['models','invoice-sync-status','assistant-history','reminder-approvals'].includes(action) ? ['GET'] : action === 'settings' ? ['GET', 'PUT'] : ['POST'];
       if (!methods.includes(req.method)) { res.setHeader('Allow', methods.join(', ')); throw new APIError(405, 'METHOD_NOT_ALLOWED'); }
       if (action === 'models') {
-        const checks = await Promise.all(VERIFIED_MODELS.map(async id => {
-          try { await verify(id, {fetchImpl, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY,
+        const checks = await Promise.all(VERIFIED_MODELS.filter(id=>!isGeminiModelId(id)).map(async id => {
+          try { await verify(id, {fetchImpl, openRouterApiKey: env.OPENROUTER_API_KEY,
             zenApiKey: env.OPENCODE_ZEN_API_KEY, cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN, timeoutMs: 5000}); return id; }
           catch { return null; }
         }));
         const available = [...new Set(checks.filter(Boolean))];
-        return res.status(200).json({models: available.filter(isPrimaryModelId), fallbackModels: available.filter(isFallbackModelId), extractionModels: available.filter(id => id === DEFAULT_EXTRACTION_MODEL), openRouterFallback: available.includes(OPENROUTER_FREE_MODEL)});
+        return res.status(200).json({models: available.filter(isPrimaryModelId), fallbackModels: available.filter(isFallbackModelId), extractionModels: [], openRouterFallback: available.includes(OPENROUTER_FREE_MODEL)});
       }
       const allowed = action==='preview-reminder'?['workspaceId','invoiceId','text','tone','sendNow','approveFallback']
         : action==='approve-reminder'?['workspaceId','approvalToken','reviewPayload','confirmed']
@@ -80,7 +81,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
       }
       if (action === 'diagnostic') {
         if (!['owner','admin'].includes(store.role)) throw new APIError(403, 'DIAGNOSTIC_ADMIN_REQUIRED');
-        const result = await diagnosticRunner({userId:store.userId, role:store.role, apiKey:env.GEMINI_API_KEY});
+        const result = await diagnosticRunner({userId:store.userId, role:store.role, apiKey:undefined});
         if (result?.error) throw new APIError(result.status, result.error);
         return res.status(200).json(result);
       }
@@ -112,10 +113,10 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         if (req.method === 'GET') return res.status(200).json({...await store.getSettings(), role:store.role});
         if (!['owner', 'admin'].includes(store.role)) throw new APIError(403, 'SETTINGS_ADMIN_REQUIRED');
         const {primary_model, fallback_model = null} = body;
-        if (!isPrimaryModelId(primary_model) || (fallback_model !== null && !isFallbackModelId(fallback_model)) || primary_model === fallback_model) throw new APIError(400, 'INVALID_MODEL_CONFIGURATION');
-        await verify(primary_model, {fetchImpl, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY,
+        if (isGeminiModelId(primary_model)||isGeminiModelId(fallback_model)||!isPrimaryModelId(primary_model) || (fallback_model !== null && !isFallbackModelId(fallback_model)) || primary_model === fallback_model) throw new APIError(400, 'INVALID_MODEL_CONFIGURATION');
+        await verify(primary_model, {fetchImpl, openRouterApiKey: env.OPENROUTER_API_KEY,
           zenApiKey: env.OPENCODE_ZEN_API_KEY, cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN});
-        if (fallback_model) await verify(fallback_model, {fetchImpl, geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY,
+        if (fallback_model) await verify(fallback_model, {fetchImpl, openRouterApiKey: env.OPENROUTER_API_KEY,
           zenApiKey: env.OPENCODE_ZEN_API_KEY, cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN});
         return res.status(200).json({...await store.saveSettings({primary_model, fallback_model}), role:store.role});
       }
@@ -124,9 +125,6 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
       if(await (store.offlineProvenance?.() ?? conversation?.offlineProvenance?.()))
         return res.status(200).json({answer:'This conversation contains local invoice information. Continue its review in WhatsApp; conversation summaries are unavailable.',pendingAction:null,readOnly:true});
       const settings = await store.getSettings();
-      const provider = providerFactory({primaryModel: settings.primary_model, fallbackModel: settings.fallback_model,
-        geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
-        cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN, fetchImpl, timeoutMs: 16000});
       if (action === 'extract') {
         const extractionBudgetMs = 42_000;
         const deadlineAt = Date.now() + extractionBudgetMs;
@@ -138,12 +136,12 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
           if (typeof f.base64 !== 'string' || f.base64.length === 0 || f.base64.length > 4194304 || f.base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(f.base64) || !['application/pdf','image/png','image/jpeg','image/webp'].includes(f.mimeType) || typeof f.fileName !== 'string' || f.fileName.length > 255) throw new APIError(400, 'INVALID_UPLOAD');
           file = {bytes: Buffer.from(f.base64, 'base64'), mimeType: f.mimeType, fileName: f.fileName};
         } else file = await store.downloadInvoiceFile(uuid(body.fileId));
-        const extractionProvider = providerFactory({primaryModel: DEFAULT_EXTRACTION_MODEL, fallbackModel: DEFAULT_EXTRACTION_FALLBACK_MODEL,
-          requestPurpose: 'extraction', geminiApiKey: env.GEMINI_API_KEY, openRouterApiKey: env.OPENROUTER_API_KEY,
-          zenApiKey: env.OPENCODE_ZEN_API_KEY, fetchImpl, timeoutMs: 23000});
         const businessName = typeof store.getBusinessName === 'function' ? await store.getBusinessName() : null;
-        return res.status(200).json(await extractInvoice({provider: extractionProvider, businessName, signal, deadlineAt, ...file}));
+        return res.status(200).json(await extractInvoiceOffline({businessName, signal, deadlineAt, ...file}));
       }
+      const provider = providerFactory({primaryModel: isGeminiModelId(settings.primary_model)?CF_PRIMARY_MODEL:settings.primary_model, fallbackModel: isGeminiModelId(settings.fallback_model)?CF_BACKUP_MODEL:settings.fallback_model,
+        openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
+        cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN, fetchImpl, timeoutMs: 16000});
       let accounting = null;
       if (shouldLoadAccountingConnection(body.message) && env.SUPABASE_SERVICE_ROLE_KEY && env.ACCOUNTING_TOKEN_ENCRYPTION_KEY) {
         try {
@@ -189,7 +187,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
       if(conversation)await conversation.append({key:`web:${turnId}:assistant`,role:'assistant',content:result.answer.slice(0,4000),pendingAction:result.pendingAction||null});
       return res.status(200).json(result);
     } catch (error) {
-      if (req.query?.action === 'extract' && error?.code === 'INVALID_OUTPUT') return res.status(502).json({error:'INVOICE_EXTRACTION_UNAVAILABLE',message:'The invoice could not be read safely. Please retry or enter its details manually.'});
+      if (req.query?.action === 'extract' && (error?.code === 'INVALID_OUTPUT'||!error?.status)) return res.status(502).json({error:'INVOICE_EXTRACTION_UNAVAILABLE',message:'The invoice could not be read safely. Please retry or enter its details manually.'});
       if (req.query?.action === 'confirm-accounting-action' && req.body?.confirmed === true) logger.error?.('Assistant accounting confirmation failed', {code:error?.code || 'UNEXPECTED_ERROR', status:error?.status || 503});
       return sendError(res, error);
     }

@@ -17,7 +17,7 @@ const clone = value => value == null ? value : structuredClone(value);
 const matches = (row, filter) => filter(row);
 
 /** A small, strict Supabase-shaped store. All model-readable tenants are seeded. */
-export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallbackModel = GEMINI_FALLBACK_MODEL} = {}) {
+export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallbackModel = CF_BACKUP_MODEL} = {}) {
   const now = DEFAULT_NOW.toISOString();
   const tables = {
     workspace_ai_settings: [{workspace_id:OWNER_CHAT_SCOPE.workspaceId,primary_model:primaryModel,fallback_model:fallbackModel,updated_at:now}],

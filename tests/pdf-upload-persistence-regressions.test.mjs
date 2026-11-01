@@ -1,8 +1,9 @@
+import {documentWithText} from './fixtures/invoice-document.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
-import {AIProvider,DEFAULT_EXTRACTION_FALLBACK_MODEL,DEFAULT_EXTRACTION_MODEL,DEFAULT_FALLBACK_MODEL,DEFAULT_MODEL} from '../ai/provider.mjs';
+import {AIProvider,CF_BACKUP_MODEL as DEFAULT_EXTRACTION_FALLBACK_MODEL,CF_PRIMARY_MODEL as DEFAULT_EXTRACTION_MODEL,DEFAULT_FALLBACK_MODEL,DEFAULT_MODEL} from '../ai/provider.mjs';
 import {extractInvoice} from '../ai/extraction.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
 import {invoiceWire} from './invoice-wire-fixture.mjs';
@@ -67,14 +68,14 @@ function makeExtractionProvider({bytes=SAMPLE_PDF,primaryContent,primaryFinishRe
   const provider=new AIProvider({
     primaryModel:DEFAULT_EXTRACTION_MODEL,
     fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL,
-    geminiApiKey:'test-gemini-key',
+    cfAccountId:'isolated',cfApiToken:'isolated',
     zenApiKey:'test-zen-key',
     maxAttempts:1,
     fetchImpl:async(url,init)=>{
       const payload=JSON.parse(init.body);
       requests.push({url:String(url),payload});
-      if(String(url).includes(DEFAULT_EXTRACTION_MODEL)){
-        return jsonResponse({candidates:[{content:{parts:[{text:primaryContent}]},finishReason:primaryFinishReason}]});
+      if(payload.model===DEFAULT_EXTRACTION_MODEL){
+        return jsonResponse({choices:[{message:{content:primaryContent},finish_reason:primaryFinishReason==='MAX_TOKENS'?'length':'stop'}]});
       }
       if(String(url).includes('generativelanguage.googleapis.com')) return jsonResponse({candidates:[{content:{parts:[{text:fallbackContent}]},finishReason:fallbackFinishReason}]});
       return jsonResponse({choices:[{message:{content:fallbackContent},finish_reason:fallbackFinishReason}]});
@@ -85,10 +86,7 @@ function makeExtractionProvider({bytes=SAMPLE_PDF,primaryContent,primaryFinishRe
 
 function assertPdfBytesReachedBothProviders(requests,bytes){
   const encoded=bytes.toString('base64');
-  const geminiPart=requests[0]?.payload.contents?.[0]?.parts?.find(part=>part.inlineData);
-  assert.deepEqual(geminiPart?.inlineData,{mimeType:'application/pdf',data:encoded});
-  const fallbackPart=requests[1]?.payload.contents?.[0]?.parts?.find(part=>part.inlineData);
-  assert.deepEqual(fallbackPart?.inlineData,{mimeType:'application/pdf',data:encoded});
+  for(const request of requests){assert.match(request.url,/api\.cloudflare/);assert.equal(request.payload.messages[0].content.find(part=>part.type==='file').file.file_data,`data:application/pdf;base64,${encoded}`);}
 }
 
 function assertPdfTextReachedBothProviders(requests){
@@ -113,9 +111,9 @@ test('malformed or truncated PDF JSON falls back once to the configured free mod
   const {requests,result,bytes}=await extractWithPrimaryOutput('{"invoiceNumber":"BPXINV-00550"','MAX_TOKENS');
 
   assert.equal(requests.length,2);
-  assert.match(requests[0].url,/gemini-3\.5-flash-lite:generateContent/);
-  assert.match(requests[1].url,/gemini-3\.5-flash:generateContent/);
-  assert.equal(requests[0].payload.generationConfig.maxOutputTokens,8192);
+  assert.equal(requests[0].payload.model,DEFAULT_EXTRACTION_MODEL);
+  assert.equal(requests[1].payload.model,DEFAULT_EXTRACTION_FALLBACK_MODEL);
+  assert.equal(requests[0].payload.max_tokens,8192);
   assert.equal(result.model,DEFAULT_EXTRACTION_FALLBACK_MODEL);
   assert.equal(result.usedFallback,true);
   assert.equal(result.invoiceNumber.value,'BPXINV-00550');
@@ -143,37 +141,33 @@ test('a malformed fallback remains a bounded, sanitized INVALID_OUTPUT failure',
     extractInvoice({provider:scenario.provider,bytes:SAMPLE_PDF,mimeType:'application/pdf',fileName:'invoice.pdf'}),
     error=>error.code==='INVALID_OUTPUT',
   );
-  assert.equal(scenario.requests.length,2,'structured extraction stops after the configured Gemini Flash structured fallback is malformed');
+  assert.equal(scenario.requests.length,2,'structured extraction stops after the configured Cloudflare structured fallback is malformed');
 });
 
-test('Gemini Lite image capability errors fail over to Gemini Flash with the exact original image',async()=>{
+test('isolated Cloudflare image adapter capability errors retain the exact source across its configured fallback',async()=>{
   const bytes=Buffer.from([137,80,78,71,13,10,26,10,0,1,2,3,4]);
   for(const status of [415,422]){
     const requests=[];
     const provider=new AIProvider({
       primaryModel:DEFAULT_EXTRACTION_MODEL,
       fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL,
-      geminiApiKey:'test-gemini-key',
+      cfAccountId:'isolated',cfApiToken:'isolated',
       zenApiKey:'test-zen-key',
       maxAttempts:1,
       fetchImpl:async(url,init)=>{
         const payload=JSON.parse(init.body);
         requests.push({url:String(url),payload});
-        if(String(url).includes(DEFAULT_EXTRACTION_MODEL)) return jsonResponse({error:{message:'private image capability detail'}},status);
+        if(payload.model===DEFAULT_EXTRACTION_MODEL) return jsonResponse({error:{message:'private image capability detail'}},status);
         if(String(url).includes('generativelanguage.googleapis.com')) return jsonResponse({candidates:[{content:{parts:[{text:JSON.stringify({...invoiceWire(SAMPLE_INVOICE),imageContent:'single_invoice'})}]},finishReason:'STOP'}]});
         return jsonResponse({choices:[{message:{content:JSON.stringify({...invoiceWire(SAMPLE_INVOICE),imageContent:'single_invoice'})},finish_reason:'stop'}]});
       },
     });
     const result=await extractInvoice({provider,bytes,mimeType:'image/png',fileName:'invoice.png'});
 
-    assert.equal(requests.length,2,`Gemini ${status} must use Gemini Flash next`);
-    assert.match(requests[0].url,/gemini-3\.5-flash-lite:generateContent/);
-    assert.match(requests[1].url,/gemini-3\.5-flash:generateContent/);
-    assert.deepEqual(requests[0].payload.contents[0].parts.find(part=>part.inlineData)?.inlineData,{
-      mimeType:'image/png',data:bytes.toString('base64'),
-    });
-    const imagePart=requests[1].payload.contents[0].parts.find(part=>part.inlineData);
-    assert.deepEqual(imagePart?.inlineData,{mimeType:'image/png',data:bytes.toString('base64')});
+    assert.equal(requests.length,2,`Cloudflare ${status} must use its configured fallback next`);
+    assert.equal(requests[0].payload.model,DEFAULT_EXTRACTION_MODEL);
+    assert.equal(requests[1].payload.model,DEFAULT_EXTRACTION_FALLBACK_MODEL);
+    for(const request of requests)assert.equal(request.payload.messages[0].content.find(part=>part.type==='image_url').image_url.url,`data:image/png;base64,${bytes.toString('base64')}`);
     assert.equal(result.model,DEFAULT_EXTRACTION_FALLBACK_MODEL);
     assert.equal(result.usedFallback,true);
   }
@@ -193,7 +187,7 @@ function createExtractionHandler(){
   const fetchImpl=async(url,init)=>{
     const payload=JSON.parse(init.body);
     requests.push({url:String(url),payload});
-    if(String(url).includes(DEFAULT_EXTRACTION_MODEL))return jsonResponse({candidates:[{content:{parts:[{text:'{"truncated":'}]},finishReason:'MAX_TOKENS'}]});
+    if(payload.model===DEFAULT_EXTRACTION_MODEL)return jsonResponse({candidates:[{content:{parts:[{text:'{"truncated":'}]},finishReason:'MAX_TOKENS'}]});
     if(String(url).includes('generativelanguage.googleapis.com'))return jsonResponse({candidates:[{content:{parts:[{text:JSON.stringify(invoiceWire(SAMPLE_INVOICE))}]},finishReason:'STOP'}]});
     return jsonResponse({choices:[{message:{content:JSON.stringify(invoiceWire(SAMPLE_INVOICE))},finish_reason:'stop'}]});
   };
@@ -211,16 +205,12 @@ async function uploadThroughExtractRoute(bytes){
   return {response,requests};
 }
 
-test('extract API carries the attached PDF unchanged through the structured-output fallback',async()=>{
-  const {response,requests}=await uploadThroughExtractRoute(SAMPLE_PDF);
-
-  assert.equal(response.code,200);
-  assert.equal(response.data.invoiceNumber.value,'BPXINV-00550');
-  assert.equal(response.data.lineItems.value.length,28);
-  assert.deepEqual(response.data.lineItems.value.map(({description,quantity,unitPrice,amount})=>({description,quantity,unitPrice,amount})),GROUND_TRUTH_LINE_ITEMS);
-  assert.equal(response.data.warnings.some(warning=>/line-item amounts do not match the printed subtotal/i.test(warning)),false);
-  assert.equal(requests.length,2);
-  assertPdfBytesReachedBothProviders(requests,SAMPLE_PDF);
+test('extract API parses a readable PDF locally and never constructs a fallback provider',async()=>{
+  const bytes=documentWithText('INVOICE\nInvoice No: BPXINV-00550\nBill to: Roger Bigot\nInvoice Date: 2026-10-01\nSubtotal: USD 100\nTax: USD 18\nTotal: USD 118\nCurrency: USD');
+  const {response,requests}=await uploadThroughExtractRoute(bytes);
+  assert.equal(response.code,200);assert.equal(response.data.invoiceNumber.value,'BPXINV-00550');
+  assert.equal(response.data.total.value,118);assert.equal(response.data.extractionRoute,'offline');assert.equal(requests.length,0);
+  const invalid=await uploadThroughExtractRoute(SAMPLE_PDF);assert.equal(invalid.response.code,502);assert.equal(invalid.requests.length,0);
 });
 
 function appFunction(startMarker,endMarker,sandbox){
@@ -372,7 +362,7 @@ test('the supplied two-page invoice PDF extracts complete printed facts without 
   assert.equal(response.data.customerName.value,'Roger Bigot');
   assert.equal(response.data.total.value,6610.95);
   assert.deepEqual(response.data.lineItems.value.map(({description,quantity,unitPrice,amount})=>({description,quantity,unitPrice,amount})),GROUND_TRUTH_LINE_ITEMS);
-  assert.equal(response.data.model,'verified-pdf-text');
+  assert.equal(response.data.model,'offline-pdf-text');
   assert.equal(response.data.currency.value,null);
   assert.equal(response.data.dueDate.value,null);
   assert.equal(requests.length,0);
