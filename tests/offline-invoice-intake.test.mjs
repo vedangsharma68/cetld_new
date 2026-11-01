@@ -32,6 +32,76 @@ const env={EXTRACTION_ROUTE:'offline',WHATSAPP_APP_SECRET:'offline-test-buttons-
 const logger={info(){},warn(){},error(){}};
 const deny=()=>{assert.fail('No provider factory, model classifier, or external fetch may run');};
 
+test('round7 owner handler retains rejected competing totals and blocks confirmation in either order', async () => {
+  for (const continuation of ['₹7.25', 'Rs.7.25', 'EUR7.25', '7.250', '?? 7']) {
+    for (const [left, right] of [[' | ', ' / '], [' ; ', ' | '], [' / ', ' ; ']]) {
+      for (const position of ['before', 'after', 'same line']) {
+        const f=await fixture();
+        try {
+          const rejected=`Grand Total 21370${right}${continuation}${left}Packing 8`;
+          let document=text.replace('Bill to: Kabir Textiles', `Bill to: Kabir Textiles${left}${rejected}`);
+          if (position !== 'before') document=text.replace('Total: INR 20060\n','').replace('Bill to: Kabir Textiles',
+            position === 'after' ? 'Total: INR 20060\nBill to: Kabir Textiles' : `Bill to: Kabir Textiles${left}Total: INR 20060`)
+            .replace('Bill to: Kabir Textiles', `Bill to: Kabir Textiles${left}${rejected}`);
+          f.setPrinted(document);
+          const reply=await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
+          const {action}=await f.pending.loadInvoiceReview(f.scope);
+          assert.equal(action.stage,'incomplete',document);
+          assert.ok(action.unresolvedFields.includes('total'),document);
+          assert.ok(action.missingFields.includes('total'));
+          assert.equal(reply.buttons,undefined);
+          for (const evidence of ['21370',continuation,'20060']) assert.ok(reply.answer.includes(evidence),reply.answer);
+          assert.match((await f.turn('yes')).answer,/Confirmation is unavailable/);
+          assert.equal(await f.count(),0);
+        } finally {await f.close();}
+      }
+    }
+  }
+});
+
+test('round7 owner handler retains rejected optional monetary occurrences alongside valid values', async () => {
+  for (const label of ['Subtotal','Tax','Balance Due']) {
+    const f=await fixture();
+    try {
+      f.setPrinted(text.replace('Bill to: Kabir Textiles',`Bill to: Kabir Textiles | ${label} 21370 / ₹7.25 ; Packing 8`));
+      const reply=await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
+      const {action}=await f.pending.loadInvoiceReview(f.scope);
+      const field={Subtotal:'subtotal',Tax:'tax','Balance Due':'outstandingAmount'}[label];
+      assert.ok(action.unresolvedFields.includes(field),label);
+      assert.equal(action.stage,'incomplete');
+      assert.equal(reply.buttons,undefined);
+      assert.match(reply.answer,/21370/);
+      assert.match(reply.answer,/₹7.25/);
+      assert.equal(await f.count(),0);
+    } finally {await f.close();}
+  }
+});
+
+test('round7 owner handler retains all candidates in three-plus mixed-separator chains', async () => {
+  for (const [left, middle, right] of [[' | ', ' / ', ' ; '], [' ; ', ' | ', ' / '], [' / ', ' ; ', ' | ']]) {
+    for (const amounts of [[21370,22490], [22490,21370], [21370,22490,23630]]) {
+      for (const separateFirst of [true,false]) {
+        const f=await fixture();
+        try {
+          const chain=amounts.map((amount,i)=>`${i % 2 ? 'Total' : 'Grand Total'} ${amount}${middle}Packing${i % 2 ? ':' : ''} 8`).join(right);
+          let document=text.replace('Bill to: Kabir Textiles',`Bill to: Kabir Textiles${left}${chain}`);
+          if (separateFirst) document=document.replace('Total: INR 20060\n','').replace('Bill to:', 'Total: INR 20060\nBill to:');
+          f.setPrinted(document);
+          const reply=await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
+          const {action}=await f.pending.loadInvoiceReview(f.scope);
+          assert.equal(action.invoice.total,null);
+          assert.ok(action.conflictingFields.includes('total'),document);
+          assert.deepEqual([...action.printedEvidence.total.candidates].sort((a,b)=>a-b),[20060,...amounts].sort((a,b)=>a-b));
+          assert.equal(action.stage,'incomplete');
+          assert.equal(reply.buttons,undefined);
+          for (const amount of [20060,...amounts]) assert.ok(reply.answer.includes(String(amount)),reply.answer);
+          assert.equal(await f.count(),0);
+        } finally {await f.close();}
+      }
+    }
+  }
+});
+
 for (const colon of [true, false]) {
   test(`round5 owner handler retains conflicts across unknown ${colon ? 'colon' : 'colonless'} segments`, async () => {
     const cases = [];

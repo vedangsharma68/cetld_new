@@ -3,6 +3,47 @@ import test from 'node:test';
 import {execFileSync} from 'node:child_process';
 import {parseOfflineInvoiceText} from '../ai/image-text.mjs';
 
+test('round7 rejected competing monetary occurrences survive successful totals in either order', () => {
+  for (const continuation of ['₹7.25', 'Rs.7.25', 'EUR7.25', '7.250', '?? 7']) {
+    for (const [left, right] of [[' | ', ' / '], [' ; ', ' | '], [' / ', ' ; ']]) {
+      const rejected = `Bill To: Cedar Works${left}Grand Total 137${right}${continuation}${left}Packing 8`;
+      for (const document of [`Total: INR 100\n${rejected}`, `${rejected}\nTotal: INR 100`,
+        `Bill To: Cedar Works${left}Total: INR 100${right}Grand Total 137${right}${continuation}`]) {
+        const result = parseDraft(document);
+        assert.equal(result.total.value, null, document);
+        assert.ok(result.unresolvedFields.includes('total'), document);
+        assert.ok(result.monetaryEvidence.total.rejected.some(value => value.includes(continuation)), document);
+        assert.deepEqual(result.monetaryEvidence.total.candidates, [100], document);
+        assert.ok(result.warnings.some(w => /unresolved.*total/i.test(w)), document);
+      }
+    }
+  }
+});
+
+test('round7 failed occurrences survive successful optional monetary fields', () => {
+  for (const [label, field] of [['Subtotal','subtotal'], ['Tax','tax'], ['Balance Due','outstandingAmount']]) {
+    const result = parseDraft(`${label}: INR 100\nBill To: Cedar Works | ${label} 137 / ₹7.25 ; Packing 8`);
+    assert.equal(result[field].value, null, field);
+    assert.ok(result.unresolvedFields.includes(field), field);
+    assert.deepEqual(result.monetaryEvidence[field].candidates, [100]);
+    assert.ok(result.monetaryEvidence[field].rejected.length);
+  }
+});
+
+test('round7 three-plus monetary candidates retain structured conflicts across mixed chains', () => {
+  for (const [left, middle, right] of [[' | ', ' / ', ' ; '], [' ; ', ' | ', ' / '], [' / ', ' ; ', ' | ']]) {
+    for (const amounts of [[137,149], [149,137], [137,149,163]]) {
+      const chain = amounts.map((amount, i) => `${i % 2 ? 'Total' : 'Grand Total'} ${amount}${middle}Packing${i % 2 ? ':' : ''} 8`).join(right);
+      for (const document of [`Total: INR 100\nBill To: Cedar Works${left}${chain}`, `Bill To: Cedar Works${left}${chain}\nTotal: INR 100`]) {
+        const result = parseDraft(document);
+        assert.equal(result.total.value, null, document);
+        assert.ok(result.conflictingFields.includes('total'), document);
+        assert.deepEqual([...result.conflictingValues.total].sort((a,b)=>a-b), [100,...amounts].sort((a,b)=>a-b), document);
+      }
+    }
+  }
+});
+
 test('round5 generic colon labels stay inside slash segments', () => {
   for (const name of ['Acme  Trading Co', 'Sharma\tIndustries Pvt', 'National   Textile Mills']) {
     for (const separator of [' / ', ' | ', ' ; ']) {

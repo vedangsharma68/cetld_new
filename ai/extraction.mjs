@@ -423,16 +423,24 @@ export async function extractInvoiceOffline({bytes, mimeType, businessName, sign
   // Repeated labelled facts with different values must not become a single
   // apparently resolved candidate. Parse each source line independently.
   const observations = {};
+  const failedMonetaryFields = new Set();
   for (const line of text.split(/\r?\n/)) {
     const facts = parseOfflineInvoiceText(line);
-    for (const field of ['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','total','outstandingAmount','currency']) {
+    for (const field of ['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency']) {
       const value = facts[field]?.value;
-      if (value != null) (observations[field] ||= new Set()).add(JSON.stringify(value));
+      const evidence = facts.monetaryEvidence?.[field];
+      for (const candidate of evidence?.candidates ?? (value != null ? [value] : []))
+        (observations[field] ||= new Set()).add(JSON.stringify(candidate));
+      if (evidence?.rejected.length) failedMonetaryFields.add(field);
     }
   }
   if (explicitCurrencies.size > 1) observations.currency=new Set([...explicitCurrencies].map(code=>JSON.stringify(code)));
   const unresolvedFields = ['dueDate','subtotal','tax','outstandingAmount']
     .filter(field=>result[field]?.value == null && printedEvidence[field]);
+  for (const field of failedMonetaryFields) {
+    if (!unresolvedFields.includes(field)) unresolvedFields.push(field);
+    result[field] = {value:null,confidence:0};
+  }
   // A failed labelled occurrence is evidence even if another occurrence parsed.
   if (sourceLines.some(line=>evidenceLabels.dueDate.test(line) && parseOfflineInvoiceText(line).dueDate.value == null)
     && !unresolvedFields.includes('dueDate')) unresolvedFields.push('dueDate');
