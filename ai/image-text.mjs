@@ -82,6 +82,10 @@ function amountFromLine(spans, labels, warnings, fieldName) {
   const values = new Set(spans.filter(span => labels.includes(span.label) && span.value !== null && span.value >= 0)
     .map(span => span.value));
   if (values.size > 1) warnings.push(`Conflicting printed ${fieldName} amounts; confirm the value against the image.`);
+  if (spans.some(span => labels.includes(span.label) && (span.value === null || span.value < 0))) {
+    warnings.push(`Unresolved printed ${fieldName} amount; confirm the rejected evidence against the image.`);
+    return null;
+  }
   return values.size === 1 ? [...values][0] : null;
 }
 
@@ -210,7 +214,11 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
           ? /^\+?\d[\d ()-]{8,}$/.test(payload)
           : /^currency(?: code)?$/i.test(match[0])
             ? CURRENCIES.has(payload.toUpperCase())
-            : moneyPattern.test(monetarySegment(payload).trim()) && (!nameValue || !/^-?\d[\d,]*$/.test(monetarySegment(payload).trim()));
+            : (moneyPattern.test(monetarySegment(payload).trim()) && (!nameValue || !/^-?\d[\d,]*$/.test(monetarySegment(payload).trim())))
+              // A segment with a recognizable amount followed by rejected
+              // continuation is still a monetary occurrence, never absence.
+              || !nameValue && (match.index === 0 || layoutStarts.includes(match.index))
+                && moneyPattern.test(payload.split(/[|;/]/)[0].trim());
       if (explicit.includes(match) || /^ *:/.test(tail) || structured) labels.unshift(match);
     }
     return labels;
@@ -232,7 +240,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
       const printed = payload.match(moneyPattern)?.[1];
       const amount = printed === undefined ? null : Number(printed.replaceAll(',', ''));
       const value = amount !== null && Number.isFinite(amount) && Number.isSafeInteger(Math.round(amount * 100)) ? amount : null;
-      spans.push({label, value});
+      spans.push({label, value, text:line.slice(match.index, labels[index + 1]?.index ?? line.length).trim()});
       if (totalLabels.includes(label) || dueLabels.includes(label) || label === 'balance due' || label.startsWith('currency')) {
         for (const code of payload.matchAll(/\b(INR|USD|EUR|GBP|AED|SGD|AUD|CAD|CHF|Rs\.?)(?= |\d|$)/gi)) {
           currencyEvidence.add(/^Rs\.?$/i.test(code[1]) ? 'INR' : code[1].toUpperCase());
@@ -243,15 +251,16 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   const subtotal = amountFromLine(spans, ['subtotal', 'taxable', 'taxable subtotal'], warnings, 'subtotal');
   const components = ['cgst', 'sgst', 'igst'].map(label => amountFromLine(spans, [label], warnings, label.toUpperCase()));
   const conflictingComponent = ['cgst', 'sgst', 'igst'].some((label, index) => components[index] === null
-    && spans.some(span => span.label === label && span.value !== null && span.value >= 0));
+    && spans.some(span => span.label === label));
   const tax = conflictingComponent ? null : components.some(value => value !== null)
     ? Math.round(components.reduce((sum, value) => sum + (value ?? 0), 0) * 100) / 100
     : amountFromLine(spans, ['gst', 'sales tax', 'tax', 'vat'], warnings, 'tax');
-  const total = spans.some(span => totalLabels.includes(span.label) && span.value !== null && span.value >= 0)
+  const hasTotal = spans.some(span => totalLabels.includes(span.label));
+  const total = hasTotal
     ? amountFromLine(spans, totalLabels, warnings, 'total')
     : amountFromLine(spans, ['amount due', 'total due'], warnings, 'total');
   // Balance Due is the more specific remaining balance, including a paid zero.
-  const hasBalance = spans.some(span => span.label === 'balance due' && span.value !== null && span.value >= 0);
+  const hasBalance = spans.some(span => span.label === 'balance due');
   const outstandingAmount = amountFromLine(spans, hasBalance ? ['balance due'] : dueLabels, warnings, 'outstanding');
   if (hasBalance && outstandingAmount !== null && spans.some(span => dueLabels.includes(span.label)
     && span.value !== null && span.value >= 0 && span.value !== outstandingAmount)) {
@@ -259,6 +268,30 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
   }
   const rounding = spans.find(span => span.label === 'rounding' && span.value !== null)?.value ?? null;
   const currency = currencyEvidence.size === 1 && CURRENCIES.has([...currencyEvidence][0]) ? [...currencyEvidence][0] : null;
+
+  // Retain occurrences before reducing them to a single field value. In
+  // particular, null is rejected printed evidence, not an absent occurrence.
+  const monetaryEvidence = {};
+  for (const [fieldName, labels] of Object.entries({
+    subtotal:['subtotal','taxable','taxable subtotal'],
+    tax:['gst','sales tax','tax','vat','cgst','sgst','igst'],
+    total:hasTotal ? totalLabels : ['amount due','total due'],
+    outstandingAmount:hasBalance ? ['balance due',...dueLabels] : dueLabels,
+  })) {
+    const occurrences = spans.filter(span => labels.includes(span.label));
+    if (!occurrences.length) continue;
+    const rejected = occurrences.filter(span => span.value === null || span.value < 0).map(span => span.text);
+    // Component taxes are additive; a balance is more specific than amount
+    // due. Retain their rejections without treating them as competing totals.
+    const candidates = [...new Set(occurrences.filter(span => span.value !== null && span.value >= 0
+      && !(fieldName === 'tax' && ['cgst','sgst','igst'].includes(span.label))
+      && !(fieldName === 'outstandingAmount' && hasBalance && span.label !== 'balance due'))
+      .map(span => span.value))];
+    monetaryEvidence[fieldName] = {candidates, rejected};
+  }
+  const unresolvedFields = Object.keys(monetaryEvidence).filter(field => monetaryEvidence[field].rejected.length);
+  const conflictingFields = Object.keys(monetaryEvidence).filter(field => monetaryEvidence[field].candidates.length > 1);
+  const conflictingValues = Object.fromEntries(conflictingFields.map(field => [field, monetaryEvidence[field].candidates]));
 
   let invoiceNumber = null;
   for (const line of lines) {
@@ -393,6 +426,7 @@ export function parseOfflineInvoiceText(text, {ocrConfidence} = {}) {
     uncertainFields: [...UNCERTAIN_FIELDS],
     warnings: [...new Set(warnings)],
     reviewRequired: true,
+    monetaryEvidence, unresolvedFields, conflictingFields, conflictingValues,
     ocr: {text: cleanText, confidence},
     model: 'tesseract.js-eng-offline',
     usedFallback: true,
