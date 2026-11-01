@@ -32,6 +32,40 @@ const env={EXTRACTION_ROUTE:'offline',WHATSAPP_APP_SECRET:'offline-test-buttons-
 const logger={info(){},warn(){},error(){}};
 const deny=()=>{assert.fail('No provider factory, model classifier, or external fetch may run');};
 
+for (const colon of [true, false]) {
+  test(`round5 owner handler retains conflicts across unknown ${colon ? 'colon' : 'colonless'} segments`, async () => {
+    const cases = [];
+    for (const unknown of ['Demurrage Reserve', 'Packing Allowance', 'Security Retention']) {
+      for (const [left, right] of [[' / ', ' / '], [' | ', ' ; '], [' ; ', ' / '], [' / ', ' | ']]) {
+        const field = `${unknown}${colon ? ':' : ''} 20060`;
+        cases.push(`Bill to: Kabir Textiles${left}Grand Total 21000${right}${field}`);
+        cases.push(`Bill to: Kabir Textiles${left}${field}${right}Grand Total 21000`);
+      }
+    }
+    for (const unknown of ['Discount', 'Shipping', 'Amount Paid']) {
+      for (const separator of [' / ', ' | ', ' ; ']) {
+        cases.push(`Bill to: Kabir Textiles${separator}Grand Total 21000${separator}${unknown}${colon ? ':' : ''} ${colon ? 20060 : 5}`);
+      }
+    }
+    for (const buyerLine of cases) {
+      const f=await fixture();
+      try {
+        f.setPrinted(text.replace('Bill to: Kabir Textiles', buyerLine));
+        const reply=await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
+        const {action}=await f.pending.loadInvoiceReview(f.scope);
+        assert.equal(action.invoice.total,null,buyerLine);
+        assert.equal(action.stage,'incomplete',buyerLine);
+        assert.ok(action.conflictingFields.includes('total'),buyerLine);
+        assert.deepEqual([...action.printedEvidence.total.candidates].sort((a,b)=>a-b),[20060,21000],buyerLine);
+        assert.equal(reply.buttons,undefined,buyerLine);
+        assert.match(reply.answer,/21000/);
+        assert.match(reply.answer,/20060/);
+        assert.equal(await f.count(),0);
+      } finally {await f.close();}
+    }
+  });
+}
+
 test('round4 owner handler exposes separated total conflicts and blocks signed confirmation', async () => {
   for (const separator of [' | ', ' ; ', ' / ']) {
     const f=await fixture();
