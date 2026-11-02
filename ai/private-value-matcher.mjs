@@ -45,6 +45,9 @@ function wordNumber(words){
   return values;
 }
 function numbers(text){
+  // Currency/unit affixes are numeric context, not identifier fragments.
+  const units='(?:inr|usd|eur|gbp|aed|sgd|aud|cad|chf|rs|rupees?|dollars?|euros?|pounds?)';
+  text=text.replace(new RegExp(`\\b${units}(?=[0-9])|(?<=[0-9])${units}\\b`,'gu'),' ');
   const keys=new Set();
   for(const match of text.matchAll(/(?<![\p{L}\p{N}_.,])\d+(?:,\d+)*(?:\.\d+)?(?![\p{L}\p{N}_]|[.,]\d)/gu)){
     const value=numeric(match[0]);if(value!==null)keys.add(value);

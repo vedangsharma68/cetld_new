@@ -16,7 +16,7 @@ function harness({terms=['1250','anurag','2026-10-31'],history=[],response='Hell
   const provider=message=>createPrivateChatProvider({message,memory,options:{},providerFactory:()=>({async generate(request){payloads.push(JSON.parse(JSON.stringify(request.messages)));return typeof response==='function'?response(request):{content:response};}})});
   return {provider,memory,payloads,writes};
 }
-const variants=['send 1,250 today','twelve fifty today','one thousand two hundred and fifty today','1,250.00','1250.00','001250.000',
+const variants=['send 1,250 today','twelve fifty today','one thousand two hundred and fifty today','1,250.00','1250USD','USD1,250.00','1,250rupees','1250.00','001250.000',
   'is it due 31 Oct?','is it due 31 October?','31/10/2026','Oct 31 2026','October 31, 2026','31-10-2026','31st Oct 2026'];
 for(const message of variants)test(`serialized payload excludes retained variant: ${message}`,async()=>{
   const h=harness();assert.equal((await h.provider(message).generate()).content,PRIVATE_CHAT_REPLY);assert.deepEqual(h.payloads,[]);assert.deepEqual(h.writes,[]);

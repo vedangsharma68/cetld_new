@@ -199,7 +199,7 @@ Every provider-bound surface uses `private-value-matcher.mjs`: current text,
 positive-provenance history, issued tool transcripts/results, tool arguments and
 model responses. It normalizes case, whitespace and NFKC compatibility forms.
 Numeric matching uses exact decimal strings/BigInt, with international and Indian
-comma grouping, leading zeros, decimal/trailing-zero variants and bounded English
+comma grouping, leading zeros, decimal/trailing-zero variants, supported currency/unit affixes, and bounded English
 number phrases (including hundred/thousand/lakh/crore and colloquial "twelve fifty").
 Dates cover ISO, day/month/year with slashes or hyphens, English short/full month
 names in either order, optional years and ordinal day suffixes. Yearless renderings
