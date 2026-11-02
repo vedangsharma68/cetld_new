@@ -1,8 +1,10 @@
 import {PRIVATE_UNICODE_FOLD} from './private-value-unicode.mjs';
-import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,namedDatePatterns,privateOriginHeader,privateOriginFieldLabel,originDateCommaPattern} from './private-value-language.mjs';
+import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,namedDatePatterns,privateOriginHeader,privateOriginFieldLabel,originDateCommaPattern,lexicalAliases,partyTransliteration,partyReference} from './private-value-language.mjs';
 // One code-point fold, shared verbatim with SQL, independent of DB/OS locale.
 export const normalizePrivateValue=value=>Array.from(String(value??''),ch=>PRIVATE_UNICODE_FOLD[ch]??ch).join('').replace(/ +/g,' ').trim();
 const clean=normalizePrivateValue;
+function lexicalText(input){const origins=[],chunks=[];for(const m of input.matchAll(/[\p{L}\p{M}]+|[^\p{L}\p{M}]+/gu)){const part=lexicalAliases[m[0]]??m[0];chunks.push(part);for(let i=0;i<part.length;i++)origins.push(Object.hasOwn(lexicalAliases,m[0])?{start:m.index,end:m.index+m[0].length}:{start:m.index+i,end:m.index+i+1});}return {text:chunks.join(''),origins};}
+const stripCurrency=value=>value.replace(/\/[-−]$/u,'').replace(new RegExp(`^(?:\\p{Sc}|${currencyUnitPattern}) *| *(?:\\p{Sc}|${currencyUnitPattern})$`,'gu'),'').trim();
 export function normalizePrivateText(value){
   const text=String(value??''),chars=[],origins=[];let index=0;
   for(const ch of text){
@@ -27,6 +29,7 @@ function groupedInteger(value){
   return null;
 }
 function scalar(value){
+  value=value.replace(/\/[-−]$/u,'');
   value=value.replace(/^[\p{Quotation_Mark}ʼ]+|[\p{Quotation_Mark}ʼ]+$/gu,'').replace(/^\((.*)\)$/u,'$1').replace(/[\p{Quotation_Mark}ʼ]/gu,"'");
   const adornment=new RegExp(`^(?:[+−-]|\\p{Sc}|${currencyUnitPattern}) *| *(?:\\p{Sc}|${currencyUnitPattern})$`,'gu');
   for(let prior;prior!==value;){prior=value;value=value.replace(adornment,'').trim();}
@@ -65,9 +68,10 @@ function dateValue(year,month,day){
   const actual=year??2000,d=new Date(0);d.setUTCHours(0,0,0,0);d.setUTCFullYear(actual,month-1,day);
   return actual>=1&&d.getUTCFullYear()===actual&&d.getUTCMonth()===month-1&&d.getUTCDate()===day?{year,month,day}:null;
 }
-function dates(text){
+function dates(original){
+  const lexical=lexicalText(original),text=lexical.text;
   const values=[],spans=[],candidates=[];
-  const add=(y,m,d,match)=>candidates.push({value:dateValue(y,Number(m),Number(d)),start:match.index,end:match.index+match[0].length});
+  const add=(y,m,d,match)=>candidates.push({value:dateValue(y,Number(m),Number(d)),start:lexical.origins[match.index]?.start??match.index,end:lexical.origins[match.index+match[0].length-1]?.end??match.index+match[0].length});
   for(const match of text.matchAll(/(?<![\p{L}\p{N}_])([0-9]{1,4}) *[./-] *([0-9]{1,2})(?: *[./-] *([0-9]{2}|[0-9]{4}|[0-9]{1}))?(?![\p{L}\p{N}_]| *[./-] *[0-9])/gu)){
     if(match[1].length===4&&match[3]!=null)add(Number(match[1]),match[2],match[3],match);
     else if(match[1].length<=2&&(match[3]==null||[2,4].includes(match[3].length))){
@@ -95,7 +99,7 @@ function wordNumber(words){
     const end=words.length-1,and=words.lastIndexOf('and'),head=and>=0?words.slice(0,and):[],tail=words.slice(and+1,end).filter(word=>word!=='a');
     const numerator=tail.length?wordNumber(tail):['1'],base=head.length?wordNumber(head):['0'];
     return base.flatMap(a=>numerator.filter(n=>/^\d+$/.test(n)).map(n=>{
-      const [integer,fraction='']=a.split('.'),digits=Math.max(fraction.length,2),scale=10n**BigInt(digits);
+      const [integer,fraction='']=a.split('.'),digits=Math.max(fraction.length,20),scale=10n**BigInt(digits);
       const value=BigInt(integer)*scale+BigInt(fraction.padEnd(digits,'0'))+BigInt(n)*scale/fractions[words.at(-1)];
       return exact((value/scale).toString(),(value%scale).toString().padStart(digits,'0'));
     }));
@@ -135,7 +139,8 @@ function wordNumber(words){
 // A valid complete numeral is atomic. Otherwise take longest valid members;
 // punctuation may connect a cardinal phrase or separate a list, never add the
 // next independent tens group to an already complete one.
-function wordRuns(text,onSpan){
+function wordRuns(original,onSpan){
+  const lexical=lexicalText(original),text=lexical.text;
   const values=new Set();let run=[];
   const flush=()=>{
     if(!run.some(token=>numberWords.has(token.word)&&!['and','a'].includes(token.word))){run=[];return;}
@@ -143,7 +148,7 @@ function wordRuns(text,onSpan){
       let end=run.length,found=[];
       for(;end>start;end--){found=wordNumber(run.slice(start,end).map(token=>token.word));if(found.length)break;}
       if(end===start){start++;continue;}
-      found.forEach(n=>values.add(n));onSpan?.(found,run[start].start,run[end-1].end);start=end;
+      found.forEach(n=>values.add(n));onSpan?.(found,lexical.origins[run[start].start]?.start??run[start].start,lexical.origins[run[end-1].end-1]?.end??run[end-1].end);start=end;
     }
     run=[];
   };
@@ -155,6 +160,7 @@ function wordRuns(text,onSpan){
 }
 
 function numbers(text,onSpan){
+  if(/\b(?:amounts|numbers|values|totals|pair|list)\b/u.test(text))text=text.replace(/(?<=[0-9]),(?=[0-9])/gu,' ');
   text=separateUnits(text);const masked=text.split(''),keys=wordRuns(text,(values,start,end)=>{onSpan?.(values,start,end);for(let i=start;i<end;i++)masked[i]=' ';});text=masked.join('');
   for(const match of text.matchAll(/[0-9]+(?:[., \p{Quotation_Mark}ʼ]+[0-9]+)*(?:[kmb])?/gu)){
     if(/[\p{L}\p{N}_]$/u.test(text.slice(0,match.index))||/^[\p{L}\p{N}_]/u.test(text.slice(match.index+match[0].length)))continue;
@@ -162,12 +168,19 @@ function numbers(text,onSpan){
   }
   return keys;
 }
-const identifier=value=>/[\p{L}]/u.test(value)&&/^[\p{L}\p{N}\p{P} ]+$/u.test(value)?value.replaceAll('&','and').replace(/[^\p{L}\p{N}]/gu,''):null;
+const identifier=value=>/[\p{L}]/u.test(value)&&/^[\p{L}\p{N}\p{M}\p{P} ]+$/u.test(value)?value.replaceAll('&','and').replace(/[^\p{L}\p{N}\p{M}]/gu,''):null;
 const identifierPattern=key=>{
   const separator='[\\p{P} ]*',and=Array.from('and',escape).join(separator);
   const pattern=key.replaceAll('&','and').split('and').map(part=>Array.from(part,escape).join(separator)).join(separator+'(?:'+and+'|&)'+separator);
   return new RegExp(`(?<![\\p{L}\\p{N}_])${pattern}(?![\\p{L}\\p{N}_])`,'u');
 };
+export function partyKey(value){return clean(value).replace(/[\p{L}\p{M}]+/gu,term=>{
+ const native=/[\u0900-\u097f]/u.test(term);let out='';
+ for(const ch of term){if(Object.hasOwn(partyTransliteration,ch)){if(/[\u093e-\u094d]/u.test(ch)&&out.endsWith('a'))out=out.slice(0,-1);out+=partyTransliteration[ch];}else out+=ch;}
+ if(native)out=out.replace(/a$/u,'');return out.replace(/aa/g,'a').replace(/ii/g,'i').replace(/uu/g,'u');
+});}
+export const privatePartyKeys=value=>clean(value).split(/[^\p{L}\p{M}\p{N}]+/u).filter(part=>part.length>=2).flatMap(part=>/[\u0900-\u097f]/u.test(part)?['party-native:'+part,'party-latin:'+partyKey(part)]:['party:'+partyKey(part)]);
+
 export function privateEvidenceValues(value){
   const values=[clean(value)];
   const amount='[0-9]+(?:[., \\p{Quotation_Mark}ʼ]+[0-9]+)*(?:[kmb])?';
@@ -200,19 +213,22 @@ export function privateFieldKeys(value){
   const raw=clean(value);if(!raw||raw.length>4000)return [];
   const term=raw.replace(/^[\p{Quotation_Mark}ʼ]+|[\p{Quotation_Mark}ʼ]+$/gu,''),keys=new Set([raw]),parsed=dates(term),date=parsed.values.filter((value,index)=>{const [a,b]=parsed.spans[index];return ['','the'].includes(term.slice(0,a).trim())&&/^[., ]*$/.test(term.slice(b));});
   for(const n of numeric(term))keys.add('number:'+n);
-  const words=term.match(/[a-z]+/g)||[];
-  if(words.every(word=>numberWords.has(word)))for(const n of wordRuns(term))keys.add('number:'+n);
+  const spoken=stripCurrency(lexicalText(stripCurrency(term)).text),words=spoken.match(/[a-z]+/g)||[];
+  if(words.every(word=>numberWords.has(word)))for(const n of wordRuns(spoken))keys.add('number:'+n);
   for(const {year,month,day} of date)keys.add('date:'+(year==null?'*':String(year).padStart(4,'0'))+'-'+String(month).padStart(2,'0')+'-'+String(day).padStart(2,'0'));
   if(keys.size===1){const key=identifier(term);if(key)keys.add('identifier:'+key);}
   return [...keys];
 }
 export function createPrivateValueMatcher(terms=[]){
-  const retainedNumbers=new Set(),retainedDates=[],literals=[];
+  const retainedNumbers=new Set(),retainedDates=[],literals=[],parties=new Set(),nativeParties=new Set(),latinParties=new Set();
   const expanded=terms.flatMap(raw=>String(raw??'').startsWith('evidence:')?privateEvidenceValues(String(raw).slice(9)):String(raw??'').startsWith('origin:')?privateOriginValues(String(raw).slice(7)):[raw]);
   const compile=term=>{
     if(/^number:[0-9]+(?:\.[0-9]+)?$/.test(term)){const [a,b]=term.slice(7).split('.');retainedNumbers.add(exact(a,b));return true;}
     const tagged=/^date:(\*|[0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(term);
     if(tagged){const value=dateValue(tagged[1]==='*'?null:Number(tagged[1]),Number(tagged[2]),Number(tagged[3]));if(value)retainedDates.push(value);return true;}
+    if(term.startsWith('party-native:')){nativeParties.add(term.slice(13));return true;}
+    if(term.startsWith('party-latin:')){latinParties.add(term.slice(12));return true;}
+    if(term.startsWith('party:')){parties.add(term.slice(6));return true;}
     if(term.startsWith('identifier:')){literals.push(identifierPattern(term.slice(11)));return true;}return false;
   };
   for(const raw of expanded){
@@ -220,8 +236,15 @@ export function createPrivateValueMatcher(terms=[]){
     const keys=privateFieldKeys(term);if(keys.length>1){keys.slice(1).forEach(compile);continue;}
     literals.push(new RegExp(`(?<![\\p{L}\\p{N}_])${escape(term)}(?![\\p{L}\\p{N}_])`,'u'));
   }
-  const matchText=text=>{
+  const partyMatches=(content,ordinary=false)=>{
+    // Generic linguistic discussion is distinguishable from a reference to a
+    // linked party. Ambiguous mentions otherwise stay local, at every boundary.
+    if(ordinary&&/\b(?:surname|given name|word meaning|etymology|name origin)\b/u.test(content)&&!new RegExp(partyReference,'u').test(content))return [];
+    return [...content.matchAll(/[\p{L}\p{M}]+/gu)].filter(m=>/[\u0900-\u097f]/u.test(m[0])?nativeParties.has(m[0])||parties.has(partyKey(m[0])):parties.has(partyKey(m[0]))||latinParties.has(partyKey(m[0])));
+  };
+  const matchText=(text,ordinary=false)=>{
     const content=clean(text);if(privateOriginStart(text)!==null)return true;if(literals.some(pattern=>pattern.test(content)))return true;
+    if(partyMatches(content,ordinary).length)return true;
     const found=dates(content);
     if(found.values.some(current=>retainedDates.some(saved=>saved.month===current.month&&saved.day===current.day&&(saved.year==null||current.year==null||saved.year===current.year))))return true;
     // A two-part dotted rendering can also be an amount. Compare that whole
@@ -233,20 +256,22 @@ export function createPrivateValueMatcher(terms=[]){
   };
   // Decode protocol JSON before checking its values. Keys are data too. The
   // same traversal owns current text, history, tools, responses and writes.
-  const contains=(value,depth=0)=>{
+  const contains=(value,depth=0,ordinary=false)=>{
     if(depth>32)return true;
     if(typeof value==='string'){
-      if(/^[\s]*[\[{\"]/.test(value)){try{const decoded=JSON.parse(value);if(decoded!==value&&contains(decoded,depth+1))return true;}catch{}}
-      return matchText(value);
+      if(/^[\s]*[\[{\"]/.test(value)){try{const decoded=JSON.parse(value);if(decoded!==value&&contains(decoded,depth+1,ordinary))return true;}catch{}}
+      return matchText(value,ordinary);
     }
-    if(typeof value==='number'||typeof value==='bigint')return matchText(String(value));
-    if(Array.isArray(value))return value.some(item=>contains(item,depth+1));
-    return value!=null&&typeof value==='object'&&Object.entries(value).some(([key,item])=>matchText(key)||contains(item,depth+1));
+    if(typeof value==='number'||typeof value==='bigint')return matchText(String(value),ordinary);
+    if(Array.isArray(value))return value.some(item=>contains(item,depth+1,ordinary));
+    return value!=null&&typeof value==='object'&&Object.entries(value).some(([key,item])=>matchText(key,ordinary)||contains(item,depth+1,ordinary));
   };
-  contains.spans=value=>{
+  contains.ordinary=value=>contains(value,0,true);
+  contains.spans=(value,{ordinary=false}={})=>{
     const normalized=normalizePrivateText(value),content=normalized.text,ranges=[];
     const origin=privateOriginStart(value);if(origin!==null)ranges.push([origin,String(value??'').length]);
     const add=(start,end)=>{if(end>start&&normalized.origins[start]&&normalized.origins[end-1])ranges.push([normalized.origins[start].start,normalized.origins[end-1].end]);};
+    for(const match of partyMatches(content,ordinary))add(match.index,match.index+match[0].length);
     for(const pattern of literals)for(const match of content.matchAll(new RegExp(pattern.source,'gu')))add(match.index,match.index+match[0].length);
     const found=dates(content),masked=content.split('');
     for(const [i,current] of found.values.entries()){

@@ -147,6 +147,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
           privateMemory??=store.privateChatMemory({messageId:turnId});return privateMemory.read(...args);
         },
         containsPrivate:value=>privateMemory?.containsPrivate(value)??true,
+        containsOrdinary:value=>privateMemory?.containsOrdinary(value)??privateMemory?.containsPrivate(value)??true,
         privateSpans:value=>privateMemory?.privateSpans(value)||[],
         append:(...args)=>privateMemory.append(...args),
       };

@@ -10,7 +10,7 @@ import {createClient} from '@supabase/supabase-js';
 const name=value=>{if(!/^[a-z_][a-z0-9_]*$/i.test(value))throw Error('unsupported fixture identifier');return `"${value}"`;};
 const parameter=value=>value&&typeof value==='object'?JSON.stringify(value):value;
 export const OFFLINE_SQL_BOOTSTRAP=`create role anon;create role authenticated;create role service_role bypassrls;
-    create schema auth;create schema storage;
+    create schema auth;create schema storage;alter default privileges in schema public grant all on tables to anon,authenticated,service_role;alter default privileges in schema public grant all on sequences to anon,authenticated,service_role;
     create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}');
     create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
     create function auth.role() returns text language sql stable as $$select nullif(current_setting('request.jwt.claim.role',true),'')$$;
@@ -42,14 +42,6 @@ async function createFixtureDatabase(excludeMigrations){
   try{
   await db.exec(OFFLINE_SQL_BOOTSTRAP);
   for(const [,sql] of migrations)await db.exec(sql.replace('create extension if not exists pgcrypto;',''));
-  await db.exec('grant all on all tables in schema public to service_role;grant all on all sequences in schema public to service_role');
-  // Match the production privacy ACLs; the legacy broad fixture grant above
-  // must not silently make service-only progress writable or terms editable.
-  if(!excludeMigrations.includes('20261101120327_private_whatsapp_chat_memory.sql'))await db.exec(`
-    revoke all on whatsapp_provider_memory,whatsapp_private_invoice_terms,whatsapp_private_invoice_backfill from service_role;
-    grant select,insert,delete on whatsapp_provider_memory to service_role;
-    grant select,insert on whatsapp_private_invoice_terms to service_role;
-    grant select on whatsapp_private_invoice_backfill to service_role;`);
   if(!excludeMigrations.includes('20261101120327_private_whatsapp_chat_memory.sql'))for(;;){
     const result=await db.exec(privateBackfillBatchSQL());
     if(result.find(item=>item.rows?.[0]?.result)?.rows[0].result.allComplete)break;

@@ -85,7 +85,7 @@ export function createPrivateChatProvider({providerFactory, options, message, lo
       if (localOnly) return {content:PRIVATE_CHAT_REPLY,toolCalls:[],model:null};
       history ??= memory ? await memory.read(message,{allowPrivateCurrent:true}) : [];
       if(history===null)return {content:PRIVATE_CHAT_REPLY,toolCalls:[],model:null};
-      selection ??= ordinaryPart(message,text=>privateChatTopic(text)||memory?.containsPrivate(text),text=>[...privateChatSpans(text),...(memory?.privateSpans?.(text)||[])]);
+      selection ??= ordinaryPart(message,text=>privateChatTopic(text)||(memory?.containsOrdinary?.(text)??memory?.containsPrivate(text)),text=>[...privateChatSpans(text),...(memory?.privateSpans?.(text)||[])]);
       if(!selection.text)return {content:PRIVATE_CHAT_REPLY,toolCalls:[],model:null};
       const currentTools=[];
       for(const turn of request.messages||[]){

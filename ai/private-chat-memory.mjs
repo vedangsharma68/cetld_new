@@ -17,16 +17,17 @@ export function createPrivateChatMemory({supabase,scope}) {
     q=audience==='owner'?q.eq('owner_id',ownerId):q.eq('customer_id',customerId);
     return q;
   };
-  let appended=false,privateTerms=[],matchPrivate=()=>false;
+  let appended=false,privateTerms=[],matchPrivate=()=>true;
   const containsPrivate=text=>matchPrivate(text);
+  const containsOrdinary=text=>matchPrivate.ordinary?matchPrivate.ordinary(text):matchPrivate(text);
   const retainOrigin=async message=>{
     if(privateOriginStart(message)===null)return;
     const retained=data(await supabase.rpc('whatsapp_retain_private_chat_origin',{p_workspace_id:workspaceId,p_text:message}));
     if(retained!==true)throw Object.assign(new Error('Private origin retention unavailable'),{code:'CHAT_MEMORY_UNAVAILABLE'});
   };
   return {
-    containsPrivate,retainOrigin,
-    privateSpans:text=>matchPrivate.spans?.(text)||[],
+    containsPrivate,containsOrdinary,retainOrigin,
+    privateSpans:text=>matchPrivate.spans?.(text,{ordinary:true})||[],
     async read(message,{allowPrivateCurrent=false}={}){
       const readiness=data(await supabase.from('whatsapp_private_invoice_backfill').select('complete').limit(4));
       if(!Array.isArray(readiness)||readiness.length!==4||readiness.some(row=>row.complete!==true))
@@ -44,9 +45,9 @@ export function createPrivateChatMemory({supabase,scope}) {
         privateTerms.push(...page.map(row=>row.term));
       }
       matchPrivate=createPrivateValueMatcher(privateTerms);
-      if(!allowPrivateCurrent&&containsPrivate(message))return null;
+      if(!allowPrivateCurrent&&containsOrdinary(message))return null;
       const eligible=row=>row.provenance===PROVENANCE&&['user','assistant'].includes(row.role)
-        &&typeof row.content==='string'&&row.content.length<=4000&&!privateChatTopic(row.content)&&!containsPrivate(row.content);
+        &&typeof row.content==='string'&&row.content.length<=4000&&!privateChatTopic(row.content)&&!containsOrdinary(row.content);
       const ordinary=rows.filter(eligible);
       let historyPage=rows;
       // Later invoice evidence can taint a previously ordinary quotation. Fill
@@ -58,7 +59,7 @@ export function createPrivateChatMemory({supabase,scope}) {
       return ordinary.slice(0,20).reverse().map(({role,content})=>({role,content}));
     },
     async append(message,answer){
-      if(appended||privateChatTopic(message)||privateChatTopic(answer)||containsPrivate(message)||containsPrivate(answer))return;
+      if(appended||privateChatTopic(message)||privateChatTopic(answer)||containsOrdinary(message)||containsPrivate(answer))return;
       const rows=[['user',message],['assistant',answer]].map(([role,content])=>({workspace_id:workspaceId,
         owner_id:audience==='owner'?ownerId:null,customer_id:audience==='customer'?customerId:null,
         phone,audience,source_message_id:messageId,role,content,provenance:PROVENANCE}));

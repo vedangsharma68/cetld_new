@@ -205,7 +205,7 @@ must belong to the exact issued call. Local domain results stay local even when
 not yet represented by a retained literal.
 
 SQL and JS use identical generated Unicode 17 data: compatibility decomposition,
-locale-independent upper/lower caseless folding, combining-mark and Cf removal,
+locale-independent upper/lower caseless folding, Latin diacritic/Cf/variation-selector removal (essential Indic vowel marks are preserved),
 a shared White_Space fold (including U+0085 and NBSP), and native decimal digits.
 Arabic decimal/thousands punctuation normalizes with the numeric separators.
 `generate-private-value-unicode.mjs --check` and
@@ -283,7 +283,7 @@ backfill, local review, menus, both audiences, memory, receipts and failures.
 
 The **unapplied** `20261101120327_private_whatsapp_chat_memory.sql` retains
 shared Unicode folding, canonical numeric/word/date/name/evidence aliases, linked
-customer retention and company-name backfill. All eight canonicalization helpers
+customer retention and company-name backfill. All ten canonicalization helpers
 are immutable invokers with empty search_path and direct EXECUTE revoked from
 PUBLIC/anon/authenticated/service_role. Retention helpers and trigger functions
 are also restricted; the one runtime origin-retention RPC is service-role only.
@@ -291,32 +291,25 @@ Original invoice/audit/mark data is not rewritten, rolled back or unmarked.
 
 ### Bounded-lock installation and backfill
 
-1. Audit the final SQL hash and apply the DDL transaction. It sets **1s
-   lock_timeout** and **5s statement_timeout**, installs additive tables/helpers
-   and capture triggers, creates four cursor slots, and commits. It performs
-   **no source scan or full backfill under DDL locks**. If lock acquisition fails,
-   the entire transaction rolls back and can be retried.
-2. With the operator's normal `PGHOST`/`PGPORT`/`PGUSER`/`PGDATABASE` credentials
-   configured outside argv/logs, run `node scripts/backfill-private-invoice-terms.mjs`
-   (optional first argument: batch size **1..100**, default **25**). Requires a
-   database owner/operator; the batch function in `app` is not granted to API
-   roles. The runner uses a **separate transaction/connection per batch**, setting
-   **250ms lock_timeout** and **5s statement_timeout before the SELECT**. A function
-   setting alone is not used to claim a running statement timeout.
-3. Each source captures its indexed upper watermark in its first batch, then
-   advances an ordered primary-key cursor. Work yields between records after
-   approximately 500ms. Capture triggers retain **OLD and NEW** values during
-   concurrent updates/deletes, including linked customers and quotation sources;
-   inserts behind/outside the watermark are already retained by triggers. The
-   batch reads existing source tables with AccessShareLock, compatible with
-   ordinary RowExclusiveLock writes. Progress-row locks apply only to the new
-   cursor table; workers use SKIP LOCKED. New private-term uniqueness conflicts
-   can briefly serialize matching writes; the runner timeout bounds contention.
-4. Alias writes and cursor advancement commit together. Failure rolls both back;
-   rerun the same command to resume idempotently. Do not wrap the runner in one
-   outer transaction. Keep four-source completion metadata intact. Chat memory
-   **fails closed until all four sources finish**; deterministic menus/reads and
-   local invoice processing remain local. Deploy application code after completion.
+Follow [the mandatory fenced cutover procedure](private-chat-rollout.md).
+Old deployed code ignores readiness; applying this migration does not stop it.
+An externally enforced `/api/` ingress fence, paused processing callers and a
+verified drain to zero must precede the schema/application transition. Keep it
+closed until truthful backfill completion and all serving code is new. If the
+operator cannot enforce/verify this maintenance boundary, do not cut over.
+
+The atomic DDL uses 1s lock_timeout and 5s statement_timeout, installs capture
+triggers and four incomplete cursor slots, and performs no source scan under
+DDL locks. The separate operator runner commits each batch, with 250ms lock and
+5s statement timeouts established before SELECT. Default/max row caps are 25/100;
+a soft 500ms yield is not a promised batch size or duration. Source watermarks
+and cursors are ordered by qualified native bigint/UUID IDs; never by projected
+text aliases. Every historical row through its watermark must be scanned.
+Source relations take AccessShareLock during batches. OLD/NEW capture preserves
+concurrent writes/deletes; alias and cursor writes roll back/resume together.
+Until all four cursors complete, new chat stores fail closed, including before
+any read. Deterministic menus/reads remain available. New private-term uniqueness
+contention is bounded by the runner timeouts; source data is never cleared.
 
 The four sources are invoices (including linked customer fields), pending invoice
 reviews (including printed evidence/owner corrections), owner audit quotations and
@@ -339,3 +332,44 @@ or homoglyphs beyond compatibility/combining-mark/Cf normalization, and resolvin
 relative dates when no retained value is restated. These are not universal
 semantic DLP guarantees. Ordinary short dates, native decimal digits and the
 supported natural number grammar are covered, not residuals.
+
+
+### Round-5 language, identity and privilege discipline
+
+Currency affixes compose with cardinal/decimal/scaled phrases and `/−` printed
+amount suffixes at both retention and match time. Shared Hindi 0–99 cardinal
+atoms/scales and month names feed the existing English grammar; native digits
+and Unicode vulgar fractions use the same generated normalization data. Fraction
+keys use the same 20-place truncation rule in both engines for non-terminating
+rational expansions; finite monetary fractions stay exact. This does not infer
+translations into every language.
+
+Linked customer names/company names additionally retain typed party-component
+keys. Whole-field Unicode keys retain distinguishing Indic marks. Native party
+keys remain script-specific: किरण/करण, कमल/कोमल and राम/रम are distinct. Additional
+Latin transliterations are used across scripts; a native-to-native match never
+uses that lossy Latin key. Roman spellings can be ambiguous, so linked references
+fail closed. Raw review/customerName fields retain party provenance too.
+
+Name specificity matrix: unretained Sharma stays ordinary; linked Ask Anurag /
+ask Sharma / अनुराग / शर्मा references stay local; Sharmila/Anuradha stay ordinary;
+explicit linguistic discussion such as `Sharma is a common surname` stays
+ordinary. This exception is only for positively ordinary chat/history screening;
+tool values, responses and memory answers use strict component screening.
+Ambiguous narrative mentions of a linked component stay local. Generic raw terms
+and identifiers keep their existing whole-token matching behavior.
+
+SQL Unicode categories are generated from JS properties with regex metacharacters
+escaped for both SQL and regex decoding. Origin positions use actual regex match
+offsets, not first-substring search. Parity tests compare complete field/party/
+origin key sets, including symbols, repeated headers, Hindi and vulgar fractions.
+The SQL Unicode map is a cached PL/pgSQL constant: changed ledger writes retain
+OLD/NEW values without re-planning the giant map at every field; no-op updates
+avoid duplicate capture. Capture exceptions still roll back source writes.
+
+The fixture installs realistic Supabase table/sequence defaults for all three
+API roles. The migration explicitly revokes every role, including service_role,
+then grants only the intended access. No post-migration fixture ACL repair is
+allowed. The release glob includes a pinned, test-only embedded native PostgreSQL
+server proving effective ACLs, adversarial watermarks, locks/timeouts/rollback/
+resume and representative 59-row write latency. No external database is used.
