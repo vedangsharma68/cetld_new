@@ -1,3 +1,4 @@
+import {privateBackfillBatchSQL} from '../../scripts/backfill-private-invoice-terms.mjs';
 import {readFile,readdir} from 'node:fs/promises';
 import {cachedEmptySchema,emptySchemaKey} from './empty-schema-cache.mjs';
 import {PGlite} from '@electric-sql/pglite';
@@ -8,22 +9,7 @@ import {createClient} from '@supabase/supabase-js';
 // never forwards a request to a network, and rejects unsupported query shapes.
 const name=value=>{if(!/^[a-z_][a-z0-9_]*$/i.test(value))throw Error('unsupported fixture identifier');return `"${value}"`;};
 const parameter=value=>value&&typeof value==='object'?JSON.stringify(value):value;
-async function createFixtureDatabase(excludeMigrations){
-  const files=(await readdir(new URL('../../supabase/migrations/',import.meta.url))).filter(file=>file.endsWith('.sql') && !['20261023164251_exact_reminder_approval_artifact.sql','20261023083356_per_message_reminder_review.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060000_customer_reminder_tone.sql','20261018060100_invoice_details_templates.sql','20261018090021_remove_stop_footer.sql','20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql'].includes(file) && !excludeMigrations.includes(file)).sort();
-  const migrations=await Promise.all(files.map(async file=>[file,await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8')]));
-  // Include schema/bootstrap code, helper, lockfile and runtime/tool dimensions.
-  const directory=process.env.CETLD_SQL_FIXTURE_CACHE_DIR;
-  const key=directory?emptySchemaKey([await readFile(new URL(import.meta.url),'utf8'),
-    await readFile(new URL('./empty-schema-cache.mjs',import.meta.url),'utf8'),
-    await readFile(new URL('../../package-lock.json',import.meta.url),'utf8'),migrations]):null;
-  return cachedEmptySchema({directory,key,
-    restore:async archive=>{
-      const db=new PGlite({loadDataDir:archive});
-      try{await db.waitReady;return db;}catch(error){await db.close().catch(()=>{});throw error;}
-    },create:async()=>{
-  const db=new PGlite();
-  try{
-  await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;
+export const OFFLINE_SQL_BOOTSTRAP=`create role anon;create role authenticated;create role service_role bypassrls;
     create schema auth;create schema storage;
     create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}');
     create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
@@ -33,9 +19,41 @@ async function createFixtureDatabase(excludeMigrations){
     grant execute on function auth.uid(),auth.role() to authenticated,anon,service_role;
     create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
     create table storage.objects(id uuid default gen_random_uuid(),bucket_id text,name text);
-    alter table storage.objects enable row level security;`);
+    alter table storage.objects enable row level security;`;
+
+export async function offlineSqlMigrationSources(excludeMigrations=[]){
+  const files=(await readdir(new URL('../../supabase/migrations/',import.meta.url))).filter(file=>file.endsWith('.sql') && !['20261023164251_exact_reminder_approval_artifact.sql','20261023083356_per_message_reminder_review.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060000_customer_reminder_tone.sql','20261018060100_invoice_details_templates.sql','20261018090021_remove_stop_footer.sql','20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql'].includes(file) && !excludeMigrations.includes(file)).sort();
+  const migrations=await Promise.all(files.map(async file=>[file,await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8')]));
+  return migrations;
+}
+async function createFixtureDatabase(excludeMigrations){
+  const migrations=await offlineSqlMigrationSources(excludeMigrations);
+  // Include schema/bootstrap code, helper, lockfile and runtime/tool dimensions.
+  const directory=process.env.CETLD_SQL_FIXTURE_CACHE_DIR;
+  const key=directory?emptySchemaKey([await readFile(new URL(import.meta.url),'utf8'),
+    await readFile(new URL('./empty-schema-cache.mjs',import.meta.url),'utf8'),
+    await readFile(new URL('../../package-lock.json',import.meta.url),'utf8'),await readFile(new URL('../../scripts/backfill-private-invoice-terms.mjs',import.meta.url),'utf8'),migrations]):null;
+  return cachedEmptySchema({directory,key,
+    restore:async archive=>{
+      const db=new PGlite({loadDataDir:archive});
+      try{await db.waitReady;return db;}catch(error){await db.close().catch(()=>{});throw error;}
+    },create:async()=>{
+  const db=new PGlite();
+  try{
+  await db.exec(OFFLINE_SQL_BOOTSTRAP);
   for(const [,sql] of migrations)await db.exec(sql.replace('create extension if not exists pgcrypto;',''));
   await db.exec('grant all on all tables in schema public to service_role;grant all on all sequences in schema public to service_role');
+  // Match the production privacy ACLs; the legacy broad fixture grant above
+  // must not silently make service-only progress writable or terms editable.
+  if(!excludeMigrations.includes('20261101120327_private_whatsapp_chat_memory.sql'))await db.exec(`
+    revoke all on whatsapp_provider_memory,whatsapp_private_invoice_terms,whatsapp_private_invoice_backfill from service_role;
+    grant select,insert,delete on whatsapp_provider_memory to service_role;
+    grant select,insert on whatsapp_private_invoice_terms to service_role;
+    grant select on whatsapp_private_invoice_backfill to service_role;`);
+  if(!excludeMigrations.includes('20261101120327_private_whatsapp_chat_memory.sql'))for(;;){
+    const result=await db.exec(privateBackfillBatchSQL());
+    if(result.find(item=>item.rows?.[0]?.result)?.rows[0].result.allComplete)break;
+  }
   return db;
   }catch(error){await db.close();throw error;}
   }});
@@ -45,7 +63,7 @@ export async function createOfflineSqlNetwork({externalFetch,excludeMigrations=[
   // Historical reminder fixtures install shared owner history later themselves;
   // its offline provenance extension must not create that function prematurely.
   if(excludeMigrations.includes('20261023061702_shared_owner_assistant.sql'))
-    excludeMigrations=[...excludeMigrations,'20261028030825_offline_invoice_review_corrections.sql'];
+    excludeMigrations=[...excludeMigrations,'20261028030825_offline_invoice_review_corrections.sql','20261101120327_private_whatsapp_chat_memory.sql'];
   if(excludeMigrations.some(file=>['20261026090000_contain_unproven_external_reminders.sql','20261026110000_zoho_prospective_operation_foundation.sql'].includes(file)))
     excludeMigrations=[...excludeMigrations,'20261026141000_zoho_capture_completion_protocol.sql'];
   if(excludeMigrations.includes('20261026141000_zoho_capture_completion_protocol.sql'))

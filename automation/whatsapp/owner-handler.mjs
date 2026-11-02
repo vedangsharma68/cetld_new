@@ -103,6 +103,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     // Keep the provider text byte-for-byte equivalent to the persisted turn.
     // Lifecycle RPCs validate exact provider message ID and stored content.
     const message=String(scope.message||'');
+    const privateMemory=createPrivateChatMemory({supabase,scope:{...scope,audience:'owner'}});
+    await privateMemory.retainOrigin(message);
     let timezone='Asia/Kolkata';
     onProgress('context');
     let pending,pendingStoreAvailable=true;
@@ -290,7 +292,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
       ?sanitizeModelSettings({primaryModel:settings.primary_model,fallbackModel:settings.fallback_model})
       :sanitizeModelSettings({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null});
     const config=privateChatModelSettings(rawConfig);
-    const provider=createPrivateChatProvider({providerFactory,message,localOnly:Boolean(media||mediaError),memory:createPrivateChatMemory({supabase,scope:{...scope,audience:'owner'}}),options:{...config,
+    const provider=createPrivateChatProvider({providerFactory,message,localOnly:Boolean(media||mediaError),memory:privateMemory,options:{...config,
       cfAccountId:env.CLOUDFLARE_ACCOUNT_ID,cfApiToken:env.CLOUDFLARE_API_TOKEN,
       fetchImpl,timeoutMs:15000,maxAttempts:2,healthStore}});
     // Store adapters invoke authorize() without arguments. Always authorize the

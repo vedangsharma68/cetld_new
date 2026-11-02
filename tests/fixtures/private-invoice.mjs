@@ -30,8 +30,8 @@ const deny=()=>{assert.fail('No provider factory, model classifier, or external 
 export const imageExtractor=printed=>request=>extractInvoiceFromImage({...request,preprocessor:async bytes=>bytes,
   workerFactory:async()=>({recognize:async()=>({data:{text:printed,confidence:99}}),terminate:async()=>{}})});
 
-export async function fixture({recording=false,providerFactory:providedFactory,navigation=false}={}){
-  const f=await createOfflineSqlNetwork(),ownerId=randomUUID();
+export async function fixture({recording=false,providerFactory:providedFactory,navigation=false,sqlNetworkOptions={}}={}){
+  const f=await createOfflineSqlNetwork(sqlNetworkOptions),ownerId=randomUUID();
   await f.db.query('insert into auth.users(id) values($1)',[ownerId]);
   await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
   const workspaceId=(await f.db.query('select (public.create_workspace($1,$2)).id',['Offline Studio',randomUUID()])).rows[0].id;

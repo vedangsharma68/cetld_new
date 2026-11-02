@@ -13,3 +13,17 @@ export const fractions={half:2n,halves:2n,quarter:4n,quarters:4n};
 export const evidenceLabel='^[a-z_][a-z0-9_ .#%()/-]{0,80}[:=] *';
 export const evidenceNumericLabel='^[a-z_][a-z_ .#%()/-]{0,80} +(?=[0-9+−\\p{Sc}-])';
 export const evidenceDateLabel='^(?:invoice +date|due(?: +date)?|date)(?![a-z])';
+// Shared canonical grammar: SQL is generated from these same expressions.
+export const currencyUnitPattern=units.replace('|rs|','|rs\\.?|');
+export const namedDayPattern=`(?:[0-9]{1,2}(?:st|nd|rd|th)?|${ordinals.map(day=>day.replaceAll(' ','[ -]+')).join('|')})`;
+export const dateSeparator='[ ./-]*';
+export const namedYearTail=`(?:[ ,./-]*['’ʼ]? *([0-9]{4}|[0-9]{2}|[0-9]{1,3}))?`;
+export const namedDatePatterns=[
+ `(?:the +)?(${namedDayPattern})${dateSeparator}(?:of +)?(${monthPattern})${namedYearTail}`,
+ `(${monthPattern})${dateSeparator}(?:the +)?(${namedDayPattern})${namedYearTail}`,
+];
+const financialQuoteHint='(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]* *, *due +[0-9])';
+export const privateOriginHeader=`(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*${financialQuoteHint})|(?:invoice|bill|receipt) *(?=[:,]))`;
+export const privateOriginFieldLabel='^(?:due(?: +date)?|invoice +date|bill +to|customer(?: +name)?|client(?: +name)?|amount|total) *(?::|=|is +)? *';
+const namedBareDates=[`(?:the +)?${namedDayPattern}${dateSeparator}(?:of +)?${monthPattern}`,`${monthPattern}${dateSeparator}(?:the +)?${namedDayPattern}`];
+export const originDateCommaPattern=`(${namedBareDates.join('|')}) *, *(['’ʼ]?[0-9]{4}|['’ʼ]?[0-9]{2})(?![0-9])`;

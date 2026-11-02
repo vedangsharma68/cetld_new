@@ -10,8 +10,8 @@ import {normalizedPrivateVariants,normalizedOrdinaryControls} from './fixtures/p
 // provider messages, not merely an extraction callback or provider call count.
 function harness({terms=['1250','anurag','2026-10-31'],history=[],response='Hello there',failure=false}={}){
   const payloads=[],writes=[];
-  const supabase={from(table){const q={select(){return q},eq(){return q},order(){return q},
-    async limit(){return {data:history}},async range(){return failure?{error:{code:'UNAVAILABLE'}}:{data:table==='whatsapp_private_invoice_terms'?terms.map(term=>({term})):[]}},
+  const supabase={async rpc(name,args){assert.equal(name,'whatsapp_retain_private_chat_origin');assert.equal(typeof args.p_text,'string');return {data:true};},from(table){const q={select(){return q},eq(){return q},order(){return q},
+    async limit(){return {data:table==='whatsapp_private_invoice_backfill'?Array.from({length:4},()=>({complete:true})):history}},async range(){return failure?{error:{code:'UNAVAILABLE'}}:{data:table==='whatsapp_private_invoice_terms'?terms.map(term=>({term})):[]}},
     async insert(rows){writes.push(...rows);return {data:null}}};return q;}};
   const memory=createPrivateChatMemory({supabase,scope:{workspaceId:'w',ownerId:'o',phone:'+12025550101',audience:'owner',messageId:'m'}});
   const provider=message=>createPrivateChatProvider({message,memory,options:{},providerFactory:()=>({async generate(request){payloads.push(JSON.parse(JSON.stringify(request.messages)));return typeof response==='function'?response(request):{content:response};}})});

@@ -1,4 +1,4 @@
-import {ordinaryPart} from '../../ai/private-value-matcher.mjs';
+import {ordinaryPart,privateOriginStart} from '../../ai/private-value-matcher.mjs';
 import {createPrivateChatMemory} from '../../ai/private-chat-memory.mjs';
 import {createPrivateChatProvider, localReviewTurn, privateChatSpans, privateChatTopic, PRIVATE_CHAT_REPLY, CHAT_UNAVAILABLE_REPLY} from '../../ai/private-chat.mjs';
 import {invoiceReadQuestion, invoiceRowsAnswer, customerInvoiceRows} from './private-invoice-read.mjs';
@@ -279,6 +279,18 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       if (signal?.aborted || (Number.isFinite(deadlineAt) && Date.now() >= deadlineAt)) throw Object.assign(new Error('Inbound processing deadline expired'), {name: 'AbortError'});
     };
     active();
+    const privateMemory=createPrivateChatMemory({supabase,scope:{workspaceId,customerId,phone,messageId,audience}});
+    const eligible=async()=>authorizeScope?{allowed:await authorizeScope({workspaceId,customerId,phone}),customer:{id:customerId}}
+      :getSendEligibility({supabase,workspaceId,phone,category:'invoice_updates'});
+    // Source text remains private even when this turn returns locally before
+    // constructing a provider. Media receipts retain their no-write refusal.
+    if(!media&&!mediaError){
+      if(privateOriginStart(message)!==null){
+        const eligibility=await eligible();
+        if(!eligibility.allowed||eligibility.customer?.id!==customerId)return 'Verify your number in cetld to discuss account details.';
+        try{await privateMemory.retainOrigin(message);}catch{return CHAT_UNAVAILABLE_REPLY;}
+      }
+    }
     if(audience!=='owner'&&(media||mediaError||/\b(?:change|chnge|set|edit|modify|fix|update|mark)\b/i.test(message||'')&&(privateChatTopic(message)||/\b(?:amount|its|it|this|that)\b/i.test(message||''))&&!(ordinaryPart(message,privateChatTopic,privateChatSpans).mixed&&ordinaryPart(message,privateChatTopic,privateChatSpans).text))){
       return media||mediaError ? 'Payment receipts cannot be recorded from customer photos here. Ask the business owner to verify and record the payment. Nothing was changed.' : 'Only the business owner can create or change invoices. Contact the business for help.';
     }
@@ -295,12 +307,10 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       fallbackModel: settings?.fallback_model});
     const offline = true; // Invoice extraction is always local, with either flag setting.
     const offlineTurn=Boolean(media || mediaError);
-    const provider=createPrivateChatProvider({providerFactory,message,memory:createPrivateChatMemory({supabase,scope:{workspaceId,customerId,phone,messageId,audience}}),options:{...models,
+    const provider=createPrivateChatProvider({providerFactory,message,memory:privateMemory,options:{...models,
       cfAccountId:env.CLOUDFLARE_ACCOUNT_ID,cfApiToken:env.CLOUDFLARE_API_TOKEN,
       fetchImpl,timeoutMs:8000,maxAttempts:1}});
     const pending = pendingActionStoreFactory({supabase});
-    const eligible=async()=>authorizeScope?{allowed:await authorizeScope({workspaceId,customerId,phone}),customer:{id:customerId}}
-      :getSendEligibility({supabase,workspaceId,phone,category:'invoice_updates'});
     const channel = channelFactory({supabase, provider,allowInvoiceWrites:audience==='owner'&&Boolean(authorizeScope),
       ...pending,
       answer:async({provider,message})=>{

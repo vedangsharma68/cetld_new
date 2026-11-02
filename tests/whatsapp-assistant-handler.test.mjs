@@ -7,7 +7,7 @@ const scope = {workspaceId: 'workspace-a', customerId: 'customer-a', phone: '+91
 
 function fakeSupabase({customerId = 'customer-a', turns = [], memoryError = null} = {}) {
   return {rpc() {}, from(table) {
-    if(['whatsapp_provider_memory','whatsapp_private_invoice_terms'].includes(table)){const q={select(){return q},eq(){return q},order(){return q},limit:async()=>({data:[]}),range:async()=>({data:[]}),insert:async()=>({data:[]})};return q;}
+    if(['whatsapp_provider_memory','whatsapp_private_invoice_terms','whatsapp_private_invoice_backfill'].includes(table)){const q={select(){return q},eq(){return q},order(){return q},limit:async()=>({data:table==='whatsapp_private_invoice_backfill'?Array.from({length:4},()=>({complete:true})):[]}),range:async()=>({data:[]}),insert:async()=>({data:[]})};return q;}
     if (table === 'whatsapp_conversation_turns') {
       if (memoryError) throw memoryError;
       const query = {select() { return query; }, eq() { return query; }, order() { return query; },

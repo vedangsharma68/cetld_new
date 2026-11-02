@@ -20,6 +20,7 @@ const matches = (row, filter) => filter(row);
 export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallbackModel = CF_BACKUP_MODEL} = {}) {
   const now = DEFAULT_NOW.toISOString();
   const tables = {
+    whatsapp_private_invoice_backfill:['invoices','reviews','owner_quotes','customer_quotes'].map(source=>({source,complete:true})),
     workspace_ai_settings: [{workspace_id:OWNER_CHAT_SCOPE.workspaceId,primary_model:primaryModel,fallback_model:fallbackModel,updated_at:now}],
     workspaces:[{id:OWNER_CHAT_SCOPE.workspaceId,owner_id:OWNER_CHAT_SCOPE.ownerId}],
     workspace_members:[{workspace_id:OWNER_CHAT_SCOPE.workspaceId,user_id:OWNER_CHAT_SCOPE.ownerId,role:'owner'}],

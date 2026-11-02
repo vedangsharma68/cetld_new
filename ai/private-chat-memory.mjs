@@ -1,4 +1,4 @@
-import {createPrivateValueMatcher} from './private-value-matcher.mjs';
+import {createPrivateValueMatcher,privateOriginStart} from './private-value-matcher.mjs';
 import {randomUUID} from 'node:crypto';
 import {privateChatTopic} from './private-chat.mjs';
 
@@ -19,10 +19,21 @@ export function createPrivateChatMemory({supabase,scope}) {
   };
   let appended=false,privateTerms=[],matchPrivate=()=>false;
   const containsPrivate=text=>matchPrivate(text);
+  const retainOrigin=async message=>{
+    if(privateOriginStart(message)===null)return;
+    const retained=data(await supabase.rpc('whatsapp_retain_private_chat_origin',{p_workspace_id:workspaceId,p_text:message}));
+    if(retained!==true)throw Object.assign(new Error('Private origin retention unavailable'),{code:'CHAT_MEMORY_UNAVAILABLE'});
+  };
   return {
-    containsPrivate,
+    containsPrivate,retainOrigin,
     privateSpans:text=>matchPrivate.spans?.(text)||[],
     async read(message,{allowPrivateCurrent=false}={}){
+      const readiness=data(await supabase.from('whatsapp_private_invoice_backfill').select('complete').limit(4));
+      if(!Array.isArray(readiness)||readiness.length!==4||readiness.some(row=>row.complete!==true))
+        throw Object.assign(new Error('Chat privacy backfill is not complete'),{code:'CHAT_MEMORY_UNAVAILABLE'});
+      // Retain private-origin atomic fields before loading history/keys. A
+      // canceled review or process restart cannot turn its fragments ordinary.
+      await retainOrigin(message);
       const [historyResult,termsResult]=await Promise.all([query().order('id',{ascending:false}).limit(20),
         supabase.from('whatsapp_private_invoice_terms').select('term').eq('workspace_id',workspaceId).order('term_hash').range(0,499)]);
       const rows=data(historyResult)||[];

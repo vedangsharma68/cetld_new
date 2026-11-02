@@ -193,7 +193,7 @@ configure platform rate limits/usage quotas. Per-request size/tool/time limits
 are enforced here; distributed usage billing/rate limiting is not implemented.
 
 
-## Private-value containment (PR #211, repair round 3)
+## Private-value containment (PR #211, repair round 4)
 
 All production WhatsApp and web Assistant chat requests pass
 `createPrivateChatProvider`. Retained values are screened with the same matcher
@@ -210,7 +210,10 @@ a shared White_Space fold (including U+0085 and NBSP), and native decimal digits
 Arabic decimal/thousands punctuation normalizes with the numeric separators.
 `generate-private-value-unicode.mjs --check` and
 `generate-private-value-sql.mjs --check` verify committed artifacts; the language
-vocabulary and date pivot come from `private-value-language.mjs`.
+vocabulary, named-date patterns, quote-origin grammar and date pivot come from
+`private-value-language.mjs`. `privateFieldKeys` constructs field keys in JS;
+SQL generation uses this same declarative grammar, and tests compare exact key
+sets (including retained alias reload), not only boolean matches.
 
 Numbers use exact decimal strings/BigInt. Complete valid international/Indian
 comma/dot/space/apostrophe groups remain one value (`1 250` is not `1` and `250`).
@@ -222,10 +225,15 @@ amount when that interpretation exists, without comparing date components. Curre
 parenthesized scalar strings retain the magnitude conservatively. Decimal-comma,
 trailing-zero, k/m/b multipliers, cardinal number phrases with comma/&/and
 connectors, decimal phrases and common fractional/scaled phrases are normalized.
+Strict cardinal groups keep spoken-list members separate instead of adding
+an independent tens group. Mixed digit/word forms (`1 thousand 250`,
+`12 hundred and 50`) use the same group grammar. Currency word affixes include
+`Rs.` with or without spacing. Decorative quotation marks are normalized.
 Typed `number:` aliases prevent canonical decimals gaining another thousands
 interpretation on reload. Whole tokens distinguish 100/1000 and ann/planning.
-Alphanumeric identifiers compare independently of punctuation/spacing, while
-INV-12 and INV-123 remain different.
+Alphabetic business names and alphanumeric identifiers compare independently
+of punctuation/spacing. Whole-word `and` and `&` share a connector key; token
+boundaries keep INV-12 and INV-123 different.
 
 Dates accept dots/slashes/hyphens, DD/MM and MM/DD ambiguity, year-first forms,
 short or full years, yearless numeric forms, English month names in either order,
@@ -233,12 +241,21 @@ ordinal suffixes and English ordinal days first through thirty-first. The shared
 pivot is **00–69 → 2000–2069; 70–99 → 1970–1999**. Explicit years match only the
 same retained year; yearless input matches retained month/day. A truly yearless
 stored date cannot establish a year and remains conservative. Full-year fields
-emit typed year-aware aliases, never lossy month/day aliases.
+emit typed year-aware aliases, never lossy month/day aliases. Named months
+accept adjoining digits and dots/slashes/hyphens (`31Oct`, `Oct31`,
+`31/Oct/26`, `31-Oct-2027`) and apostrophe years. Maximal lexical date spans
+prevent a suffix of a full date becoming a second yearless date.
 
 Complete local text-invoice instructions use the existing guarded parser before
 clause separation. Web memory adapters forward both retained-value and private-span
 checks, so punctuation inside a known name cannot create independent fragments.
-Mixed turns retain whole independently understandable ordinary clauses; there
+Private-origin invoice/bill/receipt quotations remain opaque through the end
+of their payload. Both authorized audience handlers retain their atomic fields
+before local early returns, and the provider memory read does the same before
+loading keys/history. SQL audit triggers retain original and replacement/deleted
+source text too. A later cancel, pruning or restart cannot relabel a field as
+ordinary chat. Generic forwarded number lists do not acquire document provenance.
+Mixed turns (including plain `and`) retain whole independently understandable ordinary clauses; there
 is no ordinary-intent allowlist. Referential/conjunctive fragments and action
 constraints remain local. Original-offset private spans prevent splitting any known field across delimiters.
 Unparsed create/correction statements stay opaque through the end of the turn;
@@ -264,26 +281,58 @@ production-fixture test must show zero calls for retained `Explain 1250` and the
 same sanitized mixed-turn payload. Native SQL tests separately cover retention,
 backfill, local review, menus, both audiences, memory, receipts and failures.
 
-Every SQL change remains in the **unapplied**
-`20261101120327_private_whatsapp_chat_memory.sql`: replace locale-dependent
-normalization with the shared Unicode map; expand the exact-number helper for
-symbols/wrappers/native digits/multipliers; add the immutable invoker word-number
-helper; update term aliases for word/identifier and typed year-aware dates; retain
-linked customer name/company/email/phone on invoice insert/update; add company_name
-to the existing backfill. All helpers retain empty search_path and direct EXECUTE
-revoked from PUBLIC/anon/authenticated/service_role. The existing tables, indexes,
-RLS/service grants, transaction, deduplication and trigger definitions are retained;
-the ledger retention function body now includes the linked customer lookup.
-Printed evidence has an explicit tagged source kind: the new immutable invoker
-`app.private_invoice_evidence_aliases(text)` derives labelled payloads and
-currency-bearing candidates before the first subsequent chat, even when amount
-validation fails. The term retainer expands these aliases, and the review
-trigger/backfill pass a named printedEvidence envelope. JSON numbers use only
-numeric aliases; labelled monetary evidence does not acquire yearless-date
-aliases. Full date fields preserve their explicit year. Direct execution is
-revoked for this helper too. The owner review text is unchanged. No
-original invoice/audit/mark rows are rewritten or unmarked. Re-run the drift,
-atomicity/object-reference and ACL audit on the final migration hash before apply.
+The **unapplied** `20261101120327_private_whatsapp_chat_memory.sql` retains
+shared Unicode folding, canonical numeric/word/date/name/evidence aliases, linked
+customer retention and company-name backfill. All eight canonicalization helpers
+are immutable invokers with empty search_path and direct EXECUTE revoked from
+PUBLIC/anon/authenticated/service_role. Retention helpers and trigger functions
+are also restricted; the one runtime origin-retention RPC is service-role only.
+Original invoice/audit/mark data is not rewritten, rolled back or unmarked.
+
+### Bounded-lock installation and backfill
+
+1. Audit the final SQL hash and apply the DDL transaction. It sets **1s
+   lock_timeout** and **5s statement_timeout**, installs additive tables/helpers
+   and capture triggers, creates four cursor slots, and commits. It performs
+   **no source scan or full backfill under DDL locks**. If lock acquisition fails,
+   the entire transaction rolls back and can be retried.
+2. With the operator's normal `PGHOST`/`PGPORT`/`PGUSER`/`PGDATABASE` credentials
+   configured outside argv/logs, run `node scripts/backfill-private-invoice-terms.mjs`
+   (optional first argument: batch size **1..100**, default **25**). Requires a
+   database owner/operator; the batch function in `app` is not granted to API
+   roles. The runner uses a **separate transaction/connection per batch**, setting
+   **250ms lock_timeout** and **5s statement_timeout before the SELECT**. A function
+   setting alone is not used to claim a running statement timeout.
+3. Each source captures its indexed upper watermark in its first batch, then
+   advances an ordered primary-key cursor. Work yields between records after
+   approximately 500ms. Capture triggers retain **OLD and NEW** values during
+   concurrent updates/deletes, including linked customers and quotation sources;
+   inserts behind/outside the watermark are already retained by triggers. The
+   batch reads existing source tables with AccessShareLock, compatible with
+   ordinary RowExclusiveLock writes. Progress-row locks apply only to the new
+   cursor table; workers use SKIP LOCKED. New private-term uniqueness conflicts
+   can briefly serialize matching writes; the runner timeout bounds contention.
+4. Alias writes and cursor advancement commit together. Failure rolls both back;
+   rerun the same command to resume idempotently. Do not wrap the runner in one
+   outer transaction. Keep four-source completion metadata intact. Chat memory
+   **fails closed until all four sources finish**; deterministic menus/reads and
+   local invoice processing remain local. Deploy application code after completion.
+
+The four sources are invoices (including linked customer fields), pending invoice
+reviews (including printed evidence/owner corrections), owner audit quotations and
+customer audit quotations. No existing history is imported as ordinary memory.
+RLS is enabled on every new public table; completion metadata is read-only for
+service_role. No new provider, external service, schema rollback or unmark is used.
+Rollback means restoring application code first; removal of additive objects is a
+separate operator operation, and original source data remains intact.
+
+`tests/private-invoice-backfill.test.mjs` captures pg_locks inside actual batches,
+checks transaction boundaries, OLD/NEW capture, retry/rollback, RLS and ACLs.
+`scripts/test-private-invoice-backfill-locks.mjs` additionally reproduces native
+PostgreSQL concurrent-writer DDL timeout, source-lock compatibility, actual
+statement timeout, atomic rollback and resume. It refuses non-local or
+non-disposable database targets and is an additional operator test, not a skipped
+release test. PostgreSQL lock semantics: [table-level locks](https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-TABLES).
 
 Residuals: arithmetic-derived expressions, scientific notation, hostile encodings
 or homoglyphs beyond compatibility/combining-mark/Cf normalization, and resolving

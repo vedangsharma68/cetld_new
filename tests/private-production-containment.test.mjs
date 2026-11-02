@@ -20,8 +20,8 @@ const cases=[
 ];
 function boundary({stored=terms,history=[],response='A safe answer'}={}){
   const payloads=[],writes=[];
-  const supabase={from(table){const q={select(){return q},eq(){return q},order(){return q},
-    async limit(){return {data:history}},async range(){return {data:table==='whatsapp_private_invoice_terms'?stored.map(term=>({term})):[]}},async insert(rows){writes.push(...rows);return {data:null}}};return q;}};
+  const supabase={async rpc(name,args){assert.equal(name,'whatsapp_retain_private_chat_origin');assert.equal(typeof args.p_text,'string');return {data:true};},from(table){const q={select(){return q},eq(){return q},order(){return q},
+    async limit(){return {data:table==='whatsapp_private_invoice_backfill'?Array.from({length:4},()=>({complete:true})):history}},async range(){return {data:table==='whatsapp_private_invoice_terms'?stored.map(term=>({term})):[]}},async insert(rows){writes.push(...rows);return {data:null}}};return q;}};
   const memory=createPrivateChatMemory({supabase,scope:{workspaceId:'w',ownerId:'o',audience:'owner',phone:'+123',messageId:'m'}});
   const provider=message=>createPrivateChatProvider({message,memory,options:{},providerFactory:()=>({async generate(request){payloads.push(JSON.parse(JSON.stringify(request.messages)));return typeof response==='function'?response(request):{content:response};}})});
   return {provider,memory,payloads,writes};
@@ -101,10 +101,14 @@ test('F4/F5 invoice insert/update and migration backfill retain linked customer 
     const updated=(await f.db.query('select term from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId])).rows.map(row=>row.term);
     assert.ok(updated.includes('second recipient'));assert.ok(updated.includes('second company'));assert.ok(updated.includes('ilker'));
     await f.db.query("insert into invoices(workspace_id,customer_id,invoice_number,total_amount,currency,status) values($1,$2,'INV-RETENTION-92',1250,'INR','draft')",[f.scope.workspaceId,customer.id]);
-    // Execute the exact migration backfill bytes, not a hand-written substitute.
-    const {readFile}=await import('node:fs/promises');const migration=await readFile(new URL('../supabase/migrations/20261101120327_private_whatsapp_chat_memory.sql',import.meta.url),'utf8');
-    const statement=migration.slice(migration.indexOf('select app.retain_private_invoice_terms(i.workspace_id'),migration.indexOf('-- Reversible'));
-    await f.db.query('delete from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId]);await f.db.exec(statement);
+    // Run the production bounded-batch protocol after simulating a pre-DDL
+    // ledger. Keep every original retention/backfill assertion below.
+    const {runPrivateInvoiceBackfill}=await import('../scripts/backfill-private-invoice-terms.mjs');
+    await f.db.query('delete from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId]);
+    await f.db.exec("update whatsapp_private_invoice_backfill set last_key=null,upper_key=null,complete=false");
+    await runPrivateInvoiceBackfill({batchSize:1,execute:async sql=>{
+      const result=await f.db.exec(sql);return result.find(item=>item.rows?.[0]?.result)?.rows[0].result;
+    }});
     assert.equal(createPrivateValueMatcher((await f.db.query('select term from whatsapp_private_invoice_terms')).rows.map(row=>row.term))('Tell me about Second Company'),true);
     const before=f.providerRecord.calls;await f.turn('Tell me about İlker');assert.equal(f.providerRecord.calls,before,'exact original dotted-I name stays local after actual backfill');
   }finally{await f.close();}
