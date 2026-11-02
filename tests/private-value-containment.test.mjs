@@ -4,6 +4,7 @@ import {createPrivateChatMemory} from '../ai/private-chat-memory.mjs';
 import {createPrivateChatProvider,PRIVATE_CHAT_REPLY} from '../ai/private-chat.mjs';
 import {createPrivateValueMatcher} from '../ai/private-value-matcher.mjs';
 import {fixture} from './fixtures/private-invoice.mjs';
+import {normalizedPrivateVariants,normalizedOrdinaryControls} from './fixtures/private-value-variants.mjs';
 
 // Real boundary + real memory implementation; capture the exact serialized
 // provider messages, not merely an extraction callback or provider call count.
@@ -20,6 +21,35 @@ const variants=['send 1,250 today','twelve fifty today','one thousand two hundre
   'is it due 31 Oct?','is it due 31 October?','31/10/2026','Oct 31 2026','October 31, 2026','31-10-2026','31st Oct 2026'];
 for(const message of variants)test(`serialized payload excludes retained variant: ${message}`,async()=>{
   const h=harness();assert.equal((await h.provider(message).generate()).content,PRIVATE_CHAT_REPLY);assert.deepEqual(h.payloads,[]);assert.deepEqual(h.writes,[]);
+});
+for(const [message,term,canonical] of normalizedPrivateVariants)test(`normalization contains a restatement in both directions: ${message}`,async()=>{
+  const h=harness();assert.equal((await h.provider(message).generate()).content,PRIVATE_CHAT_REPLY);
+  assert.deepEqual(h.payloads,[]);assert.deepEqual(h.writes,[]);
+  const reverse=harness({terms:[term]});assert.equal((await reverse.provider('say '+canonical+' today').generate()).content,PRIVATE_CHAT_REPLY);
+  assert.deepEqual(reverse.payloads,[]);assert.deepEqual(reverse.writes,[]);
+});
+for(const message of normalizedOrdinaryControls)test(`numeric/date control remains provider-bound: ${message}`,async()=>{
+  const h=harness();await h.provider(message).generate();
+  assert.equal(h.payloads.length,1);assert.equal(h.payloads[0].at(-1).content,message);
+});
+test('complete grouped candidates, ambiguity and typed decimal aliases do not invent subvalues',async()=>{
+  for(const term of ['1','250']){
+    const h=harness({terms:[term]});await h.provider('send 1 250 today').generate();assert.equal(h.payloads.length,1);
+  }
+  for(const term of ['1250','1.25']){
+    const h=harness({terms:[term]});await h.provider('send 1.250 today').generate();assert.deepEqual(h.payloads,[]);
+  }
+  assert.equal(createPrivateValueMatcher(['number:1.125'])('1125'),false);
+  assert.equal(createPrivateValueMatcher(['number:1.125'])('1,125'),true);
+  for(const term of ['2026-10-11','2026-11-10']){
+    const h=harness({terms:[term]});await h.provider('is it due 10/11/2026?').generate();assert.deepEqual(h.payloads,[]);
+  }
+  const h=harness();await h.provider('is it due 10/11/2026?').generate();assert.equal(h.payloads.length,1);
+  for(const term of ['100','100.00']){
+    const common=harness({terms:[term]});
+    for(const value of ['100','100.00','100,00','one hundred','1\u200b00'])await common.provider('top up '+value).generate();
+    assert.deepEqual(common.payloads,[]);
+  }
 });
 for(const message of ['1,25,000','1,25,000.00','125,000.00','one lakh twenty five thousand'])test(`Indian amount restatement stays local: ${message}`,async()=>{
   const h=harness({terms:['125000']});assert.equal((await h.provider(message).generate()).content,PRIVATE_CHAT_REPLY);assert.deepEqual(h.payloads,[]);
@@ -58,6 +88,28 @@ test('history, issued tool results, tool arguments and model responses share can
     const ap=args.provider('Hello');ap.setTools([{type:'function',function:{name:'lookup'}}]);assert.deepEqual((await ap.generate({tools:[{function:{name:'lookup'}}]})).toolCalls,[]);
   }
 });
+test('locale/Cf/date normalization screens history, tool results/arguments, responses, writes and mixed clauses',async()=>{
+  const history=normalizedPrivateVariants.map(([content],id)=>({id,role:'user',content,provenance:'ordinary_chat_v1'}));
+  const h=harness({history:[...history,{id:99,role:'user',content:'ordinary poetry',provenance:'ordinary_chat_v1'}]});
+  await h.provider('Hello').generate();assert.deepEqual(h.payloads[0].slice(1,-1),[{role:'user',content:'ordinary poetry'}]);
+  for(const [value] of normalizedPrivateVariants){
+    const output=harness({response:value});assert.equal((await output.provider('Hello').generate()).content,PRIVATE_CHAT_REPLY);assert.deepEqual(output.writes,[]);
+    const tool=harness({response:()=>({toolCalls:[{id:'issued',function:{name:'lookup',arguments:'{}'}}]})});
+    const provider=tool.provider('Explain gardening');provider.setTools([{type:'function',function:{name:'lookup'}}]);
+    const first=await provider.generate({tools:[{function:{name:'lookup'}}]});
+    const reply=await provider.generate({messages:[{role:'assistant',tool_calls:first.toolCalls},{role:'tool',tool_call_id:'issued',content:JSON.stringify({detail:value})}]});
+    assert.equal(reply.content,PRIVATE_CHAT_REPLY);assert.equal(tool.payloads.length,1);
+    const args=harness({response:()=>({toolCalls:[{id:'bad',function:{name:'lookup',arguments:JSON.stringify({detail:value})}}]})});
+    const ap=args.provider('Hello');ap.setTools([{type:'function',function:{name:'lookup'}}]);
+    assert.deepEqual((await ap.generate({tools:[{function:{name:'lookup'}}]})).toolCalls,[]);
+    const writes=harness();await writes.memory.read('Hello');
+    await writes.memory.append(value,'Hello');await writes.memory.append('Hello',value);assert.deepEqual(writes.writes,[]);
+    const mixed=harness();const result=await mixed.provider('Tell me a joke; '+value).generate();
+    assert.match(result.content,/Hello there/);assert.equal(mixed.payloads.length,1);
+    assert.equal(mixed.payloads[0].at(-1).content,'Tell me a joke');
+    assert.deepEqual(mixed.writes.map(row=>row.content),['Tell me a joke','Hello there']);
+  }
+});
 test('store failures fail closed even when an ordinary clause could be separated',async()=>{
   const h=harness({failure:true});await assert.rejects(h.provider('Hello; send 1,250 today').generate(),{code:'CHAT_MEMORY_UNAVAILABLE'});assert.deepEqual(h.payloads,[]);
 });
@@ -65,7 +117,7 @@ test('unapplied SQL retains raw values plus canonical aliases atomically, includ
   const f=await fixture({recording:true});try{
     await f.db.query("insert into whatsapp_pending_actions(workspace_id,customer_id,phone,source,action,expires_at) values($1,$2,$3,'whatsapp',$4,now()+interval '15 minutes')",[f.scope.workspaceId,f.scope.customerId,f.scope.phone,{type:'invoice_review_draft',invoice:{total:'1,25,000.00',dueDate:'31 Oct 2026',notes:'2026-02-31'}}]);
     const terms=(await f.db.query('select term from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId])).rows.map(row=>row.term);
-    for(const term of ['1,25,000.00','125000','31 oct 2026','2026-10-31','31 oct','2026-02-31'])assert.ok(terms.includes(term),term);
+    for(const term of ['1,25,000.00','number:125000','31 oct 2026','2026-10-31','31 oct','2026-02-31'])assert.ok(terms.includes(term),term);
     for(const role of ['anon','authenticated','service_role'])assert.equal((await f.db.query("select has_function_privilege($1,'app.private_invoice_term_aliases(text)','execute') allowed",[role])).rows[0].allowed,false);
     assert.equal(createPrivateValueMatcher(terms)('one lakh twenty five thousand'),true);
   }finally{await f.close();}

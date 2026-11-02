@@ -197,12 +197,25 @@ are enforced here; distributed usage billing/rate limiting is not implemented.
 
 Every provider-bound surface uses `private-value-matcher.mjs`: current text,
 positive-provenance history, issued tool transcripts/results, tool arguments and
-model responses. It normalizes case, whitespace and NFKC compatibility forms.
-Numeric matching uses exact decimal strings/BigInt, with international and Indian
-comma grouping, leading zeros, decimal/trailing-zero variants, supported currency/unit affixes, and bounded English
+model responses, including memory writes. It normalizes NFKC compatibility forms,
+removes Unicode format characters (category Cf, including zero-width joiners/spaces
+and BOM), then folds case and whitespace at retention and screening time.
+Numeric matching uses exact decimal strings/BigInt. A maximal separated digit run
+is one candidate, never its constituent groups. International/Indian grouping uses
+commas, dots, spaces (including normalized Unicode spaces), or apostrophes
+(Unicode Quotation_Mark normalization plus modifier apostrophe); the
+rightmost dot/comma can be decimal when the preceding integer groups are valid.
+Both valid interpretations of an ambiguous form are compared only against known
+retained values. This covers decimal-comma locales without coercing malformed
+`1,2500` into `1250` or treating `1 250` as separate `1` and `250` values.
+Leading zeros, decimal/trailing-zero variants, supported currency/unit affixes, and bounded English
 number phrases (including hundred/thousand/lakh/crore and colloquial "twelve fifty").
-Dates cover ISO, day/month/year with slashes or hyphens, English short/full month
-names in either order, optional years and ordinal day suffixes. Yearless renderings
+Dates cover year-first numeric forms and both day/month/year and month/day/year
+with dots, slashes or hyphens. Both calendar-valid interpretations of ambiguous
+numeric dates are checked against stored values. English short/full month names
+work in either order, with optional years, numeric ordinal suffixes, and bounded
+English ordinals first through thirty-first (spaces/hyphens and optional "of").
+Yearless renderings
 are conservative: a matching month/day stays local regardless of year. Numeric
 terms match complete numeric tokens, names match complete tokens/phrases, and
 invoice identifiers do not match longer identifiers. Thus an unretained `100` is
@@ -217,20 +230,30 @@ local. Only the separated ordinary text and screened model answer enter provider
 memory; the raw mixed turn and the local notice never enter it. Mixed turns cannot
 execute the discarded private correction or payment instruction.
 
-Residual variant classes are explicit: space/apostrophe/dot thousands grouping,
-decimal-comma locales, scientific notation, fractions and arithmetic-derived
-restatements; non-English number words/digit scripts, unenumerated English idioms, phonetic/name
-transliterations, hostile encodings/zero-width concealment; relative dates, numeric
-month-first dates and other unenumerated calendar renderings. These are not claimed
-as covered. Mixed messages without a recognized independent ordinary clause stay
+Residual variant classes are explicit: scientific notation, fractions and
+arithmetic-derived restatements; non-English number words/digit scripts, English
+number idioms outside the bounded grammar (including number runs over 40 tokens),
+phonetic/name transliterations, hostile encodings and homoglyphs beyond NFKC/Cf
+normalization; relative-date resolution and other unenumerated calendar forms
+(such as compact dates without separators, two-digit years, alternative ordinal
+phrasing outside the documented grammar and non-Gregorian calendars). These are not claimed as
+covered. Relative-date questions that restate no stored value remain ordinary;
+responses are screened independently. Mixed messages without a recognized independent ordinary clause stay
 local with actionable menu/review guidance. No semantic DLP guarantee for arbitrary
 paraphrases or encodings is claimed.
 
 SQL repair in the **unapplied** `20261101120327_private_whatsapp_chat_memory.sql`:
-add internal immutable invoker `app.private_invoice_term_aliases(text)` with direct
-EXECUTE revoked from PUBLIC/anon/authenticated/service_role; retain normalized raw
-terms plus canonical exact-decimal and valid ISO/English day-month aliases; change
-`app.retain_private_invoice_terms` to expand those aliases before SHA-256 hashing.
+add internal immutable invoker helpers `app.private_invoice_normalize(text)` and
+`app.private_invoice_number_aliases(text)`, alongside the updated
+`app.private_invoice_term_aliases(text)`. All three use an empty search_path and
+revoke direct EXECUTE from PUBLIC/anon/authenticated/service_role. The normalizer
+uses NFKC, Unicode 17 Cf ranges and case/whitespace folding. The numeric helper
+validates complete grouping shapes, retains every valid decimal interpretation,
+and emits typed `number:` aliases so canonical decimals cannot gain new numeric
+interpretations on reload. The term helper retains normalized raw terms, numeric
+aliases, and valid ISO/English month-day aliases for both numeric date orders,
+all three numeric separators and English ordinals. `app.retain_private_invoice_terms`
+still expands aliases before SHA-256 hashing.
 The existing retention triggers and backfill use that expansion automatically.
 Invalid dates retain raw evidence without inventing a normalized date; yearless
 dates get only a month/day alias. No new table, grant, RLS policy or pre-existing

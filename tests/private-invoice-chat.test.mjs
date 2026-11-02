@@ -7,9 +7,81 @@ import {AIProvider,CF_PRIMARY_MODEL,CF_BACKUP_MODEL,GEMINI_FALLBACK_MODEL} from 
 import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistant-handler.mjs';
 import {invoiceRowsAnswer} from '../automation/whatsapp/private-invoice-read.mjs';
 import {createPrivateChatMemory} from '../ai/private-chat-memory.mjs';
+import {createPrivateValueMatcher} from '../ai/private-value-matcher.mjs';
+import {normalizedPrivateVariants,normalizedOrdinaryControls} from './fixtures/private-value-variants.mjs';
 
 const deny=()=>assert.fail('Private content must not reach a provider or customer review');
 const secret='PRIVATE-INVOICE-CANARY Kabir Textiles 20060';
+
+test('SQL-retained known values contain every locale/Cf/date probe in real memory and both audience routes',async()=>{
+  const f=await fixture({recording:true});try{
+    await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,['1250','anurag','2026-10-31']]);
+    const payloads=[];
+    const customer=createWhatsAppBoundMessageHandler({supabase:f.supabase,audience:'customer',authorizeScope:async()=>true,
+      providerFactory:()=>({async generate(request){payloads.push(JSON.parse(JSON.stringify(request.messages)));return {content:'A safe answer'};}})});
+    for(const [i,[message]] of normalizedPrivateVariants.entries()){
+      const before=f.providerRecord.calls;
+      assert.equal((await f.turn(message)).answer,PRIVATE_CHAT_REPLY,message);assert.equal(f.providerRecord.calls,before);
+      const customerBefore=payloads.length;
+      assert.equal(await customer({...f.scope,messageId:'normalized-'+i,message}),PRIVATE_CHAT_REPLY,message);assert.equal(payloads.length,customerBefore);
+      // Also prove the actual createPrivateChatProvider + real SQL-backed memory.
+      const memory=createPrivateChatMemory({supabase:f.supabase,scope:{...f.scope,audience:'owner',messageId:'boundary-'+i}});
+      await createPrivateChatProvider({message,memory,options:{},providerFactory:deny}).generate();
+    }
+    for(const [i,message] of normalizedOrdinaryControls.entries()){
+      const ownerBefore=f.providerRecord.calls;assert.equal((await f.turn(message)).answer,'Summary');assert.equal(f.providerRecord.calls,ownerBefore+1);
+      assert.equal(JSON.parse(JSON.stringify(f.providerRecord.requests.at(-1).messages)).at(-1).content,message);
+      const customerBefore=payloads.length;
+      assert.equal(await customer({...f.scope,messageId:'control-'+i,message}),'A safe answer');assert.equal(payloads.length,customerBefore+1);
+      assert.equal(payloads.at(-1).at(-1).content,message);
+    }
+    for(const [i,[value]] of normalizedPrivateVariants.entries()){
+      const message='Tell me a joke; '+value;
+      assert.match((await f.turn(message)).answer,/Summary/);assert.equal(f.providerRecord.requests.at(-1).messages.at(-1).content,'Tell me a joke');
+      assert.match(await customer({...f.scope,messageId:'mixed-'+i,message}),/A safe answer/);assert.equal(payloads.at(-1).at(-1).content,'Tell me a joke');
+    }
+  }finally{await f.close();}
+});
+
+test('SQL/JS alias parity: locale shapes, decimal ambiguity, every ordinal, numeric date order, and all Unicode Cf',async()=>{
+  const f=await fixture({recording:true});try{
+    const aliases=async term=>(await f.db.query('select app.private_invoice_term_aliases($1) term',[term])).rows.map(row=>row.term);
+    const samples=[...normalizedPrivateVariants.map(([,term])=>term),'1,25,000','1 25 000','1.25.000,00','1\u202f250,00','1ʼ250','1,250','1,2500','1,1250','1250.000','100,00','USD1.250,00','0.000','000100','10/11/2026','2026/10/31','31 . 10 . 2026','2026-02-31','31.02.2026','0026-10-31'];
+    const probes=['1250','125000','100','1000','1','250','1.25','1.125','1125','12500','anurag','2026-10-31','2026-10-11','2026-11-10','2026-02-28'];
+    for(const sample of samples){
+      const terms=await aliases(sample),raw=createPrivateValueMatcher([sample]),retained=createPrivateValueMatcher(terms);
+      for(const probe of probes)assert.equal(retained(probe),raw(probe),JSON.stringify({sample,probe,terms}));
+    }
+    for(const [,term,canonical] of normalizedPrivateVariants){
+      const retained=await aliases(term);
+      assert.ok(retained.includes(canonical==='1250'?'number:1250':canonical==='anurag'?'anurag':canonical==='2026-10-31'&&/2026/.test(term)?'2026-10-31':'31 oct'),JSON.stringify({term,retained}));
+    }
+    assert.deepEqual(await aliases('2026-02-31'),['2026-02-31']);assert.deepEqual(await aliases('31.02.2026'),['31.02.2026']);
+    const words='first,second,third,fourth,fifth,sixth,seventh,eighth,ninth,tenth,eleventh,twelfth,thirteenth,fourteenth,fifteenth,sixteenth,seventeenth,eighteenth,nineteenth,twentieth,twenty first,twenty second,twenty third,twenty fourth,twenty fifth,twenty sixth,twenty seventh,twenty eighth,twenty ninth,thirtieth,thirty first'.split(',');
+    for(const [i,word] of words.entries())for(const spelling of [word,word.replaceAll(' ','-')])for(const text of ['the '+spelling+' of October', 'October '+spelling+', 2026', 'October the '+spelling+', 2026']){
+      const date='2026-10-'+String(i+1).padStart(2,'0');
+      const terms=await aliases(text);assert.ok(terms.includes(String(i+1).padStart(2,'0')+' oct'),text);
+      assert.equal(createPrivateValueMatcher([text])(date),true,text);assert.equal(createPrivateValueMatcher(terms)(date),true,text);
+      assert.equal(createPrivateValueMatcher([date])(text),true,text);
+    }
+    let formatChars='';for(let cp=0;cp<=0x10ffff;cp++)if(/\p{Cf}/u.test(String.fromCodePoint(cp)))formatChars+=String.fromCodePoint(cp);
+    for(const term of ['1'+formatChars+'250','anu'+formatChars+'rag','2026-'+formatChars+'10-31']){
+      const sql=(await f.db.query('select app.private_invoice_normalize($1) term',[term])).rows[0].term;
+      assert.equal(sql,term.replace(/\p{Cf}/gu,''));
+      assert.equal(createPrivateValueMatcher([term])(sql),true);
+      assert.equal(createPrivateValueMatcher([sql])(term),true);
+    }
+    for(let cp=0;cp<=0x10ffff;cp++)if(/\p{Quotation_Mark}/u.test(String.fromCodePoint(cp))){
+      const text='1'+String.fromCodePoint(cp)+'250';
+      assert.ok((await aliases(text)).includes('number:1250'),text);
+      assert.equal(createPrivateValueMatcher([text])('1250'),true,text);
+      assert.equal(createPrivateValueMatcher(['1250'])(text),true,text);
+    }
+    for(const fn of ['private_invoice_normalize','private_invoice_number_aliases','private_invoice_term_aliases'])for(const role of ['anon','authenticated','service_role']){
+      assert.equal((await f.db.query('select has_function_privilege($1,$2,\'execute\') allowed',[role,'app.'+fn+'(text)'])).rows[0].allowed,false);
+    }
+  }finally{await f.close();}
+});
 
 test('network boundary discards private transcripts, schema enums, tool results, profiles, errors and media on every retry',async()=>{
   const requests=[];
