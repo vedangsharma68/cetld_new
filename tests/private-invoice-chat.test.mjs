@@ -140,7 +140,12 @@ for(const route of [undefined,'offline'])test(`owner chat and deterministic read
     const status=await f.turn('What is the status of invoice INV-2026-0142?');
     assert.match(status.answer,/INV-2026-0142/);
     assert.equal(f.providerRecord.calls,calls);
-    for(const payload of f.providerRecord.requests)assert.doesNotMatch(JSON.stringify(payload),/Kabir|PRIVATE-INVOICE|20060|INV-2026|Cotton/);
+    for(const payload of f.providerRecord.requests){
+      // These are the model-bound data. deadlineAt/signal are local transport
+      // controls; the real HTTP-body regression below proves they never ship.
+      assert.doesNotMatch(JSON.stringify(payload.messages),/Kabir|PRIVATE-INVOICE|20060|INV-2026|Cotton/);
+      assert.doesNotMatch(JSON.stringify(payload.tools||[]),/Kabir|PRIVATE-INVOICE|20060|INV-2026|Cotton/);
+    }
     assert.equal((await f.supabase.rpc('owner_assistant_offline_provenance',{p_workspace_id:f.scope.workspaceId})).data,true);
   }finally{await f.close();}
 });
@@ -296,5 +301,24 @@ test('eligible memory fills its twenty-message window after later invoice eviden
     const turns=f.providerRecord.requests.at(-1).messages;
     assert.equal(turns.length,22);assert.doesNotMatch(JSON.stringify(turns),/CanaryAlpha|Kabir|20060/);
     assert.ok(turns.some(turn=>turn.content==='I enjoy gardening'));
+  }finally{await f.close();}
+});
+
+
+test('actual Cloudflare HTTP bodies contain no invoice canaries or local deadline metadata even when its digits coincide',async()=>{
+  const f=await fixture({recording:true});try{
+    await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,['20060','Kabir','INV-2026-0142','Cotton','PRIVATE-INVOICE']]);
+    const wire=[],deadlineAt=(Math.floor(Date.now()/100000000)+2)*100000000+20060;
+    assert.match(String(deadlineAt),/20060/);
+    const make=message=>createPrivateChatProvider({message,memory:createPrivateChatMemory({supabase:f.supabase,scope:{...f.scope,audience:'owner'}}),options:{},providerFactory:options=>{
+      const actual=new AIProvider({...options,cfAccountId:'fixture',cfApiToken:'fixture',fetchImpl:async(url,init)=>{
+        assert.equal(new URL(url).hostname,'api.cloudflare.com');wire.push(init.body);
+        return Response.json({choices:[{message:{content:'A safe answer'},finish_reason:'stop'}]});
+      }});
+      return {generate(request){assert.equal(request.deadlineAt,deadlineAt);return actual.generate(request);}};
+    }});
+    await make('Tell me a joke').generate({deadlineAt});assert.equal(wire.length,1);
+    for(const body of wire){assert.doesNotMatch(body,/Kabir|PRIVATE-INVOICE|20060|INV-2026|Cotton|deadlineAt|signal/);assert.equal(JSON.parse(body).messages.at(-1).content,'Tell me a joke');}
+    await make('Explain 20060').generate({deadlineAt});assert.equal(wire.length,1,'retained values stop at the production wrapper before the real transport');
   }finally{await f.close();}
 });

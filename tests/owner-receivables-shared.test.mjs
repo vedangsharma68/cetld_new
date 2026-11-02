@@ -70,6 +70,7 @@ test('authenticated dashboard client and verified WhatsApp owner share the issue
     await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[otherId,phone,otherMessage]);
     const plannedWa=await createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test'},providerFactory:()=>provider,logger,replyStore:null})({workspaceId,ownerId,customerId,phone,messageId:otherId,message:otherMessage});
     assert.equal(plannedWa.answer,expected,'planner-selected reads use the same raw-row split as bounded reads');
+    assert.equal(providerCalls,0,'both ordinary and formerly planner-selected balance reads must stay deterministic-local');
     await service();
     const history=(await db.query('select content from owner_assistant_turns where workspace_id=$1 and role=\'assistant\' order by id',[workspaceId])).rows;
     assert.equal(history.filter(row=>row.content===expected).length,4,'both transports store the same split in their shared conversation');

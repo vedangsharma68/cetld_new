@@ -72,7 +72,7 @@ export function receivablesReadAnswer(result, options) {
 // Named customers/invoices, scenarios and write instructions stay on their own paths.
 export function isOutstandingBalanceQuestion(message) {
   const text=String(message||'').trim().toLowerCase().replace(/[.!?]+$/,'').replace(/\s+/g,' ');
-  return /^(?:what is|what's|how much is)(?: (?:my|our|the))?(?: total)? outstanding(?: balance)?(?: (?:right now|today))?(?: (?:in|for) (?:my|our|the|this) business)?$/.test(text);
+  return /^(?:(?:please )?(?:what is|what's|how much is|explain|tell me|show me|check|summari[sz]e))(?: (?:my|our|the))?(?: total)? outstanding(?: balance)?(?: (?:right now|today))?(?: (?:in|for) (?:my|our|the|this) business)?$/.test(text);
 }
 
 export function receivableBalanceLabel(invoice) {

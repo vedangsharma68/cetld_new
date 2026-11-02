@@ -44,7 +44,7 @@ export async function fixture({recording=false,providerFactory:providedFactory,n
   let printed=text, pdfText=null;
   const providerRecord={constructions:0,calls:0,requests:[]};
   const routeEnv={...env};
-  const makeHandler=()=>createOwnerMessageHandler({supabase:f.supabase,env:routeEnv,logger,providerFactory:providedFactory||(recording?()=>{providerRecord.constructions++;return {async generate(request){providerRecord.calls++;providerRecord.requests.push(request);return {content:'Summary'};}};}:deny),fetchImpl:deny,
+  const makeHandler=()=>createOwnerMessageHandler({supabase:f.supabase,env:routeEnv,logger,providerFactory:providedFactory||(recording?()=>{providerRecord.constructions++;return {async generate(request){providerRecord.calls++;providerRecord.requests.push(JSON.parse(JSON.stringify(request)));return {content:'Summary'};}};}:deny),fetchImpl:deny,
     ...(recording||providedFactory?{}:{agentFactory:deny}),...(navigation?{}:{replyStore:null}),
     toolsFactory:options=>createOwnerWorkspaceTools({...options,extractOfflineAttachment:request=>extractInvoiceOffline({...request,
       imageExtractor:imageExtractor(printed),pdfTextExtractor:async()=>pdfText})})});

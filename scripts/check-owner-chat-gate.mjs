@@ -74,7 +74,7 @@ export async function writeReleaseManifest({outputPath='owner-chat-build.json'}=
   paths.push('automation/external-reminder-verification.mjs','automation/accounting/integration.mjs',
     'automation/accounting/providers.mjs','automation/accounting/http.mjs',
     'supabase/migrations/20261024094013_fresh_external_reminder_reads.sql');
-  paths.push('ai/assistant.mjs','tests/fixtures/owner-engine.mjs','tests/private-production-containment.test.mjs','ai/private-value-unicode.mjs','ai/private-value-language.mjs','ai/private-value-matcher.mjs','ai/private-chat-memory.mjs','supabase/migrations/20261101120327_private_whatsapp_chat_memory.sql','ai/private-chat.mjs','automation/whatsapp/private-invoice-read.mjs');
+  paths.push('invoice/receivables.mjs','ai/assistant.mjs','tests/fixtures/owner-engine.mjs','tests/private-production-containment.test.mjs','ai/private-value-unicode.mjs','ai/private-value-language.mjs','ai/private-value-matcher.mjs','ai/private-chat-memory.mjs','supabase/migrations/20261101120327_private_whatsapp_chat_memory.sql','ai/private-chat.mjs','automation/whatsapp/private-invoice-read.mjs');
   const files={};for(const path of paths)files[path]=createHash('sha256').update(await readFile(path)).digest('hex');
   let commit=process.env.VERCEL_GIT_COMMIT_SHA||process.env.GITHUB_SHA;
   if(!commit)try{commit=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();}catch{commit=null;}
