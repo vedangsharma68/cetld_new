@@ -228,7 +228,7 @@ test('owner reminder approval uses native pending confirmations and leaves deliv
     return result;
    };
    const created=await turn('new invoice QA-REPRO-001, QA Repro Customer, Rs 1,500, due tomorrow');
-   assert.match(created.answer,/Created invoice/);
+   assert.match(created.answer,/Created invoice/);assert.equal(modelCalls,0,'text creation and subsequent reminders stay local');
    const fresh=(await db.query("select * from invoices where workspace_id=$1 and metadata->>'source_invoice_number'='QA-REPRO-001'",[workspaceId])).rows[0];
    assert.ok(fresh);assert.equal(Number(fresh.total_amount),1500);assert.equal(fresh.status,'draft');
    filters=target(fresh.invoice_number);mode='reminder';

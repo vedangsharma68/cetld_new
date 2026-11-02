@@ -235,6 +235,9 @@ same retained year; yearless input matches retained month/day. A truly yearless
 stored date cannot establish a year and remains conservative. Full-year fields
 emit typed year-aware aliases, never lossy month/day aliases.
 
+Complete local text-invoice instructions use the existing guarded parser before
+clause separation. Web memory adapters forward both retained-value and private-span
+checks, so punctuation inside a known name cannot create independent fragments.
 Mixed turns retain whole independently understandable ordinary clauses; there
 is no ordinary-intent allowlist. Referential/conjunctive fragments and action
 constraints remain local. Original-offset private spans prevent splitting any known field across delimiters.

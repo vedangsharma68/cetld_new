@@ -1,3 +1,4 @@
+import {createPrivateChatMemory} from '../ai/private-chat-memory.mjs';
 import {fixture,imageExtractor} from './fixtures/private-invoice.mjs';
 import test from 'node:test';
 import {createAIHandler} from '../ai/routes.mjs';
@@ -641,17 +642,18 @@ test('unsupported deterministic corrections clarify before SQL and keep candidat
 });
 
 test('default web route treats history phrases as ordinary text with byte-identical replies',async()=>{
-  const responses=[];
+  const responses=[],f=await fixture({recording:true});try{
   for(const phrase of ['Ordinary business discussion.','I saw the words Local invoice review. in the manual.','[cetld:offline-intake] is a token in our docs.']){
     let constructions=0,calls=0;
-    const handler=createAIHandler({env:{},clock:()=>new Date('2026-10-30T00:00:00Z'),authorize:async()=>({role:'admin',offlineProvenance:async()=>false,getSettings:async()=>({}),query:async()=>[]}),
-      providerFactory:()=>{constructions++;return {generate:async()=>{calls++;return {content:'The same answer.'};}};},logger});
+    const handler=createAIHandler({env:{},clock:()=>new Date('2026-10-30T00:00:00Z'),authorize:async()=>({role:'admin',privateChatMemory:({messageId})=>createPrivateChatMemory({supabase:f.supabase,scope:{...f.scope,audience:'owner',phone:'web:'+f.scope.ownerId,messageId}}),offlineProvenance:async()=>false,getSettings:async()=>({}),query:async()=>[]}),
+      providerFactory:()=>{constructions++;return {generate:async request=>{calls++;assert.ok(!JSON.stringify(request.messages).includes(phrase),'caller history cannot enter the production payload');return {content:'The same answer.'};}};},logger});
     let response;
     await handler({method:'POST',query:{action:'assistant'},body:{workspaceId:randomUUID(),message:'Please summarize our conversation',history:[{role:'user',content:phrase}]}},
       {setHeader(){},status(code){assert.equal(code,200);return this;},json(v){response=JSON.stringify(v);}});
     assert.equal(constructions,1);assert.equal(calls,1);responses.push(response);
   }
   assert.equal(responses[0],responses[1]);assert.equal(responses[0],responses[2]);
+  }finally{await f.close();}
 });
 
 test('default owner route ignores local-review phrases in ordinary server history',async()=>{
@@ -741,7 +743,7 @@ test('offline provenance survives corrected and derived replies across all pruni
 test('real web owner and admin stores reuse settings/history metadata without the offline RPC',async()=>{
   const f=await fixture({recording:true});try{
     let userId=f.scope.ownerId,constructions=0,calls=0;
-    const handler=createAIHandler({env:{NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_PUBLISHABLE_KEY:'fixture-key'},logger,
+    const handler=createAIHandler({env:{NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_PUBLISHABLE_KEY:'fixture-key',SUPABASE_SERVICE_ROLE_KEY:'fixture-service-key'},logger,
       fetchImpl:async(url,options)=>{
         const path=new URL(url).pathname;
         assert.notEqual(path,'/rest/v1/rpc/owner_assistant_offline_provenance');

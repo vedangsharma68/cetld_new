@@ -182,7 +182,7 @@ function simpleLedgerReadTool(message) {
   const prompt = message.trim().toLowerCase().replace(/[!?.,]+$/g, '').replace(/\s+/g, ' ');
   if (/^(?:which|what) invoices? (?:are|were|is|was) overdue$/.test(prompt)
     || /^(?:list|show(?: me)?)(?: all| the)? overdue invoices?$/.test(prompt)) return 'getOverdueInvoices';
-  if (isOutstandingBalanceQuestion(message) || /^how many (?:(?:outstanding|unpaid) invoices(?: (?:do (?:i|we) have|are there))?|invoices are (?:outstanding|unpaid))$/.test(prompt)) return 'getOutstandingSummary';
+  if (isOutstandingBalanceQuestion(prompt.replace(/^(?:please )?(?:explain|tell me|show me|check|summari[sz]e) /i,'what is ')) || /^how many (?:(?:outstanding|unpaid) invoices(?: (?:do (?:i|we) have|are there))?|invoices are (?:outstanding|unpaid))$/.test(prompt)) return 'getOutstandingSummary';
   if (/^what payments were recorded$/.test(prompt)) return 'getPayments';
   if (/^what happened recently$/.test(prompt)) return 'getActivity';
   return null;

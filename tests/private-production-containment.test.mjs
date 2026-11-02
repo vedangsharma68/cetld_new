@@ -195,16 +195,17 @@ test('F7 actual owner agent forwards an ordinary issued result but blocks decode
 test('web Assistant uses the same real boundary, decoded memory and fail-closed private store without UI changes',async()=>{
   const {createAIHandler}=await import('../ai/routes.mjs');
   const f=await fixture({recording:true});try{
-    await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,terms]);
+    await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,[...terms,'Company One, Branch Two']]);
     const requests=[];const store={role:'owner',workspaceId:f.scope.workspaceId,userId:f.scope.ownerId,
       getSettings:async()=>({primary_model:'@cf/meta/llama-3.3-70b-instruct-fp8-fast'}),query:async()=>[],
       privateChatMemory:({messageId})=>createPrivateChatMemory({supabase:f.supabase,scope:{workspaceId:f.scope.workspaceId,ownerId:f.scope.ownerId,audience:'owner',phone:'web:'+f.scope.ownerId,messageId}})};
     const handler=createAIHandler({authorize:async()=>store,providerFactory:()=>({async generate(request){requests.push(JSON.parse(JSON.stringify(request.messages)));return {content:'A safe answer'};}})});
     const call=async message=>{const response={setHeader(){},status(code){this.code=code;return this},json(data){this.data=data;return this}};
       await handler({method:'POST',query:{action:'assistant'},body:{workspaceId:f.scope.workspaceId,message,history:[{role:'user',content:'1250 PRIVATE-CALLER-TRANSCRIPT'}]}},response);return response;};
-    for(const message of ['Explain 1250','The amounts are 1250, 77','31/10/26']){const before=requests.length;const result=await call(message);assert.equal(result.code,200);assert.equal(requests.length,before);}
+    for(const message of ['Explain 1250','The amounts are 1250, 77','31/10/26','Company One, Branch Two']){const before=requests.length;const result=await call(message);assert.equal(result.code,200);assert.equal(requests.length,before);}
     const reply=await call('Help me plan a walk; 1250, 77');assert.equal(reply.code,200);assert.equal(requests.at(-1).at(-1).content,'Help me plan a walk');
-    assert.doesNotMatch(JSON.stringify(requests),/1250|PRIVATE-CALLER-TRANSCRIPT/);
+    const company=await call('Help me plan a walk; Company One, Branch Two');assert.equal(company.code,200);assert.equal(requests.at(-1).at(-1).content,'Help me plan a walk');
+    assert.doesNotMatch(JSON.stringify(requests),/1250|PRIVATE-CALLER-TRANSCRIPT|Company One|Branch Two/);
     delete store.privateChatMemory;const before=requests.length;const failed=await call('Tell me about astronomy');assert.equal(failed.code,200);assert.equal(failed.data.readOnly,true);assert.match(failed.data.answer,/try|unavailable|couldn.t|can.t/i);assert.equal(requests.length,before);
   }finally{await f.close();}
 });

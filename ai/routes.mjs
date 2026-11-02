@@ -147,6 +147,7 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
           privateMemory??=store.privateChatMemory({messageId:turnId});return privateMemory.read(...args);
         },
         containsPrivate:value=>privateMemory?.containsPrivate(value)??true,
+        privateSpans:value=>privateMemory?.privateSpans(value)||[],
         append:(...args)=>privateMemory.append(...args),
       };
       const provider = createPrivateChatProvider({providerFactory,message:body.message,memory,options:{primaryModel: isGeminiModelId(settings.primary_model)?CF_PRIMARY_MODEL:settings.primary_model, fallbackModel: isGeminiModelId(settings.fallback_model)?CF_BACKUP_MODEL:settings.fallback_model,

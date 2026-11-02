@@ -8,7 +8,7 @@ export const CHAT_UNAVAILABLE_REPLY = 'Chat is temporarily unavailable. Please t
 // Unparsed create/correction values can themselves contain punctuation or
 // sentences. Their payload extends to the end of the turn; only an independent
 // prefix can be separated before this explicit local-data statement.
-const privateStatement=/\b(?:(?:set|change|correct|update|edit|modify|fix|create|log|save|record|mark)\b[^;.!?\n]{0,60}\b(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)\b|(?:invoice(?: number| no| date)?|due date|total|subtotal|tax|amount|currency|notes?|customer(?: name)?|client(?: name)?)\s*(?:is\b|:|=))/iu;
+const privateStatement=/\b(?:(?:new|नया)\s+invoice\b|(?:set|change|correct|update|edit|modify|fix|create|log|save|record|mark)\b[^;.!?\n]{0,60}\b(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)\b|(?:invoice(?: number| no| date)?|due date|total|subtotal|tax|amount|currency|notes?|customer(?: name)?|client(?: name)?)\s*(?:is\b|:|=))/iu;
 export function privateChatSpans(message){
   const {text,origins}=normalizePrivateText(message),match=privateStatement.exec(text);
   return match&&origins[match.index]?[[origins[match.index].start,String(message??'').length]]:[];

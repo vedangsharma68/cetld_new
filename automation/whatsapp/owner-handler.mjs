@@ -1,3 +1,4 @@
+import {parseTextInvoice} from './text-invoice.mjs';
 import {ordinaryPart} from '../../ai/private-value-matcher.mjs';
 import {invoiceReadQuestion, invoiceRowsAnswer} from './private-invoice-read.mjs';
 import {createPrivateChatMemory} from '../../ai/private-chat-memory.mjs';
@@ -313,8 +314,10 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     }
     provider.setTools(tools.definitions);
     onToolsReady(tools);
+    // A complete local command is one instruction; its field commas are not
+    // independent ordinary clauses. Preserve the guarded model-free parser.
     if(agentFactory===runOwnerAgent&&!scope.interactionId&&!media&&!mediaError&&!scope.contactCard
-      &&ordinaryPart(message,privateChatTopic,privateChatSpans).mixed&&ordinaryPart(message,privateChatTopic,privateChatSpans).text){
+      &&!parseTextInvoice(message,{clock,timezone})&&ordinaryPart(message,privateChatTopic,privateChatSpans).mixed&&ordinaryPart(message,privateChatTopic,privateChatSpans).text){
       const reply=await provider.generate({signal,deadlineAt}).catch(()=>({content:CHAT_UNAVAILABLE_REPLY}));
       return await reauthorize()?{answer:signedReply(reply.content)}:'';
     }
