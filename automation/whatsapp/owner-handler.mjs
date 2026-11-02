@@ -1,3 +1,4 @@
+import {ordinaryPart} from '../../ai/private-value-matcher.mjs';
 import {invoiceReadQuestion, invoiceRowsAnswer} from './private-invoice-read.mjs';
 import {createPrivateChatMemory} from '../../ai/private-chat-memory.mjs';
 import {ownerInvoiceReadAnalysis} from './owner-invoice-read-analysis.mjs';
@@ -312,6 +313,11 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     }
     provider.setTools(tools.definitions);
     onToolsReady(tools);
+    if(agentFactory===runOwnerAgent&&!scope.interactionId&&!media&&!mediaError&&!scope.contactCard
+      &&ordinaryPart(message,privateChatTopic).mixed&&ordinaryPart(message,privateChatTopic).text){
+      const reply=await provider.generate({signal,deadlineAt}).catch(()=>({content:CHAT_UNAVAILABLE_REPLY}));
+      return await reauthorize()?{answer:signedReply(reply.content)}:'';
+    }
     if (offlineTurn) {
       const reviewAction = pendingAtStart?.action;
       const inputIssue=reviewAction?.extractionRoute==='offline' && offlineCorrectionInputIssue(message,{parseCorrection:parseInvoiceCorrection,clock});

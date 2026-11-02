@@ -1,7 +1,8 @@
+import {ordinaryPart} from './private-value-matcher.mjs';
 import {OFFLINE_CONFIRMATION_REPLY,OFFLINE_CANCEL_REPLY} from './offline-invoice-review.mjs';
 import {CF_PRIMARY_MODEL, CF_BACKUP_MODEL, isCloudflareModelId} from './provider.mjs';
 
-export const PRIVATE_CHAT_REPLY = 'I can only answer invoice questions from verified records. Use the invoice menu or specify an invoice and the detail you need. I cannot safely handle that request in free-form chat.';
+export const PRIVATE_CHAT_REPLY = 'I can only answer invoice questions from verified records. I kept the private details local. Use the invoice menu to check a balance or status, or continue the upload review to correct or confirm it. You can send an unrelated chat request separately.';
 export const CHAT_UNAVAILABLE_REPLY = 'Chat is temporarily unavailable. Please try again shortly. Nothing was lost; your invoices and reviews are still saved.';
 
 // This is a routing hint, NOT the privacy boundary. The boundary below never
@@ -35,20 +36,24 @@ export function localReviewTurn(action, message, interactionId) {
 }
 
 export function createPrivateChatProvider({providerFactory, options, message, localOnly = false, memory}) {
-  let provider,history;
+  let provider,history,selection;
   let definitions=[];
-  const issuedCalls=new Set();
+  const issuedCalls=new Map();
   return {
     setTools(tools){definitions=Array.isArray(tools)?structuredClone(tools):[];},
     async generate(request = {}) {
-      if (localOnly || privateChatTopic(message)) return {content:PRIVATE_CHAT_REPLY,toolCalls:[],model:null};
-      history ??= memory ? await memory.read(message) : [];
+      if (localOnly) return {content:PRIVATE_CHAT_REPLY,toolCalls:[],model:null};
+      history ??= memory ? await memory.read(message,{allowPrivateCurrent:true}) : [];
       if(history===null)return {content:PRIVATE_CHAT_REPLY,toolCalls:[],model:null};
+      selection ??= ordinaryPart(message,text=>privateChatTopic(text)||memory?.containsPrivate(text));
+      if(!selection.text)return {content:PRIVATE_CHAT_REPLY,toolCalls:[],model:null};
       const currentTools=[];
       for(const turn of request.messages||[]){
-        if(turn.role==='assistant'&&turn.tool_calls?.length&&turn.tool_calls.every(call=>issuedCalls.has(call.id)))
+        if(turn.role==='assistant'&&turn.tool_calls?.length){
+          if(turn.tool_calls.every(call=>!issuedCalls.has(call.id)))continue;
+          if(!turn.tool_calls.every(call=>issuedCalls.get(call.id)===JSON.stringify(call))||memory?.containsPrivate(JSON.stringify(turn.tool_calls)))return {content:PRIVATE_CHAT_REPLY,toolCalls:[],model:null};
           currentTools.push({role:'assistant',content:'',tool_calls:turn.tool_calls});
-        else if(turn.role==='tool'&&issuedCalls.has(turn.tool_call_id)){
+        }else if(turn.role==='tool'&&issuedCalls.has(turn.tool_call_id)){
           if(memory?.containsPrivate(turn.content)||/"table"\s*:\s*"(?:invoices|payments|invoice_files)"|invoice_review_draft|printedEvidence/.test(turn.content))
             return {content:PRIVATE_CHAT_REPLY,toolCalls:[],model:null};
           currentTools.push({role:'tool',tool_call_id:turn.tool_call_id,name:turn.name,content:turn.content});
@@ -60,16 +65,17 @@ export function createPrivateChatProvider({providerFactory, options, message, lo
         geminiApiKey:undefined,openRouterApiKey:undefined,zenApiKey:undefined});
       const result = await provider.generate({
         messages:[{role:'system',content:'You are cetld, a helpful WhatsApp assistant. Answer ordinary conversation concisely using the supplied ordinary chat memory. Use available tools for current non-invoice requests. You have no access to private invoice records. Never invent invoice, customer, payment, balance or reminder facts. Ask the user to use the invoice menu for those questions.'},
-          ...history,{role:'user',content:String(message || '')},...currentTools],
+          ...history,{role:'user',content:selection.text},...currentTools],
         ...(tools.length?{tools,toolChoice:'auto'}:{}),
         maxTokens:800,temperature:0.2,signal:request.signal,deadlineAt:request.deadlineAt,
       });
-      const content=privateChatTopic(result?.content)||memory?.containsPrivate?.(result?.content)?PRIVATE_CHAT_REPLY:result?.content;
+      let content=privateChatTopic(result?.content)||memory?.containsPrivate?.(result?.content)?PRIVATE_CHAT_REPLY:result?.content;
       const toolCalls=(result.toolCalls||[]).filter(call=>tools.some(tool=>tool.function.name===call.function?.name)
         &&!memory?.containsPrivate(JSON.stringify(call)));
-      for(const call of toolCalls)issuedCalls.add(call.id);
-      if(memory && content && content!==PRIVATE_CHAT_REPLY && !toolCalls.length) await memory.append(message,content);
-      return {...result,content,toolCalls};
+      if(toolCalls.length!==(result.toolCalls||[]).length)content=PRIVATE_CHAT_REPLY;
+      for(const call of toolCalls)issuedCalls.set(call.id,JSON.stringify(call));
+      if(memory && content && content!==PRIVATE_CHAT_REPLY && !toolCalls.length) await memory.append(selection.text,content);
+      return {...result,content:selection.mixed&&content!==PRIVATE_CHAT_REPLY?content+'\n\nI kept the private part local. Use the invoice menu or your current review for that part.':content,toolCalls};
     },
     async generateStructured() {
       throw Object.assign(new Error(PRIVATE_CHAT_REPLY),{code:'LOCAL_DATA_ONLY'});

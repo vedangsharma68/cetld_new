@@ -1,3 +1,4 @@
+import {createPrivateValueMatcher} from './private-value-matcher.mjs';
 import {randomUUID} from 'node:crypto';
 import {privateChatTopic} from './private-chat.mjs';
 
@@ -16,15 +17,11 @@ export function createPrivateChatMemory({supabase,scope}) {
     q=audience==='owner'?q.eq('owner_id',ownerId):q.eq('customer_id',customerId);
     return q;
   };
-  let appended=false,privateTerms=[];
-  const containsPrivate=text=>{
-    const content=String(text||'').toLowerCase();
-    return privateTerms.some(term=>term.length>=3?content.includes(term)
-      :new RegExp(`(?<![\\p{L}\\p{N}_])${term.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}(?![\\p{L}\\p{N}_])`,'u').test(content));
-  };
+  let appended=false,privateTerms=[],matchPrivate=()=>false;
+  const containsPrivate=text=>matchPrivate(text);
   return {
     containsPrivate,
-    async read(message){
+    async read(message,{allowPrivateCurrent=false}={}){
       const [historyResult,termsResult]=await Promise.all([query().order('id',{ascending:false}).limit(20),
         supabase.from('whatsapp_private_invoice_terms').select('term').eq('workspace_id',workspaceId).order('term_hash').range(0,499)]);
       const rows=data(historyResult)||[];
@@ -34,7 +31,8 @@ export function createPrivateChatMemory({supabase,scope}) {
         page=data(await supabase.from('whatsapp_private_invoice_terms').select('term').eq('workspace_id',workspaceId).order('term_hash').range(offset,offset+499))||[];
         privateTerms.push(...page.map(row=>row.term));
       }
-      if(containsPrivate(message))return null;
+      matchPrivate=createPrivateValueMatcher(privateTerms);
+      if(!allowPrivateCurrent&&containsPrivate(message))return null;
       const eligible=row=>row.provenance===PROVENANCE&&['user','assistant'].includes(row.role)
         &&typeof row.content==='string'&&row.content.length<=4000&&!privateChatTopic(row.content)&&!containsPrivate(row.content);
       const ordinary=rows.filter(eligible);

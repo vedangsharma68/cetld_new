@@ -37,12 +37,53 @@ alter table public.whatsapp_private_invoice_terms enable row level security;
 revoke all on public.whatsapp_private_invoice_terms from public,anon,authenticated;
 grant select,insert on public.whatsapp_private_invoice_terms to service_role;
 
+-- Raw values remain retained; aliases add canonical numeric/calendar forms.
+-- Internal invoker helper only: no public/service direct execution surface.
+create function app.private_invoice_term_aliases(p_term text) returns setof text
+language plpgsql immutable set search_path='' as $$
+declare
+  term text := lower(btrim(regexp_replace(p_term,'[[:space:]]+',' ','g')));
+  parts text[]; y integer; m integer; day integer; d date;
+begin
+  if length(term) not between 1 and 4000 then return; end if;
+  return next term;
+  if term ~ '^([0-9]+|[0-9]{1,3}(,[0-9]{3})+|[0-9]{1,2}(,[0-9]{2})*,[0-9]{3})(\.[0-9]+)?$' then
+    return next trim_scale(replace(term,',','')::numeric)::text;
+    return;
+  end if;
+  parts := regexp_match(term,'^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})$');
+  if parts is not null then y:=parts[1]::integer; m:=parts[2]::integer; day:=parts[3]::integer;
+  else
+    parts:=regexp_match(term,'^([0-9]{1,2})[/-]([0-9]{1,2})[/-]([0-9]{4})$');
+    if parts is not null then day:=parts[1]::integer; m:=parts[2]::integer; y:=parts[3]::integer;
+    else
+      parts:=regexp_match(term,'^([0-9]{1,2})(st|nd|rd|th)?[ -]+([a-z]+)\.?([ ,]+([0-9]{4}))?$');
+      if parts is not null then
+        if parts[3] !~ '^(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|sep(t(ember)?)?|oct(ober)?|nov(ember)?|dec(ember)?)$' then return; end if;
+        day:=parts[1]::integer; m:=array_position(array['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'],left(parts[3],3)); y:=parts[5]::integer;
+      else
+        parts:=regexp_match(term,'^([a-z]+)\.?[ -]+([0-9]{1,2})(st|nd|rd|th)?([ ,]+([0-9]{4}))?$');
+        if parts is null then return; end if;
+        if parts[1] !~ '^(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|sep(t(ember)?)?|oct(ober)?|nov(ember)?|dec(ember)?)$' then return; end if;
+        m:=array_position(array['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'],left(parts[1],3)); day:=parts[2]::integer; y:=parts[5]::integer;
+      end if;
+    end if;
+  end if;
+  if m is null then return; end if;
+  begin d:=make_date(coalesce(y,2000),m,day);
+  exception when datetime_field_overflow or invalid_datetime_format then return; end;
+  if y is not null then return next to_char(d,'YYYY-MM-DD'); end if;
+  return next lower(to_char(d,'DD Mon'));
+end $$;
+revoke all on function app.private_invoice_term_aliases(text) from public,anon,authenticated,service_role;
+
 create function app.retain_private_invoice_terms(p_workspace_id uuid,p_document jsonb) returns void
 language sql set search_path='' as $$
   insert into public.whatsapp_private_invoice_terms(workspace_id,term_hash,term)
   select distinct p_workspace_id,encode(sha256(convert_to(term,'UTF8')),'hex'),term from (
-    select lower(btrim(value #>> '{}')) term from jsonb_path_query(p_document,
+    select alias.term from jsonb_path_query(p_document,
       '$.** ? (@.type() == "string" || @.type() == "number")') value
+    cross join lateral app.private_invoice_term_aliases(value #>> '{}') alias(term)
   ) terms where length(term) between 1 and 4000 on conflict do nothing;
 $$;
 revoke all on function app.retain_private_invoice_terms(uuid,jsonb) from public,anon,authenticated,service_role;

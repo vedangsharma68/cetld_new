@@ -191,3 +191,48 @@ explicitly reported by the current verification run.
 Before production: verify end-to-end against a staging Supabase deployment and
 configure platform rate limits/usage quotas. Per-request size/tool/time limits
 are enforced here; distributed usage billing/rate limiting is not implemented.
+
+
+## Private-value format matching (PR #211 repair)
+
+Every provider-bound surface uses `private-value-matcher.mjs`: current text,
+positive-provenance history, issued tool transcripts/results, tool arguments and
+model responses. It normalizes case, whitespace and NFKC compatibility forms.
+Numeric matching uses exact decimal strings/BigInt, with international and Indian
+comma grouping, leading zeros, decimal/trailing-zero variants and bounded English
+number phrases (including hundred/thousand/lakh/crore and colloquial "twelve fifty").
+Dates cover ISO, day/month/year with slashes or hyphens, English short/full month
+names in either order, optional years and ordinal day suffixes. Yearless renderings
+are conservative: a matching month/day stays local regardless of year. Numeric
+terms match complete numeric tokens, names match complete tokens/phrases, and
+invoice identifiers do not match longer identifiers. Thus an unretained `100` is
+ordinary; a retained `100` stays local in every supported representation, while
+`1000`, `planning` for retained `ann`, and `INV-123` for `INV-12` are distinct.
+
+Only complete, independently understandable ordinary clauses survive a mixed
+message. Supported clauses include greetings and self-contained joke/story/poem
+requests, explanations, and ordinary "I like/enjoy/love" statements, separated by
+clear punctuation or "also". Referencing clauses ("explain that", "do it") remain
+local. Only the separated ordinary text and screened model answer enter provider
+memory; the raw mixed turn and the local notice never enter it. Mixed turns cannot
+execute the discarded private correction or payment instruction.
+
+Residual variant classes are explicit: space/apostrophe/dot thousands grouping,
+decimal-comma locales, scientific notation, fractions and arithmetic-derived
+restatements; non-English number words/digit scripts, unenumerated English idioms, phonetic/name
+transliterations, hostile encodings/zero-width concealment; relative dates, numeric
+month-first dates and other unenumerated calendar renderings. These are not claimed
+as covered. Mixed messages without a recognized independent ordinary clause stay
+local with actionable menu/review guidance. No semantic DLP guarantee for arbitrary
+paraphrases or encodings is claimed.
+
+SQL repair in the **unapplied** `20261101120327_private_whatsapp_chat_memory.sql`:
+add internal immutable invoker `app.private_invoice_term_aliases(text)` with direct
+EXECUTE revoked from PUBLIC/anon/authenticated/service_role; retain normalized raw
+terms plus canonical exact-decimal and valid ISO/English day-month aliases; change
+`app.retain_private_invoice_terms` to expand those aliases before SHA-256 hashing.
+The existing retention triggers and backfill use that expansion automatically.
+Invalid dates retain raw evidence without inventing a normalized date; yearless
+dates get only a month/day alias. No new table, grant, RLS policy or pre-existing
+invoice/audit/mark update is introduced by this repair. Re-run the drift/atomicity
+and ACL audit against the final migration bytes before applying it.

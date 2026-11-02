@@ -1,3 +1,4 @@
+import {ordinaryPart} from '../../ai/private-value-matcher.mjs';
 import {createPrivateChatMemory} from '../../ai/private-chat-memory.mjs';
 import {createPrivateChatProvider, localReviewTurn, privateChatTopic, PRIVATE_CHAT_REPLY, CHAT_UNAVAILABLE_REPLY} from '../../ai/private-chat.mjs';
 import {invoiceReadQuestion, invoiceRowsAnswer, customerInvoiceRows} from './private-invoice-read.mjs';
@@ -278,7 +279,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       if (signal?.aborted || (Number.isFinite(deadlineAt) && Date.now() >= deadlineAt)) throw Object.assign(new Error('Inbound processing deadline expired'), {name: 'AbortError'});
     };
     active();
-    if(audience!=='owner'&&(media||mediaError||/\b(?:change|chnge|set|edit|modify|fix|update|mark)\b/i.test(message||''))){
+    if(audience!=='owner'&&(media||mediaError||/\b(?:change|chnge|set|edit|modify|fix|update|mark)\b/i.test(message||'')&&!(ordinaryPart(message,privateChatTopic).mixed&&ordinaryPart(message,privateChatTopic).text))){
       return media||mediaError ? 'Payment receipts cannot be recorded from customer photos here. Ask the business owner to verify and record the payment. Nothing was changed.' : 'Only the business owner can create or change invoices. Contact the business for help.';
     }
     const {data: settings, error} = await supabase.from('workspace_ai_settings')
@@ -307,6 +308,10 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           workspaceId: scope.workspaceId, customerId: scope.customerId, phone: scope.phone};
       },
     });
+    if(!media&&!mediaError&&!contactCard&&ordinaryPart(message,privateChatTopic).mixed&&ordinaryPart(message,privateChatTopic).text){
+      try { return (await channel.ask({workspaceId,customerId,phone,message,history:[]})).answer; }
+      catch { return CHAT_UNAVAILABLE_REPLY; }
+    }
     if (media || mediaError) {
       if(!authorizeScope || !await authorizeScope({workspaceId,customerId,phone})) return 'Only the business owner can create or change invoices.';
       // This durable tombstone is written before extraction. Its row/version
@@ -550,7 +555,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         return invoiceRowsAnswer(message,{ok:true,readOnly:true,operation:'read',table:'invoices',rows,truncated:rows.length>=50,offset:0});
       } catch { return 'I could not verify your invoice records right now. Try again shortly.'; }
     }
-    if (privateChatTopic(message)) return PRIVATE_CHAT_REPLY;
+    if (privateChatTopic(message)&&!(ordinaryPart(message,privateChatTopic).mixed&&ordinaryPart(message,privateChatTopic).text)) return PRIVATE_CHAT_REPLY;
     if (offlineTurn) return 'What would you like to change, and what should the new value be?';
     let history = [];
     try { history = await readConversationHistory({supabase, workspaceId, phone,customerId,audience}); }
