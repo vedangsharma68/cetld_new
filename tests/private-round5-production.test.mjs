@@ -75,3 +75,15 @@ test('round5 short formal given-name components are retained, not dismissed as n
   const c=(await f.db.query("insert into customers(workspace_id,name) values($1,'Li Wang') returning id",[f.scope.workspaceId])).rows[0];await f.db.query("insert into invoices(workspace_id,customer_id,invoice_number,total_amount,currency,status) values($1,$2,'R5-SHORT-NAME',43,'INR','draft')",[f.scope.workspaceId,c.id]);await f.turn('Ask Li for advice');assert.equal(wires.length,0);await f.turn('Explain the surname Li');assert.equal(wires.length,1);
  }finally{await f.close();}
 });
+
+
+test('round5 every Hindi cardinal atom retains and matches its numeric key in both engines',async()=>{
+ const f=await fixture();try{
+  const{nativeCardinals}=await import('../ai/private-value-language.mjs');const{createPrivateValueMatcher}=await import('../ai/private-value-matcher.mjs');
+  for(const[value,word]of nativeCardinals.entries()){
+   assert.ok(privateFieldKeys(word).includes('number:'+value),word);
+   const sql=(await f.db.query('select distinct term from app.private_invoice_term_aliases($1) term',[word])).rows.map(r=>r.term);assert.ok(sql.includes('number:'+value),word);
+   assert.equal(createPrivateValueMatcher(['number:'+value])('send '+word+' today'),true,word);
+  }
+ }finally{await f.close();}
+});

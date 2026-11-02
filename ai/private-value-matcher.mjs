@@ -3,7 +3,7 @@ import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,
 // One code-point fold, shared verbatim with SQL, independent of DB/OS locale.
 export const normalizePrivateValue=value=>Array.from(String(value??''),ch=>PRIVATE_UNICODE_FOLD[ch]??ch).join('').replace(/ +/g,' ').trim();
 const clean=normalizePrivateValue;
-function lexicalText(input){const origins=[],chunks=[];for(const m of input.matchAll(/[\p{L}\p{M}]+|[^\p{L}\p{M}]+/gu)){const part=lexicalAliases[m[0]]??m[0];chunks.push(part);for(let i=0;i<part.length;i++)origins.push(Object.hasOwn(lexicalAliases,m[0])?{start:m.index,end:m.index+m[0].length}:{start:m.index+i,end:m.index+i+1});}return {text:chunks.join(''),origins};}
+function lexicalText(input){const origins=[],chunks=[];for(const m of input.matchAll(/[\p{L}\p{M}]+|[^\p{L}\p{M}]+/gu)){const part=lexicalAliases[m[0]]??m[0];chunks.push(part);for(let i=0;i<part.length;i++)origins.push(Object.hasOwn(lexicalAliases,m[0])?{start:m.index,end:m.index+m[0].length,translated:true}:{start:m.index+i,end:m.index+i+1});}return {text:chunks.join(''),origins};}
 const stripCurrency=value=>value.replace(/\/[-−]$/u,'').replace(new RegExp(`^(?:\\p{Sc}|${currencyUnitPattern}) *| *(?:\\p{Sc}|${currencyUnitPattern})$`,'gu'),'').trim();
 export function normalizePrivateText(value){
   const text=String(value??''),chars=[],origins=[];let index=0;
@@ -143,7 +143,7 @@ function wordRuns(original,onSpan){
   const lexical=lexicalText(original),text=lexical.text;
   const values=new Set();let run=[];
   const flush=()=>{
-    if(!run.some(token=>numberWords.has(token.word)&&!['and','a'].includes(token.word))){run=[];return;}
+    if(!run.some(token=>numberWords.has(token.word)&&!['and','a'].includes(token.word)||lexical.origins[token.start]?.translated)){run=[];return;}
     for(let start=0;start<run.length;){
       let end=run.length,found=[];
       for(;end>start;end--){found=wordNumber(run.slice(start,end).map(token=>token.word));if(found.length)break;}
@@ -214,7 +214,7 @@ export function privateFieldKeys(value){
   const term=raw.replace(/^[\p{Quotation_Mark}ʼ]+|[\p{Quotation_Mark}ʼ]+$/gu,''),keys=new Set([raw]),parsed=dates(term),date=parsed.values.filter((value,index)=>{const [a,b]=parsed.spans[index];return ['','the'].includes(term.slice(0,a).trim())&&/^[., ]*$/.test(term.slice(b));});
   for(const n of numeric(term))keys.add('number:'+n);
   const spoken=stripCurrency(lexicalText(stripCurrency(term)).text),words=spoken.match(/[a-z]+/g)||[];
-  if(words.every(word=>numberWords.has(word)))for(const n of wordRuns(spoken))keys.add('number:'+n);
+  if(words.every(word=>numberWords.has(word))){for(const n of numeric(spoken))keys.add('number:'+n);for(const n of wordRuns(lexicalText(term).text===term?spoken:term))keys.add('number:'+n);}
   for(const {year,month,day} of date)keys.add('date:'+(year==null?'*':String(year).padStart(4,'0'))+'-'+String(month).padStart(2,'0')+'-'+String(day).padStart(2,'0'));
   if(keys.size===1){const key=identifier(term);if(key)keys.add('identifier:'+key);}
   return [...keys];

@@ -159,7 +159,7 @@ create function app.private_invoice_word_number_aliases(p_term text) returns set
 language plpgsql immutable set search_path='' as $$
 declare
   small jsonb:='SMALL'::jsonb; scales jsonb:='SCALES'::jsonb; fractions jsonb:='FRACTIONS'::jsonb;
-  prepared text:=app.private_invoice_lexical(app.private_invoice_normalize(p_term)); prior text;token text[]; word text; words text[]:=array[]::text[]; segment text[]; start_at integer:=1; end_at integer; segment_end integer; piece integer; keys text[];
+  prepared text:=app.private_invoice_lexical(app.private_invoice_normalize(p_term)); translated boolean:=prepared<>app.private_invoice_normalize(p_term);prior text;token text[]; word text; words text[]:=array[]::text[]; segment text[]; start_at integer:=1; end_at integer; segment_end integer; piece integer; keys text[];
 begin
   prepared:=regexp_replace(prepared,'/[-−]$','');
   loop prior:=prepared;prepared:=btrim(regexp_replace(prepared,'^(?:'||U&'[CURRENCY]'||'|UNITS) *| *(?:'||U&'[CURRENCY]'||'|UNITS)$','','g'));exit when prepared=prior;end loop;
@@ -178,7 +178,7 @@ begin
   while start_at<=cardinality(words) loop
     segment_end:=coalesce((select min(n)::integer from unnest(words) with ordinality p(w,n) where n>=start_at and w='!'),cardinality(words)+1)-1;
     segment:=words[start_at:segment_end];piece:=1;
-    if exists(select 1 from unnest(segment) w where (small ? w or scales ? w or fractions ? w or w in ('hundred','point'))) then
+    if translated or exists(select 1 from unnest(segment) w where (small ? w or scales ? w or fractions ? w or w in ('hundred','point'))) then
       while piece<=cardinality(segment) loop
         end_at:=cardinality(segment);
         while end_at>=piece loop

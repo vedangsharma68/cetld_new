@@ -218,7 +218,7 @@ create function app.private_invoice_word_number_aliases(p_term text) returns set
 language plpgsql immutable set search_path='' as $$
 declare
   small jsonb:='{"zero":"0","one":"1","two":"2","three":"3","four":"4","five":"5","six":"6","seven":"7","eight":"8","nine":"9","ten":"10","eleven":"11","twelve":"12","thirteen":"13","fourteen":"14","fifteen":"15","sixteen":"16","seventeen":"17","eighteen":"18","nineteen":"19","twenty":"20","thirty":"30","forty":"40","fifty":"50","sixty":"60","seventy":"70","eighty":"80","ninety":"90"}'::jsonb; scales jsonb:='{"thousand":"1000","lakh":"100000","lac":"100000","million":"1000000","crore":"10000000","billion":"1000000000"}'::jsonb; fractions jsonb:='{"half":"2","halves":"2","quarter":"4","quarters":"4","third":"3","fifth":"5","sixth":"6","seventh":"7","eighth":"8","ninth":"9","tenth":"10"}'::jsonb;
-  prepared text:=app.private_invoice_lexical(app.private_invoice_normalize(p_term)); prior text;token text[]; word text; words text[]:=array[]::text[]; segment text[]; start_at integer:=1; end_at integer; segment_end integer; piece integer; keys text[];
+  prepared text:=app.private_invoice_lexical(app.private_invoice_normalize(p_term)); translated boolean:=prepared<>app.private_invoice_normalize(p_term);prior text;token text[]; word text; words text[]:=array[]::text[]; segment text[]; start_at integer:=1; end_at integer; segment_end integer; piece integer; keys text[];
 begin
   prepared:=regexp_replace(prepared,'/[-−]$','');
   loop prior:=prepared;prepared:=btrim(regexp_replace(prepared,'^(?:'||U&'[\0024\00a2-\00a5\058f\060b\07fe-\07ff\09f2-\09f3\09fb\0af1\0bf9\0e3f\17db\20a0-\20c1\a838\fdfc\fe69\ff04\ffe0-\ffe1\ffe5-\ffe6\+011fdd-\+011fe0\+01e2ff\+01ecb0]'||'|(?:inr|usd|eur|gbp|aed|sgd|aud|cad|chf|rs\.?|rupees?|dollars?|euros?|pounds?)) *| *(?:'||U&'[\0024\00a2-\00a5\058f\060b\07fe-\07ff\09f2-\09f3\09fb\0af1\0bf9\0e3f\17db\20a0-\20c1\a838\fdfc\fe69\ff04\ffe0-\ffe1\ffe5-\ffe6\+011fdd-\+011fe0\+01e2ff\+01ecb0]'||'|(?:inr|usd|eur|gbp|aed|sgd|aud|cad|chf|rs\.?|rupees?|dollars?|euros?|pounds?))$','','g'));exit when prepared=prior;end loop;
@@ -237,7 +237,7 @@ begin
   while start_at<=cardinality(words) loop
     segment_end:=coalesce((select min(n)::integer from unnest(words) with ordinality p(w,n) where n>=start_at and w='!'),cardinality(words)+1)-1;
     segment:=words[start_at:segment_end];piece:=1;
-    if exists(select 1 from unnest(segment) w where (small ? w or scales ? w or fractions ? w or w in ('hundred','point'))) then
+    if translated or exists(select 1 from unnest(segment) w where (small ? w or scales ? w or fractions ? w or w in ('hundred','point'))) then
       while piece<=cardinality(segment) loop
         end_at:=cardinality(segment);
         while end_at>=piece loop
