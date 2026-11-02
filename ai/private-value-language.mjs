@@ -8,3 +8,8 @@ export const small=Object.fromEntries('zero one two three four five six seven ei
 for(const [i,word] of ['twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety'].entries())small[word]=BigInt((i+2)*10);
 export const scales={thousand:1000n,lakh:100000n,lac:100000n,million:1000000n,crore:10000000n,billion:1000000000n};
 export const fractions={half:2n,halves:2n,quarter:4n,quarters:4n};
+// Private printed evidence keeps a field label separate from its value. This
+// grammar applies only to explicitly tagged evidence, not arbitrary names.
+export const evidenceLabel='^[a-z_][a-z0-9_ .#%()/-]{0,80}[:=] *';
+export const evidenceNumericLabel='^[a-z_][a-z_ .#%()/-]{0,80} +(?=[0-9+−\\p{Sc}-])';
+export const evidenceDateLabel='^(?:invoice +date|due(?: +date)?|date)(?![a-z])';

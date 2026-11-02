@@ -1,5 +1,5 @@
 import {PRIVATE_UNICODE_FOLD} from './private-value-unicode.mjs';
-import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions} from './private-value-language.mjs';
+import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel} from './private-value-language.mjs';
 // One code-point fold, shared verbatim with SQL, independent of DB/OS locale.
 export const normalizePrivateValue=value=>Array.from(String(value??''),ch=>PRIVATE_UNICODE_FOLD[ch]??ch).join('').replace(/ +/g,' ').trim();
 const clean=normalizePrivateValue;
@@ -98,10 +98,11 @@ function wordNumber(words){
     return wordNumber(words.slice(0,point)).map(value=>exact(value,tail.map(w=>String(small[w])).join('')));}
   const actual=words.filter(w=>!['and','a'].includes(w));let total=0n,group=0n;
   for(const word of actual){if(small[word]!==undefined)group+=small[word];else if(word==='hundred')group=(group||1n)*100n;else if(scales[word]){total+=(group||1n)*scales[word];group=0n;}else return [];}
-  const values=[String(total+group)];
+  if(actual.length>=2&&actual.every(word=>small[word]!==undefined&&small[word]<=9n)&&!words.includes('and'))return [exact(actual.map(word=>String(small[word])).join(''))];
+  const values=[];
   if(actual.length>=2&&actual.length<=3&&actual.every(w=>small[w]!==undefined)&&small[actual[0]]<100n&&small[actual[1]]>=10n){
     const tail=actual.slice(1).reduce((sum,w)=>sum+small[w],0n);if(tail<100n)values.push(String(small[actual[0]]*100n+tail));}
-  return values;
+  return values.length?values:[String(total+group)];
 }
 function wordRuns(text,onSpan){
   const values=new Set();let run=[],start=0,end=0;
@@ -118,26 +119,42 @@ function numbers(text,onSpan){
 }
 const identifier=value=>/[a-z\p{L}]/u.test(value)&&/[0-9]/u.test(value)&&/^[\p{L}\p{N}\p{P} ]+$/u.test(value)?value.replace(/[^\p{L}\p{N}]/gu,''):null;
 const identifierPattern=key=>new RegExp(`(?<![\\p{L}\\p{N}_])${Array.from(key,escape).join('[\\p{P} ]*')}(?![\\p{L}\\p{N}_])`,'u');
+export function privateEvidenceValues(value){
+  const values=[clean(value)];
+  const amount='[0-9]+(?:[., \\p{Quotation_Mark}ʼ]+[0-9]+)*(?:[kmb])?';
+  const currency=new RegExp(`(?:(?:${units}|\\p{Sc}) *[+−-]? *${amount}|${amount} *(?:${units}|\\p{Sc}))`,'gu');
+  for(const raw of String(value??'').split(/[\r\n]+/u)){
+    const line=clean(raw),payload=line.replace(new RegExp(evidenceLabel,'u'),'').replace(new RegExp(evidenceNumericLabel,'u'),'');
+    if(payload){const amounts=numeric(payload);if(amounts.size&&!new RegExp(evidenceDateLabel,'u').test(line))values.push(...[...amounts].map(value=>'number:'+value));else values.push(payload);}
+    for(const match of line.matchAll(currency))values.push(match[0]);
+  }
+  return [...new Set(values.filter(Boolean))];
+}
 export function createPrivateValueMatcher(terms=[]){
   const retainedNumbers=new Set(),retainedDates=[],literals=[];
-  for(const raw of terms){
+  const expanded=terms.flatMap(raw=>String(raw??'').startsWith('evidence:')?privateEvidenceValues(String(raw).slice(9)):[raw]);
+  for(const raw of expanded){
     const term=clean(raw);if(!term)continue;
     if(/^number:[0-9]+(?:\.[0-9]+)?$/.test(term)){const [a,b]=term.slice(7).split('.');retainedNumbers.add(exact(a,b));continue;}
     const tagged=/^date:(\*|[0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(term);
     if(tagged){const value=dateValue(tagged[1]==='*'?null:Number(tagged[1]),Number(tagged[2]),Number(tagged[3]));if(value)retainedDates.push(value);continue;}
     if(term.startsWith('identifier:')){literals.push(identifierPattern(term.slice(11)));continue;}
-    const date=dates(term).values,amount=numeric(term);
+    const parsedDates=dates(term),date=parsedDates.spans.some(([a,b])=>['','the'].includes(term.slice(0,a).trim())&&/^[., ]*$/.test(term.slice(b)))?parsedDates.values:[],amount=numeric(term);
     if(date.length)retainedDates.push(...date);
     if(amount.size)amount.forEach(value=>retainedNumbers.add(value));
     if(!date.length&&!amount.size){
-      const words=term.split(/[ ,&-]+/u);if(words.every(word=>numberWords.has(word)))wordNumber(words).forEach(n=>retainedNumbers.add(n));
-      const key=identifier(term);literals.push(key?identifierPattern(key):new RegExp(`(?<![\\p{L}\\p{N}_])${escape(term)}(?![\\p{L}\\p{N}_])`,'u'));
+      const words=term.split(/[ ,&-]+/u),spoken=words.every(word=>numberWords.has(word))?wordNumber(words):[];
+      if(spoken.length)spoken.forEach(n=>retainedNumbers.add(n));
+      else{const key=identifier(term);literals.push(key?identifierPattern(key):new RegExp(`(?<![\\p{L}\\p{N}_])${escape(term)}(?![\\p{L}\\p{N}_])`,'u'));}
     }
   }
   const matchText=text=>{
     const content=clean(text);if(literals.some(pattern=>pattern.test(content)))return true;
     const found=dates(content);
     if(found.values.some(current=>retainedDates.some(saved=>saved.month===current.month&&saved.day===current.day&&(saved.year==null||current.year==null||saved.year===current.year))))return true;
+    // A two-part dotted rendering can also be an amount. Compare that whole
+    // interpretation before masking date parts; never compare its subvalues.
+    if(found.spans.some(([start,end])=>[...numeric(content.slice(start,end))].some(n=>retainedNumbers.has(n))))return true;
     // Do not reinterpret the parts of an explicit non-matching date as amounts.
     const masked=content.split('');for(const [start,end] of found.spans)for(let i=start;i<end;i++)masked[i]=' ';
     return retainedNumbers.size>0&&[...numbers(masked.join(''))].some(n=>retainedNumbers.has(n));
@@ -161,7 +178,8 @@ export function createPrivateValueMatcher(terms=[]){
     const found=dates(content),masked=content.split('');
     for(const [i,current] of found.values.entries()){
       const [start,end]=found.spans[i];
-      if(retainedDates.some(saved=>saved.month===current.month&&saved.day===current.day&&(saved.year==null||current.year==null||saved.year===current.year)))add(start,end);
+      if(retainedDates.some(saved=>saved.month===current.month&&saved.day===current.day&&(saved.year==null||current.year==null||saved.year===current.year))
+        ||[...numeric(content.slice(start,end))].some(n=>retainedNumbers.has(n)))add(start,end);
       for(let j=start;j<end;j++)masked[j]=' ';
     }
     numbers(masked.join(''),(keys,start,end)=>{if(keys.some(key=>retainedNumbers.has(key)))add(start,end);});

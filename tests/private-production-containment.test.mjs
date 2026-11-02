@@ -16,7 +16,7 @@ const cases=[
   'one thousand, two hundred and fifty','one thousand two hundred & fifty','1.25k',
   'INV–2026–0142','INV 2026 0142','INV/2026/0142','१,२५०','١٢٥٠','١٬٢٥٠','١٢٥٠٫٠٠',
   'one point two five thousand','one and a quarter thousand','twelve and a half hundred',
-  'Quoted: "one thousand,\ntwo hundred and fifty"','1\ufe0f250','1\u034f250',
+  'Quoted: "one thousand,\ntwo hundred and fifty"','1\ufe0f250','1\u034f250','one two five zero',
 ];
 function boundary({stored=terms,history=[],response='A safe answer'}={}){
   const payloads=[],writes=[];
@@ -122,7 +122,7 @@ test('F5 SQL/JS caseless/mark/whitespace/native-digit semantics and alias gramma
       }
     }
     const pivot=createPrivateValueMatcher(['2069-10-31','1970-11-01']);assert.equal(pivot('31/10/69'),true);assert.equal(pivot('1/11/70'),true);
-    for(const fn of ['private_invoice_normalize','private_invoice_number_aliases','private_invoice_word_number_aliases','private_invoice_term_aliases']){
+    for(const fn of ['private_invoice_normalize','private_invoice_number_aliases','private_invoice_word_number_aliases','private_invoice_term_aliases','private_invoice_evidence_aliases']){
       const meta=(await f.db.query("select provolatile,prosecdef,proconfig from pg_proc where oid=$1::regprocedure",['app.'+fn+'(text)'])).rows[0];
       assert.equal(meta.provolatile,'i');assert.equal(meta.prosecdef,false);assert.deepEqual(meta.proconfig,['search_path=""']);
       for(const role of ['anon','authenticated','service_role'])assert.equal((await f.db.query("select has_function_privilege($1,$2,'execute') allowed",[role,'app.'+fn+'(text)'])).rows[0].allowed,false);
@@ -166,6 +166,10 @@ test('F3 local OCR evidence and owner notes retain currency-symbol aliases befor
   const f=await fixture({recording:true});try{
     f.setPrinted('Invoice No: PRIVATE-RAW\nBill to: Anurag\nInvoice Date: 2026-10-20\nDue Date: 2026-10-31\nTotal: ₹1.250,00');
     await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
+    const beforeCorrection=f.providerRecord.calls;
+    const earlyTerms=(await f.db.query('select term from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId])).rows.map(row=>row.term);
+    assert.ok(earlyTerms.includes('number:1250'),'raw labelled evidence must retain the amount before any correction');
+    await f.turn('Explain 1250');assert.equal(f.providerRecord.calls,beforeCorrection);
     await f.turn('set notes to ₹1.250,00');
     const aliases=(await f.db.query('select term from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId])).rows.map(row=>row.term);
     assert.ok(aliases.includes('number:1250'));const before=f.providerRecord.calls;
@@ -234,5 +238,36 @@ test('real web authorization adapter uses scoped service-only privacy memory aft
     assert.equal(saved.length,2);assert.ok(saved.every(row=>row.workspace_id===f.scope.workspaceId&&row.owner_id===f.scope.ownerId&&row.provenance==='ordinary_chat_v1'));
     const restarted=store.privateChatMemory({messageId:'web-restart'});assert.equal((await restarted.read('Hello')).length,2);
     assert.deepEqual(f.errors,[]);
+  }finally{await f.close();}
+});
+
+
+test('explicit printed-evidence provenance expands labelled and embedded monetary values with SQL/JS parity',async()=>{
+  const f=await fixture({recording:true});try{
+    for(const text of ['Total: ₹1.250,00','Total ₹1.250,00','Total₹1.250,00','Grand total was ₹1.250,00 plus tax','Amount: $1,250','Invoice total1250₹','Total: one thousand, two hundred & fifty','Due date: 31/10/26']){
+      const aliases=(await f.db.query('select app.private_invoice_evidence_aliases($1) term',[text])).rows.map(row=>row.term);
+      const match=createPrivateValueMatcher(['evidence:'+text]),retained=createPrivateValueMatcher(aliases);
+      for(const probe of ['1250','12500','2026-10-31','2027-10-31'])assert.equal(retained(probe),match(probe),JSON.stringify({text,probe,aliases}));
+      if(!text.startsWith('Due'))assert.ok(aliases.includes('number:1250'),text);
+    }
+    const colloquial=boundary({stored:['twelve fifty']});await colloquial.provider('send 62 today').generate();await colloquial.provider('twelve fifty one today').generate();assert.equal(colloquial.payloads.length,2);
+    for(const stored of [['number:12.5'],['₹12.50']]){
+      const h=boundary({stored});for(const value of ['12.5','12.50','12.500'])await h.provider('Explain '+value).generate();assert.deepEqual(h.payloads,[],'short-date ambiguity cannot suppress a retained amount');
+    }
+  }finally{await f.close();}
+});
+
+test('typed monetary values and printed amounts do not acquire lossy yearless date aliases',async()=>{
+  const f=await fixture({recording:true});try{
+    await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,{amount:31.10,due_date:'2026-10-31',printedEvidence:{total:'Total: ₹31.10'}}]);
+    const aliases=(await f.db.query('select term from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId])).rows.map(row=>row.term);
+    assert.ok(aliases.includes('number:31.1'));assert.ok(!aliases.includes('date:*-10-31'));
+    for(const stored of [aliases,['evidence:Total: ₹31.10','2026-10-31']]){
+      const h=boundary({stored});
+      for(const value of ['2027-10-31','31 Oct 2025'])await h.provider('Explain '+value).generate();
+      assert.equal(h.payloads.length,2);
+      for(const value of ['31.1','₹31.10','2026-10-31','31/10'])await h.provider('Explain '+value).generate();
+      assert.equal(h.payloads.length,2);
+    }
   }finally{await f.close();}
 });

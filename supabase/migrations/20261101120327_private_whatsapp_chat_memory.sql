@@ -94,7 +94,7 @@ declare
   words text[]:=regexp_split_to_array(app.private_invoice_normalize(p_term),'[ ,&-]+');
   small jsonb:='{"zero":"0","one":"1","two":"2","three":"3","four":"4","five":"5","six":"6","seven":"7","eight":"8","nine":"9","ten":"10","eleven":"11","twelve":"12","thirteen":"13","fourteen":"14","fifteen":"15","sixteen":"16","seventeen":"17","eighteen":"18","nineteen":"19","twenty":"20","thirty":"30","forty":"40","fifty":"50","sixty":"60","seventy":"70","eighty":"80","ninety":"90"}'::jsonb; scales jsonb:='{"thousand":"1000","lakh":"100000","lac":"100000","million":"1000000","crore":"10000000","billion":"1000000000"}'::jsonb; fractions jsonb:='{"half":"2","halves":"2","quarter":"4","quarters":"4"}'::jsonb;
   factor numeric; split_at integer; base_key text; numerator_key text; head text; tail_words text[];
-  word text; total numeric:=0; part numeric:=0; tail text:=''; point boolean:=false; actual text[]:=array[]::text[];
+  word text; total numeric:=0; part numeric:=0; additive numeric; tail text:=''; point boolean:=false; actual text[]:=array[]::text[];
 begin
   if cardinality(words)=0 then return;end if;
   factor:=coalesce((scales->>words[cardinality(words)])::numeric,case when words[cardinality(words)]='hundred' then 100 else 1 end);
@@ -129,12 +129,16 @@ begin
     else return;end if;
   end loop;
   if cardinality(actual)=0 or point and tail='' then return;end if;
-  return next 'number:'||trim_scale((total+part)::text::numeric+case when point then ('0.'||tail)::numeric else 0 end)::text;
+  additive:=total+part;
+  if not point and cardinality(actual)>=2 and array_position(words,'and') is null and not exists(select 1 from unnest(actual) w where not small ? w or (small->>w)::numeric>9) then
+    return next 'number:'||trim_scale((select string_agg(small->>w,'' order by n) from unnest(actual) with ordinality p(w,n))::numeric)::text;return;
+  end if;
   if not point and cardinality(actual) between 2 and 3 and not exists(select 1 from unnest(actual) w where not small ? w)
     and (small->>actual[2])::numeric>=10 then
     part:=(select sum((small->>w)::numeric) from unnest(actual[2:cardinality(actual)]) w);
-    if part<100 then return next 'number:'||trim_scale((small->>actual[1])::numeric*100+part)::text;end if;
+    if part<100 then return next 'number:'||trim_scale((small->>actual[1])::numeric*100+part)::text;return;end if;
   end if;
+  return next 'number:'||trim_scale(additive+case when point then ('0.'||tail)::numeric else 0 end)::text;
 end $$;
 revoke all on function app.private_invoice_word_number_aliases(text) from public,anon,authenticated,service_role;
 
@@ -190,13 +194,47 @@ begin
 end $$;
 revoke all on function app.private_invoice_term_aliases(text) from public,anon,authenticated,service_role;
 
+-- Explicit printed-evidence provenance. Preserve raw evidence and derive the
+-- labelled value plus every currency-bearing numeric candidate, even when the
+-- extraction validator cannot resolve its amount. No whole workspace wall.
+create function app.private_invoice_evidence_aliases(p_term text) returns setof text
+language plpgsql immutable set search_path='' as $$
+declare
+  line text; payload text; candidate text[];
+  amount_pattern text:=U&'[0-9]+(?:[., ''\0022\0027\00ab\00bb\2018-\201f\2039-\203a\2e42\300c-\300f\301d-\301f\fe41-\fe44\ff02\ff07\ff62-\ff63\02bc]+[0-9]+)*(?:[kmb])?';
+  currency_pattern text;
+begin
+  currency_pattern:='(?:(?:(?:inr|usd|eur|gbp|aed|sgd|aud|cad|chf|rs|rupees?|dollars?|euros?|pounds?)|'||U&'[\0024\00a2-\00a5\058f\060b\07fe-\07ff\09f2-\09f3\09fb\0af1\0bf9\0e3f\17db\20a0-\20c1\a838\fdfc\fe69\ff04\ffe0-\ffe1\ffe5-\ffe6\+011fdd-\+011fe0\+01e2ff\+01ecb0]'||') *[+−-]? *'||amount_pattern||'|'||amount_pattern||' *(?:(?:inr|usd|eur|gbp|aed|sgd|aud|cad|chf|rs|rupees?|dollars?|euros?|pounds?)|'||U&'[\0024\00a2-\00a5\058f\060b\07fe-\07ff\09f2-\09f3\09fb\0af1\0bf9\0e3f\17db\20a0-\20c1\a838\fdfc\fe69\ff04\ffe0-\ffe1\ffe5-\ffe6\+011fdd-\+011fe0\+01e2ff\+01ecb0]'||'))';
+  for line in select app.private_invoice_normalize(v) from regexp_split_to_table(p_term,E'[\\r\\n]+') v loop
+    if length(line) between 1 and 3991 then return next 'evidence:'||line;end if;
+    payload:=regexp_replace(line,'^[a-z_][a-z0-9_ .#%()/-]{0,80}[:=] *','');
+    payload:=regexp_replace(payload,U&'^[a-z_][a-z_ .#%()/-]{0,80} +(?=[0-9+−\0024\00a2-\00a5\058f\060b\07fe-\07ff\09f2-\09f3\09fb\0af1\0bf9\0e3f\17db\20a0-\20c1\a838\fdfc\fe69\ff04\ffe0-\ffe1\ffe5-\ffe6\+011fdd-\+011fe0\+01e2ff\+01ecb0-])','');
+    if length(payload) between 1 and 4000 then
+      if line !~ '^(?:invoice +date|due(?: +date)?|date)(?![a-z])' and exists(select 1 from app.private_invoice_number_aliases(payload)) then
+        return query select * from app.private_invoice_number_aliases(payload);
+      else return query select * from app.private_invoice_term_aliases(payload);end if;
+    end if;
+    for candidate in select regexp_matches(line,currency_pattern,'g') loop
+      return query select * from app.private_invoice_number_aliases(candidate[1]);
+    end loop;
+  end loop;
+end $$;
+revoke all on function app.private_invoice_evidence_aliases(text) from public,anon,authenticated,service_role;
+
 create function app.retain_private_invoice_terms(p_workspace_id uuid,p_document jsonb) returns void
 language sql set search_path='' as $$
   insert into public.whatsapp_private_invoice_terms(workspace_id,term_hash,term)
   select distinct p_workspace_id,encode(sha256(convert_to(term,'UTF8')),'hex'),term from (
     select alias.term from jsonb_path_query(p_document,
-      '$.** ? (@.type() == "string" || @.type() == "number")') value
+      '$.** ? (@.type() == "string")') value
     cross join lateral app.private_invoice_term_aliases(value #>> '{}') alias(term)
+    union all
+    select alias.term from jsonb_path_query(p_document,'$.** ? (@.type() == "number")') value
+    cross join lateral app.private_invoice_number_aliases(value #>> '{}') alias(term)
+    union all
+    select alias.term from jsonb_path_query(p_document,
+      '$.**.printedEvidence.** ? (@.type() == "string")') value
+    cross join lateral app.private_invoice_evidence_aliases(value #>> '{}') alias(term)
   ) terms where length(term) between 1 and 4000 on conflict do nothing;
 $$;
 revoke all on function app.retain_private_invoice_terms(uuid,jsonb) from public,anon,authenticated,service_role;
@@ -205,8 +243,8 @@ create function app.retain_private_review_terms() returns trigger
 language plpgsql security definer set search_path='' as $$
 begin
   if new.action->>'type'='invoice_review_draft' then
-    perform app.retain_private_invoice_terms(new.workspace_id,jsonb_build_array(
-      new.action->'invoice',new.action->'printedEvidence',new.action->'ownerProvidedFacts'));
+    perform app.retain_private_invoice_terms(new.workspace_id,jsonb_build_object(
+      'invoice',new.action->'invoice','printedEvidence',new.action->'printedEvidence','ownerProvidedFacts',new.action->'ownerProvidedFacts'));
   end if;
   return new;
 end $$;
@@ -239,7 +277,7 @@ revoke all on function app.retain_private_invoice_customer_terms() from public,a
 create trigger retain_private_invoice_customer_terms after update of name,company_name,email,phone on public.customers
   for each row execute function app.retain_private_invoice_customer_terms();
 
-select app.retain_private_invoice_terms(workspace_id,jsonb_build_array(action->'invoice',action->'printedEvidence',action->'ownerProvidedFacts'))
+select app.retain_private_invoice_terms(workspace_id,jsonb_build_object('invoice',action->'invoice','printedEvidence',action->'printedEvidence','ownerProvidedFacts',action->'ownerProvidedFacts'))
   from public.whatsapp_pending_actions where action->>'type'='invoice_review_draft';
 select app.retain_private_invoice_terms(i.workspace_id,to_jsonb(i)||jsonb_build_object('customer_name',c.name,'customer_company',c.company_name,'customer_email',c.email,'customer_phone',c.phone))
   from public.invoices i left join public.customers c on c.workspace_id=i.workspace_id and c.id=i.customer_id;

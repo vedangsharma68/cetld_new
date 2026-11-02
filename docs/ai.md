@@ -217,7 +217,8 @@ comma/dot/space/apostrophe groups remain one value (`1 250` is not `1` and `250`
 Invalid grouping chains are segmented as lists, with comma+space separating list
 items; `1250, 77` and `1250 77` cannot hide a retained `1250`. Malformed `1,2500`
 does not become `1250`. Both valid grouping/decimal interpretations are checked
-only against retained values. Currency words and symbols are affixes; signed and
+only against retained values. A dotted short date is also compared as one whole
+amount when that interpretation exists, without comparing date components. Currency words and symbols are affixes; signed and
 parenthesized scalar strings retain the magnitude conservatively. Decimal-comma,
 trailing-zero, k/m/b multipliers, cardinal number phrases with comma/&/and
 connectors, decimal phrases and common fractional/scaled phrases are normalized.
@@ -269,7 +270,15 @@ linked customer name/company/email/phone on invoice insert/update; add company_n
 to the existing backfill. All helpers retain empty search_path and direct EXECUTE
 revoked from PUBLIC/anon/authenticated/service_role. The existing tables, indexes,
 RLS/service grants, transaction, deduplication and trigger definitions are retained;
-the ledger retention function body now includes the linked customer lookup. No
+the ledger retention function body now includes the linked customer lookup.
+Printed evidence has an explicit tagged source kind: the new immutable invoker
+`app.private_invoice_evidence_aliases(text)` derives labelled payloads and
+currency-bearing candidates before the first subsequent chat, even when amount
+validation fails. The term retainer expands these aliases, and the review
+trigger/backfill pass a named printedEvidence envelope. JSON numbers use only
+numeric aliases; labelled monetary evidence does not acquire yearless-date
+aliases. Full date fields preserve their explicit year. Direct execution is
+revoked for this helper too. The owner review text is unchanged. No
 original invoice/audit/mark rows are rewritten or unmarked. Re-run the drift,
 atomicity/object-reference and ACL audit on the final migration hash before apply.
 
