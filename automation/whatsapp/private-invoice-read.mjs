@@ -1,7 +1,9 @@
 import {receivablesReadAnswer, receivableBalanceLabel} from '../../invoice/receivables.mjs';
 
 export function invoiceReadQuestion(message) {
-  const text=String(message||'').trim();
+  const text=String(message||'').trim()
+    .replace(/\b(?:do not|don't)\s+(?:change|edit|update|write|modify)\b[^.!?;]*/gi,'')
+    .replace(/\b(?:and\s+)?(?:its|the|their)\s+edit options\b/gi,'');
   if(/\b(?:work[- ]life|balance between)\b/i.test(text))return false;
   if(/^(?:(?:my|our|total|current) )?(?:balances?|outstanding|receivables?)[.!?\s]*$/i.test(text))return true;
   return /^(?:please[ ,]+)?(?:what|who|which|how|show|list|tell|view|read|check|is|are|has|have|did|does|can you show|could you show|menu)\b/i.test(text)
@@ -44,7 +46,7 @@ export function invoiceRowsAnswer(message,result,{history=[]}={}) {
   if(!balances)return unavailable;
   if(/\b(?:who|which|status|invoices?|bills?)\b/i.test(message)||number||customer){
     if(rows.length>10)return balances+'\nThere are more than 10 matching invoices. Use the invoice menu or specify a customer.';
-    return balances+'\n'+rows.map(row=>`${row.invoice_number}${row.customer_name?` (${row.customer_name})`:''}: ${row.status}; ${receivableBalanceLabel(row)} ${row.currency} ${Math.max(0,Number(row.total_amount)-Number(row.amount_paid||0)).toFixed(2)}.`).join('\n');
+    return balances+'\n'+rows.map(row=>`${row.invoice_number}${row.customer_name?` (${row.customer_name})`:''}: ${row.status}; ${receivableBalanceLabel(row)} ${row.currency} ${Math.max(0,Number(row.total_amount)-Number(row.amount_paid||0)).toFixed(2)}. Current paid balance: ${row.currency} ${Number(row.amount_paid||0).toFixed(2)}.`).join('\n');
   }
   return balances;
 }

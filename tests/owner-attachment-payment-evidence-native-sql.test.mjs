@@ -1,10 +1,12 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import {extractInvoiceOffline} from '../ai/extraction.mjs';
 import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 
 function textPdf(lines) {
  const escape=text=>text.replace(/[\\()]/g,'\\$&');
@@ -16,7 +18,7 @@ function textPdf(lines) {
  return Buffer.from(pdf);
 }
 
-for(const kind of ['paid-conflict-pdf','paid-image','paid-evidence-conflict-image','unsupported-unpaid-image','paid-zero-pdf','partial-pdf','paid-fallback-pdf','shipping-pdf'])test(`native attachment keeps ${kind} in review without invoice or payment writes`,async()=>{
+for(const kind of ['paid-conflict-pdf','paid-image','paid-evidence-conflict-image','unsupported-unpaid-image','paid-zero-pdf','partial-pdf','paid-fallback-pdf','shipping-pdf'])engineTest(`native attachment keeps ${kind} in review without invoice or payment writes`,async()=>{
  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+15555550126';
  try{
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -34,7 +36,7 @@ for(const kind of ['paid-conflict-pdf','paid-image','paid-evidence-conflict-imag
   const facts={invoiceNumber:'EVIDENCE-118',customerName:'Fixture customer',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:18,total:118,outstandingAmount:118,currency:'USD',direction:'receivable',clientEmail:null,clientPhone:null,clientPhoneRaw:null,notes:null,paymentStatus:fallback?null:evidenceConflict||unsupported?'unpaid':'paid',paymentStatusEvidence:fallback||unsupported?null:'PAID watermark; Total Due USD 118'};
   const wire={...Object.fromEntries(Object.entries(facts).flatMap(([key,value])=>[[key,value],[key+'Confidence',value==null?0:.99]])),lineItems:[{description:'Service',quantity:1,unitPrice:100,amount:100,confidence:.99}],lineItemsConfidence:.99};
   let requests=0,extractions=0,followup=false;
-  const handler=createOwnerMessageHandler({supabase,localExtraction:async input=>{extractions++;return image?localExtraction(wire):extractInvoiceOffline(input);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},fetchImpl:async(url,init)=>{
+  const handler=createOwnerEngineHarness({supabase,localExtraction:async input=>{extractions++;return image?localExtraction(wire):extractInvoiceOffline(input);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},fetchImpl:async(url,init)=>{
    requests++;const body=JSON.parse(init.body);
    if(new URL(url).hostname==='generativelanguage.googleapis.com'){extractions++;return Response.json({candidates:[{content:{parts:[{text:JSON.stringify({...wire,...(image?{imageContent:'single_invoice'}:{})})}]},finishReason:'STOP'}]});}
    assert.equal(new URL(url).hostname,'api.cloudflare.com');

@@ -1,10 +1,12 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 
 const caption='Log this public sample invoice for testing. Keep customer messages and reminders off.';
@@ -45,7 +47,7 @@ async function fixture({oldSql=false,transform=null,currency='AUD',currencyEvide
  const wire={...Object.fromEntries(Object.entries(facts).flatMap(([key,value])=>[[key,value],[key+'Confidence',value==null?0:.99]])),
   lineItems:[{description:'Web Design',quantity:1,unitPrice:85,amount:85,confidence:.99}],lineItemsConfidence:.99};
  const calls=[],executions=[],outputs=[];let confirming=false;
- const handler=createOwnerMessageHandler({supabase,localExtraction:async input=>{return localExtraction(wire);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},
+ const handler=createOwnerEngineHarness({supabase,localExtraction:async input=>{return localExtraction(wire);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},
   toolsFactory:options=>{
    const tools=createOwnerWorkspaceTools(options);
    return {...tools,async execute(name,args,context){executions.push({name,args});const result=await tools.execute(name,args,context);outputs.push(result);return transform?transform(result,args):result;}};
@@ -80,7 +82,7 @@ async function fixture({oldSql=false,transform=null,currency='AUD',currencyEvide
  return {...f,scope,bytes,turn,persist,handler,review,ledger,calls,executions,outputs};
 }
 
-test('event254 PDF wording takes real scoped review path before Cloudflare and saves only on a later confirmation',async()=>{
+engineTest('event254 PDF wording takes real scoped review path before Cloudflare and saves only on a later confirmation',async()=>{
  const f=await fixture();try{
   const before=await f.ledger(),draft=await f.review(),callCount=f.calls.length,executionCount=f.executions.length;
   const reply=await f.turn('pdf-correction',clarification),proposal=await f.review();
@@ -106,7 +108,7 @@ test('event254 PDF wording takes real scoped review path before Cloudflare and s
  }finally{await f.close();}
 });
 
-test('ordinary composed CHF correction uses the same review and preserves all printed arithmetic',async()=>{
+engineTest('ordinary composed CHF correction uses the same review and preserves all printed arithmetic',async()=>{
  const f=await fixture();try{
   const before=await f.ledger(),calls=f.calls.length;
   const message='Our business issued the invoice; the paid watermark is wrong; nothing has been paid; the currency is CHF; the full CHF 93.50 is still due; please save the invoice as an unpaid draft; keep customer messages or reminders off.';
@@ -120,7 +122,7 @@ for(const [currency,currencyEvidence] of [
  ['INR','Indian details'],['USD','US address or phone details'],['EUR','European details'],['GBP','UK details'],
  ['AED','UAE details'],['SGD','Singapore details'],['CAD','Canadian details'],['CHF','Swiss details'],
  ['GBP','inferred GBP based on address'],
-])test(`native retained ${currency} inference (${currencyEvidence}) stages current owner currency facts before separate confirmation`,async()=>{
+])engineTest(`native retained ${currency} inference (${currencyEvidence}) stages current owner currency facts before separate confirmation`,async()=>{
  const f=await fixture({currency,currencyEvidence});try{
   const draft=await f.review(),before=await f.ledger(),calls=f.calls.length,executions=f.executions.length;
   const corrected=currency==='USD'?'CHF':'USD',message=clarification.replaceAll('USD',corrected);
@@ -145,7 +147,7 @@ for(const [currency,currencyEvidence] of [
 });
 
 for(const [currency,currencyEvidence] of [['GBP','printed currency code GBP'],['EUR','€ symbol'],['CAD','ambiguous $ symbol; assumed CAD'],['INR','currency not shown; assumed workspace default INR'],['GBP','printed GBP code and inferred USD based on address'],['CAD','unknown location']])
-test(`native correction rejects printed or ambiguous ${currency} provenance (${currencyEvidence})`,async()=>{
+engineTest(`native correction rejects printed or ambiguous ${currency} provenance (${currencyEvidence})`,async()=>{
  const f=await fixture({currency,currencyEvidence});try{
   const draft=await f.review(),before=await f.ledger(),calls=f.calls.length;
   const reply=await f.turn('invalid-currency-provenance',clarification);
@@ -154,7 +156,7 @@ test(`native correction rejects printed or ambiguous ${currency} provenance (${c
  }finally{await f.close();}
 });
 
-test('superseded AUD-only SQL refuses another inferred currency without generic invoice creation',async()=>{
+engineTest('superseded AUD-only SQL refuses another inferred currency without generic invoice creation',async()=>{
  const f=await fixture({currency:'CAD',currencyEvidence:'Canadian details',beforeGeneral:true});try{
   const draft=await f.review(),before=await f.ledger(),calls=f.calls.length;
   const reply=await f.turn('old-inferred-correction',clarification);
@@ -163,7 +165,7 @@ test('superseded AUD-only SQL refuses another inferred currency without generic 
  }finally{await f.close();}
 });
 
-test('old deployed SQL rejects the nonzero currency correction with grounded no-save reply and no fallback',async()=>{
+engineTest('old deployed SQL rejects the nonzero currency correction with grounded no-save reply and no fallback',async()=>{
  const f=await fixture({oldSql:true});try{
   const before=await f.ledger(),draft=await f.review(),calls=f.calls.length;
   const reply=await f.turn('old-sql-correction',clarification);
@@ -173,7 +175,7 @@ test('old deployed SQL rejects the nonzero currency correction with grounded no-
  }finally{await f.close();}
 });
 
-test('contradictory, quoted and extra-directive corrections leave retained review intact without native creation',async()=>{
+engineTest('contradictory, quoted and extra-directive corrections leave retained review intact without native creation',async()=>{
  const f=await fixture();try{
   const before=await f.ledger(),draft=await f.review(),calls=f.calls.length;
   for(const [index,message]of [clarification+' We received USD 10.',clarification+' Also send the customer a reminder.',`Someone said "${clarification}"`,clarification.replace('full USD 93.50','full USD 94.50')].entries()){
@@ -185,7 +187,7 @@ test('contradictory, quoted and extra-directive corrections leave retained revie
  }finally{await f.close();}
 });
 
-test('forged owner scope cannot consume the PDF review or reach a provider',async()=>{
+engineTest('forged owner scope cannot consume the PDF review or reach a provider',async()=>{
  const f=await fixture();try{
   const before=await f.ledger(),draft=await f.review(),calls=f.calls.length;
   const reply=await f.handler({...f.scope,workspaceId:randomUUID(),messageId:'foreign-correction',message:clarification});
@@ -193,7 +195,7 @@ test('forged owner scope cannot consume the PDF review or reach a provider',asyn
  }finally{await f.close();}
 });
 
-test('lost SQL acknowledgement resumes as uncertain without reissuing the retained review transition',async()=>{
+engineTest('lost SQL acknowledgement resumes as uncertain without reissuing the retained review transition',async()=>{
  const f=await fixture({transform:(result,args)=>{
   if(args.operation==='reviewAttachment')throw Object.assign(new Error('lost transition acknowledgement'),{code:'OWNER_LOOP_TIMEOUT'});
   return result;
@@ -210,7 +212,7 @@ test('lost SQL acknowledgement resumes as uncertain without reissuing the retain
  }finally{await f.close();}
 });
 
-test('a currency question retains ordinary native read-only answering and never becomes a correction',async()=>{
+engineTest('a currency question retains ordinary native read-only answering and never becomes a correction',async()=>{
  const f=await fixture();try{
   const before=await f.ledger(),draft=await f.review();
   for(const [index,message]of readQuestions.entries()){

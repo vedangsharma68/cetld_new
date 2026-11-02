@@ -117,7 +117,7 @@ test('unapplied SQL retains raw values plus canonical aliases atomically, includ
   const f=await fixture({recording:true});try{
     await f.db.query("insert into whatsapp_pending_actions(workspace_id,customer_id,phone,source,action,expires_at) values($1,$2,$3,'whatsapp',$4,now()+interval '15 minutes')",[f.scope.workspaceId,f.scope.customerId,f.scope.phone,{type:'invoice_review_draft',invoice:{total:'1,25,000.00',dueDate:'31 Oct 2026',notes:'2026-02-31'}}]);
     const terms=(await f.db.query('select term from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId])).rows.map(row=>row.term);
-    for(const term of ['1,25,000.00','number:125000','31 oct 2026','2026-10-31','31 oct','2026-02-31'])assert.ok(terms.includes(term),term);
+    for(const term of ['1,25,000.00','number:125000','31 oct 2026','date:2026-10-31','2026-02-31'])assert.ok(terms.includes(term),term);
     for(const role of ['anon','authenticated','service_role'])assert.equal((await f.db.query("select has_function_privilege($1,'app.private_invoice_term_aliases(text)','execute') allowed",[role])).rows[0].allowed,false);
     assert.equal(createPrivateValueMatcher(terms)('one lakh twenty five thousand'),true);
   }finally{await f.close();}

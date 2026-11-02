@@ -1,8 +1,10 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerSafetyTools as createOwnerAgentTools} from '../automation/whatsapp/owner-agent.mjs';
 import {createWhatsAppInvoiceStore} from '../automation/whatsapp/invoice-store.mjs';
 import {mergeWhatsAppMessages} from '../conversations-ui.mjs';
@@ -43,7 +45,7 @@ function setup(history=[],{plans={},answers={}}={}){
   consumePendingAction:async()=>{if(!action)return null;const old=id;action=null;generation++;return {id:old}}};
  const supabase={from(table){assert.equal(table,'workspace_ai_settings');const q={select(){return q;},eq(){return q;},async maybeSingle(){return {data:null};}};return q;},
   rpc:async(name,args)=>{if(name==='whatsapp_confirm_owner_invoice_action'){assert.ok(args.p_confirmation_message_id);confirmCalls++;return {data:{ok:true,invoiceNumber:'1223113',actionType:action?.type||'owner_invoice_update',duplicate:confirmCalls>1}};}return {data:{ok:false,code:'FEATURE_UNAVAILABLE'}};}};
- const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase,authorize:async()=>authorized,invoiceStoreFactory:()=>store,ownerStoreFactory:()=>ownerStore,
+ const handler=createOwnerEngineHarness({toolsFactory:createOwnerAgentTools,supabase,authorize:async()=>authorized,invoiceStoreFactory:()=>store,ownerStoreFactory:()=>ownerStore,
   pendingActionStoreFactory:()=>pending,historyReader:async()=>history,logger:{error(){}},providerFactory:options=>({async generate({messages,tools}){
    modelCalls.push(messages);
    assert.ok(tools.length>0,'owner model call must include tools');
@@ -56,13 +58,13 @@ function setup(history=[],{plans={},answers={}}={}){
  const h=async input=>{const result=await handler(input);return result?.answer??result;};
  return {h,get action(){return action},get confirmCalls(){return confirmCalls},get modelCalls(){return modelCalls},get toolOutputs(){return toolOutputs},revoke(){authorized=false},customerIdFor};
 }
-test('owner reads existing dashboard invoices through a model-selected scoped tool',async()=>{
+engineTest('owner reads existing dashboard invoices through a model-selected scoped tool',async()=>{
  const message='which invoices do i have logged';const s=setup([],{plans:{[message]:{tool:'getInvoices',args:{limit:10}}},answers:{[message]:'I found five invoices across five customers.'}});
  const response=await s.h({...scope,message,messageId:'m1'});
  assert.match(response,/five invoices/);assert.equal(s.modelCalls.length,2);
  for(const invoice of invoices){assert.ok(s.toolOutputs.join('\n').includes(invoice.invoiceNumber));assert.ok(s.toolOutputs.join('\n').includes(invoice.clientName))}
 });
-test('the model selects one numeric invoice and carries its context into a change proposal',async()=>{
+engineTest('the model selects one numeric invoice and carries its context into a change proposal',async()=>{
  const s=setup([{role:'assistant',content:'Invoice 1223113, MineralTree, total USD 1,725.00'}],{plans:{
   'show invoice 1223113':{tool:'getInvoiceDetails',args:{target:'1223113'}},
   'change its amount to 2000 USD':{tool:'proposeInvoiceChange',args:{target:'1223113',changes:{total:2000}}}},answers:{
@@ -72,7 +74,7 @@ test('the model selects one numeric invoice and carries its context into a chang
  assert.match(await s.h({...scope,message:'change its amount to 2000 USD',messageId:'m3'}),/1223113.*MineralTree/s);
  assert.equal(s.action.invoiceId,'b');assert.equal(s.action.changes.total,2000);
 });
-test('owner change is a proposal until explicit confirmation, then uses atomic RPC',async()=>{
+engineTest('owner change is a proposal until explicit confirmation, then uses atomic RPC',async()=>{
  const first='change MineralTree amount to 2000 USD',second='yes';const s=setup([],{plans:{
   [first]:{tool:'proposeInvoiceChange',args:{target:'1223113',changes:{total:2000}}},
   [second]:{tool:'confirmPendingOwnerChange'}},answers:{
@@ -82,7 +84,7 @@ test('owner change is a proposal until explicit confirmation, then uses atomic R
  assert.equal(s.confirmCalls,0);assert.equal(s.action.invoiceId,'b');assert.equal(s.action.expectedUpdatedAt,'v1');
  assert.match(await s.h({...scope,message:second,messageId:'m5'}),/Updated invoice 1223113/);assert.equal(s.confirmCalls,1);
 });
-test('ambiguous pronouns never select a random invoice; dates must actually exist',async()=>{
+engineTest('ambiguous pronouns never select a random invoice; dates must actually exist',async()=>{
  const ambiguous='change its amount to 2000 USD',invalid='change invoice 1223113 due date to 2026-02-30';const s=setup([],{plans:{
   [invalid]:{tool:'proposeInvoiceChange',args:{target:'1223113',changes:{dueDate:'2026-02-30'}}}},answers:{
   [ambiguous]:'Which invoice should I change?',
@@ -92,17 +94,17 @@ test('ambiguous pronouns never select a random invoice; dates must actually exis
  assert.match(await s.h({...scope,message:invalid,messageId:'m7'}),/date is not valid/i);
  assert.equal(s.action,null);assert.ok(s.toolOutputs.some(value=>value.includes('INVALID')));
 });
-test('owner can propose a payment; revoked binding cannot confirm it',async()=>{
+engineTest('owner can propose a payment; revoked binding cannot confirm it',async()=>{
  const message='mark invoice 1223113 paid';const s=setup([],{plans:{[message]:{tool:'proposeInvoicePayment',args:{target:'1223113'}}},answers:{[message]:'Proposed recording the USD 1,725 payment. Reply yes to confirm, or cancel.'}});
  assert.match(await s.h({...scope,message,messageId:'m8'}),/payment.*1,725|1,725.*payment/i);
  assert.equal(s.action.type,'owner_invoice_payment');s.revoke();
  assert.equal(await s.h({...scope,message:'yes',messageId:'m9'}),'');assert.equal(s.confirmCalls,0);
 });
-test('a list in conversation history is not an unambiguous invoice context',async()=>{
+engineTest('a list in conversation history is not an unambiguous invoice context',async()=>{
  const message='send me its invoice file';const s=setup([{role:'assistant',content:invoices.map(i=>i.invoiceNumber).join('\n')}],{answers:{[message]:'Which invoice file should I send?'}});
  assert.match(await s.h({...scope,message,messageId:'m10'}),/Which invoice/);assert.equal(s.modelCalls.length,1);
 });
-test('settings has one simple owner flow, prefilled WhatsApp link, no client attestation or code input',()=>{
+engineTest('settings has one simple owner flow, prefilled WhatsApp link, no client attestation or code input',()=>{
  const html=ownerWhatsAppSettings({owner:true,phone:scope.phone,businessName:'CETLD test',verification:{phone:scope.phone,code:'173043',expiresAt:Date.now()+600000}});
  assert.match(html,/Open WhatsApp/);assert.match(html,/LINK%20173043/);
  assert.doesNotMatch(html,/client agreement|name="code"|whatsapp-code|Confirm agreement/);
@@ -119,14 +121,14 @@ test('settings has one simple owner flow, prefilled WhatsApp link, no client att
  assert.match(ownerWhatsAppSettings({owner:true,phone:scope.phone,businessName:'CETLD test'}),/Connected/);
 });
 
-test('the model keeps an explicitly targeted invoice while changing its customer',async()=>{
+engineTest('the model keeps an explicitly targeted invoice while changing its customer',async()=>{
  const message='change its customer to Shiv Engineering';const s=setup([{role:'assistant',content:'Invoice 1223113, MineralTree'}],{plans:{
   [message]:{tool:'proposeInvoiceChange',args:{target:'1223113',changes:{clientName:'Shiv Engineering'}}}},answers:{
   [message]:'Proposed changing invoice 1223113 customer to Shiv Engineering. Reply yes to apply, or cancel.'}});
  assert.match(await s.h({...scope,message,messageId:'rename'}),/1223113.*Shiv Engineering/);
  assert.equal(s.action.invoiceId,'b');assert.equal(s.action.changes.clientName,'Shiv Engineering');
 });
-test('the model can resolve a follow-up name from prior context without local keyword routing',async()=>{
+engineTest('the model can resolve a follow-up name from prior context without local keyword routing',async()=>{
  const message='MineralTree';const s=setup([{role:'user',content:'change its amount to 2000 USD'},{role:'assistant',content:'Which invoice do you mean?'}],{plans:{
   [message]:{tool:'proposeInvoiceChange',args:{target:'1223113',changes:{total:2000}}}},answers:{
   [message]:'Proposed changing invoice 1223113 for MineralTree to USD 2,000. Reply yes to apply, or cancel.'}});
@@ -135,7 +137,7 @@ test('the model can resolve a follow-up name from prior context without local ke
 });
 
 
-test('customer file lookup cannot fetch another customer invoice or touch its storage',async()=>{
+engineTest('customer file lookup cannot fetch another customer invoice or touch its storage',async()=>{
  let storageReads=0;
  const filters=[];
  const supabase={from(table){assert.equal(table,'invoices');const q={select(){return q},eq(key,value){filters.push([key,value]);return q},is(key,value){filters.push([key,`is.${value}`]);return q},limit(){return {data:[]}}};return q},
@@ -148,7 +150,7 @@ test('customer file lookup cannot fetch another customer invoice or touch its st
 });
 
 
-test('the dashboard verification poll refreshes the connected phone immediately',async()=>{
+engineTest('the dashboard verification poll refreshes the connected phone immediately',async()=>{
  const source=await readFile(new URL('../app.js',import.meta.url),'utf8');
  const poll=source.slice(source.indexOf('let ownerVerifyTimer=null;'),source.indexOf("document.addEventListener('submit',async event=>{",source.indexOf('let ownerVerifyTimer=null;')));
  const state={user:{id:'owner'},workspace:{id:'ws'},settings:{whatsapp_owner_phone:null},ownerVerify:{workspaceId:'ws',expiresAt:Date.now()+600000}};
@@ -159,7 +161,7 @@ test('the dashboard verification poll refreshes the connected phone immediately'
 });
 
 
-test('dashboard history uses a stable precise cursor and refresh retains previously loaded pages',async()=>{
+engineTest('dashboard history uses a stable precise cursor and refresh retains previously loaded pages',async()=>{
  const source=await readFile(new URL('../app.js',import.meta.url),'utf8');
  const fn=source.slice(source.indexOf('async function loadWhatsAppMessages('),source.indexOf('function ownerNumberForm()'));
  const stamp='2026-10-02T01:00:00.123456+00:00';
@@ -177,7 +179,7 @@ test('dashboard history uses a stable precise cursor and refresh retains previou
 });
 
 
-test('dashboard older messages accept actual UUID message IDs used by the production schema',async()=>{
+engineTest('dashboard older messages accept actual UUID message IDs used by the production schema',async()=>{
  const source=await readFile(new URL('../app.js',import.meta.url),'utf8');
  const fn=source.slice(source.indexOf('async function loadWhatsAppMessages('),source.indexOf('function ownerNumberForm()'));
  const id='bbaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',stamp='2026-10-02T01:00:00.123456+00:00';
@@ -188,7 +190,7 @@ test('dashboard older messages accept actual UUID message IDs used by the produc
  assert.equal(filter,`created_at.lt.${stamp},and(created_at.eq.${stamp},id.lt.${id})`);
  assert.equal(state.whatsappMessagesError,'');assert.equal(state.whatsappHasMore,false);
 });
-test('settings capability questions are answered by the model rather than a route shortcut',async()=>{
+engineTest('settings capability questions are answered by the model rather than a route shortcut',async()=>{
  const {h,modelCalls}=setup();
  for(const message of ['update my timezone','change my whatsapp number to +919800000000','turn on customer messages']){
   const reply=await h({...scope,message,messageId:'s'+message.length});
@@ -196,7 +198,7 @@ test('settings capability questions are answered by the model rather than a rout
  }
  assert.equal(modelCalls.length,3);
 });
-test('customer contact details are read through the model-selected scoped tools',async()=>{
+engineTest('customer contact details are read through the model-selected scoped tools',async()=>{
  const list=[{id:'x',invoiceNumber:'INV-2026-0002',printedInvoiceNumber:'US-001',clientName:'John Smith',currency:'USD',total:154.06,amountPaid:0,status:'draft',updatedAt:'v1',metadata:{}},
   {id:'y',invoiceNumber:'INV-2026-0003',clientName:'John Smith',currency:'USD',total:10,amountPaid:0,status:'draft',updatedAt:'v1',metadata:{client_phone:'+919818685252'}},
   {id:'z',invoiceNumber:'1001',clientName:'App Revolution',currency:'CHF',total:5,amountPaid:0,status:'draft',updatedAt:'v1',metadata:{}}];
@@ -211,7 +213,7 @@ test('customer contact details are read through the model-selected scoped tools'
   return [];
  }};
  let modelCalls=0;
- const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase:{from(table){if(table==='workspace_ai_settings')return {select(){return this},eq(){return this},maybeSingle:async()=>({data:null})};throw Error('unexpected db read')},rpc:async()=>({data:{ok:false,code:'FEATURE_UNAVAILABLE'}})},authorize:async()=>true,
+ const handler=createOwnerEngineHarness({toolsFactory:createOwnerAgentTools,supabase:{from(table){if(table==='workspace_ai_settings')return {select(){return this},eq(){return this},maybeSingle:async()=>({data:null})};throw Error('unexpected db read')},rpc:async()=>({data:{ok:false,code:'FEATURE_UNAVAILABLE'}})},authorize:async()=>true,
   ownerStoreFactory:()=>ownerStore,invoiceStoreFactory:()=>({findInvoices:async()=>list}),pendingActionStoreFactory:()=>pending,historyReader:async()=>[],
   providerFactory:options=>({async generate({messages,tools}){modelCalls++;assert.ok(tools.length);const hadTool=messages.some(m=>m.role==='tool');
    if(!hadTool)return {model:options.primaryModel,content:'',toolCalls:[{id:'contact-read',type:'function',function:{name:'getInvoices',arguments:'{"limit":10}'}}]};
@@ -220,7 +222,7 @@ test('customer contact details are read through the model-selected scoped tools'
  assert.match(await h({...scope,message:'what is johns number?',messageId:'q'}),/\+919818685252/);assert.equal(modelCalls,2);
  assert.doesNotMatch(await h({...scope,message:'show invoice number 1001',messageId:'q2'}),/Contact for/);
 });
-test('owner questions skip the off-topic keyword filter and reach the model',async()=>{
+engineTest('owner questions skip the off-topic keyword filter and reach the model',async()=>{
  const {answerWorkspaceQuestion}=await import('../ai/assistant.mjs');
  let calls=0;const provider={generate:async()=>{calls++;return {toolCalls:[],model:'m'}}};
  await answerWorkspaceQuestion({provider,store:{query:async()=>[]},message:'what is johns number?',ownerMode:true});

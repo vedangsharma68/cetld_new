@@ -1,6 +1,6 @@
 import {ordinaryPart} from '../../ai/private-value-matcher.mjs';
 import {createPrivateChatMemory} from '../../ai/private-chat-memory.mjs';
-import {createPrivateChatProvider, localReviewTurn, privateChatTopic, PRIVATE_CHAT_REPLY, CHAT_UNAVAILABLE_REPLY} from '../../ai/private-chat.mjs';
+import {createPrivateChatProvider, localReviewTurn, privateChatSpans, privateChatTopic, PRIVATE_CHAT_REPLY, CHAT_UNAVAILABLE_REPLY} from '../../ai/private-chat.mjs';
 import {invoiceReadQuestion, invoiceRowsAnswer, customerInvoiceRows} from './private-invoice-read.mjs';
 import {offlineReviewDraft, offlineReviewClarification, correctOfflineReview, offlineCorrectionInputIssue, OFFLINE_CANCEL_REPLY, OFFLINE_CONFIRMATION_REPLY} from '../../ai/offline-invoice-review.mjs';
 import {normalizeOwnerPhone,PHONE_FORMAT_GUIDANCE} from './owner-phone.mjs';
@@ -279,8 +279,14 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       if (signal?.aborted || (Number.isFinite(deadlineAt) && Date.now() >= deadlineAt)) throw Object.assign(new Error('Inbound processing deadline expired'), {name: 'AbortError'});
     };
     active();
-    if(audience!=='owner'&&(media||mediaError||/\b(?:change|chnge|set|edit|modify|fix|update|mark)\b/i.test(message||'')&&!(ordinaryPart(message,privateChatTopic).mixed&&ordinaryPart(message,privateChatTopic).text))){
+    if(audience!=='owner'&&(media||mediaError||/\b(?:change|chnge|set|edit|modify|fix|update|mark)\b/i.test(message||'')&&(privateChatTopic(message)||/\b(?:amount|its|it|this|that)\b/i.test(message||''))&&!(ordinaryPart(message,privateChatTopic,privateChatSpans).mixed&&ordinaryPart(message,privateChatTopic,privateChatSpans).text))){
       return media||mediaError ? 'Payment receipts cannot be recorded from customer photos here. Ask the business owner to verify and record the payment. Nothing was changed.' : 'Only the business owner can create or change invoices. Contact the business for help.';
+    }
+    if(audience==='customer'&&!media&&!mediaError&&!contactCard&&/^\s*(?:menu|help|options)[.!?\s]*$/i.test(message||'')){
+      const eligibility=authorizeScope?{allowed:await authorizeScope({workspaceId,customerId,phone}),customer:{id:customerId}}
+        :await getSendEligibility({supabase,workspaceId,phone,category:'invoice_updates'});
+      if(!eligibility.allowed||eligibility.customer?.id!==customerId)return 'Verify your number in cetld to discuss account details.';
+      return "Ask for your outstanding balance or an invoice's status. For changes or receipt checks, contact the business owner.";
     }
     const {data: settings, error} = await supabase.from('workspace_ai_settings')
       .select('*').eq('workspace_id', workspaceId).maybeSingle();
@@ -308,7 +314,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
           workspaceId: scope.workspaceId, customerId: scope.customerId, phone: scope.phone};
       },
     });
-    if(!media&&!mediaError&&!contactCard&&ordinaryPart(message,privateChatTopic).mixed&&ordinaryPart(message,privateChatTopic).text){
+    if(!media&&!mediaError&&!contactCard&&ordinaryPart(message,privateChatTopic,privateChatSpans).mixed&&ordinaryPart(message,privateChatTopic,privateChatSpans).text){
       try { return (await channel.ask({workspaceId,customerId,phone,message,history:[]})).answer; }
       catch { return CHAT_UNAVAILABLE_REPLY; }
     }
@@ -555,7 +561,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         return invoiceRowsAnswer(message,{ok:true,readOnly:true,operation:'read',table:'invoices',rows,truncated:rows.length>=50,offset:0});
       } catch { return 'I could not verify your invoice records right now. Try again shortly.'; }
     }
-    if (privateChatTopic(message)&&!(ordinaryPart(message,privateChatTopic).mixed&&ordinaryPart(message,privateChatTopic).text)) return PRIVATE_CHAT_REPLY;
+    if (privateChatTopic(message)&&!(ordinaryPart(message,privateChatTopic,privateChatSpans).mixed&&ordinaryPart(message,privateChatTopic,privateChatSpans).text)) return PRIVATE_CHAT_REPLY;
     if (offlineTurn) return 'What would you like to change, and what should the new value be?';
     let history = [];
     try { history = await readConversationHistory({supabase, workspaceId, phone,customerId,audience}); }

@@ -1,11 +1,13 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 
-test('owner photo QA-MEDIA-001 keeps its reviewed number through issuer clarification, confirmation and original-file storage',async()=>{
+engineTest('owner photo QA-MEDIA-001 keeps its reviewed number through issuer clarification, confirmation and original-file storage',async()=>{
  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+15555550125';
  try{
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -18,7 +20,7 @@ test('owner photo QA-MEDIA-001 keeps its reviewed number through issuer clarific
   const facts={invoiceNumber:'QA-MEDIA-001',customerName:'QA Media Customer',invoiceDate:'2026-10-01',dueDate:'2026-10-30',subtotal:1500,tax:0,total:1500,outstandingAmount:1500,currency:'INR',direction:'payable',clientPhone:null,clientPhoneRaw:null,clientEmail:null,notes:'Payment due within 30 days.',currencySource:null,addressHint:null,paymentTerms:null};
   const wire={...Object.fromEntries(Object.entries(facts).flatMap(([key,value])=>[[key,value],[key+'Confidence',value==null?0:.99]])),lineItems:[{description:'Service',quantity:1,unitPrice:1500,amount:1500,confidence:.99}],lineItemsConfidence:.99};
   const bytes=Buffer.from([255,216,255,0,0,0]),results=[],contracts=[];let currentTurn=0,providerCalls=0,extractions=0;
-  const handler=createOwnerMessageHandler({supabase,localExtraction:async input=>{extractions++;return localExtraction(wire);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},fetchImpl:async(url,init)=>{
+  const handler=createOwnerEngineHarness({supabase,localExtraction:async input=>{extractions++;return localExtraction(wire);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},fetchImpl:async(url,init)=>{
    providerCalls++;const body=JSON.parse(init.body);
    if(new URL(url).hostname==='generativelanguage.googleapis.com'){extractions++;return Response.json({candidates:[{content:{parts:[{text:JSON.stringify({...wire,imageContent:'single_invoice'})}]},finishReason:'STOP'}]});}
    assert.equal(new URL(url).hostname,'api.cloudflare.com');const tool=body.messages.findLast(item=>item.role==='tool');

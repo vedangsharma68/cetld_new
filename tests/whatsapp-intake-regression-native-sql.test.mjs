@@ -1,9 +1,11 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerActionButtons} from '../automation/whatsapp/owner-action-buttons.mjs';
 import {FollowUpEngine} from '../automation/engine.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
@@ -16,7 +18,7 @@ import {freightInvoiceText} from './fixtures/freight-invoice-text.mjs';
 const logger={info(){},warn(){},error(){}};
 const env={WHATSAPP_APP_SECRET:'isolated-intake-fixture-secret'};
 
-test('owner intake repairs and exact proposal buttons run through real handler, SDK and PostgreSQL',async t=>{
+engineTest('owner intake repairs and exact proposal buttons run through real handler, SDK and PostgreSQL',async t=>{
  const f=await createOfflineSqlNetwork(),{db,supabase}=f;
  try{
   await db.exec(await readFile(new URL('../supabase/migrations/20261018060000_customer_reminder_tone.sql',import.meta.url),'utf8'));
@@ -31,7 +33,7 @@ test('owner intake repairs and exact proposal buttons run through real handler, 
   const scope={workspaceId,ownerId,phone,customerId};
   let plannerCalls=0,sequence=0;
   const provider={async generate(){plannerCalls++;throw Error('Intake repair/decision must bypass record lookup and planner');}};
-  const handle=createOwnerMessageHandler({supabase,env,logger,authorize:async()=>true,providerFactory:()=>provider});
+  const handle=createOwnerEngineHarness({supabase,env,logger,authorize:async()=>true,providerFactory:()=>provider});
   const extracted=validateInvoiceExtractionResponse(parsePdfInvoiceText(freightInvoiceText,{businessName:'INTERNATIONAL PARCEL SERVICES'}));
   const base=reviewDraft(extracted,'source-pdf');
   const invoice=base.invoice;

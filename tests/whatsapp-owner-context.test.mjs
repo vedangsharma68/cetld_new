@@ -1,7 +1,9 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {resolveOwnerBinding} from '../automation/whatsapp/owner-binding.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {CF_QWEN_MODEL} from '../ai/provider.mjs';
 import {createOwnerChatDatabase,OWNER_CHAT_SCOPE,DEFAULT_NOW} from './fixtures/owner-chat-battery.mjs';
 
@@ -9,7 +11,7 @@ const phone='+919871367051';
 const binding={workspace_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',owner_id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
   customer_id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',business_name:'Northstar'};
 
-test('owner binding is resolved by one joined server RPC',async()=>{
+engineTest('owner binding is resolved by one joined server RPC',async()=>{
   const calls=[];
   const supabase={async rpc(name,args){calls.push({name,args});return {data:[binding]};}};
 
@@ -19,7 +21,7 @@ test('owner binding is resolved by one joined server RPC',async()=>{
   assert.deepEqual(calls,[{name:'whatsapp_resolve_verified_owner',args:{p_phone:phone}}]);
 });
 
-test('owner turn reuses one request-local authorization result across setup and agent work',async()=>{
+engineTest('owner turn reuses one request-local authorization result across setup and agent work',async()=>{
   const workspaceId=binding.workspace_id;
   const reads=[];
   const supabase={from(table){
@@ -29,7 +31,7 @@ test('owner turn reuses one request-local authorization result across setup and 
     return query;
   },rpc:async()=>({data:{ok:false,code:'FEATURE_UNAVAILABLE'}})};
   let authorizationCalls=0;
-  const handler=createOwnerMessageHandler({supabase,authorize:async()=>{authorizationCalls++;return true;},replyStore:null,
+  const handler=createOwnerEngineHarness({supabase,authorize:async()=>{authorizationCalls++;return true;},replyStore:null,
     pendingActionStoreFactory:()=>({loadPendingAction:async()=>null,loadPendingActionState:async()=>({generation:0,id:null,version:null})}),
     ownerStoreFactory:()=>({query:async()=>[]}),historyReader:async()=>[],logger:{error(){},info(){}},
     agentFactory:async()=>({answer:'Your workspace is ready.',model:CF_QWEN_MODEL}),
@@ -40,7 +42,7 @@ test('owner turn reuses one request-local authorization result across setup and 
   assert.equal(authorizationCalls,1);
 });
 
-test('processing acknowledgements cannot crowd John out of the recent owner history',async()=>{
+engineTest('processing acknowledgements cannot crowd John out of the recent owner history',async()=>{
   const db=createOwnerChatDatabase();let sequence=0;
   for(const [index,message]of ['John Smith is my customer','What is his balance?','Thanks','What about John?'].entries()){
     const push=(body,direction,key)=>db.tables.whatsapp_messages.push({id:String(++sequence),workspace_id:OWNER_CHAT_SCOPE.workspaceId,
@@ -49,7 +51,7 @@ test('processing acknowledgements cannot crowd John out of the recent owner hist
     push(message,'inbound','inbound:turn-'+index);push("On it. I'll send the answer here when it's ready.",'outbound','ack:turn-'+index);
     if(index<3)push(index===0?'Got it. John Smith.':'I can help.','outbound','reply:turn-'+index);
   }
-  const handler=createOwnerMessageHandler({supabase:db.supabase,authorize:async()=>true,replyStore:null,logger:{info(){},error(){}},
+  const handler=createOwnerEngineHarness({supabase:db.supabase,authorize:async()=>true,replyStore:null,logger:{info(){},error(){}},
     agentFactory:async({history})=>{
       assert.ok(history.some(turn=>turn.content==='John Smith is my customer'));
       assert.ok(history.every(turn=>!turn.content.startsWith('On it.')));assert.ok(history.length<=20);
@@ -59,13 +61,13 @@ test('processing acknowledgements cannot crowd John out of the recent owner hist
 });
 
 for (const pendingQuestion of [true, false]) {
-  test(`owner contact card uses deterministic debtor flow (pending=${pendingQuestion})`, async () => {
+  engineTest(`owner contact card uses deterministic debtor flow (pending=${pendingQuestion})`, async () => {
     const writes = [];
     let consumed = 0;
     const row = pendingQuestion ? {id: 7, action: {type: 'invoice_debtor_phone', stage: 'awaiting_phone',
       invoiceId: 'invoice-7', clientName: 'Buyer'}} : null;
     const db = createOwnerChatDatabase();
-    const handler = createOwnerMessageHandler({supabase: db.supabase, authorize: async () => true,
+    const handler = createOwnerEngineHarness({supabase: db.supabase, authorize: async () => true,
       replyStore: null, logger: {info(){},error(){}}, historyReader: async () => [],
       pendingActionStoreFactory: () => ({loadPendingAction: async () => row,
         loadPendingActionState: async () => ({generation: 0, id: null, version: null}),

@@ -1,10 +1,12 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
 import {answerWorkspaceQuestion} from '../ai/assistant.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {parseTextInvoice} from '../automation/whatsapp/text-invoice.mjs';
 import {ownerMenuInvoiceEdit} from '../automation/whatsapp/owner-next-actions.mjs';
 import {personalNoteReply} from '../ai/personal-note.mjs';
@@ -26,7 +28,7 @@ const notes=[
 ];
 const response=()=>({setHeader(){},status(code){this.code=code;return this;},json(data){this.data=data;return this;}});
 
-test('note amounts and dates cannot become a deterministic invoice creation request',()=>{
+engineTest('note amounts and dates cannot become a deterministic invoice creation request',()=>{
   for(const message of notes){
     assert.equal(personalNoteReply(message),scopeReply,message);
     assert.equal(parseTextInvoice(message,{clock:()=>new Date('2026-10-23T12:00:00Z')}),null,message);
@@ -45,7 +47,7 @@ test('note amounts and dates cannot become a deterministic invoice creation requ
   assert.equal(parsed.values.invoice_number,'QA-MEDIA-001');assert.equal(parsed.values.total_amount,1500);
 });
 
-test('the direct owner assistant rejects note-driven data access while retaining conversation validation',async()=>{
+engineTest('the direct owner assistant rejects note-driven data access while retaining conversation validation',async()=>{
   const accessed=[];
   const blocked=label=>new Proxy({}, {get(_target,property){
     accessed.push(`${label}.${String(property)}`);throw Error('A personal note must not access '+label);
@@ -64,7 +66,7 @@ test('the direct owner assistant rejects note-driven data access while retaining
   assert.deepEqual(accessed,[],'invalid conversation metadata must fail before any operation');
 });
 
-test('authenticated web and WhatsApp notes bypass planning and all application database mutations',async t=>{
+engineTest('authenticated web and WhatsApp notes bypass planning and all application database mutations',async t=>{
   const f=await createOfflineSqlNetwork(),{db,supabase}=f;
   const ownerId=randomUUID(),foreignOwner=randomUUID(),phone='+919871367054';
   const service=()=>db.exec("reset role;set request.jwt.claim.role='service_role';set request.jwt.claim.sub=''");
@@ -91,7 +93,7 @@ test('authenticated web and WhatsApp notes bypass planning and all application d
     };
     const env={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_PUBLISHABLE_KEY:'public-fixture-key',AI_ACCOUNTING_CONFIRMATION_SECRET:'n'.repeat(32)};
     const web=createAIHandler({env,fetchImpl,providerFactory:()=>provider,logger});
-    const whatsapp=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test'},providerFactory:()=>provider,logger});
+    const whatsapp=createOwnerEngineHarness({supabase,env:{NODE_ENV:'test'},providerFactory:()=>provider,logger});
     const api=async(action,body)=>{
       await asUser(actor);const res=response();
       await web({method:'POST',headers:{authorization:'Bearer fixture-user-token'},query:{action},body:{workspaceId,...body}},res);

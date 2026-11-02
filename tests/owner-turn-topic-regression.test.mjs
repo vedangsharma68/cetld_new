@@ -1,6 +1,8 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as scope,DEFAULT_NOW,JOHN_CUSTOMER_ID} from './fixtures/owner-chat-battery.mjs';
 import {CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
@@ -10,14 +12,14 @@ const phone='+919818685252';
 const readPhone={operation:'read',table:'customers',columns:['phone'],filters:[{column:'name',operator:'eq',value:'John Smith'}]};
 const call=(name,args,id)=>({model:CF_PRIMARY_MODEL,toolCalls:[{id,type:'function',function:{name,arguments:JSON.stringify(args)}}]});
 
-test('model question, John phone and repeated John phone cannot let a later config call replace the current business answer',async()=>{
+engineTest('model question, John phone and repeated John phone cannot let a later config call replace the current business answer',async()=>{
  const db=createOwnerChatDatabase();
  db.tables.customers.find(row=>row.id===JOHN_CUSTOMER_ID).phone=phone;
  db.tables.whatsapp_pending_actions.push({id:14,version:1,...scope,workspace_id:scope.workspaceId,customer_id:scope.customerId,
   created_at:'2026-10-02T09:33:49Z',consumed_at:null,action:{type:'owner_invoice_request'}});
  const before=structuredClone({customers:db.tables.customers,invoices:db.tables.invoices,payments:db.tables.payments,pending:db.tables.whatsapp_pending_actions});
  let turn=0,generations=0,plans=0;const seen=[];
- const handler=createOwnerMessageHandler({supabase:db.supabase,env:{WHATSAPP_APP_SECRET:'isolated-topic-regression'},authorize:async()=>true,
+ const handler=createOwnerEngineHarness({supabase:db.supabase,env:{WHATSAPP_APP_SECRET:'isolated-topic-regression'},authorize:async()=>true,
   clock:()=>new Date(DEFAULT_NOW.getTime()+turn*30000),logger:{info(){},warn(){},error(){}},providerFactory:()=>{
    const thisTurn=turn;let round=0;
    return {async generate(request){
@@ -60,7 +62,7 @@ test('model question, John phone and repeated John phone cannot let a later conf
  db.assertScopedReads();
 });
 
-test('configuration capability remains generic, and current-turn anchors guide a business answer after interruption',async()=>{
+engineTest('configuration capability remains generic, and current-turn anchors guide a business answer after interruption',async()=>{
  let configReads=0,calls=0;
  const staleCall={id:'interrupted-config',type:'function',function:{name:'getAIProviderConfiguration',arguments:'{}'}};
  const result=await runOwnerAgent({message:"What's John Smith's phone?",tools:{definitions:[{type:'function',function:{name:'getAIProviderConfiguration'}}],

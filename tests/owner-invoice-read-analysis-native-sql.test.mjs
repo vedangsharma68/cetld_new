@@ -1,8 +1,10 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {ownerInvoiceReadAnalysis,invoiceReadAnalysisReply} from '../automation/whatsapp/owner-invoice-read-analysis.mjs';
 import {ownerGroundingIssue} from '../automation/whatsapp/owner-grounding.mjs';
@@ -52,7 +54,7 @@ async function fixture({modelResponse=null}={}){
     const invoice=await addInvoice({printedNumber:'SIM-2048',paid:400});
     const foreignInvoice=await addInvoice({workspace:foreignWorkspaceId,customer:COMPANY,number:'AUTO',printedNumber:'SIM-2048',total:9999999,status:'sent'});
     const executions=[],outputs=[],providerCalls=[];
-    const handler=createOwnerMessageHandler({supabase:f.supabase,
+    const handler=createOwnerEngineHarness({supabase:f.supabase,
       env:{NODE_ENV:'test',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
       logger:{info(){},warn(){},error(){}},
       toolsFactory:options=>{
@@ -80,7 +82,7 @@ async function fixture({modelResponse=null}={}){
   }catch(error){await f.close();throw error;}
 }
 
-test('unpaid invoice listing uses current SQL balances and valid statuses instead of a model enum alias',async()=>{
+engineTest('unpaid invoice listing uses current SQL balances and valid statuses instead of a model enum alias',async()=>{
   const f=await fixture({modelResponse:round=>Response.json({choices:[{finish_reason:round===1?'tool_calls':'stop',message:round===1
     ?{content:'',tool_calls:[{id:'invalid-status-read',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'read',table:'invoices',filters:[{column:'status',operator:'eq',value:'unpaid'}]})}}]}
     :{content:'The workspace data service is temporarily unavailable.'}}]})});
@@ -103,7 +105,7 @@ test('unpaid invoice listing uses current SQL balances and valid statuses instea
   }finally{await f.close();}
 });
 
-test('explicit global unpaid listing includes unpaid invoices across customers and drafts without inheriting a customer filter',async()=>{
+engineTest('explicit global unpaid listing includes unpaid invoices across customers and drafts without inheriting a customer filter',async()=>{
   const f=await fixture();try{
     const alpha=await f.addInvoice({customer:'Global Alpha Ltd',number:'GLOBAL-A',status:'sent',total:240});
     const beta=await f.addInvoice({customer:'Global Beta Inc',number:'GLOBAL-B',status:'draft',currency:'INR',total:500});
@@ -119,7 +121,7 @@ test('explicit global unpaid listing includes unpaid invoices across customers a
   }finally{await f.close();}
 });
 
-test('abstract hypothetical overpayment is answered with arithmetic only and no provider, tool, or ledger calls',async()=>{
+engineTest('abstract hypothetical overpayment is answered with arithmetic only and no provider, tool, or ledger calls',async()=>{
   const f=await fixture();try{
     const before=await f.snapshot();
     const reply=await f.turn('abstract-overpayment','If a customer pays USD 120 on an invoice for USD 100, how much is overpaid? Just explain, do not record a payment.');
@@ -131,7 +133,7 @@ test('abstract hypothetical overpayment is answered with arithmetic only and no 
   }finally{await f.close();}
 });
 
-test('invalid invoice status filters are rejected before the real SQL enum or any ledger write',async()=>{
+engineTest('invalid invoice status filters are rejected before the real SQL enum or any ledger write',async()=>{
   const f=await fixture();try{
     const before=await f.snapshot(),tool=createWorkspaceDataTool({supabase:f.supabase,scope:f.scope,authorize:async()=>true});
     for(const filter of [{column:'status',operator:'eq',value:'unpaid'},{column:'status',operator:'in',value:['sent','unknown-status']},
@@ -146,7 +148,7 @@ test('invalid invoice status filters are rejected before the real SQL enum or an
   }finally{await f.close();}
 });
 
-test('a truncated unpaid list fails closed without inventing an empty or complete list',async()=>{
+engineTest('a truncated unpaid list fails closed without inventing an empty or complete list',async()=>{
   const f=await fixture();try{
     for(let i=0;i<51;i++)await f.addInvoice({customer:'Large Synthetic Customer',number:`UNPAID-${i}`,total:100,status:'sent'});
     const before=await f.snapshot(),reply=await f.turn('unpaid-list-truncated','show me my unpaid invoices');
@@ -161,7 +163,7 @@ function assertNoCalculation(answer){
   assert.doesNotMatch(answer,/overpaid would be|overpayment would be|remaining balance would be/i,answer);
 }
 
-test('conditional payment arithmetic derives a hypothetical overpayment from the current invoice without writing',async()=>{
+engineTest('conditional payment arithmetic derives a hypothetical overpayment from the current invoice without writing',async()=>{
   const f=await fixture();try{
     const before=await f.snapshot();
     const over=await f.turn('event269-overpayment',invoiceQuestion(1000));
@@ -181,14 +183,14 @@ test('conditional payment arithmetic derives a hypothetical overpayment from the
   }finally{await f.close();}
 });
 
-test('parser separates read-only conditional scenarios from writes and rejects mixed write clauses',()=>{
+engineTest('parser separates read-only conditional scenarios from writes and rejects mixed write clauses',()=>{
   assert.deepEqual(ownerInvoiceReadAnalysis(invoiceQuestion(1000)),{kind:'conditionalPayment',customerName:COMPANY,currency:'USD',paymentCents:100000,invoiceNumber:'SIM-2048'});
   assert.equal(ownerInvoiceReadAnalysis('Record USD 300 payment against invoice SIM-2048 for Example Fabrication LLC.'),null);
   assert.equal(ownerInvoiceReadAnalysis(`${invoiceQuestion(1000)} Then record it.`),null);
   assert.equal(ownerInvoiceReadAnalysis(`If ${COMPANY} pays USD 0 against invoice SIM-2048, how much would be overpaid?`),null);
 });
 
-test('currency mismatch, missing invoice, ambiguity, and stale version fail closed',async t=>{
+engineTest('currency mismatch, missing invoice, ambiguity, and stale version fail closed',async t=>{
   await t.test('currency mismatch',async()=>{
     const f=await fixture();try{
       const before=await f.snapshot(),reply=await f.turn('event269-currency-mismatch',invoiceQuestion(1000).replace('USD 1000','INR 1000'));
@@ -225,7 +227,7 @@ test('currency mismatch, missing invoice, ambiguity, and stale version fail clos
   });
 });
 
-test('currency balances keep issued receivables and unissued drafts separate with or without an explicit draft request',async()=>{
+engineTest('currency balances keep issued receivables and unissued drafts separate with or without an explicit draft request',async()=>{
   const f=await fixture();try{
     const alpha='Example Alpha Ltd',beta='Example Beta Inc',unrelated='Unlisted Example LLC';
     const alphaMain=await f.addInvoice({customer:alpha,number:'AUTO',printedNumber:'ALPHA-1',currency:'USD',total:600,status:'sent',paid:100});
@@ -248,7 +250,7 @@ test('currency balances keep issued receivables and unissued drafts separate wit
   }finally{await f.close();}
 });
 
-test('truncated currency rollup fails closed instead of returning a partial total',async()=>{
+engineTest('truncated currency rollup fails closed instead of returning a partial total',async()=>{
   const f=await fixture();try{
     const customer='Large Synthetic Customer';
     for(let i=0;i<51;i++)await f.addInvoice({customer,number:`BULK-${String(i+1).padStart(3,'0')}`,currency:'USD',total:100,status:'sent'});
@@ -258,7 +260,7 @@ test('truncated currency rollup fails closed instead of returning a partial tota
   }finally{await f.close();}
 });
 
-test('an explicit payment request stays on the guarded proposal route',async()=>{
+engineTest('an explicit payment request stays on the guarded proposal route',async()=>{
   const f=await fixture();try{
     const before=await f.snapshot();
     const message=`Record USD 300 payment against invoice SIM-2048 for ${COMPANY}.`;
@@ -278,7 +280,7 @@ test('an explicit payment request stays on the guarded proposal route',async()=>
   }finally{await f.close();}
 });
 
-test('foreign workspace scope cannot read or summarize the invoice',async()=>{
+engineTest('foreign workspace scope cannot read or summarize the invoice',async()=>{
   const f=await fixture();try{
     const before=await f.snapshot(),reply=await f.turn('event269-wrong-scope',invoiceQuestion(1000),{...f.scope,workspaceId:f.foreignWorkspaceId});
     assert.equal(reply,'');assert.equal(f.executions.length,0);assert.equal(f.providerCalls.length,0);assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);

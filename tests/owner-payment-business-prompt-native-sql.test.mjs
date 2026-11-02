@@ -1,8 +1,10 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 
 const failedPrompt='Record a USD 500 partial payment on the dummy Northwind Systems LLC invoice SB-10442. Leave USD 451.52 outstanding. This is a test bookkeeping entry; do not send any customer messages or reminders.';
@@ -31,7 +33,7 @@ async function fixture(){
 }
 function nativeHandler(f,{transform=null}={}){
  let calls=0,mode='malformed';const outputs=[],executions=[];
- const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},toolsFactory:options=>{
+ const handler=createOwnerEngineHarness({supabase:f.supabase,env:{NODE_ENV:'test',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},toolsFactory:options=>{
   const tools=createOwnerWorkspaceTools(options);
   return {...tools,async execute(name,args,context){
    executions.push({name,args});
@@ -52,7 +54,7 @@ function nativeHandler(f,{transform=null}={}){
  return {handler,outputs,executions,calls:()=>calls,confirm:()=>{mode='confirm';}};
 }
 
-test('exact event252 business prompt uses production tools before Cloudflare and later records one exact payment',async()=>{
+engineTest('exact event252 business prompt uses production tools before Cloudflare and later records one exact payment',async()=>{
  const f=await fixture();try{
   const before=await f.snapshot(),run=nativeHandler(f);await f.inbound('business-propose',failedPrompt);
   const scope={...f.scope,messageId:'business-propose',message:failedPrompt},reply=await run.handler(scope);
@@ -76,7 +78,7 @@ test('exact event252 business prompt uses production tools before Cloudflare and
  }finally{await f.close();}
 });
 
-test('ordinary invoice-first wording preserves a different customer, currency, amount and explicit remainder',async()=>{
+engineTest('ordinary invoice-first wording preserves a different customer, currency, amount and explicit remainder',async()=>{
  const f=await fixture();try{
   await f.db.query("update customers set name='Riverside Studio' where id=(select customer_id from invoices where id=$1)",[f.ids[0]]);
   await f.db.query("update invoices set currency='CHF',total_amount=42,metadata=jsonb_set(metadata,'{printed_invoice_number}','\"RW-24\"') where id=$1",[f.ids[0]]);
@@ -92,7 +94,7 @@ test('ordinary invoice-first wording preserves a different customer, currency, a
  }finally{await f.close();}
 });
 
-for(const fault of ['wrong-customer','missing','ambiguous','truncated','wrong-read','read-failure','wrong-remainder','old-capability'])test(`business payment ${fault} refuses without model fallback, broader reads or ledger changes`,async()=>{
+for(const fault of ['wrong-customer','missing','ambiguous','truncated','wrong-read','read-failure','wrong-remainder','old-capability'])engineTest(`business payment ${fault} refuses without model fallback, broader reads or ledger changes`,async()=>{
  const f=await fixture();try{
   if(fault==='ambiguous'){
    const duplicateName=(await f.db.query("insert into customers(workspace_id,name) values($1,'Northwind Systems LLC') returning id",[f.scope.workspaceId])).rows[0].id;
@@ -110,7 +112,7 @@ for(const fault of ['wrong-customer','missing','ambiguous','truncated','wrong-re
  }finally{await f.close();}
 });
 
-test('an interrupted proposal checkpoint cannot replay a payment operation or create a second proposal',async()=>{
+engineTest('an interrupted proposal checkpoint cannot replay a payment operation or create a second proposal',async()=>{
  const f=await fixture();try{
   const run=nativeHandler(f),before=await f.snapshot();let persisted;
   await f.inbound('interrupted-business',failedPrompt);
@@ -129,7 +131,7 @@ test('an interrupted proposal checkpoint cannot replay a payment operation or cr
  }finally{await f.close();}
 });
 
-test('a deferred server-selected invoice read resumes to one proposal with its original customer constraint',async()=>{
+engineTest('a deferred server-selected invoice read resumes to one proposal with its original customer constraint',async()=>{
  const f=await fixture();try{
   const run=nativeHandler(f),before=await f.snapshot();let persisted;
   await f.inbound('deferred-business-read',failedPrompt);
@@ -149,7 +151,7 @@ test('a deferred server-selected invoice read resumes to one proposal with its o
  }finally{await f.close();}
 });
 
-test('SQL independently rejects a wrong requested remainder even when a valid staged action was tampered afterwards',async()=>{
+engineTest('SQL independently rejects a wrong requested remainder even when a valid staged action was tampered afterwards',async()=>{
  const f=await fixture();try{
   const run=nativeHandler(f);await f.inbound('remainder-source',failedPrompt);await run.handler({...f.scope,messageId:'remainder-source',message:failedPrompt});
   const pending=(await f.db.query('select * from whatsapp_pending_actions where consumed_at is null')).rows[0];assert.ok(pending);
@@ -164,7 +166,7 @@ async function disposableInvoice(f){
  await f.db.query("update customers set name='QA Fixture Customer' where id=(select customer_id from invoices where id=$1)",[f.ids[0]]);
  await f.db.query("update invoices set total_amount=100,metadata=jsonb_set(metadata,'{printed_invoice_number}','\"INV-2026-6771\"') where id=$1",[f.ids[0]]);
 }
-test('event278 exact bookkeeping request proposes through native SQL; cancel and stale yes write nothing, a fresh confirmed proposal records exactly USD40',async()=>{
+engineTest('event278 exact bookkeeping request proposes through native SQL; cancel and stale yes write nothing, a fresh confirmed proposal records exactly USD40',async()=>{
  const f=await fixture();try{
   await disposableInvoice(f);const before=await f.snapshot(),run=nativeHandler(f);
   const turn=async(id,message)=>{await f.inbound(id,message);return run.handler({...f.scope,messageId:id,message});};
@@ -186,7 +188,7 @@ test('event278 exact bookkeeping request proposes through native SQL; cancel and
   assert.deepEqual(await f.snapshot(),after,'lost reply recovers the exact receipt without another payment');assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });
-test('event301 exact canceled legacy payment confirmation returns a scoped no-pending reply without a model',async()=>{
+engineTest('event301 exact canceled legacy payment confirmation returns a scoped no-pending reply without a model',async()=>{
  const f=await fixture();try{
   await disposableInvoice(f);const before=await f.snapshot(),run=nativeHandler(f);
   const turn=async(id,message)=>{await f.inbound(id,message);return run.handler({...f.scope,messageId:id,message});};
@@ -202,7 +204,7 @@ test('event301 exact canceled legacy payment confirmation returns a scoped no-pe
   assert.equal((await run.handler({...f.scope,messageId:'event301-stale-yes',message:'yes'})).replayed,true);assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });
-for(const fault of ['missing-feature','external-ledger','wrong-remainder'])test(`event278 ${fault} gives grounded refusal without planner fallback or writes`,async()=>{
+for(const fault of ['missing-feature','external-ledger','wrong-remainder'])engineTest(`event278 ${fault} gives grounded refusal without planner fallback or writes`,async()=>{
  const f=await fixture();try{
   await disposableInvoice(f);
   if(fault==='missing-feature')await f.db.exec("create or replace function public.whatsapp_owner_partial_payment_capability() returns jsonb language sql as $$select '{\"ok\":true,\"version\":4}'::jsonb$$");
@@ -214,7 +216,7 @@ for(const fault of ['missing-feature','external-ledger','wrong-remainder'])test(
   assert.deepEqual(await f.snapshot(),before);assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions')).rows[0].n,0);assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });
-test('event278 later typed confirmation fails closed when the bookkeeping capability disappears',async()=>{
+engineTest('event278 later typed confirmation fails closed when the bookkeeping capability disappears',async()=>{
  const f=await fixture();try{
   await disposableInvoice(f);const run=nativeHandler(f);await f.inbound('capability-propose',bookkeepingPrompt);await run.handler({...f.scope,messageId:'capability-propose',message:bookkeepingPrompt});
   const pending=(await f.db.query('select * from whatsapp_pending_actions where consumed_at is null')).rows[0];assert.equal(pending.action.instructionVersion,5);

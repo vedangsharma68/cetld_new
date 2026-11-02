@@ -1,123 +1,192 @@
-// Shared by all provider-bound surfaces. No locale-dependent Number rounding.
-const clean=value=>String(value??'').normalize('NFKC').replace(/\p{Cf}/gu,'').toLowerCase().replace(/\s+/gu,' ').trim();
+import {PRIVATE_UNICODE_FOLD} from './private-value-unicode.mjs';
+import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions} from './private-value-language.mjs';
+// One code-point fold, shared verbatim with SQL, independent of DB/OS locale.
+export const normalizePrivateValue=value=>Array.from(String(value??''),ch=>PRIVATE_UNICODE_FOLD[ch]??ch).join('').replace(/ +/g,' ').trim();
+const clean=normalizePrivateValue;
+export function normalizePrivateText(value){
+  const text=String(value??''),chars=[],origins=[];let index=0;
+  for(const ch of text){
+    const end=index+ch.length;
+    for(const part of (PRIVATE_UNICODE_FOLD[ch]??ch).split('')){
+      if(part===' '&&(!chars.length||chars.at(-1)===' ')){if(chars.length)origins.at(-1).end=end;continue;}
+      chars.push(part);origins.push({start:index,end});
+    }
+    index=end;
+  }
+  if(chars.at(-1)===' '){chars.pop();origins.pop();}return {text:chars.join(''),origins};
+}
 const escape=value=>value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-const separators=/[.,' ]/u;
-const units='(?:inr|usd|eur|gbp|aed|sgd|aud|cad|chf|rs|rupees?|dollars?|euros?|pounds?)';
-const separateUnits=text=>text.replace(new RegExp(`\\b${units}(?=[0-9])|(?<=[0-9])${units}\\b`,'gu'),' ');
-const exact=(integer,fraction='')=>{
-  const tail=fraction.replace(/0+$/,'');
-  return BigInt(integer).toString()+(tail?'.'+tail:'');
-};
+const separateUnits=text=>text.replace(new RegExp(`\\b${units}(?=[0-9])|(?<=[0-9])${units}\\b`,'gu'),match=>' '.repeat(match.length));
+const exact=(integer,fraction='')=>{const tail=fraction.replace(/0+$/,'');return BigInt(integer).toString()+(tail?'.'+tail:'');};
+const shift=(value,places)=>{const [integer,fraction='']=value.split('.');return exact(integer+fraction.padEnd(places,'0').slice(0,places),fraction.slice(places));};
 function groupedInteger(value){
-  const groups=value.split(separators);
+  const groups=value.split(/[.,' ]/u);
   if(!groups.every(group=>/^\d+$/.test(group)))return null;
   if(groups.length===1||groups[0].length<=3&&groups.slice(1).every(group=>group.length===3)
     ||groups[0].length<=2&&groups.at(-1).length===3&&groups.slice(1,-1).every(group=>group.length===2))return groups.join('');
   return null;
 }
-// Keep every valid interpretation; ambiguity is private only when a retained
-// value matches. Never split a malformed/space-grouped candidate into subvalues.
-// Mirrored by app.private_invoice_number_aliases; SQL/JS parity is tested.
-function numeric(value){
-  value=value.replace(/[\p{Quotation_Mark}ʼ]/gu,"'").replace(/ *([.,']) */gu,'$1');
+function scalar(value){
+  value=value.replace(/^\((.*)\)$/u,'$1').replace(/[\p{Quotation_Mark}ʼ]/gu,"'");
+  const adornment=new RegExp(`^(?:[+−-]|\\p{Sc}|${units}) *| *(?:\\p{Sc}|${units})$`,'gu');
+  for(let prior;prior!==value;){prior=value;value=value.replace(adornment,'').trim();}
+  return value.replace(/ *([.,']) */gu,'$1');
+}
+// Both valid grouping/decimal interpretations are compared only to retained keys.
+function numeric(input){
+  let value=scalar(input),places=0;
+  const suffix=/([kmb])$/.exec(value);if(suffix){places={k:3,m:6,b:9}[suffix[1]];value=value.slice(0,-1).trim();}
   const values=new Set(),integer=groupedInteger(value);
   if(integer!==null)values.add(exact(integer));
   const last=value.search(/[.,][0-9]+$/u);
-  if(last>=0){
-    const whole=groupedInteger(value.slice(0,last)),fraction=value.slice(last+1);
-    if(whole!==null)values.add(exact(whole,fraction));
-  }
-  return values;
+  if(last>=0){const whole=groupedInteger(value.slice(0,last));if(whole!==null)values.add(exact(whole,value.slice(last+1)));}
+  return new Set([...values].map(n=>places?shift(n,places):n));
 }
-const months=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
-const monthPattern='(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
-const ordinals='first,second,third,fourth,fifth,sixth,seventh,eighth,ninth,tenth,eleventh,twelfth,thirteenth,fourteenth,fifteenth,sixteenth,seventeenth,eighteenth,nineteenth,twentieth,twenty first,twenty second,twenty third,twenty fourth,twenty fifth,twenty sixth,twenty seventh,twenty eighth,twenty ninth,thirtieth,thirty first'.split(',');
+// Grouping wins when the complete candidate has a valid grouping shape. If it
+// does not, comma+space separates lists and invalid whitespace chains are
+// segmented into longest valid groups. Thus 1 250 != [1,250], but 1250 77 is a list.
+function numericList(value){
+  const prepared=scalar(value),whole=groupedInteger(prepared);
+  if(whole!==null)return numeric(value);
+  const list=value.split(/, +/u);
+  if(list.length>1)return new Set(list.flatMap(part=>[...numericList(part)]));
+  const direct=numeric(value);if(direct.size)return direct;
+  const groups=value.split(/ +/u),result=new Set();
+  for(let i=0;i<groups.length;){let end=groups.length,keys=new Set();
+    for(;end>i;end--){keys=numeric(groups.slice(i,end).join(' '));if(keys.size)break;}
+    if(end===i){i++;continue;}keys.forEach(n=>result.add(n));i=end;
+  }
+  return result;
+}
 const dayPattern=`(?:[0-9]{1,2}(?:st|nd|rd|th)?|${ordinals.map(day=>day.replaceAll(' ','[ -]+')).join('|')})`;
 const dayValue=value=>/^\d/.test(value)?parseInt(value,10):ordinals.indexOf(value.replace(/[ -]+/g,' '))+1;
-function dateKeys(year,month,day){
-  year=year?Number(year):2000;month=Number(month);day=Number(day);
-  if(year<1)return [];
-  const d=new Date(0);d.setUTCHours(0,0,0,0);d.setUTCFullYear(year,month-1,day);
-  if(d.getUTCFullYear()!==year||d.getUTCMonth()!==month-1||d.getUTCDate()!==day)return [];
-  return [`date:${month}-${day}`]; // Missing-year renderings conservatively match any retained year.
+const yearValue=value=>value==null?null:value.length===2?Number(value)+(Number(value)<=PRIVATE_DATE_YEAR_PIVOT?2000:1900):Number(value);
+function dateValue(year,month,day){
+  const actual=year??2000,d=new Date(0);d.setUTCHours(0,0,0,0);d.setUTCFullYear(actual,month-1,day);
+  return actual>=1&&d.getUTCFullYear()===actual&&d.getUTCMonth()===month-1&&d.getUTCDate()===day?{year,month,day}:null;
 }
 function dates(text){
-  const keys=new Set();
-  const add=(y,m,d)=>dateKeys(y,m,d).forEach(key=>keys.add(key));
-  for(const match of text.matchAll(/(?<![\p{L}\p{N}_])([0-9]{4}) *[./-] *([0-9]{1,2}) *[./-] *([0-9]{1,2})(?![\p{L}\p{N}_])/gu))add(match[1],match[2],match[3]);
-  for(const match of text.matchAll(/(?<![\p{L}\p{N}_])([0-9]{1,2}) *[./-] *([0-9]{1,2}) *[./-] *([0-9]{4})(?![\p{L}\p{N}_])/gu)){
-    add(match[3],match[2],match[1]);add(match[3],match[1],match[2]);
+  const values=[],spans=[];
+  const add=(y,m,d,match)=>{const value=dateValue(y,Number(m),Number(d));if(value){values.push(value);spans.push([match.index,match.index+match[0].length]);}};
+  for(const match of text.matchAll(/(?<![\p{L}\p{N}_])([0-9]{1,4}) *[./-] *([0-9]{1,2})(?: *[./-] *([0-9]{2}|[0-9]{4}|[0-9]{1}))?(?![\p{L}\p{N}_]| *[./-] *[0-9])/gu)){
+    if(match[1].length===4&&match[3]!=null)add(Number(match[1]),match[2],match[3],match);
+    else if(match[1].length<=2&&(match[3]==null||[2,4].includes(match[3].length))){
+      const y=yearValue(match[3]);add(y,match[2],match[1],match);add(y,match[1],match[2],match);
+    }
   }
-  for(const match of text.matchAll(new RegExp(`(?<![\\p{L}\\p{N}_])(${dayPattern})[ -]+(?:of[ -]+)?(${monthPattern})\\.?(?:[ ,]+([0-9]{4}))?(?![\\p{L}\\p{N}_])`,'gu')))add(match[3],months.indexOf(match[2].slice(0,3))+1,dayValue(match[1]));
-  for(const match of text.matchAll(new RegExp(`(?<![\\p{L}\\p{N}_])(${monthPattern})\\.?[ -]+(?:the[ -]+)?(${dayPattern})(?:[ ,]+([0-9]{4}))?(?![\\p{L}\\p{N}_])`,'gu')))add(match[3],months.indexOf(match[1].slice(0,3))+1,dayValue(match[2]));
-  return keys;
+  const tail='(?:[ ,]+([0-9]{4}|[0-9]{2}))?(?![\\p{L}\\p{N}_]|[ ,]+[0-9])';
+  for(const match of text.matchAll(new RegExp(`(?<![\\p{L}\\p{N}_])(${dayPattern})[ -]+(?:of[ -]+)?(${monthPattern})\\.?${tail}`,'gu')))add(yearValue(match[3]),months.indexOf(match[2].slice(0,3))+1,dayValue(match[1]),match);
+  for(const match of text.matchAll(new RegExp(`(?<![\\p{L}\\p{N}_])(${monthPattern})\\.?[ -]+(?:the[ -]+)?(${dayPattern})${tail}`,'gu')))add(yearValue(match[3]),months.indexOf(match[1].slice(0,3))+1,dayValue(match[2]),match);
+  return {values,spans};
 }
-const small=Object.fromEntries('zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen'.split(' ').map((word,i)=>[word,BigInt(i)]));
-for(const [i,word] of ['twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety'].entries())small[word]=BigInt((i+2)*10);
-const scales={thousand:1000n,lakh:100000n,lac:100000n,million:1000000n,crore:10000000n,billion:1000000000n};
-const numberWords=new Set([...Object.keys(small),...Object.keys(scales),'hundred','and','point']);
+const numberWords=new Set([...Object.keys(small),...Object.keys(scales),...Object.keys(fractions),'hundred','and','a','point']);
 function wordNumber(words){
-  if(!words.length||words.length>40||words.every(word=>word==='and'))return [];
+  if(!words.length||words.every(word=>['and','a'].includes(word)))return [];
+  const factor=scales[words.at(-1)]||(words.at(-1)==='hundred'?100n:1n);
+  if(factor!==1n&&words.some(word=>word==='point'||fractions[word]))return wordNumber(words.slice(0,-1)).map(value=>shift(value,factor.toString().length-1));
+  if(fractions[words.at(-1)]){
+    const end=words.length-1,and=words.lastIndexOf('and'),head=and>=0?words.slice(0,and):[],tail=words.slice(and+1,end).filter(word=>word!=='a');
+    const numerator=tail.length?wordNumber(tail):['1'],base=head.length?wordNumber(head):['0'];
+    return base.flatMap(a=>numerator.filter(n=>/^\d+$/.test(n)).map(n=>{
+      const [integer,fraction='']=a.split('.'),digits=Math.max(fraction.length,2),scale=10n**BigInt(digits);
+      const value=BigInt(integer)*scale+BigInt(fraction.padEnd(digits,'0'))+BigInt(n)*scale/fractions[words.at(-1)];
+      return exact((value/scale).toString(),(value%scale).toString().padStart(digits,'0'));
+    }));
+  }
   const point=words.indexOf('point');
   if(point>=0){const tail=words.slice(point+1);if(!tail.length||tail.some(w=>small[w]===undefined||small[w]>9n))return [];
     return wordNumber(words.slice(0,point)).map(value=>exact(value,tail.map(w=>String(small[w])).join('')));}
-  const actual=words.filter(w=>w!=='and');let total=0n,group=0n;
+  const actual=words.filter(w=>!['and','a'].includes(w));let total=0n,group=0n;
   for(const word of actual){if(small[word]!==undefined)group+=small[word];else if(word==='hundred')group=(group||1n)*100n;else if(scales[word]){total+=(group||1n)*scales[word];group=0n;}else return [];}
   const values=[String(total+group)];
-  // Colloquial amounts: twelve fifty, one twenty five, nineteen ninety nine.
   if(actual.length>=2&&actual.length<=3&&actual.every(w=>small[w]!==undefined)&&small[actual[0]]<100n&&small[actual[1]]>=10n){
-    const tail=actual.slice(1).reduce((sum,w)=>sum+small[w],0n);
-    if(tail<100n)values.push(String(small[actual[0]]*100n+tail));
-  }
+    const tail=actual.slice(1).reduce((sum,w)=>sum+small[w],0n);if(tail<100n)values.push(String(small[actual[0]]*100n+tail));}
   return values;
 }
-function numbers(text){
-  // Currency/unit affixes are numeric context, not identifier fragments.
-  text=separateUnits(text);
-  const keys=new Set();
-  for(const match of text.matchAll(/[0-9]+(?:[., \p{Quotation_Mark}ʼ]+[0-9]+)*/gu)){
+function wordRuns(text,onSpan){
+  const values=new Set();let run=[],start=0,end=0;
+  const flush=()=>{const found=wordNumber(run);found.forEach(n=>values.add(n));if(found.length)onSpan?.(found,start,end);run=[];};
+  for(const token of text.matchAll(/[a-z]+|[^a-z\s, &-]+/g)){if(numberWords.has(token[0])){if(!run.length)start=token.index;run.push(token[0]);end=token.index+token[0].length;}else flush();}flush();return values;
+}
+function numbers(text,onSpan){
+  text=separateUnits(text);const keys=wordRuns(text,onSpan);
+  for(const match of text.matchAll(/[0-9]+(?:[., \p{Quotation_Mark}ʼ]+[0-9]+)*(?:[kmb])?/gu)){
     if(/[\p{L}\p{N}_]$/u.test(text.slice(0,match.index))||/^[\p{L}\p{N}_]/u.test(text.slice(match.index+match[0].length)))continue;
-    numeric(match[0]).forEach(value=>keys.add(value));
+    const found=[...numericList(match[0])];found.forEach(value=>keys.add(value));if(found.length)onSpan?.(found,match.index,match.index+match[0].length);
   }
-  let run=[];
-  const flush=()=>{wordNumber(run).forEach(n=>keys.add(n));run=[];};
-  for(const token of text.matchAll(/[a-z]+|[^a-z\s-]+/g)){if(numberWords.has(token[0]))run.push(token[0]);else flush();}flush();
   return keys;
 }
+const identifier=value=>/[a-z\p{L}]/u.test(value)&&/[0-9]/u.test(value)&&/^[\p{L}\p{N}\p{P} ]+$/u.test(value)?value.replace(/[^\p{L}\p{N}]/gu,''):null;
+const identifierPattern=key=>new RegExp(`(?<![\\p{L}\\p{N}_])${Array.from(key,escape).join('[\\p{P} ]*')}(?![\\p{L}\\p{N}_])`,'u');
 export function createPrivateValueMatcher(terms=[]){
-  const retainedNumbers=new Set(),retainedDates=new Set(),literals=[];
+  const retainedNumbers=new Set(),retainedDates=[],literals=[];
   for(const raw of terms){
     const term=clean(raw);if(!term)continue;
-    // SQL aliases are typed so a canonical decimal cannot acquire a new
-    // thousands interpretation when loaded again (e.g. 1.125 -> 1125).
-    if(/^number:[0-9]+(?:\.[0-9]+)?$/.test(term)){
-      const [integer,fraction]=term.slice(7).split('.');retainedNumbers.add(exact(integer,fraction));continue;
-    }
-    const amount=numeric(separateUnits(term).trim()),date=dates(term);
-    if(date.size)date.forEach(key=>retainedDates.add(key));
-    else if(amount.size)amount.forEach(value=>retainedNumbers.add(value));
-    else {
-      // Treat complete English number phrases as values, never arbitrary words
-      // inside names. Names/identifiers require complete token/phrase matches.
-      const words=term.split(/[ -]+/);
-      if(words.every(word=>numberWords.has(word)))wordNumber(words).forEach(n=>retainedNumbers.add(n));
-      literals.push(new RegExp(`(?<![\\p{L}\\p{N}_])${escape(term)}(?![\\p{L}\\p{N}_])`,'u'));
+    if(/^number:[0-9]+(?:\.[0-9]+)?$/.test(term)){const [a,b]=term.slice(7).split('.');retainedNumbers.add(exact(a,b));continue;}
+    const tagged=/^date:(\*|[0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(term);
+    if(tagged){const value=dateValue(tagged[1]==='*'?null:Number(tagged[1]),Number(tagged[2]),Number(tagged[3]));if(value)retainedDates.push(value);continue;}
+    if(term.startsWith('identifier:')){literals.push(identifierPattern(term.slice(11)));continue;}
+    const date=dates(term).values,amount=numeric(term);
+    if(date.length)retainedDates.push(...date);
+    if(amount.size)amount.forEach(value=>retainedNumbers.add(value));
+    if(!date.length&&!amount.size){
+      const words=term.split(/[ ,&-]+/u);if(words.every(word=>numberWords.has(word)))wordNumber(words).forEach(n=>retainedNumbers.add(n));
+      const key=identifier(term);literals.push(key?identifierPattern(key):new RegExp(`(?<![\\p{L}\\p{N}_])${escape(term)}(?![\\p{L}\\p{N}_])`,'u'));
     }
   }
-  return text=>{
-    const content=clean(text);
-    if(literals.some(pattern=>pattern.test(content)))return true;
-    if(retainedDates.size&&[...dates(content)].some(key=>retainedDates.has(key)))return true;
-    return retainedNumbers.size>0&&[...numbers(content)].some(n=>retainedNumbers.has(n));
+  const matchText=text=>{
+    const content=clean(text);if(literals.some(pattern=>pattern.test(content)))return true;
+    const found=dates(content);
+    if(found.values.some(current=>retainedDates.some(saved=>saved.month===current.month&&saved.day===current.day&&(saved.year==null||current.year==null||saved.year===current.year))))return true;
+    // Do not reinterpret the parts of an explicit non-matching date as amounts.
+    const masked=content.split('');for(const [start,end] of found.spans)for(let i=start;i<end;i++)masked[i]=' ';
+    return retainedNumbers.size>0&&[...numbers(masked.join(''))].some(n=>retainedNumbers.has(n));
   };
+  // Decode protocol JSON before checking its values. Keys are data too. The
+  // same traversal owns current text, history, tools, responses and writes.
+  const contains=(value,depth=0)=>{
+    if(depth>32)return true;
+    if(typeof value==='string'){
+      if(/^[\s]*[\[{\"]/.test(value)){try{const decoded=JSON.parse(value);if(decoded!==value&&contains(decoded,depth+1))return true;}catch{}}
+      return matchText(value);
+    }
+    if(typeof value==='number'||typeof value==='bigint')return matchText(String(value));
+    if(Array.isArray(value))return value.some(item=>contains(item,depth+1));
+    return value!=null&&typeof value==='object'&&Object.entries(value).some(([key,item])=>matchText(key)||contains(item,depth+1));
+  };
+  contains.spans=value=>{
+    const normalized=normalizePrivateText(value),content=normalized.text,ranges=[];
+    const add=(start,end)=>{if(end>start&&normalized.origins[start]&&normalized.origins[end-1])ranges.push([normalized.origins[start].start,normalized.origins[end-1].end]);};
+    for(const pattern of literals)for(const match of content.matchAll(new RegExp(pattern.source,'gu')))add(match.index,match.index+match[0].length);
+    const found=dates(content),masked=content.split('');
+    for(const [i,current] of found.values.entries()){
+      const [start,end]=found.spans[i];
+      if(retainedDates.some(saved=>saved.month===current.month&&saved.day===current.day&&(saved.year==null||current.year==null||saved.year===current.year)))add(start,end);
+      for(let j=start;j<end;j++)masked[j]=' ';
+    }
+    numbers(masked.join(''),(keys,start,end)=>{if(keys.some(key=>retainedNumbers.has(key)))add(start,end);});
+    return ranges;
+  };
+  return contains;
 }
 
-// Split whole clauses, never redact a value out of a private sentence. Only
-// independent ordinary speech acts can survive a mixed turn; references cannot.
-export function ordinaryPart(message,isPrivate){
+// Preserve any syntactically independent ordinary clause, with a dependency
+// veto rather than an intent allowlist. Never redact fields inside a sentence.
+export function ordinaryPart(message,isPrivate,privateSpans=()=>[]){
   const text=String(message||'');if(!isPrivate(text))return {text,mixed:false};
-  const clauses=text.split(/(?:[;!?\n]+|\.(?=\s|$)|,\s+(?:also\s+)?|\s+(?:and also|also)\s+)/iu).map(s=>s.trim()).filter(Boolean);
-  const independent=/^(?:good (?:morning|afternoon|evening)|hello|hi|hey|thanks|thank you|tell me (?:a|another) joke|(?:please )?(?:tell|write) (?:me )?(?:a|another) (?:joke|story|poem)|(?:please )?explain\b|i (?:like|enjoy|love)\b)/i;
-  const ordinary=clauses.filter(clause=>!isPrivate(clause)&&independent.test(clause)&&! /\b(?:it|this|that|these|those|above|below|instead|same|them|their|its)\b/i.test(clause));
-  return {text:ordinary.join('. '),mixed:true};
+  // Protocol JSON and punctuation inside values are not ordinary clauses.
+  if(/^\s*[\[{\"]/.test(text)){try{JSON.parse(text);return {text:'',mixed:true};}catch{}}
+  const valuePart=word=>/^[0-9]+$/.test(word)||numberWords.has(word)||ordinals.includes(word)||new RegExp(`^${monthPattern}$`,'u').test(word);
+  const protectedRanges=privateSpans(text),clauses=[];let start=0;
+  const retain=(start,end)=>{if(!protectedRanges.some(([a,b])=>start<b&&end>a))clauses.push(text.slice(start,end).trim());};
+  for(const boundary of text.matchAll(/[;!?]+|\n+|\.(?=\s|$)|,\s+(?:also\s+)?|\s+(?:and also|also)\s+/giu)){
+    const left=clean(text.slice(0,boundary.index)).match(/([\p{L}\p{N}]+)[,\p{Quotation_Mark}]*$/u)?.[1];
+    const right=clean(text.slice(boundary.index+boundary[0].length)).match(/^[,\p{Quotation_Mark}]*([\p{L}\p{N}]+)/u)?.[1];
+    if(/[\n.]/.test(boundary[0])&&valuePart(left||'')&&valuePart(right||''))continue;
+    retain(start,boundary.index);start=boundary.index+boundary[0].length;
+  }
+  retain(start,text.length);
+  const dependent=/\b(?:it|this|that|these|those|above|below|instead|same|them|their|its|former|latter)\b|^(?:and|but|or|because|so|then|do not|don't|never|no changes|no writes)\b/i;
+  return {text:clauses.filter(clause=>clause&&!isPrivate(clause)&&!dependent.test(clean(clause))&&/[\p{L}]/u.test(clause)
+    &&!clean(clause).split(/[ ,&-]+/u).every(word=>numberWords.has(word))).join('. '),mixed:true};
 }

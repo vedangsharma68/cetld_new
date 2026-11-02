@@ -1,6 +1,8 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {CF_QWEN_MODEL, CF_PRIMARY_MODEL, CF_BACKUP_MODEL} from '../ai/provider.mjs';
 
 const workspaceId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -43,11 +45,11 @@ function database() {
 const pendingFactory=()=>({loadPendingAction:async()=>null,loadPendingActionState:async()=>({generation:0,id:null,version:null,action:null})});
 const call=args=>({id:'workspace-call',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(args)}});
 function handler(db,provider,history=[]) {
-  return createOwnerMessageHandler({supabase:db,authorize:async()=>true,pendingActionStoreFactory:pendingFactory,
+  return createOwnerEngineHarness({supabase:db,authorize:async()=>true,pendingActionStoreFactory:pendingFactory,
     ownerStoreFactory:()=>({query:async()=>[]}),historyReader:async()=>history,providerFactory:()=>provider,logger:{error(){}}});
 }
 
-test('default owner handler exposes compact workspace and configuration tools and answers meta with a scoped tool result and model-written summary',async()=>{
+engineTest('default owner handler exposes compact workspace and configuration tools and answers meta with a scoped tool result and model-written summary',async()=>{
   const db=database();let calls=0;
   const h=handler(db,{async generate({tools,messages}){
     calls++;if(tools){assert.deepEqual(tools.map(tool=>tool.function.name),['getAIProviderConfiguration','workspaceData']);assert.ok(JSON.stringify(tools).length<2600);}
@@ -64,7 +66,7 @@ test('default owner handler exposes compact workspace and configuration tools an
   assert.equal(result.agentDiagnostics.toolRounds,1);
 });
 
-test('natural-language workspaceData reads real fixture invoices and preserves John across later turns',async()=>{
+engineTest('natural-language workspaceData reads real fixture invoices and preserves John across later turns',async()=>{
   const db=database();const history=[{role:'user',content:'John Smith is my customer'},
     {role:'assistant',content:'Got it. John Smith.'},{role:'user',content:'Thanks'},
     {role:'assistant',content:'You are welcome.'},{role:'user',content:'What can you help with?'},{role:'assistant',content:'Your workspace records.'}];
@@ -89,7 +91,7 @@ test('natural-language workspaceData reads real fixture invoices and preserves J
   for(const table of ['customers','invoices'])assert.ok(db.reads.some(read=>read.table===table&&read.column==='workspace_id'&&read.value===workspaceId));
 });
 
-test('provider failure returns an honest owner reply without exposing error text or another model call',async()=>{
+engineTest('provider failure returns an honest owner reply without exposing error text or another model call',async()=>{
   let calls=0;const h=handler(database(),{async generate(){calls++;throw Object.assign(new Error('PRIVATE_DATABASE_SECRET'),{code:'PROVIDER_UNAVAILABLE'});}});
   const result=await h({...scope,message:'Show my invoices',messageId:'error-1'});
   assert.equal(calls,1);assert.ok(result.answer);assert.doesNotMatch(result.answer,/PRIVATE_DATABASE_SECRET|check your invoice or setting/i);
@@ -98,9 +100,9 @@ test('provider failure returns an honest owner reply without exposing error text
   assert.match(reply,/too long|timed out/i);assert.equal(calls,1);
 });
 
-test('the whole owner turn is bounded even when loading conversation history hangs',async()=>{
+engineTest('the whole owner turn is bounded even when loading conversation history hangs',async()=>{
   let modelCalls=0;
-  const h=createOwnerMessageHandler({supabase:database(),authorize:async()=>true,pendingActionStoreFactory:pendingFactory,
+  const h=createOwnerEngineHarness({supabase:database(),authorize:async()=>true,pendingActionStoreFactory:pendingFactory,
     historyReader:()=>new Promise(()=>{}),providerFactory:()=>({async generate(){modelCalls++;return {content:'Late'};}}),logger:{error(){}}});
   const started=Date.now();
   const result=await h({...scope,message:'Show invoices',messageId:'hung-setup',allowDeferred:true,deadlineAt:Date.now()+5_040});
@@ -108,7 +110,7 @@ test('the whole owner turn is bounded even when loading conversation history han
   assert.equal(result.deferred,true);assert.equal(result.checkpoint,null);assert.equal(result.plannerFailure,undefined);
 });
 
-test('the default single tool preserves invoice delete confirmation and undo end to end',async()=>{
+engineTest('the default single tool preserves invoice delete confirmation and undo end to end',async()=>{
   const db=database(),invoice=db.tables.invoices[0];
   Object.assign(invoice,{issue_date:'2026-09-01',due_date:'2026-10-01',created_at:'2026-09-01T00:00:00Z',updated_at:'2026-09-02T00:00:00Z',metadata:{invoice_direction:'receivable'}});
   let current=null,generation=0,sequence=0,proposal=null;
@@ -132,7 +134,7 @@ test('the default single tool preserves invoice delete confirmation and undo end
   const answers=['John Smith’s invoice INV-JOHN-1 is USD 120, status sent. Reply yes to delete, or cancel.',
     'Deleted INV-JOHN-1. Reply UNDO DELETE INV-JOHN-1 to restore it within 30 days.','Restored INV-JOHN-1.'];
   let turn=0;
-  const h=createOwnerMessageHandler({supabase:db,authorize:async()=>true,pendingActionStoreFactory:()=>pending,
+  const h=createOwnerEngineHarness({supabase:db,authorize:async()=>true,pendingActionStoreFactory:()=>pending,
     historyReader:async()=>[],ownerStoreFactory:()=>({async query(table,{filters={}}={}){
       let rows=(db.tables[table]||[]).filter(row=>row.workspace_id===workspaceId);
       for(const [key,filter] of Object.entries(filters)){
@@ -153,7 +155,7 @@ test('the default single tool preserves invoice delete confirmation and undo end
   assert.ok(actions.includes('prepare'));assert.ok(actions.includes('confirm'));assert.ok(actions.includes('undo'));
 });
 
-test('model selection is proposed through workspaceData, confirmed later, and used on the next owner turn',async()=>{
+engineTest('model selection is proposed through workspaceData, confirmed later, and used on the next owner turn',async()=>{
   const db=database(),modelSettings=db.tables.workspace_ai_settings[0];
   let proposal=null,generation=0,turn=0;
   const pending={loadPendingAction:async()=>proposal?structuredClone(proposal):null,
@@ -173,7 +175,7 @@ test('model selection is proposed through workspaceData, confirmed later, and us
   const configured=[];
   const plans=[{operation:'update',table:'workspace_ai_settings',values:{primary_model:CF_PRIMARY_MODEL}},
     {operation:'confirm'},{operation:'describe'}];
-  const h=createOwnerMessageHandler({supabase:db,authorize:async()=>true,pendingActionStoreFactory:()=>pending,
+  const h=createOwnerEngineHarness({supabase:db,authorize:async()=>true,pendingActionStoreFactory:()=>pending,
     ownerStoreFactory:()=>({query:async()=>[]}),historyReader:async()=>[],logger:{error(){}},providerFactory:config=>{
       const index=turn++;configured.push(config.primaryModel);
       return {async generate({messages,tools}){

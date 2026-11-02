@@ -1,9 +1,11 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import {cloudflarePartsResponse,cloudflareToolResults} from './fixtures/cloudflare-wire.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {AIProvider} from '../ai/provider.mjs';
 
@@ -56,13 +58,13 @@ async function fixture(){
    const latest=toolResults.at(-1);
    return response([{text:latest?.completed?'Payment decision completed.':latest?.proposal?'A USD 70 payment is proposed. Reply yes to confirm or cancel.':'No changes were made.'}]);
   };
-  const handler=createOwnerMessageHandler({supabase,env,toolsFactory,providerFactory,fetchImpl,logger:{info(){},warn(){},error(){}}});
+  const handler=createOwnerEngineHarness({supabase,env,toolsFactory,providerFactory,fetchImpl,logger:{info(){},warn(){},error(){}}});
   const pending=async()=> (await db.query("select * from whatsapp_pending_actions where workspace_id=$1 and action->>'type'='owner_invoice_payment' order by id desc limit 1",[workspaceId])).rows[0];
   return {...f,db,supabase,env,scope,invoiceId,persist,state,handler,pending,decisions};
  }catch(error){await f.close();throw error;}
 }
 
-test('a signed cancel retires a partial-payment proposal and a stale confirm or replay cannot record it',async()=>{
+engineTest('a signed cancel retires a partial-payment proposal and a stale confirm or replay cannot record it',async()=>{
  const f=await fixture();
  try{
   const before=await f.state();

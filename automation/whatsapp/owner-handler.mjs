@@ -2,7 +2,7 @@ import {ordinaryPart} from '../../ai/private-value-matcher.mjs';
 import {invoiceReadQuestion, invoiceRowsAnswer} from './private-invoice-read.mjs';
 import {createPrivateChatMemory} from '../../ai/private-chat-memory.mjs';
 import {ownerInvoiceReadAnalysis} from './owner-invoice-read-analysis.mjs';
-import {createPrivateChatProvider, localReviewTurn, privateChatModelSettings, privateChatTopic, CHAT_UNAVAILABLE_REPLY} from '../../ai/private-chat.mjs';
+import {createPrivateChatProvider, localReviewTurn, privateChatSpans, privateChatModelSettings, privateChatTopic, CHAT_UNAVAILABLE_REPLY} from '../../ai/private-chat.mjs';
 import {offlineReviewClarification, correctOfflineReview, offlineCorrectionInputIssue, OFFLINE_CANCEL_REPLY, OFFLINE_CONFIRMATION_REPLY} from '../../ai/offline-invoice-review.mjs';
 import {ownerWriteConfirmation} from './owner-write-confirmation.mjs';
 import {receivableBalanceLabel} from '../../invoice/receivables.mjs';
@@ -304,7 +304,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
       configurationAvailable:settingsAvailable,configurationSource,historyAvailable,ownerStoreAvailable,lifecycleAvailable,
       invoiceEditContext:menuEditTarget?.stale?null:menuEditTarget?{...menuEditTarget,values:menuEditValues}:null,
       planRequest:createOwnerWorkspacePlanner({provider,message,history,timezone,clock,signal,deadlineAt}),
-      pendingStoreAvailable,message,messageId,media,mediaError,authorize:reauthorize,lifecycle,providerFactory,env,fetchImpl,clock,logger});}
+      pendingStoreAvailable,message,messageId,media,mediaError,authorize:reauthorize,lifecycle,providerFactory:()=>provider,env,fetchImpl,clock,logger});}
     catch(error){
       toolSetupIssue='OWNER_TOOLS_UNAVAILABLE';
       logger?.error?.('WhatsApp owner tool setup failed',{workspaceId,code:toolSetupIssue});
@@ -314,7 +314,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     provider.setTools(tools.definitions);
     onToolsReady(tools);
     if(agentFactory===runOwnerAgent&&!scope.interactionId&&!media&&!mediaError&&!scope.contactCard
-      &&ordinaryPart(message,privateChatTopic).mixed&&ordinaryPart(message,privateChatTopic).text){
+      &&ordinaryPart(message,privateChatTopic,privateChatSpans).mixed&&ordinaryPart(message,privateChatTopic,privateChatSpans).text){
       const reply=await provider.generate({signal,deadlineAt}).catch(()=>({content:CHAT_UNAVAILABLE_REPLY}));
       return await reauthorize()?{answer:signedReply(reply.content)}:'';
     }
@@ -574,7 +574,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
       invoiceReadReply=invoiceRowsAnswer(message,read,{history});
     }
     const response=verifiedDecisionReply?{answer:verifiedDecisionReply,deterministicWriteReply:true}:invoiceReadReply?{answer:invoiceReadReply}:tools.getConsentReply?.()?{answer:tools.getConsentReply()}:businessNameReply?{answer:businessNameReply}:phoneCorrectionReply?{answer:phoneCorrectionReply}:profileReply?{answer:profileReply}:tools.getReminderReply?.()?{answer:tools.getReminderReply()}:reminderResult?.ok===false
-      ?{answer:reminderResult.message||'The reminder request could not be prepared. Nothing was sent.'}:!privateChatTopic(message)&&agentFactory===runOwnerAgent&&!/\b(?:model|usin|configuration|business|supplier|contact|phone|record)\b/i.test(message)?await provider.generate({signal,deadlineAt}).then(r=>({answer:r.content})).catch(()=>({answer:CHAT_UNAVAILABLE_REPLY})):await agentFactory({provider,config,store:ownerStore,tools,history,message,signal,deadlineAt,clock,timezone,logger,traceId:messageId,botPreferences,businessProfile,initialToolResults,
+      ?{answer:reminderResult.message||'The reminder request could not be prepared. Nothing was sent.'}:(!pendingAtStart||!ownerIsConfirmation(message))&&!initialToolResults.length&&!privateChatTopic(message)&&agentFactory===runOwnerAgent&&!/\b(?:model|usin|configuration|business|supplier|contact|phone|record)\b/i.test(message)?await provider.generate({signal,deadlineAt}).then(r=>({answer:r.content})).catch(()=>({answer:CHAT_UNAVAILABLE_REPLY})):await agentFactory({provider,config,store:ownerStore,tools,history,message,signal,deadlineAt,clock,timezone,logger,traceId:messageId,botPreferences,businessProfile,initialToolResults,
       checkpoint:scope.checkpoint||null,onCheckpoint:scope.onCheckpoint,allowDeferred:scope.allowDeferred===true,budgetMs:scope.budgetMs,
       attachmentDescriptor:media?{available:true,mimeType:String(media.mimeType||media.mime_type||'application/octet-stream').slice(0,80)}
         :mediaError?{available:false,errorCode:'ATTACHMENT_UNAVAILABLE'}:{available:false},

@@ -1,3 +1,5 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import {cloudflarePartsResponse,cloudflareToolResults} from './fixtures/cloudflare-wire.mjs';
 import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
@@ -7,7 +9,7 @@ import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createOwnerSafetyTools} from '../automation/whatsapp/owner-agent.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {invoiceReviewUnpaidResolution} from '../automation/whatsapp/invoice-review-payment-resolution.mjs';
 import {originalRetainedUnpaidInstruction,retainedUnpaidWordingCases,retainedUnpaidWordingNegatives} from './fixtures/retained-unpaid-wording.mjs';
@@ -27,7 +29,7 @@ const contradictory=[instruction+' We received USD 10.',instruction+' We got a p
  instruction.replace('no payment has been received','payment has been received'),instruction.replace('incorrect','correct'),
  ...retainedUnpaidWordingNegatives];
 
-test('retained zero-balance correction accepts equivalent complete facts and rejects unknown or contradictory clauses',()=>{
+engineTest('retained zero-balance correction accepts equivalent complete facts and rejects unknown or contradictory clauses',()=>{
  const resolve=(message,review=action)=>invoiceReviewUnpaidResolution({action:review,message,messageId:'correction-source'});
  assert.deepEqual(resolve(instruction),{status:'unpaid',outstanding:93.5,currency:'USD',sourceMessageId:'correction-source',
   ownerInstruction:instruction,extractedFacts:{currency:'AUD',outstanding:0}});
@@ -52,7 +54,7 @@ test('retained zero-balance correction accepts equivalent complete facts and rej
   assert.equal(resolve(instruction,review),null);
 });
 
-for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF',retainedUnpaidWordingCases[0]],['LF',retainedUnpaidWordingCases[1]],['LF',retainedUnpaidWordingCases[2]]])test(`native image-shaped extraction corrects retained AUD/zero balance with ${wording.name}${wording===retainedUnpaidWordingCases[1]?' and NULL owner transcript':''} under ${lineEndings} SQL only after a later yes`,async()=>{
+for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF',retainedUnpaidWordingCases[0]],['LF',retainedUnpaidWordingCases[1]],['LF',retainedUnpaidWordingCases[2]]])engineTest(`native image-shaped extraction corrects retained AUD/zero balance with ${wording.name}${wording===retainedUnpaidWordingCases[1]?' and NULL owner transcript':''} under ${lineEndings} SQL only after a later yes`,async()=>{
  const instruction=wording.message;
  const f=await createOfflineSqlNetwork({excludeMigrations:[migrationName,'20261009015001_owner_payment_factual_instruction.sql','20261009031935_invoice_review_nonzero_inferred_currency_correction.sql','20261009040005_invoice_review_general_inferred_currency_correction.sql']}),{db,supabase}=f;
  const ownerId=randomUUID(),phone='+15555550130';
@@ -73,7 +75,7 @@ for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF'
   // No original image was supplied for this regression. These fixture bytes
   // travel through the native image request with the reported extraction facts.
   const bytes=Buffer.from([255,216,255,0,0,0]),results=[],contracts=[];let providerCalls=0,extractions=0,confirming=false;
-  const handler=createOwnerMessageHandler({supabase,localExtraction:async input=>{extractions++;return localExtraction(wire);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
+  const handler=createOwnerEngineHarness({supabase,localExtraction:async input=>{extractions++;return localExtraction(wire);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
    logger:{info(){},warn(){},error(){}},toolsFactory:options=>{
     const tools=createOwnerWorkspaceTools(options);
     return {...tools,async execute(name,args,context){const result=await tools.execute(name,args,context);results.push(result);return result;}};
@@ -201,7 +203,7 @@ for(const [lineEndings,wording] of [['LF',retainedUnpaidWordingCases[0]],['CRLF'
  }finally{await f.close();}
 });
 
-test('retained correction source guard rejects unknown or mixed sources and historical guard rejects the new body',async()=>{
+engineTest('retained correction source guard rejects unknown or mixed sources and historical guard rejects the new body',async()=>{
  const f=await createOfflineSqlNetwork({excludeMigrations:[migrationName,'20261009015001_owner_payment_factual_instruction.sql','20261009031935_invoice_review_nonzero_inferred_currency_correction.sql','20261009040005_invoice_review_general_inferred_currency_correction.sql']}),{db}=f;
  try{
   const migration=await readFile(new URL('../supabase/migrations/'+migrationName,import.meta.url),'utf8');
@@ -219,7 +221,7 @@ test('retained correction source guard rejects unknown or mixed sources and hist
  }finally{await f.close();}
 });
 
-test('retained correction acknowledgement and deadline failures never claim an unchanged review or retry a ledger write',async()=>{
+engineTest('retained correction acknowledgement and deadline failures never claim an unchanged review or retry a ledger write',async()=>{
  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+15555550131';
  try{
   await db.query('insert into auth.users(id) values($1)',[ownerId]);

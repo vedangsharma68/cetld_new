@@ -21,6 +21,7 @@ export function createPrivateChatMemory({supabase,scope}) {
   const containsPrivate=text=>matchPrivate(text);
   return {
     containsPrivate,
+    privateSpans:text=>matchPrivate.spans?.(text)||[],
     async read(message,{allowPrivateCurrent=false}={}){
       const [historyResult,termsResult]=await Promise.all([query().order('id',{ascending:false}).limit(20),
         supabase.from('whatsapp_private_invoice_terms').select('term').eq('workspace_id',workspaceId).order('term_hash').range(0,499)]);

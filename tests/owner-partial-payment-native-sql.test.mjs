@@ -1,3 +1,5 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import {cloudflarePartsResponse,cloudflareToolResults} from './fixtures/cloudflare-wire.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -6,7 +8,7 @@ import {pathToFileURL} from 'node:url';
 const baseline=process.env.CETLD_PAYMENT_BASELINE||process.env.CETLD_PAYMENT_LEADING_BASELINE;
 const base=baseline?pathToFileURL(baseline+'/'):new URL('../',import.meta.url);
 const {createOfflineSqlNetwork}=await import(new URL('tests/fixtures/offline-sql-network.mjs',base));
-const {createOwnerMessageHandler}=await import(new URL('tests/fixtures/owner-engine.mjs',base));
+const {createOwnerEngineHarness}=await import(new URL('tests/fixtures/owner-engine-unit.mjs',base));
 const {AIProvider}=await import(new URL('ai/provider.mjs',base));
 const {createOwnerWorkspaceTools}=await import(new URL('automation/whatsapp/owner-workspace-tools.mjs',base));
 const prompt='Record a USD 500 test payment against invoice SB-10442 for Northwind Systems LLC. This is only a dummy bookkeeping entry. Keep customer messages and reminders off.';
@@ -43,7 +45,7 @@ async function fixture(options={}){
 function handlerFor(f,{readTwice=false,readOnce=false,readTarget=target,operation=proposal,confirmation=false,repairPlan=null,planningMessage=null,keepReading=false,finalFunctionCall=false,transformToolResult=null,boundedPayment=true}={}){
  let calls=0;const outputs=[],requests=[],planningRequests=[];
  const response=cloudflarePartsResponse;
- const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated'},logger:{info(){},warn(){},error(){}},toolsFactory:options=>{
+ const handler=createOwnerEngineHarness({supabase:f.supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated'},logger:{info(){},warn(){},error(){}},toolsFactory:options=>{
   const tools=createOwnerWorkspaceTools(options);
   return {...tools,supportsBoundedPaymentProposal:boundedPayment&&tools.supportsBoundedPaymentProposal,async execute(name,args,context){
    const actual=await tools.execute(name,args,context),result=transformToolResult?transformToolResult(actual,args):actual;
@@ -65,7 +67,7 @@ function handlerFor(f,{readTwice=false,readOnce=false,readTarget=target,operatio
  }});
  return {handler,outputs,requests,planningRequests,calls:()=>calls};
 }
-test('production tools select the scoped read and USD500 proposal before native planning, then later confirm exactly USD500',async()=>{
+engineTest('production tools select the scoped read and USD500 proposal before native planning, then later confirm exactly USD500',async()=>{
  const f=await fixture();try{
   const before=await f.snapshot(),run=handlerFor(f,{readTwice:true});
   await f.inbound('payment-propose',prompt);const turn={...f.scope,messageId:'payment-propose',message:prompt};const result=await run.handler(turn);
@@ -86,7 +88,7 @@ test('production tools select the scoped read and USD500 proposal before native 
   const calls=confirm.calls();assert.equal((await confirm.handler({...f.scope,messageId:'payment-confirm',message:'yes'})).replayed,true);assert.equal(confirm.calls(),calls);assert.deepEqual(await f.snapshot(),after);assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });
-test('one exact native read queues the canonical payment before an invalid model batch can run', {skip:Boolean(baseline)},async()=>{
+engineTest('one exact native read queues the canonical payment before an invalid model batch can run', {skip:Boolean(baseline)},async()=>{
  const f=await fixture({invoiceNumber:'INV-2026-6769'});try{
   const before=await f.snapshot(),currentTarget=[{column:'invoice_number',operator:'eq',value:'INV-2026-6769'}];
   await f.inbound('bounded-leading',leadingPrompt);
@@ -102,7 +104,7 @@ test('one exact native read queues the canonical payment before an invalid model
   assert.deepEqual(await f.snapshot(),before);assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });
-test('exact live wording proposes locally despite endless native reads and a final function call, then confirms only USD500', {skip:Boolean(baseline)},async()=>{
+engineTest('exact live wording proposes locally despite endless native reads and a final function call, then confirms only USD500', {skip:Boolean(baseline)},async()=>{
  const f=await fixture({invoiceNumber:'INV-2026-6769'});try{
   const before=await f.snapshot();await f.inbound('endless-native-propose',livePrompt);
   const run=handlerFor(f,{keepReading:true,finalFunctionCall:true,readTwice:true});
@@ -127,7 +129,7 @@ test('exact live wording proposes locally despite endless native reads and a fin
   assert.deepEqual(after.invoices.filter(row=>row.id!==f.ids[0]),before.invoices.filter(row=>row.id!==f.ids[0]));assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });
-test('a wrong-target or truncated native invoice read cannot authorize the canonical proposal', {skip:Boolean(baseline)},async()=>{
+engineTest('a wrong-target or truncated native invoice read cannot authorize the canonical proposal', {skip:Boolean(baseline)},async()=>{
  for(const [label,options]of [
   ['wrong-target',{transformToolResult:result=>result.operation==='read'?{...result,lookupInvoiceNumber:'OTHER',rows:result.rows.map(row=>({...row,invoice_number:'OTHER'}))}:result}],
   ['truncated',{transformToolResult:result=>result.operation==='read'?{...result,truncated:true}:result}],
@@ -143,7 +145,7 @@ test('a wrong-target or truncated native invoice read cannot authorize the canon
   }finally{await f.close();}
  }
 });
-test('leading invoice syntax repairs native BATCH_SHAPE to a single model-selected payment and later confirms exactly USD500', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
+engineTest('leading invoice syntax repairs native BATCH_SHAPE to a single model-selected payment and later confirms exactly USD500', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
  const f=await fixture({invoiceNumber:'INV-2026-6769'});try{
   const {requestedOwnerPayment}=await import(new URL('automation/whatsapp/owner-payment-intent.mjs',base));
   for(const text of [prompt,leadingPrompt,'For invoice INV-2026-6769, log payment of USD 500.',
@@ -170,7 +172,7 @@ test('leading invoice syntax repairs native BATCH_SHAPE to a single model-select
   assert.equal((await f.db.query("select count(*)::int n from whatsapp_owner_action_receipts where provider_message_id='leading-confirm'")).rows[0].n,1);assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });
-test('allowed messages-off tails agree in JS and SQL and both instruction forms confirm exact partial amounts', {skip:Boolean(baseline)},async()=>{
+engineTest('allowed messages-off tails agree in JS and SQL and both instruction forms confirm exact partial amounts', {skip:Boolean(baseline)},async()=>{
  const {requestedOwnerPayment}=await import(new URL('automation/whatsapp/owner-payment-intent.mjs',base));
  const tails=['','This is only a dummy bookkeeping entry.','Keep customer messages and reminders off.','No customer messages or reminders.','This is only a dummy bookkeeping entry. Keep customer messages and reminders off.','This is only a dummy bookkeeping entry. No customer messages or reminders.','This is a dummy bookkeeping entry only; keep messages and reminders off.'];
  for(const [index,instruction]of ['Record a USD 500 test payment against invoice SB-10442 for Northwind Systems LLC.','For test invoice INV-2026-6769 for Northwind Systems LLC, record a partial payment of USD 500.'].entries()){
@@ -186,14 +188,14 @@ test('allowed messages-off tails agree in JS and SQL and both instruction forms 
   }finally{await f.close();}
  }
 });
-test('payment batches remain invalid even when the planning repair proposes a two-item batch', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
+engineTest('payment batches remain invalid even when the planning repair proposes a two-item batch', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
  const f=await fixture({invoiceNumber:'INV-2026-6769'});try{
   const before=await f.snapshot(),single={...proposal,filters:[{column:'invoice_number',operator:'eq',value:'INV-2026-6769'}]};await f.inbound('leading-batch',leadingPrompt);
   const run=handlerFor(f,{boundedPayment:false,operation:{operations:[single]},repairPlan:{operations:[single,single]},planningMessage:leadingPrompt});await run.handler({...f.scope,messageId:'leading-batch',message:leadingPrompt});
   assert.equal(run.planningRequests.length,1);assert.equal(run.outputs.at(-1).validationCode,'BATCH_SHAPE');assert.equal(run.outputs.at(-1).writeAttempted,false);assert.deepEqual(await f.snapshot(),before);assert.equal((await f.db.query('select count(*)::int n from whatsapp_pending_actions')).rows[0].n,0);
  }finally{await f.close();}
 });
-test('amount proposal rejects currency, full-settlement fallback, wrong target and quoted/negated requests', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
+engineTest('amount proposal rejects currency, full-settlement fallback, wrong target and quoted/negated requests', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
  const f=await fixture();try{
   const before=await f.snapshot();
   for(const [id,message,operation] of [
@@ -205,7 +207,7 @@ test('amount proposal rejects currency, full-settlement fallback, wrong target a
  }finally{await f.close();}
 });
 
-test('partial confirmation preserves an original receipt and refuses a tampered currency or owner source', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
+engineTest('partial confirmation preserves an original receipt and refuses a tampered currency or owner source', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
  const f=await fixture();try{
   await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${f.scope.ownerId}';set role authenticated`);
   await f.db.query('select record_invoice_payment($1,$2,100,$3,$4,false)',[f.scope.workspaceId,f.ids[0],'original-fixture-receipt','Original immutable receipt']);
@@ -225,7 +227,7 @@ test('partial confirmation preserves an original receipt and refuses a tampered 
   assert.equal(confirmed.outputs.at(-1).completed,true);const after=await f.snapshot();assert.equal(after.payments.length,2);assert.deepEqual(after.payments.find(p=>p.id===original.id),original);assert.equal(after.invoices.find(i=>i.id===f.ids[0]).amount_paid,600);assert.equal(confirmed.outputs.at(-1).outstandingAmount,351.52);assert.equal(after.outbound,0);
  }finally{await f.close();}
 });
-test('failed post-write readback never claims completion or executes a second payment', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
+engineTest('failed post-write readback never claims completion or executes a second payment', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
  const f=await fixture();try{
   await f.inbound('uncertain-propose',prompt);await handlerFor(f).handler({...f.scope,messageId:'uncertain-propose',message:prompt});
   f.intercept((url,options)=>{if(url.pathname==='/rest/v1/payments'&&options.method==='GET')throw new Error('isolated lost readback');});
@@ -236,7 +238,7 @@ test('failed post-write readback never claims completion or executes a second pa
  }finally{await f.close();}
 });
 
-test('forward migration is idempotent, refuses installed drift and preserves existing routine ACLs', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
+engineTest('forward migration is idempotent, refuses installed drift and preserves existing routine ACLs', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
  const {readFile}=await import('node:fs/promises');const sql=await readFile(new URL('supabase/migrations/20261008031733_owner_partial_payment_confirmation.sql',base),'utf8');
  const f=await fixture({excludeMigrations:[newMigration]});try{
   const routines=async()=> (await f.db.query("select proname,md5(prosrc) hash,proacl::text acl,has_function_privilege('anon',oid,'EXECUTE') anon,has_function_privilege('authenticated',oid,'EXECUTE') authenticated,has_function_privilege('service_role',oid,'EXECUTE') service from pg_proc where proname in ('whatsapp_confirm_owner_invoice_action','whatsapp_apply_direct_owner_write','owner_payment_instruction') order by proname")).rows;
@@ -255,7 +257,7 @@ test('forward migration is idempotent, refuses installed drift and preserves exi
  }finally{await f.close();}
 });
 
-test('new runtime on old production SQL fails closed without any partial proposal or full settlement', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
+engineTest('new runtime on old production SQL fails closed without any partial proposal or full settlement', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
  const f=await fixture({invoiceNumber:'INV-2026-6769',excludeMigrations:['20261008031733_owner_partial_payment_confirmation.sql',newMigration]});try{
   const before=await f.snapshot();
   for(const [id,message,operation]of [['old-schema-propose',prompt,proposal],['old-schema-leading',leadingPrompt,{...proposal,filters:[{column:'invoice_number',operator:'eq',value:'INV-2026-6769'}]}]]){
@@ -272,7 +274,7 @@ test('new runtime on old production SQL fails closed without any partial proposa
  }finally{await f.close();}
 });
 
-test('a genuine signed amount proposal confirms through the button adapter and preserves full-settlement compatibility', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
+engineTest('a genuine signed amount proposal confirms through the button adapter and preserves full-settlement compatibility', {skip:Boolean(process.env.CETLD_PAYMENT_BASELINE)},async()=>{
  const f=await fixture();try{
   await f.inbound('button-propose',prompt);await handlerFor(f).handler({...f.scope,messageId:'button-propose',message:prompt});
   const pending=(await f.db.query('select to_jsonb(p) value from whatsapp_pending_actions p where consumed_at is null')).rows[0].value;
@@ -292,7 +294,7 @@ test('a genuine signed amount proposal confirms through the button adapter and p
  }finally{await f.close();}
 });
 
-test('exact live partial-payment wording uses the production native routing and immutable source SQL',async()=>{
+engineTest('exact live partial-payment wording uses the production native routing and immutable source SQL',async()=>{
  const f=await fixture({invoiceNumber:'INV-2026-6769'});try{
   const {requestedOwnerPayment,ownerPaymentAmountMentioned}=await import(new URL('automation/whatsapp/owner-payment-intent.mjs',base));
   assert.deepEqual(requestedOwnerPayment(livePrompt),{amount:500,currency:'USD',invoiceNumber:'SB-10442',customerName:'Northwind Systems LLC'});
@@ -311,7 +313,7 @@ test('exact live partial-payment wording uses the production native routing and 
   assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });
-test('unsupported partial and amount wording cannot stage or confirm full settlement',async()=>{
+engineTest('unsupported partial and amount wording cannot stage or confirm full settlement',async()=>{
  const f=await fixture();try{
   const {requestedOwnerPayment,ownerPaymentAmountMentioned}=await import(new URL('automation/whatsapp/owner-payment-intent.mjs',base));
   const before=await f.snapshot();
@@ -333,7 +335,7 @@ test('unsupported partial and amount wording cannot stage or confirm full settle
   }
  }finally{await f.close();}
 });
-test('previous version-2 SQL cannot expose a confirmable new wording proposal',async()=>{
+engineTest('previous version-2 SQL cannot expose a confirmable new wording proposal',async()=>{
  const f=await fixture({excludeMigrations:[newMigration]});try{
   assert.deepEqual((await f.db.query('select whatsapp_owner_partial_payment_capability() value')).rows[0].value,{ok:true,version:2});
   assert.equal((await f.db.query('select app.owner_payment_instruction($1) value',[livePrompt])).rows[0].value,null,'the installed version-2 source parser rejects the exact live wording');
@@ -361,7 +363,7 @@ for(const [label,expiresAt,stage,retired]of [
  ['undated incomplete',null,'incomplete',true],
  ['future incomplete','2100-01-01T00:00:00Z','incomplete',false],
  ['expired saving','2000-01-01T00:00:00Z','saving',false],
-])test(`verified native owner turn ${label} review 29 before USD500 proposal`,async()=>{
+])engineTest(`verified native owner turn ${label} review 29 before USD500 proposal`,async()=>{
  const f=await fixture();try{
   const otherReviews=await seedReview249(f,{expiresAt,stage}),before=await f.snapshot();
   await f.inbound('review249-payment',livePrompt);
@@ -396,7 +398,7 @@ for(const [label,expiresAt,stage,retired]of [
  }finally{await f.close();}
 });
 
-for(const fault of ['review-rpc','state-reload','action-reload','proposal-cas'])test(`review249 ${fault} failure cannot stage a partial payment`,async()=>{
+for(const fault of ['review-rpc','state-reload','action-reload','proposal-cas'])engineTest(`review249 ${fault} failure cannot stage a partial payment`,async()=>{
  const f=await fixture();try{
   await seedReview249(f);const before=await f.snapshot();let stateReads=0,actionReads=0,failed=false;
   f.intercept(async(url,options)=>{
@@ -417,7 +419,7 @@ for(const fault of ['review-rpc','state-reload','action-reload','proposal-cas'])
  }finally{await f.close();}
 });
 
-for(const fault of ['wrong-owner','wrong-workspace','wrong-phone'])test(`review249 ${fault} cannot reach review retirement`,async()=>{
+for(const fault of ['wrong-owner','wrong-workspace','wrong-phone'])engineTest(`review249 ${fault} cannot reach review retirement`,async()=>{
  const f=await fixture();try{
   await seedReview249(f);const rows=(await f.db.query('select to_jsonb(p) value from whatsapp_pending_actions p order by id')).rows;
   const invalid={...f.scope,...(fault==='wrong-owner'?{ownerId:randomUUID()}:fault==='wrong-workspace'?{workspaceId:randomUUID()}:{phone:'+12025550198'})};
@@ -427,7 +429,7 @@ for(const fault of ['wrong-owner','wrong-workspace','wrong-phone'])test(`review2
  }finally{await f.close();}
 });
 
-test('review249 context completing after request timeout cannot reach provider or proposal',async t=>{
+engineTest('review249 context completing after request timeout cannot reach provider or proposal',async t=>{
  const f=await fixture();try{
   await seedReview249(f);const before=await f.snapshot();let release,entered;
   const waiting=new Promise(resolve=>{release=resolve;}),started=new Promise(resolve=>{entered=resolve;});

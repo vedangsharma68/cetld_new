@@ -1,3 +1,5 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import {createOwnerScopedStore} from '../ai/whatsapp-channel.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {cloudflarePartsResponse,cloudflareToolResults} from './fixtures/cloudflare-wire.mjs';
@@ -7,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {authorizeOwnerPhone} from '../automation/whatsapp/owner-binding.mjs';
 import {createDirectOwnerWriteAdapter} from '../automation/whatsapp/direct-owner-write.mjs';
 import {AIProvider} from '../ai/provider.mjs';
@@ -45,7 +47,7 @@ async function fixture(){
  };
  const run=async(fetchImpl,messageId,message=request)=>{
   const outputs=[],logs=[];
-  const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},authorize:input=>authorizeOwnerPhone({supabase,...input}),
+  const handler=createOwnerEngineHarness({supabase,env:{NODE_ENV:'test',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},authorize:input=>authorizeOwnerPhone({supabase,...input}),
    logger:{info(label,data){logs.push({label,data});},warn(){},error(){}},fetchImpl:async(url,init)=>{
     assert.equal(new URL(url).hostname,'api.cloudflare.com');
     const body=JSON.parse(init.body),result=body.messages.findLast(item=>item.role==='tool');
@@ -66,11 +68,11 @@ async function fixture(){
 }
 
 const dueOnlyMessage='Only change the due date of QA-CONTRACT-001 to 2026-10-20. Leave its amount and currency unchanged, and keep reminders off.';
-test('native Cloudflare read and excessive date-only plan repair use compatible JSON before one audited SQL correction',async()=>{
+engineTest('native Cloudflare read and excessive date-only plan repair use compatible JSON before one audited SQL correction',async()=>{
  const f=await fixture();try{
   let calls=0,repairs=0;const outputs=[];
   const response=cloudflarePartsResponse;
-  const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated'},authorize:input=>authorizeOwnerPhone({supabase:f.supabase,...input}),
+  const handler=createOwnerEngineHarness({supabase:f.supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated'},authorize:input=>authorizeOwnerPhone({supabase:f.supabase,...input}),
    logger:{info(){},warn(){},error(){}},providerFactory:options=>new AIProvider({...options,primaryModel:'@cf/meta/llama-3.3-70b-instruct-fp8-fast',cfAccountId:'isolated',cfApiToken:'isolated',fallbackModel:null}),
    fetchImpl:async(url,init)=>{
     assert.equal(new URL(url).hostname,'api.cloudflare.com');const body=JSON.parse(init.body);calls++;
@@ -94,7 +96,7 @@ test('native Cloudflare read and excessive date-only plan repair use compatible 
   assert.equal(await f.count('invoice_correction_audits'),1);await handler(turn);assert.equal(await f.count('invoice_correction_audits'),1);await f.assertNoCustomerWrites();
  }finally{await f.close();}
 });
-test('actual live date-only instruction refuses the observed amount-only plan and a still-incomplete repair before SQL',async()=>{
+engineTest('actual live date-only instruction refuses the observed amount-only plan and a still-incomplete repair before SQL',async()=>{
  const f=await fixture();try{
   let plans=0;
   const turn=await f.run(body=>{
@@ -111,7 +113,7 @@ test('actual live date-only instruction refuses the observed amount-only plan an
  }finally{await f.close();}
 });
 
-test('date-only preflight replans the omitted date once, saves it through native SQL, and grounds generic Done in the persisted field',async()=>{
+engineTest('date-only preflight replans the omitted date once, saves it through native SQL, and grounds generic Done in the persisted field',async()=>{
  const f=await fixture();try{
   let plans=0;
   const turn=await f.run(body=>{
@@ -132,7 +134,7 @@ test('date-only preflight replans the omitted date once, saves it through native
  }finally{await f.close();}
 });
 
-test('a retained native amount-only receipt cannot authorize a false date success or a second correction on recovery',async()=>{
+engineTest('a retained native amount-only receipt cannot authorize a false date success or a second correction on recovery',async()=>{
  const f=await fixture();try{
   const receipt=await f.seedCorrection('recover-observed-amount-only',dueOnlyMessage,{total_amount:100,subtotal:100});
   assert.deepEqual(receipt.correction.changedFields,[]);
@@ -144,7 +146,7 @@ test('a retained native amount-only receipt cannot authorize a false date succes
  }finally{await f.close();}
 });
 
-test('recovered partial native correction reports its actual fields and stored date without claiming the whole request succeeded',async()=>{
+engineTest('recovered partial native correction reports its actual fields and stored date without claiming the whole request succeeded',async()=>{
  const f=await fixture();try{
   await f.seedCorrection('recover-partial-date',dueOnlyMessage,{notes:'Retained business note'});
   const turn=await f.run(()=>completion('Done.'),'recover-partial-date',dueOnlyMessage);
@@ -157,7 +159,7 @@ test('recovered partial native correction reports its actual fields and stored d
 // Native default owner/provider HTTP, consolidated tool, SDK and SQL. The exact
 // serialized canonical filter shape was observed live; malformed field values
 // below are reconstructions because production intentionally logs no values.
-test('serialized correction values and filters select the native audited route and expose only safe transport types',async()=>{
+engineTest('serialized correction values and filters select the native audited route and expose only safe transport types',async()=>{
  const f=await fixture();try{
   const turn=await f.run(body=>{
    if(body.tools&&!body.messages.some(m=>m.role==='tool'))return toolCall({operation:'update',table:'invoices',filters:JSON.stringify(target),values:JSON.stringify({due_date:'2026-10-20'})});
@@ -175,7 +177,7 @@ test('serialized correction values and filters select the native audited route a
  }finally{await f.close();}
 });
 
-test('missing correction values gets one current-message plan with the original serialized target before native persistence',async()=>{
+engineTest('missing correction values gets one current-message plan with the original serialized target before native persistence',async()=>{
  const f=await fixture();try{
   let plans=0;
   const message='Change QA-CONTRACT-001 due date to 2026-10-20.';
@@ -192,7 +194,7 @@ test('missing correction values gets one current-message plan with the original 
  }finally{await f.close();}
 });
 
-test('serialized canonical invoice correction target saves a due date once through the native production toolset',async()=>{
+engineTest('serialized canonical invoice correction target saves a due date once through the native production toolset',async()=>{
  const f=await fixture();try{
   let calls=0;
   const turn=await f.run(body=>{
@@ -213,7 +215,7 @@ test('serialized canonical invoice correction target saves a due date once throu
  }finally{await f.close();}
 });
 
-test('a rejected correction field shape replans once from typed catalog and current owner request before native SQL save',async()=>{
+engineTest('a rejected correction field shape replans once from typed catalog and current owner request before native SQL save',async()=>{
  const f=await fixture();try{
   let plans=0;
   const turn=await f.run(body=>{
@@ -245,7 +247,7 @@ test('a rejected correction field shape replans once from typed catalog and curr
  }finally{await f.close();}
 });
 
-test('catalog repair cannot change the original invoice target or widen into a status/payment action',async()=>{
+engineTest('catalog repair cannot change the original invoice target or widen into a status/payment action',async()=>{
  const f=await fixture();try{
   for(const [suffix,patch]of [['retarget',{filters:[{...target[0],value:'OTHER-INVOICE'}]}],['status',{values:{status:'paid'}}],['batch',{operation:'batch',operations:[]}]] ){
    let plans=0;
@@ -261,7 +263,7 @@ test('catalog repair cannot change the original invoice target or widen into a s
  }finally{await f.close();}
 });
 
-test('native Cloudflare cached reads keep one bounded current-date execution opportunity despite prior failure history',async()=>{
+engineTest('native Cloudflare cached reads keep one bounded current-date execution opportunity despite prior failure history',async()=>{
  const f=await fixture();try{
   for(const [i,direction,body] of [[0,'inbound','Set amount to INR 6670 and due date 2026-10-20.'],[1,'outbound','Done, the due date was changed.'],[2,'outbound','The edit tool was not successfully run.']]){
    await f.db.query("insert into whatsapp_messages(workspace_id,customer_id,phone,direction,audience,body,kind,status,idempotency_key,created_at) values($1,$2,$3,$4,'owner',$5,'normal',$6,$7,now()+$8::interval)",[f.scope.workspaceId,f.scope.customerId,f.scope.phone,direction,body,direction==='inbound'?'received':'sent','history-'+i,i+' seconds']);
@@ -269,7 +271,7 @@ test('native Cloudflare cached reads keep one bounded current-date execution opp
   const outputs=[],sent=[],readArgs={operation:'read',table:'invoices',filters:target,columns:['invoice_number','due_date','total_amount','currency']};
   const response=cloudflarePartsResponse;
   const native=(args,id)=>response([{functionCall:{name:'workspaceData',args,id},thoughtSignature:'c2ln'+id}]);
-  const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated'},authorize:input=>authorizeOwnerPhone({supabase:f.supabase,...input}),
+  const handler=createOwnerEngineHarness({supabase:f.supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated'},authorize:input=>authorizeOwnerPhone({supabase:f.supabase,...input}),
    logger:{info(){},warn(){},error(){}},providerFactory:options=>new AIProvider({...options,primaryModel:'@cf/meta/llama-3.3-70b-instruct-fp8-fast',cfAccountId:'isolated',cfApiToken:'isolated',fallbackModel:null}),
    fetchImpl:async(url,init)=>{
     assert.equal(new URL(url).hostname,'api.cloudflare.com');const body=JSON.parse(init.body);sent.push(body);
@@ -300,7 +302,7 @@ async function runNativeMoney(f,initialValues,repairedValues,id,instruction=requ
  const outputs=[],sent=[];let repairs=0;
  const response=cloudflarePartsResponse;
  const native=(args,callId)=>response([{functionCall:{name:'workspaceData',args,id:callId},thoughtSignature:'isolated-signature-'+callId}]);
- const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated'},authorize:input=>authorizeOwnerPhone({supabase:f.supabase,...input}),
+ const handler=createOwnerEngineHarness({supabase:f.supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated'},authorize:input=>authorizeOwnerPhone({supabase:f.supabase,...input}),
   logger:{info(){},warn(){},error(){}},providerFactory:options=>new AIProvider({...options,primaryModel:'@cf/meta/llama-3.3-70b-instruct-fp8-fast',cfAccountId:'isolated',cfApiToken:'isolated',fallbackModel:null}),
   fetchImpl:async(url,init)=>{
    assert.equal(new URL(url).hostname,'api.cloudflare.com');const body=JSON.parse(init.body);sent.push(body);
@@ -320,7 +322,7 @@ async function runNativeMoney(f,initialValues,repairedValues,id,instruction=requ
  const turn={...f.scope,messageId:id,message:instruction};return {reply:await handler(turn),outputs,sent,repairs,handler,turn};
 }
 const observedMoneyValues={due_date:'2026-10-20',subtotal:6670,total_amount:6670,line_items:[{description:'Consulting service charge',amount:6670}]};
-test('observed native amount-only plan repairs explicit INR before one complete audited correction',async()=>{
+engineTest('observed native amount-only plan repairs explicit INR before one complete audited correction',async()=>{
  const f=await fixture();try{
   // A failed earlier instruction must not replace the current money evidence.
   await f.db.query("insert into whatsapp_messages(workspace_id,customer_id,phone,direction,audience,body,kind,status,idempotency_key) values($1,$2,$3,'outbound','owner','The prior edit was not successfully run.','normal','sent','money-prior-failure')",[f.scope.workspaceId,f.scope.customerId,f.scope.phone]);
@@ -335,7 +337,7 @@ test('observed native amount-only plan repairs explicit INR before one complete 
   assert.match(turn.reply.answer,/INR 6670/);await turn.handler(turn.turn);assert.equal(await f.count('invoice_correction_audits'),1);await f.assertNoCustomerWrites();
  }finally{await f.close();}
 });
-test('native repairs still missing currency or requested amounts stop before any invoice SQL',async()=>{
+engineTest('native repairs still missing currency or requested amounts stop before any invoice SQL',async()=>{
  for(const [suffix,values] of [['missing-currency',observedMoneyValues],['wrong-currency',{...observedMoneyValues,currency:'USD'}],['missing-total',{currency:'INR',subtotal:6670,due_date:'2026-10-20'}],['wrong-total',{...observedMoneyValues,currency:'INR',total_amount:6600}]]){
   const f=await fixture();try{
    const turn=await runNativeMoney(f,observedMoneyValues,values,'native-money-'+suffix);
@@ -346,7 +348,7 @@ test('native repairs still missing currency or requested amounts stop before any
  }
 });
 
-test('native explicit currency repair cannot bypass recorded payment history',async()=>{
+engineTest('native explicit currency repair cannot bypass recorded payment history',async()=>{
  const f=await fixture();try{
   await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${f.scope.ownerId}';set role authenticated`);
   await f.db.query('select record_invoice_payment($1,$2,50,$3,$4,false)',[f.scope.workspaceId,f.ids[0],'money-protected-payment','Isolated original receipt']);
@@ -358,7 +360,7 @@ test('native explicit currency repair cannot bypass recorded payment history',as
   assert.equal((await f.db.query("select count(*)::int n from whatsapp_messages where audience='customer'")).rows[0].n,0);assert.deepEqual(f.errors,[]);
  }finally{await f.close();}
 });
-test('unchanged currency read is version-bound and concurrent currency edits prevent SQL dispatch',async()=>{
+engineTest('unchanged currency read is version-bound and concurrent currency edits prevent SQL dispatch',async()=>{
  const f=await fixture();try{
   let readSeen=false,changed=false;
   f.intercept(async(url,options,db)=>{
@@ -381,7 +383,7 @@ test('unchanged currency read is version-bound and concurrent currency edits pre
  }finally{await f.close();}
 });
 
-test('recovered prior USD partial receipt reports incomplete INR correction and never replays a financial write',async()=>{
+engineTest('recovered prior USD partial receipt reports incomplete INR correction and never replays a financial write',async()=>{
  const f=await fixture();try{
   await f.seedCorrection('recover-partial-money',request,observedMoneyValues);
   const turn=await f.run(()=>completion('Done.'),'recover-partial-money',request);
@@ -390,7 +392,7 @@ test('recovered prior USD partial receipt reports incomplete INR correction and 
  }finally{await f.close();}
 });
 
-test('native trailing monetary assignments require every explicit amount before SQL',async()=>{
+engineTest('native trailing monetary assignments require every explicit amount before SQL',async()=>{
  const f=await fixture();try{
   const instruction='Set subtotal to INR 6670 and total to 6670 and tax to 0 for QA-CONTRACT-001. Keep reminders off.';
   const initial={...observedMoneyValues,currency:'INR'},corrected={...initial,tax:0};

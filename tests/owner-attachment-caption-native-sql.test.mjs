@@ -1,3 +1,5 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
@@ -5,7 +7,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 
 const captions=[
   ['Log this sample invoice for testing. Do not send any customer reminders.','image/jpeg'],
@@ -28,7 +30,7 @@ const captions=[
   ['No reminders. Do not save this invoice. Let me know if anything is missing.','image/jpeg',true],
 ];
 
-for(const [caption,mimeType,declined=false] of captions)test(`default native attachment routing: ${mimeType} / ${caption}`,async()=>{
+for(const [caption,mimeType,declined=false] of captions)engineTest(`default native attachment routing: ${mimeType} / ${caption}`,async()=>{
   const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+15555550123';
   try{
     await db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -50,7 +52,7 @@ for(const [caption,mimeType,declined=false] of captions)test(`default native att
     if(mimeType==='application/pdf')Object.assign(facts,{invoiceNumber:'INV-R-1048',customerName:'Northlake Foods',invoiceDate:'2026-09-01',dueDate:null,currency:'INR'});
     const wire={...Object.fromEntries(Object.entries(facts).flatMap(([k,v])=>[[k,v],[k+'Confidence',v===null?0:.99]])),lineItems:[{description:'Service',quantity:1,unitPrice:100,amount:100,confidence:.99}],lineItemsConfidence:.99};
     const requests=[],results=[],logs=[],operations=[];
-    const handler=createOwnerMessageHandler({supabase,localExtraction:async()=>localExtraction(wire),env:{NODE_ENV:'test'},
+    const handler=createOwnerEngineHarness({supabase,localExtraction:async()=>localExtraction(wire),env:{NODE_ENV:'test'},
       logger:{info(label,data){logs.push({label,data});},warn(){},error(){}},
       toolsFactory:options=>{const tools=createOwnerWorkspaceTools(options);return {...tools,async execute(name,args,context){
         operations.push(args.operation);const result=await tools.execute(name,args,context);results.push(result);return result;

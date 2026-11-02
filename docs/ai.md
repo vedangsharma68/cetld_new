@@ -193,69 +193,88 @@ configure platform rate limits/usage quotas. Per-request size/tool/time limits
 are enforced here; distributed usage billing/rate limiting is not implemented.
 
 
-## Private-value format matching (PR #211 repair)
+## Private-value containment (PR #211, repair round 3)
 
-Every provider-bound surface uses `private-value-matcher.mjs`: current text,
-positive-provenance history, issued tool transcripts/results, tool arguments and
-model responses, including memory writes. It normalizes NFKC compatibility forms,
-removes Unicode format characters (category Cf, including zero-width joiners/spaces
-and BOM), then folds case and whitespace at retention and screening time.
-Numeric matching uses exact decimal strings/BigInt. A maximal separated digit run
-is one candidate, never its constituent groups. International/Indian grouping uses
-commas, dots, spaces (including normalized Unicode spaces), or apostrophes
-(Unicode Quotation_Mark normalization plus modifier apostrophe); the
-rightmost dot/comma can be decimal when the preceding integer groups are valid.
-Both valid interpretations of an ambiguous form are compared only against known
-retained values. This covers decimal-comma locales without coercing malformed
-`1,2500` into `1250` or treating `1 250` as separate `1` and `250` values.
-Leading zeros, decimal/trailing-zero variants, supported currency/unit affixes, and bounded English
-number phrases (including hundred/thousand/lakh/crore and colloquial "twelve fifty").
-Dates cover year-first numeric forms and both day/month/year and month/day/year
-with dots, slashes or hyphens. Both calendar-valid interpretations of ambiguous
-numeric dates are checked against stored values. English short/full month names
-work in either order, with optional years, numeric ordinal suffixes, and bounded
-English ordinals first through thirty-first (spaces/hyphens and optional "of").
-Yearless renderings
-are conservative: a matching month/day stays local regardless of year. Numeric
-terms match complete numeric tokens, names match complete tokens/phrases, and
-invoice identifiers do not match longer identifiers. Thus an unretained `100` is
-ordinary; a retained `100` stays local in every supported representation, while
-`1000`, `planning` for retained `ann`, and `INV-123` for `INV-12` are distinct.
+All production WhatsApp and web Assistant chat requests pass
+`createPrivateChatProvider`. Retained values are screened with the same matcher
+at current-message, positive-history, decoded tool argument/result, model-response
+and memory-write boundaries. Protocol JSON is decoded recursively before matching;
+malformed tool protocol fails closed. Caller transcripts, profiles, private schema
+values, summaries, checkpoints and error bodies are not forwarded. Tool transcripts
+must belong to the exact issued call. Local domain results stay local even when
+not yet represented by a retained literal.
 
-Only complete, independently understandable ordinary clauses survive a mixed
-message. Supported clauses include greetings and self-contained joke/story/poem
-requests, explanations, and ordinary "I like/enjoy/love" statements, separated by
-clear punctuation or "also". Referencing clauses ("explain that", "do it") remain
-local. Only the separated ordinary text and screened model answer enter provider
-memory; the raw mixed turn and the local notice never enter it. Mixed turns cannot
-execute the discarded private correction or payment instruction.
+SQL and JS use identical generated Unicode 17 data: compatibility decomposition,
+locale-independent upper/lower caseless folding, combining-mark and Cf removal,
+a shared White_Space fold (including U+0085 and NBSP), and native decimal digits.
+Arabic decimal/thousands punctuation normalizes with the numeric separators.
+`generate-private-value-unicode.mjs --check` and
+`generate-private-value-sql.mjs --check` verify committed artifacts; the language
+vocabulary and date pivot come from `private-value-language.mjs`.
 
-Residual variant classes are explicit: scientific notation, fractions and
-arithmetic-derived restatements; non-English number words/digit scripts, English
-number idioms outside the bounded grammar (including number runs over 40 tokens),
-phonetic/name transliterations, hostile encodings and homoglyphs beyond NFKC/Cf
-normalization; relative-date resolution and other unenumerated calendar forms
-(such as compact dates without separators, two-digit years, alternative ordinal
-phrasing outside the documented grammar and non-Gregorian calendars). These are not claimed as
-covered. Relative-date questions that restate no stored value remain ordinary;
-responses are screened independently. Mixed messages without a recognized independent ordinary clause stay
-local with actionable menu/review guidance. No semantic DLP guarantee for arbitrary
-paraphrases or encodings is claimed.
+Numbers use exact decimal strings/BigInt. Complete valid international/Indian
+comma/dot/space/apostrophe groups remain one value (`1 250` is not `1` and `250`).
+Invalid grouping chains are segmented as lists, with comma+space separating list
+items; `1250, 77` and `1250 77` cannot hide a retained `1250`. Malformed `1,2500`
+does not become `1250`. Both valid grouping/decimal interpretations are checked
+only against retained values. Currency words and symbols are affixes; signed and
+parenthesized scalar strings retain the magnitude conservatively. Decimal-comma,
+trailing-zero, k/m/b multipliers, cardinal number phrases with comma/&/and
+connectors, decimal phrases and common fractional/scaled phrases are normalized.
+Typed `number:` aliases prevent canonical decimals gaining another thousands
+interpretation on reload. Whole tokens distinguish 100/1000 and ann/planning.
+Alphanumeric identifiers compare independently of punctuation/spacing, while
+INV-12 and INV-123 remain different.
 
-SQL repair in the **unapplied** `20261101120327_private_whatsapp_chat_memory.sql`:
-add internal immutable invoker helpers `app.private_invoice_normalize(text)` and
-`app.private_invoice_number_aliases(text)`, alongside the updated
-`app.private_invoice_term_aliases(text)`. All three use an empty search_path and
-revoke direct EXECUTE from PUBLIC/anon/authenticated/service_role. The normalizer
-uses NFKC, Unicode 17 Cf ranges and case/whitespace folding. The numeric helper
-validates complete grouping shapes, retains every valid decimal interpretation,
-and emits typed `number:` aliases so canonical decimals cannot gain new numeric
-interpretations on reload. The term helper retains normalized raw terms, numeric
-aliases, and valid ISO/English month-day aliases for both numeric date orders,
-all three numeric separators and English ordinals. `app.retain_private_invoice_terms`
-still expands aliases before SHA-256 hashing.
-The existing retention triggers and backfill use that expansion automatically.
-Invalid dates retain raw evidence without inventing a normalized date; yearless
-dates get only a month/day alias. No new table, grant, RLS policy or pre-existing
-invoice/audit/mark update is introduced by this repair. Re-run the drift/atomicity
-and ACL audit against the final migration bytes before applying it.
+Dates accept dots/slashes/hyphens, DD/MM and MM/DD ambiguity, year-first forms,
+short or full years, yearless numeric forms, English month names in either order,
+ordinal suffixes and English ordinal days first through thirty-first. The shared
+pivot is **00–69 → 2000–2069; 70–99 → 1970–1999**. Explicit years match only the
+same retained year; yearless input matches retained month/day. A truly yearless
+stored date cannot establish a year and remains conservative. Full-year fields
+emit typed year-aware aliases, never lossy month/day aliases.
+
+Mixed turns retain whole independently understandable ordinary clauses; there
+is no ordinary-intent allowlist. Referential/conjunctive fragments and action
+constraints remain local. Original-offset private spans prevent splitting any known field across delimiters.
+Unparsed create/correction statements stay opaque through the end of the turn;
+only an independent prefix can precede them. Delimiters inside amounts, dates,
+number phrases or protocol JSON cannot launder fragments into ordinary chat. Only the selected
+ordinary text and screened ordinary answer enter the 20-message positive memory.
+Legacy audit history remains local. The web memory scope is separate from the
+WhatsApp scope; its internal service-only store requires the existing server-side
+SUPABASE_SERVICE_ROLE_KEY after caller membership authorization. No ledger or
+Storage RLS is bypassed. Dashboard UI files are unchanged.
+
+Both audience menus are deterministic-local; customer receipts remain refusals
+before extraction, marking, review or provider access. Invoice questions use
+scoped database tools and deterministic replies. Cloudflare exhaustion never
+falls back to Gemini and produces an honest temporary-unavailability reply.
+
+The production fast battery uses the real handler directly (43 scenarios), and
+`owner-engine.mjs` can no longer replace its wrapped provider. The original 38
+planner/tool-state battery scenarios and 49 historical planner simulation suites
+remain enabled as explicitly named **engine subsystem** tests using local mocks.
+They are not counted as production privacy coverage. A paired actual-handler/
+production-fixture test must show zero calls for retained `Explain 1250` and the
+same sanitized mixed-turn payload. Native SQL tests separately cover retention,
+backfill, local review, menus, both audiences, memory, receipts and failures.
+
+Every SQL change remains in the **unapplied**
+`20261101120327_private_whatsapp_chat_memory.sql`: replace locale-dependent
+normalization with the shared Unicode map; expand the exact-number helper for
+symbols/wrappers/native digits/multipliers; add the immutable invoker word-number
+helper; update term aliases for word/identifier and typed year-aware dates; retain
+linked customer name/company/email/phone on invoice insert/update; add company_name
+to the existing backfill. All helpers retain empty search_path and direct EXECUTE
+revoked from PUBLIC/anon/authenticated/service_role. The existing tables, indexes,
+RLS/service grants, transaction, deduplication and trigger definitions are retained;
+the ledger retention function body now includes the linked customer lookup. No
+original invoice/audit/mark rows are rewritten or unmarked. Re-run the drift,
+atomicity/object-reference and ACL audit on the final migration hash before apply.
+
+Residuals: arithmetic-derived expressions, scientific notation, hostile encodings
+or homoglyphs beyond compatibility/combining-mark/Cf normalization, and resolving
+relative dates when no retained value is restated. These are not universal
+semantic DLP guarantees. Ordinary short dates, native decimal digits and the
+supported natural number grammar are covered, not residuals.

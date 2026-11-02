@@ -1,9 +1,11 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 import {authorizeOwnerPhone} from '../automation/whatsapp/owner-binding.mjs';
@@ -12,7 +14,7 @@ import {createOwnerScopedStore} from '../ai/whatsapp-channel.mjs';
 const caption='Log this invoice as a receivable draft for this disposable QA fixture. Nothing has been paid. Never send customer reminders. Ask me if any required fact is missing.';
 const question='What information is missing from the invoice photo I just sent?';
 
-test('native missing-field follow-ups read matching reviews and never invent facts or retry creation',async()=>{
+engineTest('native missing-field follow-ups read matching reviews and never invent facts or retry creation',async()=>{
   const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+15555550186';
   try{
     await db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -35,7 +37,7 @@ test('native missing-field follow-ups read matching reviews and never invent fac
       lineItems:[{description:'Synthetic QA service',quantity:1,unitPrice:100,amount:100,confidence:.99}]};
     const wire={...Object.fromEntries(Object.entries(facts).flatMap(([key,value])=>[[key,value],[key+'Confidence',value==null?0:.99]])),lineItemsConfidence:.99};
     let chatCalls=0,extractionCalls=0;const logs=[];
-    const handler=createOwnerMessageHandler({supabase,localExtraction:async input=>{extractionCalls++;return localExtraction(wire);},env:{NODE_ENV:'test'},logger:{info(label,data){logs.push({label,data});},warn(){},error(){}},
+    const handler=createOwnerEngineHarness({supabase,localExtraction:async input=>{extractionCalls++;return localExtraction(wire);},env:{NODE_ENV:'test'},logger:{info(label,data){logs.push({label,data});},warn(){},error(){}},
       providerFactory:options=>options.requestPurpose==='extraction'?{async generateStructured(call){
         extractionCalls++;return {data:call.validate({...structuredClone(wire),imageContent:'single_invoice'}),model:'fixture-extraction'};
       }}:{async generate({messages}){

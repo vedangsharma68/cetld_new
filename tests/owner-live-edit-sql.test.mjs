@@ -1,14 +1,16 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 
 const phone='+919871367051';
 const logger={info(){},warn(){},error(){}};
 
-test('native repeated rejected reads log only filter structure without invoking ineligible repair or reaching the invoice',async()=>{
+engineTest('native repeated rejected reads log only filter structure without invoking ineligible repair or reaching the invoice',async()=>{
   // These shapes reproduce the observed failure signature, not historical raw arguments.
   const f=await fixture();try{
     const {db,supabase,scope,customerId}=f;
@@ -20,7 +22,7 @@ test('native repeated rejected reads log only filter structure without invoking 
       const message=`Show invoice ${invoice.invoice_number} and its edit options. Do not change any data.`,messageId=`diagnostic-gap-${index}`;
       await addInbound(db,messageId,message);
       const logs=[];let calls=0,plans=0;
-      const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',WHATSAPP_APP_SECRET:'isolated-read-diagnostic'},authorize:async()=>true,
+      const handler=createOwnerEngineHarness({supabase,env:{NODE_ENV:'test',WHATSAPP_APP_SECRET:'isolated-read-diagnostic'},authorize:async()=>true,
         logger:{info(label,data){logs.push({label,data});},warn(){},error(){}},
         providerFactory:()=>new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,logger,
           fetchImpl:async(_url,init)=>{
@@ -75,7 +77,7 @@ async function addInbound(db,id,message){
 
 function handlerWithNativeCall(supabase,scope,{messageId,args,onFinal,plannerOutput=null,expectedPlannerMessage=null}={}){
   let calls=0;
-  const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test'},logger,authorize:async()=>true,
+  const handler=createOwnerEngineHarness({supabase,env:{NODE_ENV:'test'},logger,authorize:async()=>true,
     providerFactory:()=>new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,logger,
       fetchImpl:async(_url,init)=>{
         calls++;const request=JSON.parse(init.body);
@@ -101,7 +103,7 @@ function handlerWithNativeCall(supabase,scope,{messageId,args,onFinal,plannerOut
   return {handler,calls:()=>calls};
 }
 
-test('consolidated Cloudflare workspaceData update blocks amount plus currency change after fully reversed payment without throwing or mutating',async()=>{
+engineTest('consolidated Cloudflare workspaceData update blocks amount plus currency change after fully reversed payment without throwing or mutating',async()=>{
   const f=await fixture();
   try{
     const {db,supabase,scope,customerId}=f;
@@ -175,7 +177,7 @@ test('consolidated Cloudflare workspaceData update blocks amount plus currency c
   }finally{await f.close();}
 });
 
-test('consolidated total-only correction preserves payment history and records overpayment',async()=>{
+engineTest('consolidated total-only correction preserves payment history and records overpayment',async()=>{
   const f=await fixture();
   try{
     const {db,supabase,scope,customerId}=f;
@@ -202,7 +204,7 @@ test('consolidated total-only correction preserves payment history and records o
   }finally{await f.close();}
 });
 
-test('malformed update filters return a structured validation result instead of throwing after workspaceData catches validation',async()=>{
+engineTest('malformed update filters return a structured validation result instead of throwing after workspaceData catches validation',async()=>{
   const f=await fixture();
   try{
     const {db,supabase,scope}=f;
@@ -230,7 +232,7 @@ test('malformed update filters return a structured validation result instead of 
   }finally{await f.close();}
 });
 
-test('native malformed invoice read repairs once and cannot turn validation failure or a present row into not-found edit options',async()=>{
+engineTest('native malformed invoice read repairs once and cannot turn validation failure or a present row into not-found edit options',async()=>{
   const f=await fixture();try{
     const {db,supabase,scope,customerId}=f;
     await createInvoice(db,scope.workspaceId,customerId,'INV-2026-0001',10);
@@ -240,7 +242,7 @@ test('native malformed invoice read repairs once and cannot turn validation fail
     const message='Show invoice INV-2026-0002 and its edit options. Do not change any data.',messageId='native-malformed-invoice-read';
     await addInbound(db,messageId,message);
     let nativeCalls=0,plannerCalls=0,toolResult,plannerOperation='read';
-    const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',WHATSAPP_APP_SECRET:'isolated-invoice-read-menu'},logger,authorize:async()=>true,
+    const handler=createOwnerEngineHarness({supabase,env:{NODE_ENV:'test',WHATSAPP_APP_SECRET:'isolated-invoice-read-menu'},logger,authorize:async()=>true,
       providerFactory:()=>new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,logger,
         fetchImpl:async(_url,init)=>{
           const request=JSON.parse(init.body);

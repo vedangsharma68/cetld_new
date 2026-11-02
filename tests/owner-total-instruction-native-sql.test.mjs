@@ -1,8 +1,10 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {authorizeOwnerPhone} from '../automation/whatsapp/owner-binding.mjs';
 import {createOwnerScopedStore} from '../ai/whatsapp-channel.mjs';
@@ -27,7 +29,7 @@ async function fixture({lineItems=[{description:'Synthetic service',quantity:1,u
  }
  await db.query("update workspace_settings set owner_bot_preferences=owner_bot_preferences||'{\"confirmationMode\":\"direct\"}' where workspace_id=$1",[workspaceId]);
  const scope={workspaceId,ownerId,customerId,phone},outputs=[],executions=[];let providerCalls=0,afterRead=null;
- const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},
+ const handler=createOwnerEngineHarness({supabase:f.supabase,env:{NODE_ENV:'test',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},
   toolsFactory:options=>{const tools=createOwnerWorkspaceTools(options);return {...tools,async execute(name,args,context){
    executions.push({name,args});const result=await tools.execute(name,args,context);outputs.push(result);
    if(args.operation==='read'&&afterRead){const operation=afterRead;afterRead=null;await operation();}return result;
@@ -41,7 +43,7 @@ async function fixture({lineItems=[{description:'Synthetic service',quantity:1,u
  return {...f,scope,ids,turn,handler,read,history,outputs,executions,providerCalls:()=>providerCalls,onRead:operation=>{afterRead=operation;}};
 }
 
-test('event306 exact total instruction adjusts one service line, retains USD40 once, reports USD10 excess and recovers a lost reply',async()=>{
+engineTest('event306 exact total instruction adjusts one service line, retains USD40 once, reports USD10 excess and recovers a lost reply',async()=>{
  const f=await fixture();try{
   const foreign=await f.read(f.ids[1]);
   assert.match((await f.turn('total-payment-propose',`Record a USD 40 payment on test invoice ${number}.`)).answer,/Record USD 40/);
@@ -71,7 +73,7 @@ test('event306 exact total instruction adjusts one service line, retains USD40 o
  }finally{await f.close();}
 });
 
-test('an unitemized invoice corrects once and a later currency preread cannot replace the original version guard',async()=>{
+engineTest('an unitemized invoice corrects once and a later currency preread cannot replace the original version guard',async()=>{
  const f=await fixture({lineItems:[]});try{
   await f.turn('plain-payment-propose',`Record a USD 40 payment on test invoice ${number}.`);await f.turn('plain-payment-confirm','yes');
   const original=await f.history(),reply=await f.turn('plain-total',request);assert.match(reply.answer,/Overpayment: USD 10\.00/);
@@ -90,7 +92,7 @@ test('an unitemized invoice corrects once and a later currency preread cannot re
  }finally{await f.close();}
 });
 
-test('multiple item allocation is clarified without changing the paid invoice or consulting a planner',async()=>{
+engineTest('multiple item allocation is clarified without changing the paid invoice or consulting a planner',async()=>{
  const f=await fixture({lineItems:[{description:'First',quantity:1,unitPrice:60,amount:60},{description:'Second',quantity:1,unitPrice:40,amount:40}]});try{
   await f.turn('multi-payment-propose',`Record a USD 40 payment on test invoice ${number}.`);await f.turn('multi-payment-confirm','yes');
   const before=await f.read(f.ids[0]),history=await f.history(),calls=f.providerCalls();
@@ -100,7 +102,7 @@ test('multiple item allocation is clarified without changing the paid invoice or
  }finally{await f.close();}
 });
 
-test('a concurrent change after the total preread and inconsistent retained payment or currency all refuse without financial writes',async()=>{
+engineTest('a concurrent change after the total preread and inconsistent retained payment or currency all refuse without financial writes',async()=>{
  const f=await fixture();try{
   await f.turn('guard-payment-propose',`Record a USD 40 payment on test invoice ${number}.`);await f.turn('guard-payment-confirm','yes');
   const before=await f.read(f.ids[0]),history=await f.history(),calls=f.providerCalls();

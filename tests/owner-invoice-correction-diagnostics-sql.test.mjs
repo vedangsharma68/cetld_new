@@ -1,15 +1,17 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {authorizeOwnerPhone} from '../automation/whatsapp/owner-binding.mjs';
 
 // Default production handler/provider over the native Cloudflare HTTP wire,
 // consolidated tool, real SDK, full local SQL chain and readback. All HTTP is
 // isolated. The repaired numeric patch is a local reconstruction: production
 // retained TARGET_REQUIRED then UNKNOWN, but not the second call's values.
-test('inconsistent draft total explains the arithmetic refusal; only an explicit consistent correction persists',async()=>{
+engineTest('inconsistent draft total explains the arithmetic refusal; only an explicit consistent correction persists',async()=>{
  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+919871367051';
  try{
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -31,7 +33,7 @@ test('inconsistent draft total explains the arithmetic refusal; only an explicit
   const read=async id=>(await db.query('select to_jsonb(i) row from invoices i where id=$1',[id])).rows[0].row;
   const before=await read(ids[0]),otherBefore=await read(ids[1]),logs=[],outputs=[];
   let values={total_amount:6670,currency:'INR',due_date:'2026-10-20'},missingTarget=true,providerCalls=0;
-  const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},authorize:input=>authorizeOwnerPhone({supabase,...input}),
+  const handler=createOwnerEngineHarness({supabase,env:{NODE_ENV:'test',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},authorize:input=>authorizeOwnerPhone({supabase,...input}),
    logger:{info(label,data){logs.push({label,data});},warn(){},error(){}},
    fetchImpl:async(url,init)=>{
     providerCalls++;assert.equal(new URL(url).hostname,'api.cloudflare.com');

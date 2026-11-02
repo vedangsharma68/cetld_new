@@ -1,13 +1,15 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {ownerConsentRequest} from '../automation/whatsapp/owner-consent.mjs';
 import {getSendEligibility} from '../automation/whatsapp/consent.mjs';
 
-test('consent confirmations use a bounded, supported owner operation',()=>{
+engineTest('consent confirmations use a bounded, supported owner operation',()=>{
   assert.deepEqual(ownerConsentRequest('record consent: John Smith agreed to WhatsApp reminders on +12025550119'),{
     operation:'recordConsent',table:'customers',filters:[{column:'name',operator:'eq',value:'John Smith'}]});
   assert.equal(ownerConsentRequest('he consented to reminders on +12025550119').filters[0].value,'+12025550119');
@@ -18,7 +20,7 @@ test('consent confirmations use a bounded, supported owner operation',()=>{
   assert.equal(ownerConsentRequest('they approve, send them a reminder (the invoice is due tommrow)').filters.length,0,'an unquoted pronoun cannot select recent customers');
 });
 
-test('owner consent commits with evidence and a receipt; owner bindings and STOP remain intact',async()=>{
+engineTest('owner consent commits with evidence and a receipt; owner bindings and STOP remain intact',async()=>{
  const f=await createOfflineSqlNetwork(),{db,supabase}=f;
  try{
   await db.exec(await readFile(new URL('../supabase/migrations/20261018060000_customer_reminder_tone.sql',import.meta.url),'utf8'));
@@ -34,7 +36,7 @@ test('owner consent commits with evidence and a receipt; owner bindings and STOP
   const invoice=(await db.query(`insert into invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,status,metadata)
     values($1,$2,'CONSENT-001',current_date,current_date+1,'USD',125,'draft','{"invoice_direction":"receivable"}') returning id,invoice_number`,[workspaceId,debtor])).rows[0];
   const scope={workspaceId,ownerId,customerId,phone},history=[];let seq=0;
-  const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test'},providerFactory:()=>({}),historyReader:async()=>history,
+  const handler=createOwnerEngineHarness({supabase,env:{NODE_ENV:'test'},providerFactory:()=>({}),historyReader:async()=>history,
     logger:{info(){},warn(){},error(){}},agentFactory:async()=>{throw Error('consent must not depend on model guesses');}});
   const event=async(message,sender=phone)=>{
     const messageId='consent-'+(++seq);

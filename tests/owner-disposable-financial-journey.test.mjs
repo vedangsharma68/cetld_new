@@ -1,13 +1,15 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 
 // Only the provider transport is simulated. Native tool calls enter the default
 // handler/toolset, real Supabase SDK and migrated SQL; no fixture writes a receipt.
-test('disposable native owner journey preserves one receipt through excess, edits and confirmed reversal',async()=>{
+engineTest('disposable native owner journey preserves one receipt through excess, edits and confirmed reversal',async()=>{
  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),otherOwner=randomUUID(),phone='+15555550168';
  try{
   await db.query('insert into auth.users(id) values($1),($2)',[ownerId,otherOwner]);
@@ -35,7 +37,7 @@ test('disposable native owner journey preserves one receipt through excess, edit
    if(value?.completed){const row=value.record;return row?`Updated invoice ${row.invoice_number}: total USD ${row.total_amount}, paid USD ${row.amount_paid}, outstanding USD ${row.outstanding_amount??Math.max(row.total_amount-row.amount_paid,0)}, overpayment USD ${row.overpayment_amount??Math.max(row.amount_paid-row.total_amount,0)}. Due date ${row.due_date}. Notes: ${row.notes||'none'}.`: 'The confirmed action completed.';}
    return 'No changes were made.';
   };
-  const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},
+  const handler=createOwnerEngineHarness({supabase,env:{NODE_ENV:'test',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},
    toolsFactory:options=>{const tools=createOwnerWorkspaceTools(options);return {...tools,async execute(...args){const value=await tools.execute(...args);outputs.push(value);return value;}};},
    fetchImpl:async(url,init)=>{
     assert.equal(new URL(url).hostname,'api.cloudflare.com');const wire=JSON.parse(init.body);nativeRequests.push(wire);

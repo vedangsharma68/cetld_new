@@ -1,10 +1,12 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import {cloudflarePartsResponse,cloudflareToolResults} from './fixtures/cloudflare-wire.mjs';
 import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createWhatsAppInvoiceStore} from '../automation/whatsapp/invoice-store.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 
@@ -21,7 +23,7 @@ async function fixture({badDuplicateReply=false,storeWrap=store=>store}={}){
  const facts={invoiceNumber:'SB-10442',customerName:'Northwind Systems LLC',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:879,tax:72.52,total:951.52,outstandingAmount:951.52,currency:'USD',direction:'payable',clientPhone:null,clientPhoneRaw:null,clientEmail:null,notes:'Net 30',currencySource:'photo',addressHint:null,paymentTerms:null,paymentStatus:null,paymentStatusEvidence:null};
  const wire={...Object.fromEntries(Object.entries(facts).flatMap(([key,value])=>[[key,value],[key+'Confidence',value==null?0:.99]])),lineItems:[{description:'Service',quantity:1,unitPrice:879,amount:879,confidence:.99}],lineItemsConfidence:.99};
  const bytes=Buffer.from([255,216,255,0,0,0]),results=[];let current='',providerCalls=0,extractions=0,falseSuccessDrafts=0;
- const handler=createOwnerMessageHandler({supabase,localExtraction:async input=>{extractions++;return localExtraction(wire);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
+ const handler=createOwnerEngineHarness({supabase,localExtraction:async input=>{extractions++;return localExtraction(wire);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
   toolsFactory:options=>{const tools=createOwnerWorkspaceTools(options);return {...tools,async execute(...args){
    const result=await tools.execute(...args);results.push(result);return result;
   }};},
@@ -59,7 +61,7 @@ async function fixture({badDuplicateReply=false,storeWrap=store=>store}={}){
  return {...f,scope,handler,turn,upload,results,get providerCalls(){return providerCalls;},get extractions(){return extractions;},get falseSuccessDrafts(){return falseSuccessDrafts;}};
 }
 
-for(const badDuplicateReply of [false,true])test(`native default owner duplicate ${badDuplicateReply?'bypasses a provider poised to invent success':'reports the verified rejection'} without saving or changing the original`,async()=>{
+for(const badDuplicateReply of [false,true])engineTest(`native default owner duplicate ${badDuplicateReply?'bypasses a provider poised to invent success':'reports the verified rejection'} without saving or changing the original`,async()=>{
  const f=await fixture({badDuplicateReply});try{
   assert.match((await f.upload('original')).answer,/Saved invoice SB-10442/);
   const before=(await f.db.query('select to_jsonb(i) value from invoices i where workspace_id=$1',[f.scope.workspaceId])).rows[0].value;
@@ -76,7 +78,7 @@ for(const badDuplicateReply of [false,true])test(`native default owner duplicate
  }finally{await f.close();}
 });
 
-test('known duplicate with unavailable identity readback reports the rejection without inventing an original number',async()=>{
+engineTest('known duplicate with unavailable identity readback reports the rejection without inventing an original number',async()=>{
  const f=await fixture({storeWrap:store=>({...store,async findDuplicateSourceInvoice(){throw Error('isolated identity read unavailable');}})});try{
   await f.upload('original');const before=(await f.db.query('select to_jsonb(i) value from invoices i')).rows;
   const reply=await f.upload('duplicate');assert.equal(reply.plannerFailure,undefined,JSON.stringify(reply));assert.match(reply.answer,/rejected as a duplicate/);assert.match(reply.answer,/No new invoice was saved/);assert.match(reply.answer,/details could not be verified/);assert.doesNotMatch(reply.answer,/INV-2026-|Saved invoice|reply yes/);
@@ -84,7 +86,7 @@ test('known duplicate with unavailable identity readback reports the rejection w
  }finally{await f.close();}
 });
 
-test('ambiguous historical source identities remain untouched and do not pick an original invoice arbitrarily',async()=>{
+engineTest('ambiguous historical source identities remain untouched and do not pick an original invoice arbitrarily',async()=>{
  const f=await fixture();try{
   await f.upload('original');const original=(await f.db.query('select * from invoices')).rows[0];
   const otherCustomer=(await f.db.query("insert into customers(workspace_id,name) values($1,'Different customer') returning id",[f.scope.workspaceId])).rows[0].id;
@@ -105,7 +107,7 @@ test('ambiguous historical source identities remain untouched and do not pick an
  }finally{await f.close();}
 });
 
-test('an unknown write result keeps reconciliation safety and cannot become a duplicate rejection',async()=>{
+engineTest('an unknown write result keeps reconciliation safety and cannot become a duplicate rejection',async()=>{
  const f=await fixture({storeWrap:store=>({...store,async createAssistantInvoice(){throw Error('isolated unknown write result');}})});try{
   const reply=await f.upload('uncertain');assert.match(reply.answer,/verif|check|uncertain|may have/i);assert.doesNotMatch(reply.answer,/already logged|rejected as a duplicate|No new invoice was saved|Saved invoice/i);
   assert.equal(f.results.some(value=>value.code==='DUPLICATE_INVOICE'),false);assert.ok(f.results.some(value=>value.code==='DATABASE_UNAVAILABLE'));
@@ -113,7 +115,7 @@ test('an unknown write result keeps reconciliation safety and cannot become a du
  }finally{await f.close();}
 });
 
-test('lost insert acknowledgement reconciles the current save receipt rather than reporting an old-source duplicate',async()=>{
+engineTest('lost insert acknowledgement reconciles the current save receipt rather than reporting an old-source duplicate',async()=>{
  let lost=false;
  const f=await fixture({storeWrap:store=>({...store,async createAssistantInvoice(input){const saved=await store.createAssistantInvoice(input);if(!lost){lost=true;throw Error('isolated lost insert acknowledgement');}return saved;}})});try{
   const reply=await f.upload('raced');assert.match(reply.answer,/Saved invoice SB-10442/);assert.equal(reply.plannerFailure,undefined);assert.equal(f.results.some(value=>value.code==='DUPLICATE_INVOICE'),false);

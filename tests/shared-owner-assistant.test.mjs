@@ -1,3 +1,5 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -6,7 +8,7 @@ import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {applyNoFooterMigration} from './fixtures/no-footer-reminders.mjs';
 import {createAccountingActionToken} from '../ai/accounting-actions.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createAssistantClient} from '../assistant-client.js';
 import {selectInvoiceReminderTemplate} from '../automation/whatsapp/reminder-templates.mjs';
 import {buildDefaultInvoiceReminderDraft} from '../automation/whatsapp/reminder-parameters.mjs';
@@ -19,7 +21,7 @@ const migration='20261023061702_shared_owner_assistant.sql';
 const logger={info(){},warn(){},error(){}};
 const response=()=>({setHeader(){},status(code){this.code=code;return this;},json(data){this.data=data;return this;}});
 
-test('shared owner context and dashboard commands use real authenticated stores and PostgreSQL safety gates',async t=>{
+engineTest('shared owner context and dashboard commands use real authenticated stores and PostgreSQL safety gates',async t=>{
  const graph=[];
  const f=await createOfflineSqlNetwork({excludeMigrations:[migration],externalFetch:async(url,options)=>{assert.equal(url.origin,'https://graph.facebook.com');graph.push(JSON.parse(options.body));return Response.json({messages:[{id:'wamid.shared.delivery'}]});}});const {db}=f;
  try{
@@ -72,7 +74,7 @@ test('shared owner context and dashboard commands use real authenticated stores 
     readProposal:async id=>(await db.query('select * from owner_assistant_proposals where workspace_id=$1 and owner_id=$2 and id=$3',[workspaceId,ownerId,id])).rows[0]});
   const wa=async(message,agentFactory=async()=>({answer:'WhatsApp context received.'}))=>{
    await service();const messageId=randomUUID();await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[messageId,phone,message]);
-   return createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test'},providerFactory:()=>provider,...(agentFactory?{agentFactory}:{}),logger,replyStore:null})({workspaceId,ownerId,customerId:ownerCustomer,phone,messageId,message});
+   return createOwnerEngineHarness({supabase:f.supabase,env:{NODE_ENV:'test'},providerFactory:()=>provider,...(agentFactory?{agentFactory}:{}),logger,replyStore:null})({workspaceId,ownerId,customerId:ownerCustomer,phone,messageId,message});
   };
   await t.test('web → WhatsApp → web uses the same persisted thread, ignoring forged browser history',async()=>{
    assert.equal((await ask('hello')).code,200);

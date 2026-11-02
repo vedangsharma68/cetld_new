@@ -49,7 +49,8 @@ for(const terminalStage of ['canceled','saved'])test(`native read after a ${term
     assert.deepEqual(result.buttons?.map(button=>button.title),['Edit details','Record payment'],JSON.stringify({result,logs,errors:f.errors}));
     assert.ok(result.buttons.every(button=>button.id.startsWith('ons1.')));
     assert.match(result.answer,/Current paid balance: USD 0/);assert.doesNotMatch(result.answer,/no payment made|never paid/i);
-    assert.equal(calls,3);assert.equal(logs.filter(row=>row.label==='WhatsApp owner tool call').length,1);
+    assert.equal(calls,0,'invoice read and signed edit options are deterministic-local');
+    assert.equal(f.requests.filter(request=>request.method==='GET'&&new URL(request.url).pathname==='/rest/v1/invoices').length,1,'one fresh scoped invoice read');
     assert.equal(f.requests.filter(request=>new URL(request.url).pathname.endsWith('/rpc/whatsapp_load_invoice_review')).length,0,'terminal review read must not invoke mutating expiry housekeeping');
     assert.deepEqual(await snapshots(),before);assert.deepEqual(f.errors,[]);
   }finally{await f.close();}

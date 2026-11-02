@@ -1,9 +1,11 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,createHmac} from 'node:crypto';
 import {Readable} from 'node:stream';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerReplyStore} from '../automation/whatsapp/owner-reply-store.mjs';
 import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 import {SupabaseInboundInbox,parseMetaMessages,createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
@@ -32,7 +34,7 @@ async function fixture(){
  const invoice=(await db.query(`insert into invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,status,metadata)
   values($1,$2,'QA-1001','2026-03-31',null,'INR',6471,'sent','{"invoice_direction":"receivable"}') returning *`,[workspaceId,customer.id])).rows[0];
  const history=[{role:'user',content:'send a reminder for QA-1001'},{role:'assistant',content:'Customer A has no saved number.'}];
- const handler=createOwnerMessageHandler({supabase,env,logger:quiet,historyReader:async()=>history,
+ const handler=createOwnerEngineHarness({supabase,env,logger:quiet,historyReader:async()=>history,
   providerFactory:()=>({}),agentFactory:async()=>{throw Error('bounded quote/phone path must not call a model');}});
  const inbox=new SupabaseInboundInbox(supabase,{env});
  const event=async(message,{id=randomUUID(),context=null,timestamp=new Date().toISOString(),sender=phone}={})=>{
@@ -70,7 +72,7 @@ async function fixture(){
  return {...network,scope,env,handler,inbox,customer,other,invoice,receipt,event,turn,resolve,consent,history};
 }
 
-test('quoted agreement resolves A despite intervening B; collisions preserve B, original words and unknown due',async()=>{
+engineTest('quoted agreement resolves A despite intervening B; collisions preserve B, original words and unknown due',async()=>{
  const f=await fixture(),{db,supabase,scope,customer,other,invoice}=f;
  try{
   // Simulate the real shared-phone arrangement: the active grant belongs to B.
@@ -95,7 +97,7 @@ test('quoted agreement resolves A despite intervening B; collisions preserve B, 
  }finally{await f.close();}
 });
 
-test('affirmative clause records scoped evidence once, does not approve a reminder or change null due',async()=>{
+engineTest('affirmative clause records scoped evidence once, does not approve a reminder or change null due',async()=>{
  const f=await fixture(),{db,scope,customer,invoice}=f;
  try{
   const message='they approve, send them a reminder (the invoice is due tomorrow)';
@@ -145,7 +147,7 @@ test('affirmative clause records scoped evidence once, does not approve a remind
  }finally{await f.close();}
 });
 
-test('quote scope, age, current versions and bot provenance reject unbound or foreign receipts',async()=>{
+engineTest('quote scope, age, current versions and bot provenance reject unbound or foreign receipts',async()=>{
  const f=await fixture(),{db,scope}=f;
  try{
   const text='they approve, send them a reminder (the invoice is due tommrow)';
@@ -199,7 +201,7 @@ test('quote scope, age, current versions and bot provenance reject unbound or fo
  }finally{await f.close();}
 });
 
-test('signed text ingress retains reply context unchanged through durable duplicates and retries',async()=>{
+engineTest('signed text ingress retains reply context unchanged through durable duplicates and retries',async()=>{
  const f=await fixture();
  try{
   const text='they approve, send them a reminder (the invoice is due tomorrow)',id='wamid.signed-quote';
@@ -233,7 +235,7 @@ test('signed text ingress retains reply context unchanged through durable duplic
  }finally{await f.close();}
 });
 
-test('phone-wide suppression/revocation still blocks both shared customers and cannot be revived by a quote',async()=>{
+engineTest('phone-wide suppression/revocation still blocks both shared customers and cannot be revived by a quote',async()=>{
  const f=await fixture();
  try{
   await f.db.query('update whatsapp_consents set customer_id=$1 where workspace_id=$2 and phone=$3',[f.other.id,f.scope.workspaceId,'+12025550719']);
@@ -247,7 +249,7 @@ test('phone-wide suppression/revocation still blocks both shared customers and c
  }finally{await f.close();}
 });
 
-test('relative due dates use original owner-local calendar including DST/month rollover; missing timestamp stays unknown',()=>{
+engineTest('relative due dates use original owner-local calendar including DST/month rollover; missing timestamp stays unknown',()=>{
  for(const [timestamp,timezone,expected] of [
   ['2026-10-24T20:00:00Z','Asia/Kolkata','2026-10-26'],
   ['2026-10-31T23:30:00Z','America/New_York','2026-11-01'],

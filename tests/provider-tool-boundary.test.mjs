@@ -1,8 +1,10 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 import {normalizeProviderToolCalls,internalToolEnvelope} from '../ai/tool-calls.mjs';
-import {createOwnerMessageHandler,standaloneOwnerGreeting} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness,standaloneOwnerGreeting} from './fixtures/owner-engine-unit.mjs';
 import {ownerReplySafetyIssue,runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
 import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as scope,DEFAULT_NOW,JOHN_CUSTOMER_ID} from './fixtures/owner-chat-battery.mjs';
@@ -11,7 +13,7 @@ const raw=String.raw`{"name": "workspaceData", "parameters": {"request": "What\'
 const logger={info(){},warn(){},error(){}};
 const ok=content=>({ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({choices:[{message:{content},finish_reason:'stop'}]})});
 
-test('known complete provider envelopes normalize without choosing an operation or weakening arguments',()=>{
+engineTest('known complete provider envelopes normalize without choosing an operation or weakening arguments',()=>{
  for(const content of [raw,'```json\n'+raw+'\n```',JSON.stringify({tool_calls:[{function:{name:'workspaceData',arguments:'{"operation":"read","table":"customers"}'}}]})]){
   const result=normalizeProviderToolCalls({content,toolCalls:[]},{tools});
   assert.equal(result.content,'');assert.equal(result.toolCalls[0].function.name,'workspaceData');
@@ -30,14 +32,14 @@ test('known complete provider envelopes normalize without choosing an operation 
  assert.equal(internalToolEnvelope(raw),true);assert.equal(ownerReplySafetyIssue(raw),'internal_tool_protocol');
 });
 
-test('real Cloudflare adapter handles the exact malformed live envelope through scoped planner, durable receipt and native buttons',async()=>{
+engineTest('real Cloudflare adapter handles the exact malformed live envelope through scoped planner, durable receipt and native buttons',async()=>{
  const db=createOwnerChatDatabase(),phone='+919818685252';
  db.tables.customers.find(row=>row.id===JOHN_CUSTOMER_ID).phone=phone;
  const before=structuredClone({customers:db.tables.customers,invoices:db.tables.invoices,payments:db.tables.payments});
  const env={WHATSAPP_APP_SECRET:'isolated-provider-boundary',WHATSAPP_OUTBOUND_ENABLED:'true',WHATSAPP_TEST_ALLOWLIST:scope.phone,
   WHATSAPP_ACCESS_TOKEN:'isolated-token',WHATSAPP_PHONE_NUMBER_ID:'1234567890',WHATSAPP_GRAPH_API_VERSION:'v24.0'};
  let generations=0;
- const handler=createOwnerMessageHandler({supabase:db.supabase,env,logger,clock:()=>DEFAULT_NOW,authorize:async()=>true,
+ const handler=createOwnerEngineHarness({supabase:db.supabase,env,logger,clock:()=>DEFAULT_NOW,authorize:async()=>true,
   providerFactory:()=>new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,logger,
    fetchImpl:async(_url,init)=>{
     generations++;const wire=JSON.parse(init.body);
@@ -63,7 +65,7 @@ test('real Cloudflare adapter handles the exact malformed live envelope through 
  assert.deepEqual({customers:db.tables.customers,invoices:db.tables.invoices,payments:db.tables.payments},before);db.assertScopedReads();
 });
 
-test('protocol text in a tools-off final round is repaired, never executed or returned',async()=>{
+engineTest('protocol text in a tools-off final round is repaired, never executed or returned',async()=>{
  let executions=0,calls=0;
  const provider=new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',logger,maxAttempts:1,
   fetchImpl:async(_url,init)=>{calls++;assert.equal(JSON.parse(init.body).tools,undefined);return ok(calls===1?raw:'I could not verify that phone number.');}});
@@ -72,9 +74,9 @@ test('protocol text in a tools-off final round is repaired, never executed or re
  assert.equal(executions,0);assert.equal(calls,2);assert.equal(result.answer,'I could not verify that phone number. Try again shortly.');assert.equal(result.plannerFailure,undefined);
 });
 
-test('standalone greetings are authorized, saved and replayed without model/context calls; mixed requests use the model',async()=>{
+engineTest('standalone greetings are authorized, saved and replayed without model/context calls; mixed requests use the model',async()=>{
  const db=createOwnerChatDatabase();let providers=0,contexts=0,allowed=true;
- const handler=createOwnerMessageHandler({supabase:db.supabase,env:{},logger,clock:()=>DEFAULT_NOW,authorize:async()=>allowed,
+ const handler=createOwnerEngineHarness({supabase:db.supabase,env:{},logger,clock:()=>DEFAULT_NOW,authorize:async()=>allowed,
   historyReader:async()=>{contexts++;return []},providerFactory:()=>{providers++;return {async generate(){return {content:'How can I help?'}}}}});
  for(const [index,message]of ['Hi','HOW ARE YOU?','What do you do?'].entries()){
   const input={...scope,messageId:'greeting-'+index,message};const result=await handler(input);

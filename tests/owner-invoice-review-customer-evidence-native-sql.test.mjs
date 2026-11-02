@@ -1,13 +1,15 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
 
 const phoneFor=index=>`+1555555020${index}`;
 
-test('invoice review accepts NULL and owner-bound message evidence but rejects another customer context',async()=>{
+engineTest('invoice review accepts NULL and owner-bound message evidence but rejects another customer context',async()=>{
  const f=await createOfflineSqlNetwork(),{db}=f;
  try{
   const cases=['null','bound','other'];
@@ -53,7 +55,7 @@ test('invoice review accepts NULL and owner-bound message evidence but rejects a
  }finally{await f.close();}
 });
 
-test('cloud inbound persists an owner turn with NULL customer_id and owner review continues through SQL',async()=>{
+engineTest('cloud inbound persists an owner turn with NULL customer_id and owner review continues through SQL',async()=>{
  const f=await createOfflineSqlNetwork(),{db,supabase}=f;
  try{
   const ownerId=randomUUID(),phone='+15555550210',messageId='cloud-owner-direction';
@@ -76,7 +78,7 @@ test('cloud inbound persists an owner turn with NULL customer_id and owner revie
    (provider_message_id,phone_number_id,sender_phone,message_type,message_text,status)
    values($1,'fixture',$2,'text',$3,'processing') returning id,received_at`,[messageId,phone,message])).rows[0];
   let agentCalls=0,directionResult;
-  const ownerHandler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
+  const ownerHandler=createOwnerEngineHarness({supabase,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
    replyStore:null,authorize:async()=>true,agentFactory:async({tools})=>{
     agentCalls++;
     directionResult=await tools.execute('workspaceData',{operation:'reviewAttachment',table:'invoices',values:{invoice_direction:'receivable'}});

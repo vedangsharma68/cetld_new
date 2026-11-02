@@ -54,13 +54,13 @@ test('SQL/JS alias parity: locale shapes, decimal ambiguity, every ordinal, nume
     }
     for(const [,term,canonical] of normalizedPrivateVariants){
       const retained=await aliases(term);
-      assert.ok(retained.includes(canonical==='1250'?'number:1250':canonical==='anurag'?'anurag':canonical==='2026-10-31'&&/2026/.test(term)?'2026-10-31':'31 oct'),JSON.stringify({term,retained}));
+      assert.ok(retained.includes(canonical==='1250'?'number:1250':canonical==='anurag'?'anurag':canonical==='2026-10-31'&&/2026/.test(term)?'date:2026-10-31':'date:*-10-31'),JSON.stringify({term,retained}));
     }
     assert.deepEqual(await aliases('2026-02-31'),['2026-02-31']);assert.deepEqual(await aliases('31.02.2026'),['31.02.2026']);
     const words='first,second,third,fourth,fifth,sixth,seventh,eighth,ninth,tenth,eleventh,twelfth,thirteenth,fourteenth,fifteenth,sixteenth,seventeenth,eighteenth,nineteenth,twentieth,twenty first,twenty second,twenty third,twenty fourth,twenty fifth,twenty sixth,twenty seventh,twenty eighth,twenty ninth,thirtieth,thirty first'.split(',');
     for(const [i,word] of words.entries())for(const spelling of [word,word.replaceAll(' ','-')])for(const text of ['the '+spelling+' of October', 'October '+spelling+', 2026', 'October the '+spelling+', 2026']){
       const date='2026-10-'+String(i+1).padStart(2,'0');
-      const terms=await aliases(text);assert.ok(terms.includes(String(i+1).padStart(2,'0')+' oct'),text);
+      const terms=await aliases(text);assert.ok(terms.includes('date:'+(/2026/.test(text)?'2026':'*')+'-10-'+String(i+1).padStart(2,'0')),text);
       assert.equal(createPrivateValueMatcher([text])(date),true,text);assert.equal(createPrivateValueMatcher(terms)(date),true,text);
       assert.equal(createPrivateValueMatcher([date])(text),true,text);
     }

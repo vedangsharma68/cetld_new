@@ -1,7 +1,9 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {planOwnerNextActions} from '../automation/whatsapp/owner-next-actions.mjs';
 import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
 import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as scope,DEFAULT_NOW,JOHN_CUSTOMER_ID} from './fixtures/owner-chat-battery.mjs';
@@ -21,10 +23,10 @@ function fixtures(){
 }
 const call=(args,id)=>({model:CF_PRIMARY_MODEL,toolCalls:[{id,type:'function',function:{name:'workspaceData',arguments:JSON.stringify(args)}}]});
 
-test('seven-row unfiltered read persists John choices and reaches native outbound transport; a repeated tap makes no model call or mutation',async()=>{
+engineTest('seven-row unfiltered read persists John choices and reaches native outbound transport; a repeated tap makes no model call or mutation',async()=>{
  const db=fixtures(),before=structuredClone({customers:db.tables.customers,invoices:db.tables.invoices,payments:db.tables.payments,pending:db.tables.whatsapp_pending_actions});
  let generations=0,plans=0,providers=0;
- const handler=createOwnerMessageHandler({supabase:db.supabase,env,clock,logger,authorize:async()=>true,
+ const handler=createOwnerEngineHarness({supabase:db.supabase,env,clock,logger,authorize:async()=>true,
   providerFactory:()=>{providers++;return {async generate({tools}){
    generations++;
    if(generations===1)return call({},'invalid');
@@ -54,7 +56,7 @@ test('seven-row unfiltered read persists John choices and reaches native outboun
  db.assertScopedReads();
 });
 
-test('explicit full names and compact names choose only their scoped read record; duplicates require selection',async()=>{
+engineTest('explicit full names and compact names choose only their scoped read record; duplicates require selection',async()=>{
  const db=fixtures(),records=db.tables.customers.filter(row=>row.workspace_id===scope.workspaceId);
  const context={params:{operation:'read',table:'customers'},result:{ok:true,readOnly:true,rows:records.map(row=>({phone:row.phone})),truncated:false},records};
  for(const message of ["What's John Smith's phone?",'Show JohnSmith contact details']){
@@ -67,7 +69,7 @@ test('explicit full names and compact names choose only their scoped read record
  assert.equal(ref.choices.length,2);assert(ref.choices.every(row=>row.action==='select'));
 });
 
-test('unfiltered suggestions cannot infer targets from substring, model reply, truncated data or protected owner contacts',async()=>{
+engineTest('unfiltered suggestions cannot infer targets from substring, model reply, truncated data or protected owner contacts',async()=>{
  const db=fixtures(),records=db.tables.customers.filter(row=>row.workspace_id===scope.workspaceId);
  const context={params:{operation:'read',table:'customers'},result:{ok:true,readOnly:true,rows:records.map(row=>({phone:row.phone}))},records};
  for(const message of ['List customers','What is his phone?','Read JohnSmithson','Read Mary John'])

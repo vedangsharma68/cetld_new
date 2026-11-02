@@ -14,6 +14,7 @@ import {createOwnerAssistantActions,ownerActionDecision} from './owner-actions.m
 import {confirmAssistantAction,invoiceConfirmationAnswer} from './confirm-action.mjs';
 import {randomUUID} from 'node:crypto';
 import {personalNoteReply} from './personal-note.mjs';
+import {createPrivateChatProvider} from './private-chat.mjs';
 
 async function invoiceAccounting({env,fetchImpl,accountingFactory}) {
  try{
@@ -139,9 +140,18 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
         const businessName = typeof store.getBusinessName === 'function' ? await store.getBusinessName() : null;
         return res.status(200).json(await extractInvoiceOffline({businessName, signal, deadlineAt, ...file}));
       }
-      const provider = providerFactory({primaryModel: isGeminiModelId(settings.primary_model)?CF_PRIMARY_MODEL:settings.primary_model, fallbackModel: isGeminiModelId(settings.fallback_model)?CF_BACKUP_MODEL:settings.fallback_model,
+      const turnId=randomUUID();let privateMemory;
+      const memory={
+        async read(...args){
+          if(!store.privateChatMemory)throw new APIError(503,'CHAT_MEMORY_UNAVAILABLE');
+          privateMemory??=store.privateChatMemory({messageId:turnId});return privateMemory.read(...args);
+        },
+        containsPrivate:value=>privateMemory?.containsPrivate(value)??true,
+        append:(...args)=>privateMemory.append(...args),
+      };
+      const provider = createPrivateChatProvider({providerFactory,message:body.message,memory,options:{primaryModel: isGeminiModelId(settings.primary_model)?CF_PRIMARY_MODEL:settings.primary_model, fallbackModel: isGeminiModelId(settings.fallback_model)?CF_BACKUP_MODEL:settings.fallback_model,
         openRouterApiKey: env.OPENROUTER_API_KEY, zenApiKey: env.OPENCODE_ZEN_API_KEY,
-        cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN, fetchImpl, timeoutMs: 16000});
+        cfAccountId: env.CLOUDFLARE_ACCOUNT_ID, cfApiToken: env.CLOUDFLARE_API_TOKEN, fetchImpl, timeoutMs: 16000}});
       let accounting = null;
       if (shouldLoadAccountingConnection(body.message) && env.SUPABASE_SERVICE_ROLE_KEY && env.ACCOUNTING_TOKEN_ENCRYPTION_KEY) {
         try {
@@ -154,7 +164,6 @@ export function createAIHandler({env = process.env, fetchImpl = fetch, authorize
       // Owner history is server authoritative. A failed/missing migration blocks
       // the turn before planning or writes; browser history is never a fallback.
       if(typeof body.message!=='string'||!body.message.trim()||body.message.length>4000)throw new APIError(400,'INVALID_CONVERSATION');
-      const turnId=randomUUID();
       if(conversation)await conversation.append({key:`web:${turnId}:user`,role:'user',content:body.message});
       const decision=ownerActionDecision(body.message);
       const activeProposal=conversation&&decision!==null?await conversation.pending():null;
