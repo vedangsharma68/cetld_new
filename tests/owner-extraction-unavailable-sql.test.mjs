@@ -8,7 +8,7 @@ import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-a
 import {ownerGroundingIssue} from '../automation/whatsapp/owner-grounding.mjs';
 import {DEFAULT_EXTRACTION_MODEL,GEMINI_FALLBACK_MODEL,ZEN_PRIMARY_MODEL} from '../ai/provider.mjs';
 
-const phone = '+919871367051';
+const phone = '+12025550101';
 const incorrect = "I couldn't log the invoice because I couldn't find it.";
 
 async function fixture(t, {persistentIncorrectReply = false} = {}) {

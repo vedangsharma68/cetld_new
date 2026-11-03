@@ -7,7 +7,7 @@ import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerActionButtons} from '../automation/whatsapp/owner-action-buttons.mjs';
 
 const now=new Date('2026-10-02T18:00:00Z');
-const scope={workspaceId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',ownerId:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',phone:'+919871367051',messageId:'wamid.new',message:'Which model?'};
+const scope={workspaceId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',ownerId:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',phone:'+12025550101',messageId:'wamid.new',message:'Which model?'};
 const row=(overrides={})=>({workspace_id:scope.workspaceId,phone:scope.phone,audience:'owner',kind:'normal',direction:'outbound',status:'accepted',body:'Llama is your primary model.',idempotency_key:'reply:wamid.old',created_at:new Date(now.getTime()-30_000).toISOString(),...overrides});
 function database(rows,pendingRows=[]) {
   const calls=[];

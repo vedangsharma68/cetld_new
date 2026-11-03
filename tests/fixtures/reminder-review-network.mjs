@@ -8,7 +8,7 @@ import {createAutomationRuntime} from '../../automation/runtime.mjs';
 
 // Actual handlers, SDK and PostgreSQL; all credentials and recipients are isolated fixtures.
 export async function createReminderReviewNetwork(){
- const graph=[],phone='+919871367051';
+ const graph=[],phone='+12025550101';
  const f=await createOfflineSqlNetwork({excludeMigrations:['20261023061702_shared_owner_assistant.sql'],externalFetch:async(url,options)=>{
   if(url.origin!=='https://graph.facebook.com')throw Error('Unexpected fixture network');graph.push(JSON.parse(options.body));return Response.json({messages:[{id:'wamid.browser.'+graph.length}]});
  }});const {db}=f;

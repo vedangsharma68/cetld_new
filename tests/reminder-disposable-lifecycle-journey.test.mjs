@@ -10,7 +10,7 @@ import {createAutomationRuntime} from '../automation/runtime.mjs';
 import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
 import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 
-const phone='+919871367051',waba='1734116767674237';
+const phone='+12025550101',waba='1734116767674237';
 const env={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_SERVICE_ROLE_KEY:'fixture-key',
   WHATSAPP_PROVIDER:'first_party_meta',WHATSAPP_REMINDER_PAYMENT_MODE:'local_verified',
   AUTOMATION_OUTBOUND_ENABLED:'true',WHATSAPP_OUTBOUND_ENABLED:'true',WHATSAPP_REMINDERS_ENABLED:'true',

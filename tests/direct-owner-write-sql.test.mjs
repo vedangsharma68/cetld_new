@@ -109,7 +109,7 @@ import {createOwnerActionButtons,verifyOwnerActionButton} from '../automation/wh
 
 const owner='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const stranger='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-const phone='+919871367051';
+const phone='+12025550101';
 
 test('paid history protects classification across authenticated and privileged updates without blocking benign edits or reversal workflows',async()=>{
  const {db,workspaceId}=await boot();try{

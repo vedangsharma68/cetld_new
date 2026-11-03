@@ -6,7 +6,7 @@ import {createOwnerWorkspaceTools} from '../../automation/whatsapp/owner-workspa
 import {createWhatsAppPendingActionStore} from '../../automation/whatsapp/pending-actions.mjs';
 import {extractInvoiceOffline} from '../../ai/extraction.mjs';
 import {extractInvoiceFromImage} from '../../ai/image-text.mjs';
-const phone='+919871367051';
+const phone='+12025550101';
 const text=`Invoice No: INV-2026-0142
 Bill to: Kabir Textiles
 Invoice Date: 2026-10-20

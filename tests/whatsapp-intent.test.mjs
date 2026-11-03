@@ -36,7 +36,7 @@ test('invalid and injected classifier output is read-only unknown', async () => 
 });
 
 import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistant-handler.mjs';
-const scopeH={workspaceId:'workspace-a',customerId:'customer-a',phone:'+919871367051'};
+const scopeH={workspaceId:'workspace-a',customerId:'customer-a',phone:'+12025550101'};
 const inv={id:'i1',invoiceNumber:'INV-2026-0003',printedInvoiceNumber:'INV-2026-0720',clientName:'Global Dynamics Inc.',total:6190,currency:'USD',status:'draft'};
 function mkHandler({provider,store,channelAsk}){
   const origins={};

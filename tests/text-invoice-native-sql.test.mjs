@@ -10,7 +10,7 @@ import {ownerCalendar} from '../automation/whatsapp/workspace-records.mjs';
 import {CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 
 engineTest('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, without outbound delivery',async()=>{
-  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+919871367051';
+  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+12025550101';
   const clock=()=>new Date('2026-10-18T12:18:00Z');
   try{
     await db.query('insert into auth.users(id) values($1)',[ownerId]);

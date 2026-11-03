@@ -3,7 +3,7 @@ import {retainPrivateOriginFixture} from './fixtures/private-origin-store.mjs';
 import assert from 'node:assert/strict';
 import {createWhatsAppBoundMessageHandler, parseInvoiceCorrection} from '../automation/whatsapp/assistant-handler.mjs';
 
-const scope={workspaceId:'workspace-a',customerId:'customer-a',phone:'+919871367051'};
+const scope={workspaceId:'workspace-a',customerId:'customer-a',phone:'+12025550101'};
 function supabase(){const origins={};return {rpc:async(name,args)=>name==='whatsapp_retain_private_chat_origin'?retainPrivateOriginFixture(origins,args):{data:null},from(table){return {select(){return this},eq(){return this},async maybeSingle(){if(table==='workspace_ai_settings')return {data:{primary_model:'space-bunny-free',fallback_model:null}};throw Error(table)}}}}}
 function handlerWith(store,{current=null}={}){
   return createWhatsAppBoundMessageHandler({audience:'owner',authorizeScope:async()=>true,supabase:supabase(),providerFactory:()=>({}),channelFactory:()=>({ask(){throw Error('planner must not write')}}),

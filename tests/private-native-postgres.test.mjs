@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createServer} from 'node:net';
 import {randomUUID,createHash} from 'node:crypto';
+import {privatePartyKeys} from '../ai/private-value-matcher.mjs';
 import {createNativePostgresFixture} from './fixtures/native-postgres.mjs';
 import {OFFLINE_SQL_BOOTSTRAP,offlineSqlMigrationSources} from './fixtures/offline-sql-network.mjs';
 import {privateBackfillBatchSQL,runPrivateInvoiceBackfill} from '../scripts/backfill-private-invoice-terms.mjs';
@@ -34,8 +35,8 @@ test('native PostgreSQL: realistic default ACLs, numeric watermarks, concurrent 
   const ids=[-10,-1,0,1,2,9,10,11,19,20,53,99,100,101,999,1000];
   for(const n of ids){
    await q(`insert into whatsapp_pending_actions(id,workspace_id,customer_id,phone,action,source,consumed_at,expires_at)
-    values($1::bigint,$2,$3,'+919871367051',jsonb_build_object('type','invoice_review_draft','invoice',jsonb_build_object('total',45678+$1::bigint)),'whatsapp',now(),now()+interval '1 day')`,[n,workspace,customer]);
-   await q(`insert into whatsapp_conversation_turns(id,workspace_id,customer_id,phone,role,content) values($1,$2,$3,'+919871367051','user',$4)`,[n,workspace,customer,`This invoice is from Historical Studio ${n}, ${70000+n}, due 12 Nov`]);
+    values($1::bigint,$2,$3,'+12025550101',jsonb_build_object('type','invoice_review_draft','invoice',jsonb_build_object('total',45678+$1::bigint)),'whatsapp',now(),now()+interval '1 day')`,[n,workspace,customer]);
+   await q(`insert into whatsapp_conversation_turns(id,workspace_id,customer_id,phone,role,content) values($1,$2,$3,'+12025550101','user',$4)`,[n,workspace,customer,`This invoice is from Historical Studio ${n}, ${70000+n}, due 12 Nov`]);
    await q(`insert into owner_assistant_turns(id,workspace_id,owner_id,event_key,channel,role,content) overriding system value values($1,$2,$3,$4,'whatsapp','user',$5)`,[n,workspace,owner,'native-'+n,`Here is the bill, Archived Studio ${n}, ${80000+n}, due 12 Nov`]);
   }
   const sql=await readFile(new URL('../supabase/migrations/'+migrationName,import.meta.url),'utf8');results.migrationSHA256=createHash('sha256').update(sql).digest('hex');
@@ -71,12 +72,37 @@ test('native PostgreSQL: realistic default ACLs, numeric watermarks, concurrent 
   // New declarations are retained atomically at every SQL write sink, even
   // after completed cursors; they never gain ordinary-memory provenance.
   const origin='Invoice is from Willow Workshop, 8654, due 12 Nov';
-  const inserted=await q("insert into whatsapp_provider_memory(workspace_id,owner_id,phone,audience,source_message_id,role,content,provenance) values($1,$2,'+919871367051','owner','native-private-origin','user',$3,'ordinary_chat_v1')",[workspace,owner,origin]);assert.equal(inserted.rowCount,0);
+  const inserted=await q("insert into whatsapp_provider_memory(workspace_id,owner_id,phone,audience,source_message_id,role,content,provenance) values($1,$2,'+12025550101','owner','native-private-origin','user',$3,'ordinary_chat_v1')",[workspace,owner,origin]);assert.equal(inserted.rowCount,0);
   await q("insert into owner_assistant_turns(id,workspace_id,owner_id,event_key,channel,role,content) overriding system value values(1001,$1,$2,'native-new-origin','whatsapp','user','Invoice is from Olive Desk, 6418, due 23 Sep 2027')",[workspace,owner]);
-  await q("insert into whatsapp_conversation_turns(id,workspace_id,customer_id,phone,role,content) values(1001,$1,$2,'+919871367051','user','Receipt from Maple Craft, 5147, due 24 Sep 2027')",[workspace,customer]);
+  await q("insert into whatsapp_conversation_turns(id,workspace_id,customer_id,phone,role,content) values(1001,$1,$2,'+12025550101','user','Receipt from Maple Craft, 5147, due 24 Sep 2027')",[workspace,customer]);
   await q('select app.retain_private_invoice_terms($1,$2)',[workspace,{notes:'Invoice is from Cedar Garden, 6961, due 25 Sep 2027'}]);
   for(const term of ['party:willow','party:workshop','number:8654','date:*-11-12','party:olive','number:6418','party:maple','number:5147','party:cedar','number:6961'])assert.equal((await one('select exists(select 1 from whatsapp_private_invoice_terms where workspace_id=$1 and term=$2) ok',[workspace,term])).ok,true,term);
   results.originWriteSinks='PASS; no ordinary-memory source row';
+  const nativeOrigins=[];
+  for(const audience of ['owner','customer'])for(const prefix of ['', '\u200b','\ufeff','\u0085','\u00a0']){
+   const source=prefix+JSON.stringify({quote:JSON.stringify({invoice:{customer_name:'The Birch Works',total:6847,due_date:'2027-07-16'}})});
+   assert.equal((await one('select app.private_invoice_has_origin($1) yes',[source])).yes,true);
+   await q('begin;set local role service_role');
+   assert.equal((await one('select current_user name')).name,'service_role');
+   const row=await q(`insert into whatsapp_provider_memory(workspace_id,owner_id,customer_id,phone,audience,source_message_id,role,content,provenance)
+    values($1,$2,$3,'+12025550101',$4,$5,'user',$6,'ordinary_chat_v1') returning id`,[workspace,audience==='owner'?owner:null,audience==='customer'?customer:null,audience,'native-nested-'+audience+prefix,source]);
+   assert.equal(row.rows.length,0);await q('commit');nativeOrigins.push({audience,prefix:prefix.codePointAt(0)??null,inserted:0});
+  }
+  for(const helper of ['private_invoice_decode_json(text)','private_invoice_origin_documents(jsonb,integer)']){
+   const meta=await one('select provolatile,prosecdef,proconfig from pg_proc where oid=$1::regprocedure',['app.'+helper]);
+   assert.equal(meta.provolatile,'i');assert.equal(meta.prosecdef,false);assert.deepEqual(meta.proconfig,['search_path=""']);
+   for(const role of ['anon','authenticated','service_role'])assert.equal((await one("select has_function_privilege($1,$2,'execute') ok",[role,'app.'+helper])).ok,false);
+  }
+  for(const term of ['party:birch','party:works','number:6847','date:2027-07-16'])assert.equal((await one('select exists(select 1 from whatsapp_private_invoice_terms where workspace_id=$1 and term=$2) yes',[workspace,term])).yes,true);
+  assert.equal((await one("select exists(select 1 from whatsapp_private_invoice_terms where workspace_id=$1 and term='party:the') yes",[workspace])).yes,false);
+  results.decodedOriginServiceRole=nativeOrigins;results.newCanonicalHelperACLs='PASS';
+  for(const value of ['𠀀 王','𐐀 王','𠀀𠀁 王','李 王','The Cedar Studio','Green1 Materials','किरण','करण','Saar Cedar']){
+   const actual=(await q('select distinct term from app.private_invoice_party_aliases($1) term order by term',[value])).rows.map(row=>row.term);
+   assert.deepEqual(actual,[...new Set(privatePartyKeys(value))].sort(),value);
+  }
+  results.nativePartyKeyParity='PASS: native, supplementary, digits, articles, Latin identity';
+
+
   await q("insert into invoices(id,workspace_id,customer_id,invoice_number,total_amount,currency,status) values('3e501620-8765-44cd-bb78-ac435fc5a790',$1,$2,'NATIVE-UUID-NOT-JSON',137,'INR','draft')",[workspace,customer]);results.scalarUUIDDecoding='PASS';
   // Representative multi-row writes, with the reviewer-imposed 5-second cap.
   await q("set statement_timeout='5s'");const start=performance.now();assert.equal((await q("update invoices set notes='updated local note' where id=any($1::uuid[])",[seeded])).rowCount,59);const elapsed=performance.now()-start;

@@ -14,7 +14,7 @@ import {createOwnerReplyStore} from '../automation/whatsapp/owner-reply-store.mj
 // Production SDK, consolidated workspaceData route, verified owner runtime,
 // persisted receipt readback and the full SQL chain. All HTTP is isolated.
 test('audited total corrections preserve net receipts and reversals across real workspaceData/SQL routes',async t=>{
- const f=await createOfflineSqlNetwork(),{db,supabase}=f,owner=randomUUID(),stranger=randomUUID(),phone='+919871367051';
+ const f=await createOfflineSqlNetwork(),{db,supabase}=f,owner=randomUUID(),stranger=randomUUID(),phone='+12025550101';
  const asOwner=async(actor=owner)=>db.exec(`reset role;set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${actor}';set role authenticated`);
  const asService=async()=>db.exec("reset role;set request.jwt.claim.role='service_role';set request.jwt.claim.sub='';set role service_role");
  try{

@@ -84,9 +84,8 @@ begin
    result:=result||(map->>ch);
   else result:=result||ch;end if;
  end loop;
- if native then result:=regexp_replace(result,'a$','');end if;
- result:=replace(replace(replace(result,'aa','a'),'ii','i'),'uu','u');
- if length(part)>=2 then if native then return next 'party-native:'||part;return next 'party-latin:'||result;else return next 'party:'||result;end if;end if;
+ if native then result:=replace(replace(replace(regexp_replace(result,'a$',''),'aa','a'),'ii','i'),'uu','u');end if;
+ if part ~ U&'[\0041-\005a\0061-\007a\00aa\00b5\00ba\00c0-\00d6\00d8-\00f6\00f8-\02c1\02c6-\02d1\02e0-\02e4\02ec\02ee\0370-\0374\0376-\0377\037a-\037d\037f\0386\0388-\038a\038c\038e-\03a1\03a3-\03f5\03f7-\0481\048a-\052f\0531-\0556\0559\0560-\0588\05d0-\05ea\05ef-\05f2\0620-\064a\066e-\066f\0671-\06d3\06d5\06e5-\06e6\06ee-\06ef\06fa-\06fc\06ff\0710\0712-\072f\074d-\07a5\07b1\07ca-\07ea\07f4-\07f5\07fa\0800-\0815\081a\0824\0828\0840-\0858\0860-\086a\0870-\0887\0889-\088f\08a0-\08c9\0904-\0939\093d\0950\0958-\0961\0971-\0980\0985-\098c\098f-\0990\0993-\09a8\09aa-\09b0\09b2\09b6-\09b9\09bd\09ce\09dc-\09dd\09df-\09e1\09f0-\09f1\09fc\0a05-\0a0a\0a0f-\0a10\0a13-\0a28\0a2a-\0a30\0a32-\0a33\0a35-\0a36\0a38-\0a39\0a59-\0a5c\0a5e\0a72-\0a74\0a85-\0a8d\0a8f-\0a91\0a93-\0aa8\0aaa-\0ab0\0ab2-\0ab3\0ab5-\0ab9\0abd\0ad0\0ae0-\0ae1\0af9\0b05-\0b0c\0b0f-\0b10\0b13-\0b28\0b2a-\0b30\0b32-\0b33\0b35-\0b39\0b3d\0b5c-\0b5d\0b5f-\0b61\0b71\0b83\0b85-\0b8a\0b8e-\0b90\0b92-\0b95\0b99-\0b9a\0b9c\0b9e-\0b9f\0ba3-\0ba4\0ba8-\0baa\0bae-\0bb9\0bd0\0c05-\0c0c\0c0e-\0c10\0c12-\0c28\0c2a-\0c39\0c3d\0c58-\0c5a\0c5c-\0c5d\0c60-\0c61\0c80\0c85-\0c8c\0c8e-\0c90\0c92-\0ca8\0caa-\0cb3\0cb5-\0cb9\0cbd\0cdc-\0cde\0ce0-\0ce1\0cf1-\0cf2\0d04-\0d0c\0d0e-\0d10\0d12-\0d3a\0d3d\0d4e\0d54-\0d56\0d5f-\0d61\0d7a-\0d7f\0d85-\0d96\0d9a-\0db1\0db3-\0dbb\0dbd\0dc0-\0dc6\0e01-\0e30\0e32-\0e33\0e40-\0e46\0e81-\0e82\0e84\0e86-\0e8a\0e8c-\0ea3\0ea5\0ea7-\0eb0\0eb2-\0eb3\0ebd\0ec0-\0ec4\0ec6\0edc-\0edf\0f00\0f40-\0f47\0f49-\0f6c\0f88-\0f8c\1000-\102a\103f\1050-\1055\105a-\105d\1061\1065-\1066\106e-\1070\1075-\1081\108e\10a0-\10c5\10c7\10cd\10d0-\10fa\10fc-\1248\124a-\124d\1250-\1256\1258\125a-\125d\1260-\1288\128a-\128d\1290-\12b0\12b2-\12b5\12b8-\12be\12c0\12c2-\12c5\12c8-\12d6\12d8-\1310\1312-\1315\1318-\135a\1380-\138f\13a0-\13f5\13f8-\13fd\1401-\166c\166f-\167f\1681-\169a\16a0-\16ea\16f1-\16f8\1700-\1711\171f-\1731\1740-\1751\1760-\176c\176e-\1770\1780-\17b3\17d7\17dc\1820-\1878\1880-\1884\1887-\18a8\18aa\18b0-\18f5\1900-\191e\1950-\196d\1970-\1974\1980-\19ab\19b0-\19c9\1a00-\1a16\1a20-\1a54\1aa7\1b05-\1b33\1b45-\1b4c\1b83-\1ba0\1bae-\1baf\1bba-\1be5\1c00-\1c23\1c4d-\1c4f\1c5a-\1c7d\1c80-\1c8a\1c90-\1cba\1cbd-\1cbf\1ce9-\1cec\1cee-\1cf3\1cf5-\1cf6\1cfa\1d00-\1dbf\1e00-\1f15\1f18-\1f1d\1f20-\1f45\1f48-\1f4d\1f50-\1f57\1f59\1f5b\1f5d\1f5f-\1f7d\1f80-\1fb4\1fb6-\1fbc\1fbe\1fc2-\1fc4\1fc6-\1fcc\1fd0-\1fd3\1fd6-\1fdb\1fe0-\1fec\1ff2-\1ff4\1ff6-\1ffc\2071\207f\2090-\209c\2102\2107\210a-\2113\2115\2119-\211d\2124\2126\2128\212a-\212d\212f-\2139\213c-\213f\2145-\2149\214e\2183-\2184\2c00-\2ce4\2ceb-\2cee\2cf2-\2cf3\2d00-\2d25\2d27\2d2d\2d30-\2d67\2d6f\2d80-\2d96\2da0-\2da6\2da8-\2dae\2db0-\2db6\2db8-\2dbe\2dc0-\2dc6\2dc8-\2dce\2dd0-\2dd6\2dd8-\2dde\2e2f\3005-\3006\3031-\3035\303b-\303c\3041-\3096\309d-\309f\30a1-\30fa\30fc-\30ff\3105-\312f\3131-\318e\31a0-\31bf\31f0-\31ff\3400-\4dbf\4e00-\a48c\a4d0-\a4fd\a500-\a60c\a610-\a61f\a62a-\a62b\a640-\a66e\a67f-\a69d\a6a0-\a6e5\a717-\a71f\a722-\a788\a78b-\a7dc\a7f1-\a801\a803-\a805\a807-\a80a\a80c-\a822\a840-\a873\a882-\a8b3\a8f2-\a8f7\a8fb\a8fd-\a8fe\a90a-\a925\a930-\a946\a960-\a97c\a984-\a9b2\a9cf\a9e0-\a9e4\a9e6-\a9ef\a9fa-\a9fe\aa00-\aa28\aa40-\aa42\aa44-\aa4b\aa60-\aa76\aa7a\aa7e-\aaaf\aab1\aab5-\aab6\aab9-\aabd\aac0\aac2\aadb-\aadd\aae0-\aaea\aaf2-\aaf4\ab01-\ab06\ab09-\ab0e\ab11-\ab16\ab20-\ab26\ab28-\ab2e\ab30-\ab5a\ab5c-\ab69\ab70-\abe2\ac00-\d7a3\d7b0-\d7c6\d7cb-\d7fb\f900-\fa6d\fa70-\fad9\fb00-\fb06\fb13-\fb17\fb1d\fb1f-\fb28\fb2a-\fb36\fb38-\fb3c\fb3e\fb40-\fb41\fb43-\fb44\fb46-\fbb1\fbd3-\fd3d\fd50-\fd8f\fd92-\fdc7\fdf0-\fdfb\fe70-\fe74\fe76-\fefc\ff21-\ff3a\ff41-\ff5a\ff66-\ffbe\ffc2-\ffc7\ffca-\ffcf\ffd2-\ffd7\ffda-\ffdc\+010000-\+01000b\+01000d-\+010026\+010028-\+01003a\+01003c-\+01003d\+01003f-\+01004d\+010050-\+01005d\+010080-\+0100fa\+010280-\+01029c\+0102a0-\+0102d0\+010300-\+01031f\+01032d-\+010340\+010342-\+010349\+010350-\+010375\+010380-\+01039d\+0103a0-\+0103c3\+0103c8-\+0103cf\+010400-\+01049d\+0104b0-\+0104d3\+0104d8-\+0104fb\+010500-\+010527\+010530-\+010563\+010570-\+01057a\+01057c-\+01058a\+01058c-\+010592\+010594-\+010595\+010597-\+0105a1\+0105a3-\+0105b1\+0105b3-\+0105b9\+0105bb-\+0105bc\+0105c0-\+0105f3\+010600-\+010736\+010740-\+010755\+010760-\+010767\+010780-\+010785\+010787-\+0107b0\+0107b2-\+0107ba\+010800-\+010805\+010808\+01080a-\+010835\+010837-\+010838\+01083c\+01083f-\+010855\+010860-\+010876\+010880-\+01089e\+0108e0-\+0108f2\+0108f4-\+0108f5\+010900-\+010915\+010920-\+010939\+010940-\+010959\+010980-\+0109b7\+0109be-\+0109bf\+010a00\+010a10-\+010a13\+010a15-\+010a17\+010a19-\+010a35\+010a60-\+010a7c\+010a80-\+010a9c\+010ac0-\+010ac7\+010ac9-\+010ae4\+010b00-\+010b35\+010b40-\+010b55\+010b60-\+010b72\+010b80-\+010b91\+010c00-\+010c48\+010c80-\+010cb2\+010cc0-\+010cf2\+010d00-\+010d23\+010d4a-\+010d65\+010d6f-\+010d85\+010e80-\+010ea9\+010eb0-\+010eb1\+010ec2-\+010ec7\+010f00-\+010f1c\+010f27\+010f30-\+010f45\+010f70-\+010f81\+010fb0-\+010fc4\+010fe0-\+010ff6\+011003-\+011037\+011071-\+011072\+011075\+011083-\+0110af\+0110d0-\+0110e8\+011103-\+011126\+011144\+011147\+011150-\+011172\+011176\+011183-\+0111b2\+0111c1-\+0111c4\+0111da\+0111dc\+011200-\+011211\+011213-\+01122b\+01123f-\+011240\+011280-\+011286\+011288\+01128a-\+01128d\+01128f-\+01129d\+01129f-\+0112a8\+0112b0-\+0112de\+011305-\+01130c\+01130f-\+011310\+011313-\+011328\+01132a-\+011330\+011332-\+011333\+011335-\+011339\+01133d\+011350\+01135d-\+011361\+011380-\+011389\+01138b\+01138e\+011390-\+0113b5\+0113b7\+0113d1\+0113d3\+011400-\+011434\+011447-\+01144a\+01145f-\+011461\+011480-\+0114af\+0114c4-\+0114c5\+0114c7\+011580-\+0115ae\+0115d8-\+0115db\+011600-\+01162f\+011644\+011680-\+0116aa\+0116b8\+011700-\+01171a\+011740-\+011746\+011800-\+01182b\+0118a0-\+0118df\+0118ff-\+011906\+011909\+01190c-\+011913\+011915-\+011916\+011918-\+01192f\+01193f\+011941\+0119a0-\+0119a7\+0119aa-\+0119d0\+0119e1\+0119e3\+011a00\+011a0b-\+011a32\+011a3a\+011a50\+011a5c-\+011a89\+011a9d\+011ab0-\+011af8\+011bc0-\+011be0\+011c00-\+011c08\+011c0a-\+011c2e\+011c40\+011c72-\+011c8f\+011d00-\+011d06\+011d08-\+011d09\+011d0b-\+011d30\+011d46\+011d60-\+011d65\+011d67-\+011d68\+011d6a-\+011d89\+011d98\+011db0-\+011ddb\+011ee0-\+011ef2\+011f02\+011f04-\+011f10\+011f12-\+011f33\+011fb0\+012000-\+012399\+012480-\+012543\+012f90-\+012ff0\+013000-\+01342f\+013441-\+013446\+013460-\+0143fa\+014400-\+014646\+016100-\+01611d\+016800-\+016a38\+016a40-\+016a5e\+016a70-\+016abe\+016ad0-\+016aed\+016b00-\+016b2f\+016b40-\+016b43\+016b63-\+016b77\+016b7d-\+016b8f\+016d40-\+016d6c\+016e40-\+016e7f\+016ea0-\+016eb8\+016ebb-\+016ed3\+016f00-\+016f4a\+016f50\+016f93-\+016f9f\+016fe0-\+016fe1\+016fe3\+016ff2-\+016ff3\+017000-\+018cd5\+018cff-\+018d1e\+018d80-\+018df2\+01aff0-\+01aff3\+01aff5-\+01affb\+01affd-\+01affe\+01b000-\+01b122\+01b132\+01b150-\+01b152\+01b155\+01b164-\+01b167\+01b170-\+01b2fb\+01bc00-\+01bc6a\+01bc70-\+01bc7c\+01bc80-\+01bc88\+01bc90-\+01bc99\+01d400-\+01d454\+01d456-\+01d49c\+01d49e-\+01d49f\+01d4a2\+01d4a5-\+01d4a6\+01d4a9-\+01d4ac\+01d4ae-\+01d4b9\+01d4bb\+01d4bd-\+01d4c3\+01d4c5-\+01d505\+01d507-\+01d50a\+01d50d-\+01d514\+01d516-\+01d51c\+01d51e-\+01d539\+01d53b-\+01d53e\+01d540-\+01d544\+01d546\+01d54a-\+01d550\+01d552-\+01d6a5\+01d6a8-\+01d6c0\+01d6c2-\+01d6da\+01d6dc-\+01d6fa\+01d6fc-\+01d714\+01d716-\+01d734\+01d736-\+01d74e\+01d750-\+01d76e\+01d770-\+01d788\+01d78a-\+01d7a8\+01d7aa-\+01d7c2\+01d7c4-\+01d7cb\+01df00-\+01df1e\+01df25-\+01df2a\+01e030-\+01e06d\+01e100-\+01e12c\+01e137-\+01e13d\+01e14e\+01e290-\+01e2ad\+01e2c0-\+01e2eb\+01e4d0-\+01e4eb\+01e5d0-\+01e5ed\+01e5f0\+01e6c0-\+01e6de\+01e6e0-\+01e6e2\+01e6e4-\+01e6e5\+01e6e7-\+01e6ed\+01e6f0-\+01e6f4\+01e6fe-\+01e6ff\+01e7e0-\+01e7e6\+01e7e8-\+01e7eb\+01e7ed-\+01e7ee\+01e7f0-\+01e7fe\+01e800-\+01e8c4\+01e900-\+01e943\+01e94b\+01ee00-\+01ee03\+01ee05-\+01ee1f\+01ee21-\+01ee22\+01ee24\+01ee27\+01ee29-\+01ee32\+01ee34-\+01ee37\+01ee39\+01ee3b\+01ee42\+01ee47\+01ee49\+01ee4b\+01ee4d-\+01ee4f\+01ee51-\+01ee52\+01ee54\+01ee57\+01ee59\+01ee5b\+01ee5d\+01ee5f\+01ee61-\+01ee62\+01ee64\+01ee67-\+01ee6a\+01ee6c-\+01ee72\+01ee74-\+01ee77\+01ee79-\+01ee7c\+01ee7e\+01ee80-\+01ee89\+01ee8b-\+01ee9b\+01eea1-\+01eea3\+01eea5-\+01eea9\+01eeab-\+01eebb\+020000-\+02a6df\+02a700-\+02b81d\+02b820-\+02cead\+02ceb0-\+02ebe0\+02ebf0-\+02ee5d\+02f800-\+02fa1d\+030000-\+03134a\+031350-\+033479]' and part <> all(array['a','an','the','and','or','of','for','to','in','on','at','by','with','from','de','del','la','le','van','von','da','di']) and (length(part)>=2 or part !~ U&'[\0041-\005a\0061-\007a\00aa\00ba\00c0-\00d6\00d8-\00f6\00f8-\02b8\02e0-\02e4\1d00-\1d25\1d2c-\1d5c\1d62-\1d65\1d6b-\1d77\1d79-\1dbe\1e00-\1eff\2071\207f\2090-\209c\212a-\212b\2132\214e\2160-\2188\2c60-\2c7f\a722-\a787\a78b-\a7dc\a7f1-\a7ff\ab30-\ab5a\ab5c-\ab64\ab66-\ab69\fb00-\fb06\ff21-\ff3a\ff41-\ff5a\+010780-\+010785\+010787-\+0107b0\+0107b2-\+0107ba\+01df00-\+01df1e\+01df25-\+01df2a]') then if native then return next 'party-native:'||part;return next 'party-latin:'||result;else return next 'party:'||result;end if;end if;
  end loop;
 end $$;
 revoke all on function app.private_invoice_party_aliases(text) from public,anon,authenticated,service_role;
@@ -158,7 +157,7 @@ revoke all on function app.private_invoice_group_number(text[]) from public,anon
 create function app.private_invoice_word_number_value(words text[]) returns setof text
 language plpgsql immutable set search_path='' as $$
 declare
-  small jsonb:='{"zero":"0","one":"1","two":"2","three":"3","four":"4","five":"5","six":"6","seven":"7","eight":"8","nine":"9","ten":"10","eleven":"11","twelve":"12","thirteen":"13","fourteen":"14","fifteen":"15","sixteen":"16","seventeen":"17","eighteen":"18","nineteen":"19","twenty":"20","thirty":"30","forty":"40","fifty":"50","sixty":"60","seventy":"70","eighty":"80","ninety":"90"}'::jsonb; scales jsonb:='{"thousand":"1000","lakh":"100000","lac":"100000","million":"1000000","crore":"10000000","billion":"1000000000"}'::jsonb; fractions jsonb:='{"half":"2","halves":"2","quarter":"4","quarters":"4","third":"3","fifth":"5","sixth":"6","seventh":"7","eighth":"8","ninth":"9","tenth":"10"}'::jsonb;
+  small jsonb:='{"zero":"0","one":"1","two":"2","three":"3","four":"4","five":"5","six":"6","seven":"7","eight":"8","nine":"9","ten":"10","eleven":"11","twelve":"12","thirteen":"13","fourteen":"14","fifteen":"15","sixteen":"16","seventeen":"17","eighteen":"18","nineteen":"19","twenty":"20","thirty":"30","forty":"40","fifty":"50","sixty":"60","seventy":"70","eighty":"80","ninety":"90"}'::jsonb; scales jsonb:='{"thousand":"1000","lakh":"100000","lac":"100000","million":"1000000","crore":"10000000","billion":"1000000000","trillion":"1000000000000","quadrillion":"1000000000000000","quintillion":"1000000000000000000"}'::jsonb; fractions jsonb:='{"half":"2","halves":"2","quarter":"4","quarters":"4","third":"3","fifth":"5","sixth":"6","seventh":"7","eighth":"8","ninth":"9","tenth":"10"}'::jsonb;
   factor numeric; split_at integer; base_key text; numerator_key text; head text[]; tail_words text[];
   word text; total numeric:=0; part numeric; tail numeric; last_scale numeric; start_at integer:=1; i integer;
   actual text[]; point integer;
@@ -200,24 +199,29 @@ begin
     part:=app.private_invoice_group_number(actual[1:1]);tail:=app.private_invoice_group_number(actual[2:cardinality(actual)]);
     if part>0 and part<100 and tail>=10 and tail<100 then return next 'number:'||trim_scale(part*100+tail)::text;return;end if;
   end if;
-  for i in 1..cardinality(actual) loop
-    if scales ? actual[i] then
-      factor:=(scales->>actual[i])::numeric;
-      part:=case when start_at=i then 1 else app.private_invoice_group_number(actual[start_at:i-1]) end;
-      if part is null or last_scale is not null and (factor>=last_scale or part>=last_scale) then return;end if;
-      total:=total+part*factor;last_scale:=factor;start_at:=i+1;
-    end if;
+  -- Greatest-scale recursive composition matches wordNumber() exactly.
+  select max((scales->>w)::numeric) into factor from unnest(actual) w where scales ? w;
+  if factor is null then
+    part:=app.private_invoice_group_number(actual);
+    if part is not null then return next 'number:'||trim_scale(part)::text;end if;return;
+  end if;
+  select min(n)::integer into i from unnest(actual) with ordinality p(w,n) where (scales->>w)::numeric=factor;
+  if exists(select 1 from unnest(actual[i+1:cardinality(actual)]) w where (scales->>w)::numeric=factor) then return;end if;
+  head:=case when i=1 then array['one'] else actual[1:i-1] end;
+  tail_words:=case when i=cardinality(actual) then array['zero'] else actual[i+1:cardinality(actual)] end;
+  for base_key in select * from app.private_invoice_word_number_value(head) loop
+    for numerator_key in select * from app.private_invoice_word_number_value(tail_words) loop
+      part:=substring(base_key from 8)::numeric*factor;tail:=substring(numerator_key from 8)::numeric;
+      if part=trunc(part) and tail=trunc(tail) and tail<factor then return next 'number:'||trim_scale(part+tail)::text;end if;
+    end loop;
   end loop;
-  tail:=app.private_invoice_group_number(actual[start_at:cardinality(actual)]);
-  if tail is null or last_scale is not null and tail>=last_scale then return;end if;
-  return next 'number:'||trim_scale(total+tail)::text;
 end $$;
 revoke all on function app.private_invoice_word_number_value(text[]) from public,anon,authenticated,service_role;
 
 create function app.private_invoice_word_number_aliases(p_term text) returns setof text
 language plpgsql immutable set search_path='' as $$
 declare
-  small jsonb:='{"zero":"0","one":"1","two":"2","three":"3","four":"4","five":"5","six":"6","seven":"7","eight":"8","nine":"9","ten":"10","eleven":"11","twelve":"12","thirteen":"13","fourteen":"14","fifteen":"15","sixteen":"16","seventeen":"17","eighteen":"18","nineteen":"19","twenty":"20","thirty":"30","forty":"40","fifty":"50","sixty":"60","seventy":"70","eighty":"80","ninety":"90"}'::jsonb; scales jsonb:='{"thousand":"1000","lakh":"100000","lac":"100000","million":"1000000","crore":"10000000","billion":"1000000000"}'::jsonb; fractions jsonb:='{"half":"2","halves":"2","quarter":"4","quarters":"4","third":"3","fifth":"5","sixth":"6","seventh":"7","eighth":"8","ninth":"9","tenth":"10"}'::jsonb;
+  small jsonb:='{"zero":"0","one":"1","two":"2","three":"3","four":"4","five":"5","six":"6","seven":"7","eight":"8","nine":"9","ten":"10","eleven":"11","twelve":"12","thirteen":"13","fourteen":"14","fifteen":"15","sixteen":"16","seventeen":"17","eighteen":"18","nineteen":"19","twenty":"20","thirty":"30","forty":"40","fifty":"50","sixty":"60","seventy":"70","eighty":"80","ninety":"90"}'::jsonb; scales jsonb:='{"thousand":"1000","lakh":"100000","lac":"100000","million":"1000000","crore":"10000000","billion":"1000000000","trillion":"1000000000000","quadrillion":"1000000000000000","quintillion":"1000000000000000000"}'::jsonb; fractions jsonb:='{"half":"2","halves":"2","quarter":"4","quarters":"4","third":"3","fifth":"5","sixth":"6","seventh":"7","eighth":"8","ninth":"9","tenth":"10"}'::jsonb;
   prepared text:=app.private_invoice_lexical(app.private_invoice_normalize(p_term)); translated boolean:=prepared<>app.private_invoice_normalize(p_term);prior text;token text[]; word text; words text[]:=array[]::text[]; segment text[]; start_at integer:=1; end_at integer; segment_end integer; piece integer; keys text[];
 begin
   prepared:=regexp_replace(prepared,'/[-−]$','');
@@ -340,8 +344,7 @@ create function app.private_invoice_origin_aliases(p_term text) returns setof te
 language plpgsql immutable set search_path='' as $$
 declare document jsonb;term text; marker text[]; nested text[]; field text; prior text; party boolean; numeric_field boolean; first_field boolean:=true;
 begin
-  if p_term ~ '^[[:space:]]*[\[{]' then begin document:=p_term::jsonb;exception when invalid_text_representation then document:=null;end;end if;
-  if jsonb_typeof(document) in ('object','array') then return;end if;
+  document:=app.private_invoice_decode_json(p_term);if document is not null then return;end if;
   term:=app.private_invoice_normalize(regexp_replace(p_term,E'[\\r\\n]+',',','g'));
   term:=regexp_replace(term,'((?:the +)?(?:(?:[0-9]{1,2}(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|twenty[ -]+first|twenty[ -]+second|twenty[ -]+third|twenty[ -]+fourth|twenty[ -]+fifth|twenty[ -]+sixth|twenty[ -]+seventh|twenty[ -]+eighth|twenty[ -]+ninth|thirtieth|thirty[ -]+first)|एक|दो|तीन|चार|पाँच|छह|सात|आठ|नौ|दस|ग्यारह|बारह|तेरह|चौदह|पंद्रह|सोलह|सत्रह|अठारह|उन्नीस|बीस|इक्कीस|बाईस|तेईस|चौबीस|पच्चीस|छब्बीस|सत्ताईस|अट्ठाईस|उनतीस|तीस|इकतीस)[ ./-]*(?:of +)?(?:(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)|जनवरी|फ़रवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|सितम्बर|अक्टूबर|अक्तूबर|नवंबर|नवम्बर|दिसंबर|दिसम्बर)|(?:(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)|जनवरी|फ़रवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|सितम्बर|अक्टूबर|अक्तूबर|नवंबर|नवम्बर|दिसंबर|दिसम्बर)[ ./-]*(?:the +)?(?:(?:[0-9]{1,2}(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|twenty[ -]+first|twenty[ -]+second|twenty[ -]+third|twenty[ -]+fourth|twenty[ -]+fifth|twenty[ -]+sixth|twenty[ -]+seventh|twenty[ -]+eighth|twenty[ -]+ninth|thirtieth|thirty[ -]+first)|एक|दो|तीन|चार|पाँच|छह|सात|आठ|नौ|दस|ग्यारह|बारह|तेरह|चौदह|पंद्रह|सोलह|सत्रह|अठारह|उन्नीस|बीस|इक्कीस|बाईस|तेईस|चौबीस|पच्चीस|छब्बीस|सत्ताईस|अट्ठाईस|उनतीस|तीस|इकतीस))[ ./-]*,[ ./-]*([''’ʼ]?[0-9]{4}|[''’ʼ]?[0-9]{2})(?![0-9])',E'\\1 \\2','g');
   marker:=regexp_match(term,'(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]* *, *due +[0-9]))|(?:(?:this|the|our|my|that|an?) +)?(?:invoices?|bills?|receipts?) +(?:(?:is|was|are|were) +)?(?:from|for|to|belongs? +to|issued +by|sent +by) +|(?:invoice|bill|receipt) *(?=[:,]))|(?<![a-z0-9_])(?:(?:new|नया) +invoice(?![a-z0-9_])|(?:set|change|correct|update|edit|modify|fix|create|log|save|record|mark)(?![a-z0-9_])(?:(?!(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_]))[^;.!?]){0,60}(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_])|(?:invoice(?: number| no| date)?|due date|total|subtotal|tax|amount|currency|notes?|customer(?: name)?|client(?: name)?)(?: +(?:is|was|are|were)(?![a-z0-9_]) *| *[:=] *))');if marker is null then return;end if;
@@ -349,7 +352,7 @@ begin
   if length(term) between 1 and 3993 then return next 'origin:'||term;end if;
   return query select * from app.private_invoice_term_aliases(term);
   for field in select regexp_split_to_table(term,';|(?<![0-9]),|,(?![0-9])') loop
-    field:=btrim(field);party:=first_field and marker[1] ~ '^(?:(?:(?:here|below|following|attached) +(?:is|are) +)?(?:(?:the|an?|my|our|this|that) +)?(?:invoices?|bills?|receipts?)(?![a-z0-9_]| +(?:number|no|date))|(?:forwarded|quoted|copied|pasted)|(?:customer|client)(?: +name)?|(?:set|change|correct|update|edit|modify|fix) +(?:customer|client)(?: +name)?)';numeric_field:=first_field and marker[1] ~ '^(?:(?:set|change|correct|update|edit|modify|fix) +)?(?:total|subtotal|tax|amount|balance|rate|quantity)(?![a-z0-9_])';first_field:=false;
+    field:=btrim(field);party:=first_field and marker[1] ~ '^(?:(?:(?:here|below|following|attached) +(?:is|are) +)?(?:(?:the|an?|my|our|this|that) +)?(?:invoices?|bills?|receipts?)(?![a-z0-9_]| +(?:number|no|date))|(?:forwarded|quoted|copied|pasted)|(?:customer|client)(?: +name)?|(?:set|change|correct|update|edit|modify|fix) +(?:customer|client)(?: +name)?)';numeric_field:=first_field and marker[1] ~ '^(?:(?:set|change|correct|update|edit|modify|fix) +)?(?:total|subtotal|tax|amount|balance|rate|quantity)(?![a-z0-9_])';
     loop
       prior:=field;
       field:=regexp_replace(field,'^[:> ]+','');field:=regexp_replace(field,U&'^[\0022\0027\00ab\00bb\2018-\201f\2039-\203a\2e42\300c-\300f\301d-\301f\fe41-\fe44\ff02\ff07\ff62-\ff63\02bc]+|[\0022\0027\00ab\00bb\2018-\201f\2039-\203a\2e42\300c-\300f\301d-\301f\fe41-\fe44\ff02\ff07\ff62-\ff63\02bc]+$','','g');
@@ -361,6 +364,7 @@ begin
       field:=regexp_replace(field,'^(?:from|to|for|belongs? +to|(?:issued|sent) +by) +','');field:=regexp_replace(field,'^(?:due(?: +date)?|invoice +date|bill +to|ship +to|customer(?: +name)?|client(?: +name)?|party(?: +name)?|company(?: +name)?|amount|total) *(?::|=|(?:is|was) +)? *','');
       exit when prior=field;
     end loop;
+    if field='' then continue;end if;first_field:=false;
     if numeric_field and (exists(select 1 from app.private_invoice_number_aliases(field)) or exists(select 1 from app.private_invoice_word_number_aliases(field))) then
       return query select * from app.private_invoice_number_aliases(field);return query select * from app.private_invoice_word_number_aliases(field);
     else return query select * from app.private_invoice_term_aliases(field);end if;
@@ -371,29 +375,54 @@ begin
 end $$;
 revoke all on function app.private_invoice_origin_aliases(text) from public,anon,authenticated,service_role;
 
-create function app.private_invoice_is_document(p_document jsonb) returns boolean
+-- Decode only transport padding before JSON.parse/jsonb; never fold JSON
+-- syntax or decoded values together. This exact Unicode set is generated.
+create function app.private_invoice_decode_json(p_term text) returns jsonb
 language plpgsql immutable set search_path='' as $$
-declare value jsonb;
+declare prepared text:=regexp_replace(p_term,U&'^[\0009-\000d\0020\0085\00a0\00ad\0600-\0605\061c\06dd\070f\0890-\0891\08e2\1680\180e\2000-\200f\2028-\202f\205f-\2064\2066-\206f\3000\feff\fff9-\fffb\+0110bd\+0110cd\+013430-\+01343f\+01bca0-\+01bca3\+01d173-\+01d17a\+0e0001\+0e0020-\+0e007f]+|[\0009-\000d\0020\0085\00a0\00ad\0600-\0605\061c\06dd\070f\0890-\0891\08e2\1680\180e\2000-\200f\2028-\202f\205f-\2064\2066-\206f\3000\feff\fff9-\fffb\+0110bd\+0110cd\+013430-\+01343f\+01bca0-\+01bca3\+01d173-\+01d17a\+0e0001\+0e0020-\+0e007f]+$','','g');
 begin
- for value in select * from jsonb_path_query(p_document,'$.** ? (@.type() == "object")') loop
-  if exists(select 1 from jsonb_object_keys(value) k where app.private_invoice_normalize(k) ~ 'invoice|payment|receipt|customer|client|total|subtotal|tax|amount|currency|notes?|balance|printedevidence|ownerprovidedfacts') then return true;end if;
- end loop;
- return false;
+ if prepared !~ '^[\[{"]' then return null;end if;
+ begin return prepared::jsonb;exception when invalid_text_representation then return null;end;
 end $$;
+revoke all on function app.private_invoice_decode_json(text) from public,anon,authenticated,service_role;
+
+-- One bounded decoded traversal owns predicates AND retention. A document
+-- nested inside serialized strings has exactly the same origin as an object.
+create function app.private_invoice_origin_documents(p_value jsonb,p_depth integer) returns setof jsonb
+language plpgsql immutable set search_path='' as $$
+declare decoded jsonb; item jsonb;
+begin
+ if p_depth>32 then raise exception 'PRIVATE_ORIGIN_DEPTH_EXCEEDED';end if;
+ case jsonb_typeof(p_value)
+ when 'string' then
+  decoded:=app.private_invoice_decode_json(p_value #>> '{}');
+  if decoded is not null and decoded<>p_value then
+   return query select * from app.private_invoice_origin_documents(decoded,p_depth+1);
+  elsif app.private_invoice_normalize(p_value #>> '{}') ~ '(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]* *, *due +[0-9]))|(?:(?:this|the|our|my|that|an?) +)?(?:invoices?|bills?|receipts?) +(?:(?:is|was|are|were) +)?(?:from|for|to|belongs? +to|issued +by|sent +by) +|(?:invoice|bill|receipt) *(?=[:,]))|(?<![a-z0-9_])(?:(?:new|नया) +invoice(?![a-z0-9_])|(?:set|change|correct|update|edit|modify|fix|create|log|save|record|mark)(?![a-z0-9_])(?:(?!(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_]))[^;.!?]){0,60}(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_])|(?:invoice(?: number| no| date)?|due date|total|subtotal|tax|amount|currency|notes?|customer(?: name)?|client(?: name)?)(?: +(?:is|was|are|were)(?![a-z0-9_]) *| *[:=] *))' then return next p_value;end if;
+ when 'object' then
+  if exists(select 1 from jsonb_object_keys(p_value) k where app.private_invoice_normalize(k) ~ 'invoice|payment|receipt|customer|client|total|subtotal|tax|amount|currency|notes?|balance|printedevidence|ownerprovidedfacts') then return next p_value;return;end if;
+  for item in select value from jsonb_each(p_value) loop
+   return query select * from app.private_invoice_origin_documents(item,p_depth+1);
+  end loop;
+ when 'array' then
+  for item in select * from jsonb_array_elements(p_value) loop
+   return query select * from app.private_invoice_origin_documents(item,p_depth+1);
+  end loop;
+ else null;
+ end case;
+end $$;
+revoke all on function app.private_invoice_origin_documents(jsonb,integer) from public,anon,authenticated,service_role;
+
+create function app.private_invoice_is_document(p_document jsonb) returns boolean
+language sql immutable set search_path='' as $$
+ select exists(select 1 from app.private_invoice_origin_documents(p_document,0));
+$$;
 revoke all on function app.private_invoice_is_document(jsonb) from public,anon,authenticated,service_role;
 
--- One origin predicate, shared by audit/memory write guards and the RPC.
 create function app.private_invoice_has_origin(p_term text) returns boolean
-language plpgsql immutable set search_path='' as $$
-declare document jsonb; value jsonb;
-begin
- if app.private_invoice_normalize(p_term) ~ '(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]* *, *due +[0-9]))|(?:(?:this|the|our|my|that|an?) +)?(?:invoices?|bills?|receipts?) +(?:(?:is|was|are|were) +)?(?:from|for|to|belongs? +to|issued +by|sent +by) +|(?:invoice|bill|receipt) *(?=[:,]))|(?<![a-z0-9_])(?:(?:new|नया) +invoice(?![a-z0-9_])|(?:set|change|correct|update|edit|modify|fix|create|log|save|record|mark)(?![a-z0-9_])(?:(?!(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_]))[^;.!?]){0,60}(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_])|(?:invoice(?: number| no| date)?|due date|total|subtotal|tax|amount|currency|notes?|customer(?: name)?|client(?: name)?)(?: +(?:is|was|are|were)(?![a-z0-9_]) *| *[:=] *))' then return true;end if;
- if p_term !~ '^[[:space:]]*[\[{]' then return false;end if;
- begin document:=p_term::jsonb;exception when invalid_text_representation then return false;end;
- if jsonb_typeof(document) not in ('object','array') then return false;end if;
- if app.private_invoice_is_document(document) then return true;end if;
- return exists(select 1 from jsonb_path_query(document,'$.** ? (@.type() == "string")') v where app.private_invoice_normalize(v #>> '{}') ~ '(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]* *, *due +[0-9]))|(?:(?:this|the|our|my|that|an?) +)?(?:invoices?|bills?|receipts?) +(?:(?:is|was|are|were) +)?(?:from|for|to|belongs? +to|issued +by|sent +by) +|(?:invoice|bill|receipt) *(?=[:,]))|(?<![a-z0-9_])(?:(?:new|नया) +invoice(?![a-z0-9_])|(?:set|change|correct|update|edit|modify|fix|create|log|save|record|mark)(?![a-z0-9_])(?:(?!(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_]))[^;.!?]){0,60}(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_])|(?:invoice(?: number| no| date)?|due date|total|subtotal|tax|amount|currency|notes?|customer(?: name)?|client(?: name)?)(?: +(?:is|was|are|were)(?![a-z0-9_]) *| *[:=] *))');
-end $$;
+language sql immutable set search_path='' as $$
+ select exists(select 1 from app.private_invoice_origin_documents(to_jsonb(p_term),0));
+$$;
 revoke all on function app.private_invoice_has_origin(text) from public,anon,authenticated,service_role;
 
 create function app.retain_private_invoice_terms(p_workspace_id uuid,p_document jsonb) returns void
@@ -453,23 +482,18 @@ revoke all on function app.retain_private_invoice_terms(uuid,jsonb) from public,
 
 create function app.retain_private_origin_terms(p_workspace_id uuid,p_text text) returns void
 language plpgsql set search_path='' as $$
-declare document jsonb; value jsonb;
+declare document jsonb;
 begin
- if not app.private_invoice_has_origin(p_text) then return;end if;
- if p_text ~ '^[[:space:]]*[\[{]' then begin document:=p_text::jsonb;exception when invalid_text_representation then document:=null;end;end if;
- if jsonb_typeof(document) in ('object','array') then
-  if app.private_invoice_is_document(document) then perform app.retain_private_invoice_terms(p_workspace_id,document);
+ for document in select distinct * from app.private_invoice_origin_documents(to_jsonb(p_text),0) loop
+  if jsonb_typeof(document) in ('object','array') then
+   perform app.retain_private_invoice_terms(p_workspace_id,document);
   else
-   for value in select distinct v from jsonb_path_query(document,'$.** ? (@.type() == "string")') v loop
-    perform app.retain_private_origin_terms(p_workspace_id,value #>> '{}');
-   end loop;
+   insert into public.whatsapp_private_invoice_terms(workspace_id,term_hash,term)
+   select distinct p_workspace_id,encode(sha256(convert_to(term,'UTF8')),'hex'),term
+   from app.private_invoice_origin_aliases(document #>> '{}') term where length(term) between 1 and 4000
+   and exists(select 1 from public.workspaces w where w.id=p_workspace_id) on conflict do nothing;
   end if;
-  return;
- end if;
- insert into public.whatsapp_private_invoice_terms(workspace_id,term_hash,term)
- select distinct p_workspace_id,encode(sha256(convert_to(term,'UTF8')),'hex'),term
- from app.private_invoice_origin_aliases(p_text) term where length(term) between 1 and 4000
- and exists(select 1 from public.workspaces w where w.id=p_workspace_id) on conflict do nothing;
+ end loop;
 end $$;
 revoke all on function app.retain_private_origin_terms(uuid,text) from public,anon,authenticated,service_role;
 

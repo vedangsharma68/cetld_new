@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
 
 const ws='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',owner='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-const customer='cccccccc-cccc-4ccc-8ccc-cccccccccccc',other='dddddddd-dddd-4ddd-8ddd-dddddddddddd',phone='+919871367051';
+const customer='cccccccc-cccc-4ccc-8ccc-cccccccccccc',other='dddddddd-dddd-4ddd-8ddd-dddddddddddd',phone='+12025550101';
 const sql=await readFile(new URL('../supabase/migrations/20261004180000_owner_invoice_review_number_override.sql',import.meta.url),'utf8');
 const original={type:'invoice_review_draft',stage:'proposal',sourceMessageId:'attachment-source',missingFields:[],currencySource:'photo',
   invoice:{invoiceNumber:'INV-17',clientName:'Rob & Joe Traders',total:662.75,currency:'USD',dueDate:'2026-10-31',lineItems:[{description:'Original',amount:600}]}};

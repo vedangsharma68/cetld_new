@@ -8,7 +8,7 @@ import {extractInvoiceOffline} from '../ai/extraction.mjs';
 import {parseOfflineInvoiceText} from '../ai/image-text.mjs';
 import {CF_QWEN_MODEL} from '../ai/provider.mjs';
 
-const scope = {workspaceId: 'workspace-a', customerId: 'customer-a', phone: '+919871367051'};
+const scope = {workspaceId: 'workspace-a', customerId: 'customer-a', phone: '+12025550101'};
 const action = {type: 'create_invoice', payload: {invoice: {invoiceNumber: 'INV-7', clientName: 'Buyer Co',
   clientEmail: null, clientPhone: null, invoiceDate: '2026-09-30', dueDate: '2026-10-30', subtotal: 100,
   tax: 0, total: 100, outstanding: 100, currency: 'INR', notes: null, alreadyPaid: false,
@@ -16,7 +16,7 @@ const action = {type: 'create_invoice', payload: {invoice: {invoiceNumber: 'INV-
 
 test('image payload captures metadata and Graph bytes are stored before enqueue', async () => {
   const payload = {object: 'whatsapp_business_account', entry: [{id: 'waba', changes: [{field: 'messages', value: {
-    metadata: {phone_number_id: 'phone-id'}, messages: [{id: 'wamid.image', from: '919871367051',
+    metadata: {phone_number_id: 'phone-id'}, messages: [{id: 'wamid.image', from: '12025550101',
       timestamp: '1790769600', type: 'image', image: {id: 'media-1', mime_type: 'image/jpeg', caption: 'September invoice'}}]}}]}]};
   const [parsed] = parseMetaMessages(payload, 'phone-id', 'waba');
   assert.equal(parsed.media_id, 'media-1');

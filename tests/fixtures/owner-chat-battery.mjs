@@ -5,7 +5,7 @@ export const OWNER_CHAT_SCOPE = Object.freeze({
   workspaceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   ownerId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
   customerId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-  phone: '+919871367051',
+  phone: '+12025550101',
 });
 export const OTHER_WORKSPACE_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 export const JOHN_CUSTOMER_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';

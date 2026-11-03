@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistant-handler.mjs';
 
-const scope = {workspaceId: 'workspace-a', customerId: 'customer-a', phone: '+919871367051', message:'Can you help me plan my day?'};
+const scope = {workspaceId: 'workspace-a', customerId: 'customer-a', phone: '+12025550101', message:'Can you help me plan my day?'};
 
 function fakeSupabase({customerId = 'customer-a', turns = [], memoryError = null} = {}) {
   return {async rpc(name,args) {if(name==='whatsapp_retain_private_chat_origin'){assert.equal(args.p_workspace_id,'workspace-a');assert.equal(typeof args.p_text,'string');return {data:true};}}, from(table) {

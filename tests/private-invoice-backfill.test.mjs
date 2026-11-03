@@ -81,7 +81,7 @@ test('privacy DDL rollback is atomic and every new helper/job/RPC retains restri
   assert.equal((await f.db.query("select to_regprocedure('app.private_invoice_normalize(text)') present")).rows[0].present,null);
   assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,1);
   await f.db.exec(sql);
-  const helpers=['private_invoice_is_document(jsonb)','private_invoice_has_origin(text)','private_invoice_lexical(text)','private_invoice_party_aliases(text)','private_invoice_normalize(text)','private_invoice_number_aliases(text)','private_invoice_group_number(text[])','private_invoice_word_number_value(text[])','private_invoice_word_number_aliases(text)','private_invoice_term_aliases(text)','private_invoice_evidence_aliases(text)','private_invoice_origin_aliases(text)'];
+  const helpers=['private_invoice_decode_json(text)','private_invoice_origin_documents(jsonb,integer)','private_invoice_is_document(jsonb)','private_invoice_has_origin(text)','private_invoice_lexical(text)','private_invoice_party_aliases(text)','private_invoice_normalize(text)','private_invoice_number_aliases(text)','private_invoice_group_number(text[])','private_invoice_word_number_value(text[])','private_invoice_word_number_aliases(text)','private_invoice_term_aliases(text)','private_invoice_evidence_aliases(text)','private_invoice_origin_aliases(text)'];
   for(const helper of helpers){
    const name='app.'+helper,meta=(await f.db.query('select provolatile,prosecdef,proconfig from pg_proc where oid=$1::regprocedure',[name])).rows[0];
    assert.equal(meta.provolatile,'i');assert.equal(meta.prosecdef,false);assert.deepEqual(meta.proconfig,['search_path=""']);

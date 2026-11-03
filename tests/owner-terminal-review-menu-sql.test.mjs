@@ -7,7 +7,7 @@ import {pendingBlocksOwnerNextActions} from '../automation/whatsapp/owner-next-a
 import {ownerGroundingIssue} from '../automation/whatsapp/owner-grounding.mjs';
 
 for(const terminalStage of ['canceled','saved'])test(`native read after a ${terminalStage} attachment restores signed menus without changing terminal review or reversed payment history`,async()=>{
-  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+919871367051';
+  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+12025550101';
   try{
     await db.query('insert into auth.users(id) values($1)',[ownerId]);
     await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);

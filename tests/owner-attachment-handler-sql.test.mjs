@@ -14,7 +14,7 @@ import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistan
 import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 import {extractInvoice} from '../ai/extraction.mjs';
 
-const phone='+919871367051';
+const phone='+12025550101';
 async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseReplyReceipt=false,caption='log this invoice',history=[],nativeWire=false,extractionWire=null}={}){
   const f=await createOfflineSqlNetwork(),ownerId=randomUUID();
   await f.db.query('insert into auth.users(id) values($1)',[ownerId]);

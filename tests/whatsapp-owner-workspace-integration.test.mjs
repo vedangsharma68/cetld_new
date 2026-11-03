@@ -8,7 +8,7 @@ import {CF_QWEN_MODEL, CF_PRIMARY_MODEL, CF_BACKUP_MODEL} from '../ai/provider.m
 const workspaceId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const otherWorkspace='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const customerId='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
-const scope={workspaceId,ownerId:'dddddddd-dddd-4ddd-8ddd-dddddddddddd',phone:'+919871367051',customerId:'owner-placeholder'};
+const scope={workspaceId,ownerId:'dddddddd-dddd-4ddd-8ddd-dddddddddddd',phone:'+12025550101',customerId:'owner-placeholder'};
 function database() {
   const reads=[];
   const tables={

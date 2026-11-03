@@ -8,7 +8,7 @@ import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createInboundRuntime, SupabaseInboundInbox, isResubscribe, isOptOut} from '../automation/whatsapp/cloud-inbound.mjs';
 import {getSendEligibility} from '../automation/whatsapp/consent.mjs';
 
-const phone = '+919871367051';
+const phone = '+12025550101';
 const logger = {log(){}, warn(){}, error(){}};
 
 test('verified owner STOP → START/UNSTOP preserves proof and resumes normal owner turns', async () => {

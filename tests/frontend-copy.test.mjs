@@ -7,7 +7,7 @@ import {ownerWhatsAppSettings} from '../owner-whatsapp-ui.mjs';
 import {debtorReminderToneForm} from '../reminder-tone-ui.mjs';
 
 test('Settings and customer tone helpers consistently call the account a business',()=>{
-  for(const html of [followUpPreferencesForm(),ownerWhatsAppSettings({owner:true,phone:'+919871367051',businessName:'Example'}),debtorReminderToneForm({name:'Example'},String)])assert.doesNotMatch(html,/\bworkspace\b/i);
+  for(const html of [followUpPreferencesForm(),ownerWhatsAppSettings({owner:true,phone:'+12025550101',businessName:'Example'}),debtorReminderToneForm({name:'Example'},String)])assert.doesNotMatch(html,/\bworkspace\b/i);
 });
 
 test('an assistant without a selected business refuses the request with business wording',async()=>{

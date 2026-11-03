@@ -11,7 +11,7 @@ import {reminderFingerprint} from '../automation/whatsapp/reminder-fingerprint.m
 import {approveReviewedReminder} from './fixtures/reviewed-reminder.mjs';
 import {CoreAutomationStore} from '../automation/core-store.mjs';
 import {createAutomationRuntime} from '../automation/runtime.mjs';
-const migration='20261023083356_per_message_reminder_review.sql',phone='+919871367051';
+const migration='20261023083356_per_message_reminder_review.sql',phone='+12025550101';
 const response=()=>({setHeader(){},status(code){this.code=code;return this},json(data){this.data=data;return this}});
 
 test('per-message review binds the real API, PostgreSQL approval, dispatch and retry forms',async t=>{

@@ -1,5 +1,5 @@
 import {privateDocumentKeyPattern} from './private-value-language.mjs';
-import {ordinaryPart,normalizePrivateValue,normalizePrivateText,privateOriginStart} from './private-value-matcher.mjs';
+import {ordinaryPart,normalizePrivateValue,normalizePrivateText,privateOriginStart,decodePrivateJSON} from './private-value-matcher.mjs';
 import {OFFLINE_CONFIRMATION_REPLY,OFFLINE_CANCEL_REPLY} from './offline-invoice-review.mjs';
 import {CF_PRIMARY_MODEL, CF_BACKUP_MODEL, isCloudflareModelId} from './provider.mjs';
 
@@ -24,9 +24,7 @@ export function privateChatTopic(message,depth=0) {
     if(Array.isArray(message))return message.some(value=>privateChatTopic(value,depth+1));
     return Object.entries(message).some(([key,value])=>new RegExp(privateDocumentKeyPattern,'u').test(normalizePrivateValue(key))||privateChatTopic(value,depth+1));
   }
-  if(typeof message==='string'&&/^\s*[\[{"]/.test(message)){
-    try{const decoded=JSON.parse(message);if(decoded!==message&&privateChatTopic(decoded,depth+1))return true;}catch{}
-  }
+  if(typeof message==='string'){const decoded=decodePrivateJSON(message);if(decoded!==undefined&&decoded!==message&&privateChatTopic(decoded,depth+1))return true;}
   const text=normalizePrivateValue(message);
   if(privateChatSpans(message).length)return true;
   return /\b(?:invoice\w*|receipts?|payments?|paid|unpaid|overdue|owes?|owed|owing|outstanding|receivables?|payables?|customers?|clients?|debtors?|creditors?|remind\w*)\b|[₹$€£]|\[cetld:/i.test(text)

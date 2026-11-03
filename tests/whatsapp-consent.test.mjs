@@ -39,7 +39,7 @@ function fakeSupabase({consents=[],suppressions=[],globalSuppressions=[],custome
   return client;
 }
 
-const phone='+919871367051';
+const phone='+12025550101';
 const active={workspace_id:'workspace-1',phone,customer_id:'customer-1',categories:['invoice_updates'],source:'verbal',revoked_at:null};
 const customer={id:'customer-1',workspace_id:'workspace-1',phone,name:'Client'};
 
@@ -85,7 +85,7 @@ test('STOP revokes once and claims only one confirmation, scoped to workspace',a
 
 test('invalid phone fails closed before querying the database',async()=>{
   const client=fakeSupabase();
-  await assert.rejects(getSendEligibility({supabase:client,workspaceId:'workspace-1',phone:'9871367051'}),/E.164/);
+  await assert.rejects(getSendEligibility({supabase:client,workspaceId:'workspace-1',phone:'2025550101'}),/E.164/);
   assert.deepEqual(client.reads,[]);
 });
 

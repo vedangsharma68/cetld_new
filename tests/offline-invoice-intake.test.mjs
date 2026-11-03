@@ -15,7 +15,7 @@ import {extractInvoiceFromImage} from '../ai/image-text.mjs';
 import {correctOfflineReview} from '../ai/offline-invoice-review.mjs';
 import {parseInvoiceCorrection} from '../automation/whatsapp/assistant-handler.mjs';
 
-const phone='+919871367051';
+const phone='+12025550101';
 const text=`Invoice No: INV-2026-0142
 Bill to: Kabir Textiles
 Invoice Date: 2026-10-20

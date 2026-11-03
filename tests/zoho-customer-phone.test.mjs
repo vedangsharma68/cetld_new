@@ -6,38 +6,39 @@ import {createAccountingIntegration} from '../automation/accounting/integration.
 import {TokenCipher, connectionAad} from '../automation/accounting/crypto.mjs';
 import {normalizeZohoPhone, zohoCustomerPhone} from '../automation/accounting/zoho-phone.mjs';
 
-const phone = '+919871367051';
+// Synthetic parser-only landline pattern already exercised below; no outbound calls.
+const phone = '+911123456789';
 const identity = {userId: 'owner-fixture', workspaceId: 'workspace-fixture', provider: 'zoho_books'};
 const json = body => new Response(JSON.stringify(body), {headers: {'content-type': 'application/json'}});
 
 test('Zoho phones normalize Indian national, trunk, country-code and international formats', () => {
-  for (const input of ['9871367051', '98713 67051', '09871367051', '91-98713-67051',
-    '+91 (98713) 67051', '0091 98713 67051', phone]) assert.equal(normalizeZohoPhone(input), phone, input);
+  for (const input of ['1123456789', '11234 56789', '01123456789', '91-11234-56789',
+    '+91 (11234) 56789', '0091 11234 56789', phone]) assert.equal(normalizeZohoPhone(input), phone, input);
   assert.equal(normalizeZohoPhone('011 2345 6789'), '+911123456789');
   assert.equal(normalizeZohoPhone('+1 (202) 555-0100'), '+12025550100');
   assert.equal(normalizeZohoPhone('001 202 555 0100'), '+12025550100');
-  for (const input of [null, undefined, '', '  ', 9871367051, {}, 'No phone provided', '12345',
-    '+91 123', '+91 09871367051', '+91 987136705123', '0000000000', '+0123456789',
-    '9871367051 ext 2', '9871367051/9871367051', '+919871367051,+919871367051', '++919871367051',
+  for (const input of [null, undefined, '', '  ', 1123456789, {}, 'No phone provided', '12345',
+    '+91 123', '+91 01123456789', '+91 112345678923', '0000000000', '+0123456789',
+    '1123456789 ext 2', '1123456789/1123456789', '+911123456789,+911123456789', '++911123456789',
     '+1234567890123456']) assert.equal(normalizeZohoPhone(input), null, String(input));
 });
 
 test('Zoho phone selection prefers contact mobile, then primary person, then phone and other people', () => {
   const secondary = {mobile: '+919000000001'};
-  const primary = {is_primary_contact: true, mobile: '9871367051'};
+  const primary = {is_primary_contact: true, mobile: '1123456789'};
   assert.equal(zohoCustomerPhone({mobile: phone, phone: secondary.mobile}), phone);
   assert.equal(zohoCustomerPhone({phone: secondary.mobile, contact_persons: [secondary, primary]}), phone);
   assert.equal(zohoCustomerPhone({contact_persons: [secondary, {...primary, mobile: '', phone}]}), phone);
-  assert.equal(zohoCustomerPhone({mobile: 'invalid', phone: '09871367051'}), phone);
+  assert.equal(zohoCustomerPhone({mobile: 'invalid', phone: '01123456789'}), phone);
   assert.equal(zohoCustomerPhone({contact_persons: [{mobile: 'invalid', phone}]}), phone);
-  assert.equal(zohoCustomerPhone({contact_persons: ['9871367051']}), null);
+  assert.equal(zohoCustomerPhone({contact_persons: ['1123456789']}), null);
   assert.equal(zohoCustomerPhone({contact_persons: [null], contact_persons_details: [{mobile: phone}]}), phone);
   assert.equal(zohoCustomerPhone({contact_persons: {}, phone: 'short'}), null);
 });
 
 function providerFixture() {
   const calls = [];
-  const state = {contacts: [{contact_id: 'zoho-customer', contact_name: 'Fixture customer', mobile: '98713 67051'}], invoices: []};
+  const state = {contacts: [{contact_id: 'zoho-customer', contact_name: 'Fixture customer', mobile: '11234 56789'}], invoices: []};
   const adapter = createZohoBooksProvider({fetchImpl: async (input, init = {}) => {
     const url = new URL(String(input));
     calls.push({url, method: init.method || 'GET'});
@@ -57,11 +58,11 @@ const invoiceRaw = extra => ({invoice_id: 'zoho-invoice', invoice_number: 'FIXTU
 test('Zoho contact and invoice adapters normalize mobiles/people without altering raw payloads or pagination', async () => {
   const f = providerFixture();
   f.state.contacts.push({contact_id: 'person-customer', contact_name: 'Person fixture',
-    contact_persons: [{is_primary_contact: true, mobile: '09871367051'}]});
-  f.state.invoices = [invoiceRaw({contact_persons: ['person-id'], contact_persons_details: [{mobile: '98713 67051'}]})];
+    contact_persons: [{is_primary_contact: true, mobile: '01123456789'}]});
+  f.state.invoices = [invoiceRaw({contact_persons: ['person-id'], contact_persons_details: [{mobile: '11234 56789'}]})];
   const contacts = await f.adapter.fetchContacts(providerInput);
   assert.deepEqual(contacts.map(contact => contact.phone), [phone, phone]);
-  assert.equal(contacts[0].raw.mobile, '98713 67051');
+  assert.equal(contacts[0].raw.mobile, '11234 56789');
   assert.equal(contacts.nextPage, null);
   const invoices = await f.adapter.fetchInvoices(providerInput);
   assert.equal(invoices[0].customerPhone, phone);
@@ -69,7 +70,7 @@ test('Zoho contact and invoice adapters normalize mobiles/people without alterin
   const detail = await f.adapter.fetchInvoice({...providerInput, invoiceId: 'zoho-invoice'});
   assert.equal(detail.customerPhone, phone);
   assert.ok(f.calls.every(call => call.url.searchParams.get('organization_id') === 'fixture-org'));
-  for (const fields of [{mobile: '9871367051'}, {phone: '09871367051'}, {contact_persons: [{mobile: phone}]}]) {
+  for (const fields of [{mobile: '1123456789'}, {phone: '01123456789'}, {contact_persons: [{mobile: phone}]}]) {
     f.state.invoices = [invoiceRaw(fields)];
     assert.equal((await f.adapter.fetchInvoices(providerInput))[0].customerPhone, phone);
   }
@@ -169,7 +170,7 @@ test('invoice phone fallback is linked by customer ID and contact phone takes pr
   for (const mobile of [undefined, '+919000000001']) {
     const db = databaseFixture([savedCustomer()]), f = providerFixture();
     f.state.contacts[0].mobile = mobile;
-    f.state.invoices = [invoiceRaw({date: null, contact_persons_details: [{mobile: '9871367051'}]}),
+    f.state.invoices = [invoiceRaw({date: null, contact_persons_details: [{mobile: '1123456789'}]}),
       invoiceRaw({date: null, customer_id: 'other-customer', mobile: '+919000000002'})];
     await syncFixture(db, f.adapter);
     assert.equal(db.customers[0].phone, mobile || phone);
@@ -180,7 +181,7 @@ test('invoice-only fallback fills only an empty customer phone in the scoped pro
   for (const existingPhone of [null, '', '+919000000001']) {
     const db = databaseFixture([savedCustomer({phone: existingPhone})]), f = providerFixture();
     f.state.contacts = [];
-    f.state.invoices = [invoiceRaw({date: null, contact_persons: [{phone: '09871367051'}]})];
+    f.state.invoices = [invoiceRaw({date: null, contact_persons: [{phone: '01123456789'}]})];
     await syncFixture(db, f.adapter);
     assert.equal(db.customers[0].phone, existingPhone || phone);
     const patch = db.calls.find(call => call.table === 'customers' && call.method === 'PATCH');
@@ -199,7 +200,7 @@ test('invoice fallback cannot match a customer in another workspace, provider, o
   for (const mismatch of [{workspace_id: 'other-workspace'}, {external_provider: 'quickbooks'}, {external_customer_id: 'other-customer'}]) {
     const db = databaseFixture([savedCustomer(mismatch)]), f = providerFixture();
     f.state.contacts = [];
-    f.state.invoices = [invoiceRaw({date: null, mobile: '9871367051'})];
+    f.state.invoices = [invoiceRaw({date: null, mobile: '1123456789'})];
     await syncFixture(db, f.adapter);
     assert.equal(db.customers[0].phone, null);
     assert.equal(db.calls.some(call => call.table === 'customers' && call.method !== 'GET'), false);

@@ -6,7 +6,7 @@ import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {CF_PRIMARY_MODEL, CF_BACKUP_MODEL, GEMINI_FALLBACK_MODEL} from '../ai/provider.mjs';
 
 const scope = {workspaceId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',ownerId:'11111111-1111-4111-8111-111111111111',
-  customerId:'22222222-2222-4222-8222-222222222222',phone:'+919871367051',messageId:'wamid.test',message:'Who owes the most?'};
+  customerId:'22222222-2222-4222-8222-222222222222',phone:'+12025550101',messageId:'wamid.test',message:'Who owes the most?'};
 
 function handlerFor(settings, capture, settingsError=null, env={}) {
   const supabase = {from(table) {

@@ -6,7 +6,7 @@ export const ordinals='first,second,third,fourth,fifth,sixth,seventh,eighth,nint
 export const units='(?:inr|usd|eur|gbp|aed|sgd|aud|cad|chf|rs|rupees?|dollars?|euros?|pounds?)';
 export const small=Object.fromEntries('zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen'.split(' ').map((word,i)=>[word,BigInt(i)]));
 for(const [i,word] of ['twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety'].entries())small[word]=BigInt((i+2)*10);
-export const scales={thousand:1000n,lakh:100000n,lac:100000n,million:1000000n,crore:10000000n,billion:1000000000n};
+export const scales={thousand:1000n,lakh:100000n,lac:100000n,million:1000000n,crore:10000000n,billion:1000000000n,trillion:1000000000000n,quadrillion:1000000000000000n,quintillion:1000000000000000000n};
 export const fractions={half:2n,halves:2n,quarter:4n,quarters:4n,third:3n,fifth:5n,sixth:6n,seventh:7n,eighth:8n,ninth:9n,tenth:10n};
 // Private printed evidence keeps a field label separate from its value. This
 // grammar applies only to explicitly tagged evidence, not arbitrary names.
@@ -50,3 +50,13 @@ export const originDateCommaPattern=`(${namedBareDates.join('|')})[ ./-]*,[ ./-]
 // field key. Distinct inherent/vowel signs remain distinct (kiran != karan).
 export const partyTransliteration=Object.fromEntries(Object.entries({'अ':'a','आ':'aa','इ':'i','ई':'ii','उ':'u','ऊ':'uu','ऋ':'ri','ए':'e','ऐ':'ai','ओ':'o','औ':'au','क':'ka','ख':'kha','ग':'ga','घ':'gha','ङ':'nga','च':'cha','छ':'chha','ज':'ja','झ':'jha','ञ':'nya','ट':'ta','ठ':'tha','ड':'da','ढ':'dha','ण':'na','त':'ta','थ':'tha','द':'da','ध':'dha','न':'na','प':'pa','फ':'pha','ब':'ba','भ':'bha','म':'ma','य':'ya','र':'ra','ल':'la','व':'va','श':'sha','ष':'sha','स':'sa','ह':'ha','ळ':'la','ा':'aa','ि':'i','ी':'ii','ु':'u','ू':'uu','ृ':'ri','े':'e','ै':'ai','ो':'o','ौ':'au','्':'','ं':'n','ँ':'n','ः':'h','़':''}));
 export const partyReference='(?:ask|contact|call|pay|send(?: +to)?|tell +me +about|advice +from|talk +to|message|email|फोन|पूछो|पूछें|भेजो)';
+
+// Grammatical function words are not independently identifying party components.
+// Complete field/identifier keys still protect the complete formal name.
+export const partyFunctionWords=['a','an','the','and','or','of','for','to','in','on','at','by','with','from','de','del','la','le','van','von','da','di'];
+// Enumeration is a syntactic frame before the candidate, never a noun found
+// elsewhere in a message (e.g. a singular decimal on a shopping list).
+export const numericEnumerationFrame='(?:\\b(?:between|among)|\\b[\\p{L}\\p{M}]+s +(?:are|were|include|contain|equal)|\\b(?:pair|couple) +(?:is|was)) *$';
+// Only transport padding is removed before JSON decoding. String values are
+// decoded first, then canonically screened; normalization must not change JSON.
+export const privateJSONPadding=/[\p{White_Space}\p{Cf}]/u;

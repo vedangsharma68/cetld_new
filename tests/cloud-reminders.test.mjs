@@ -1,3 +1,5 @@
+// Exercise the existing operational recipient policy without copying personal contact literals.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import {reminderDeliveryForm} from '../automation/whatsapp/reminder-approval.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,7 +11,7 @@ import {createAutomationRuntime} from '../automation/runtime.mjs';
 import {createFirstPartyReminderProvider} from '../automation/whatsapp/cloud-reminders.mjs';
 import {localReminderStatusPayable} from '../automation/external-reminder-verification.mjs';
 
-const phone='+919871367051';
+const phone=QA_POLICY_PHONE;
 const template={status:'APPROVED',category:'UTILITY',useCase:'first_party_invoice_reminder',name:'fixture_first_party_invoice_reminder',language:'en',
   revision:'fixture-approved-v1',wabaId:'654321',phoneNumberId:'123456',
   body:'Hello {{2}}, invoice {{3}} has {{4}} {{5}} remaining, due {{6}}. Reply STOP anytime.\n\n{{1}}'};

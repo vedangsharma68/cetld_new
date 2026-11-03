@@ -14,7 +14,7 @@ import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 import {createWhatsAppProvider} from '../automation/whatsapp/factory.mjs';
 import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
 
-const phone='+919871367051',owner=randomUUID(),foreignOwner=randomUUID();
+const phone='+12025550101',owner=randomUUID(),foreignOwner=randomUUID();
 const env={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_SERVICE_ROLE_KEY:'isolated-fixture-service-key',
   AUTOMATION_APP_URL:'https://automation.fixture.test',AUTOMATION_WORKER_SECRET:'fixture-worker-secret-'.repeat(3),
   AUTOMATION_OUTBOUND_ENABLED:'true',WHATSAPP_PROVIDER:'mock',WHATSAPP_OUTBOUND_ENABLED:'true',

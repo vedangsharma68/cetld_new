@@ -12,7 +12,7 @@ import {authorizeOwnerPhone} from '../automation/whatsapp/owner-binding.mjs';
 // isolated. The repaired numeric patch is a local reconstruction: production
 // retained TARGET_REQUIRED then UNKNOWN, but not the second call's values.
 engineTest('inconsistent draft total explains the arithmetic refusal; only an explicit consistent correction persists',async()=>{
- const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+919871367051';
+ const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+12025550101';
  try{
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
   await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);

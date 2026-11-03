@@ -7,7 +7,7 @@ import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 
-const phone='+919871367051';
+const phone='+12025550101';
 const logger={info(){},warn(){},error(){}};
 
 engineTest('native repeated rejected reads log only filter structure without invoking ineligible repair or reaching the invoice',async()=>{

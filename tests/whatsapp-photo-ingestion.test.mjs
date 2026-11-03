@@ -15,7 +15,7 @@ import {AIProvider} from '../ai/provider.mjs';
 import {extractInvoiceOffline, INVOICE_IMAGE_REPLIES} from '../ai/extraction.mjs';
 import {extractInvoiceFromImage} from '../ai/image-text.mjs';
 
-const phone='+919871367051';
+const phone='+12025550101';
 const sample=await readFile(new URL('./fixtures/qa-invoice.jpg',import.meta.url));
 const quiet={info(){},warn(){},error(){},log(){}};
 

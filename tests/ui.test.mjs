@@ -136,10 +136,10 @@ test('reminder preview gates on the signed-in workspace owner, not an unset UI f
   const requests=[];
   const preview=extractedAppFunction('async function reminderProofRequest(send=false,signal){','let reminderProofReviewPending=null;',{
     state:{demo:false,user:{id:'owner-1'},workspace:{id:'workspace-1',owner_id:'owner-1'}},readyReminderPreviewToken:()=>null,
-    accessToken:async()=>'owner-session-token',fetch:async(url,options)=>{requests.push({url,options});return{ok:true,json:async()=>({test:true,recipient:'+919871367051'})}},
+    accessToken:async()=>'owner-session-token',fetch:async(url,options)=>{requests.push({url,options});return{ok:true,json:async()=>({test:true,recipient:'+12025550101'})}},
     URL,URLSearchParams,Error,
   });
-  assert.equal((await preview()).recipient,'+919871367051');
+  assert.equal((await preview()).recipient,'+12025550101');
   assert.equal(requests.length,1);
   assert.equal(requests[0].options.method,'GET');
   const nonOwner=extractedAppFunction('async function reminderProofRequest(send=false,signal){','let reminderProofReviewPending=null;',{
@@ -244,7 +244,7 @@ test('client wording, official integration logos and global contact links are pr
   for (const infrastructure of ["['supabase'", "['whatsapp'", "['resend'", "['sentry'"]) assert.doesNotMatch(app, new RegExp(infrastructure.replace('[', '\\[')));
   assert.match(app, /cdn\.simpleicons\.org/);
   assert.match(app, /mailto:vedangsharma52@gmail\.com/);
-  assert.match(app, /tel:\+919871367051/);
+  assert.match(app, /tel:\+12025550101/);
   const csp=JSON.parse(vercel).headers[0].headers.find(({key})=>key==='Content-Security-Policy').value;
   assert.match(csp,/img-src[^;]*https:\/\/cdn\.simpleicons\.org/);
 });

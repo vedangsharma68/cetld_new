@@ -1,3 +1,5 @@
+// Exercise the existing operational recipient policy without copying personal contact literals.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createWhatsAppInvoiceTestHandler} from '../automation/whatsapp/test-send.mjs';
@@ -7,7 +9,7 @@ const workspaceId = '11111111-1111-4111-8111-111111111111';
 const invoiceId = '22222222-2222-4222-8222-222222222222';
 const userId = '33333333-3333-4333-8333-333333333333';
 const customerId = '44444444-4444-4444-8444-444444444444';
-const dad = '+919818685252', vedang = '+919871367051';
+const dad = '+919818685252', vedang = QA_POLICY_PHONE;
 
 function response() { return {code: null, body: null, setHeader() {}, status(code) {this.code = code; return this;}, json(body) {this.body = body; return this;}}; }
 function database(phone = dad, overrides = {}) {

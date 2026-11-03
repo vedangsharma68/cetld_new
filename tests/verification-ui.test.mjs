@@ -7,7 +7,7 @@ import {createOwnerTemplateTestUI,zohoDiscoveryView,ownerTemplateCheckView} from
 
 const workspaceId='9a83b58d-6b02-4b17-8de5-c67136f26434',userId='40ff343c-4334-4aec-b49a-ca772f0cf8ad',invoiceId='f86e28bd-16a8-4c83-a03d-05302f7f3ff6';
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const preview={test:true,audience:'owner',workspaceId,ownerId:userId,invoiceId,recipient:'+919871367051',
+const preview={test:true,audience:'owner',workspaceId,ownerId:userId,invoiceId,recipient:'+12025550101',
   template:{name:'cetld_invoice_update_v3',language:{code:'en'}},text:'Hi, this is CETLD test. Invoice TEST ONLY - INV-2026-6771 for owner test only has an update.',previewToken:'fixture-preview-secret'};
 function setup({reply=preview,request}={}){
   const state={demo:false,user:{id:userId},workspace:{id:workspaceId,owner_id:userId},invoices:[{id:invoiceId,total:140,paid:40,paused:true}]};

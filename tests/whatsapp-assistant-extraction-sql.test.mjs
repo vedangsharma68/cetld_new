@@ -8,7 +8,7 @@ import {extractInvoice, validateInvoiceExtractionWireResponse} from '../ai/extra
 import {validateAssistantInvoice} from '../ai/invoice-ops.mjs';
 import {DEFAULT_EXTRACTION_MODEL} from '../ai/provider.mjs';
 
-const phone = '+919871367051';
+const phone = '+12025550101';
 const media = {bytes: Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0]), mimeType: 'image/png', fileName: 'invoice.png'};
 
 function invoiceWire(patch = {}) {

@@ -7,7 +7,7 @@ import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {CF_QWEN_MODEL} from '../ai/provider.mjs';
 import {createOwnerChatDatabase,OWNER_CHAT_SCOPE,DEFAULT_NOW} from './fixtures/owner-chat-battery.mjs';
 
-const phone='+919871367051';
+const phone='+12025550101';
 const binding={workspace_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',owner_id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
   customer_id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',business_name:'Northstar'};
 

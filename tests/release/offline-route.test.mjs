@@ -5,7 +5,7 @@ import {createWhatsAppBoundMessageHandler} from '../../automation/whatsapp/assis
 // Deliberately omit env from the handler options. This verifies activation from
 // the process environment supplied by the release gate, as in production.
 const deny=()=>assert.fail('Offline turns must not construct or call a provider');
-const scope={workspaceId:'w',customerId:'c',phone:'+919871367051',messageId:'activation'};
+const scope={workspaceId:'w',customerId:'c',phone:'+12025550101',messageId:'activation'};
 function options(pending={}) {
   const q={select(){return q;},eq(){return q;},maybeSingle:async()=>({data:null})};
   return {audience:'owner',supabase:{from:()=>q,rpc:async()=>({data:false})},authorizeScope:async()=>true,

@@ -7,7 +7,7 @@ import {CF_QWEN_MODEL, GEMINI_FALLBACK_MODEL} from '../ai/provider.mjs';
 
 const workspaceId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const ownerId='dddddddd-dddd-4ddd-8ddd-dddddddddddd';
-const phone='+919871367051';
+const phone='+12025550101';
 const invoiceId='ffffffff-ffff-4fff-8fff-ffffffffffff';
 const secret='test-only-owner-button-secret';
 const now=Date.parse('2026-10-03T10:00:00.000Z');

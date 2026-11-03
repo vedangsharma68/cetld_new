@@ -15,7 +15,7 @@ import {ownerWhatsAppSettings} from '../owner-whatsapp-ui.mjs';
 test.before(()=>mock.method(globalThis,'fetch',async()=>assert.fail('Ledger subsystem tests must never make a live fetch')));
 test.after(()=>mock.restoreAll());
 
-const scope={workspaceId:'00000000-0000-4000-8000-000000000001',ownerId:'00000000-0000-4000-8000-000000000002',customerId:'owner-placeholder',phone:'+919871367051'};
+const scope={workspaceId:'00000000-0000-4000-8000-000000000001',ownerId:'00000000-0000-4000-8000-000000000002',customerId:'owner-placeholder',phone:'+12025550101'};
 const invoices=[
  {id:'a',invoiceNumber:'INV-005',clientName:'Green1 Materials LLC',currency:'USD',total:1564,amountPaid:1564,status:'paid',updatedAt:'v1',metadata:{}},
  {id:'b',invoiceNumber:'1223113',clientName:'MineralTree',currency:'USD',total:1725,amountPaid:0,status:'draft',updatedAt:'v1',metadata:{}},
@@ -173,9 +173,9 @@ engineTest('the dashboard verification poll refreshes the connected phone immedi
  const poll=source.slice(source.indexOf('let ownerVerifyTimer=null;'),source.indexOf("document.addEventListener('submit',async event=>{",source.indexOf('let ownerVerifyTimer=null;')));
  const state={user:{id:'owner'},workspace:{id:'ws'},settings:{whatsapp_owner_phone:null},ownerVerify:{workspaceId:'ws',expiresAt:Date.now()+600000}};
  let tick,renders=0;
- const db={rpc:async()=>({data:'linked'}),from(table){assert.equal(table,'workspace_settings');const q={select(){return q},eq(key,value){assert.equal(key,'workspace_id');assert.equal(value,'ws');return q},single:async()=>({data:{whatsapp_owner_phone:'+919871367051',business_name:'CETLD test'}})};return q}};
+ const db={rpc:async()=>({data:'linked'}),from(table){assert.equal(table,'workspace_settings');const q={select(){return q},eq(key,value){assert.equal(key,'workspace_id');assert.equal(value,'ws');return q},single:async()=>({data:{whatsapp_owner_phone:'+12025550101',business_name:'CETLD test'}})};return q}};
  runInNewContext(poll+';startOwnerVerifyPoll();',{state,db,Date,render(){renders++},toast(){},setInterval(fn){tick=fn;return 1},clearInterval(){}});
- await tick();assert.equal(state.settings.whatsapp_owner_phone,'+919871367051');assert.equal(state.ownerVerify,null);assert.equal(renders,1);
+ await tick();assert.equal(state.settings.whatsapp_owner_phone,'+12025550101');assert.equal(state.ownerVerify,null);assert.equal(renders,1);
 });
 
 

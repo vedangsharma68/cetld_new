@@ -8,7 +8,7 @@ import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {PGlite} from '@electric-sql/pglite';
 import {readFile} from 'node:fs/promises';
-const workspaceId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',phone='+919871367051',ownerId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const workspaceId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',phone='+12025550101',ownerId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const scope={workspaceId,phone,ownerId,messageId:'wamid.test',message:'Show invoice'};
 const now=new Date('2026-10-04T10:00:00Z'),clock=()=>now,env={WHATSAPP_APP_SECRET:'isolated-next-actions-secret'};
 const invoice={id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',workspace_id:workspaceId,invoice_number:'INV-1',status:'sent',total_amount:100,amount_paid:0,updated_at:now.toISOString(),created_at:now.toISOString(),deleted_at:null,custom_fields:{}};

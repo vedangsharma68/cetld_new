@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerSafetyTools as createOwnerAgentTools} from '../automation/whatsapp/owner-agent.mjs';
 
-const scope={workspaceId:'w1',ownerId:'o1',customerId:'owner-placeholder',phone:'+919871367051'};
+const scope={workspaceId:'w1',ownerId:'o1',customerId:'owner-placeholder',phone:'+12025550101'};
 function setup({failWrite=null,changeBetween=false,pauseCount=0,plans={},answers={}}={}){
  let action=null,row={business_name:'CETLD test',follow_up_preferences:{tone:'professional',maxReminders:3},updated_at:'t1'},writes=[],rpcCalls=0,authorized=true,pid=0;
  let modelCalls=0;

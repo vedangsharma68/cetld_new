@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
 import {installVerifiedOwnerRpc} from './fixtures/verified-owner-rpc.mjs';
 
-const phone='+919871367051';
+const phone='+12025550101';
 function ownerDatabase(){
   const rows={whatsapp_owner_verifications:[{workspace_id:'ws-owner',requested_by:'owner-1',verified_at:'2026-10-01',phone}],
     workspaces:[{id:'ws-owner',owner_id:'owner-1'}],workspace_members:[{workspace_id:'ws-owner',user_id:'owner-1',role:'owner'}],

@@ -13,7 +13,7 @@ import {installVerifiedOwnerRpc} from './fixtures/verified-owner-rpc.mjs';
 const workspaceId='00000000-0000-4000-8000-000000000002';
 const ownerId='00000000-0000-4000-8000-000000000001';
 const customerId='00000000-0000-4000-8000-000000000003';
-const phone='+919871367051';
+const phone='+12025550101';
 const scope={workspaceId,ownerId,customerId,phone,messageId:'wamid.test'};
 
 engineTest('an incomplete photo can retain an optional missing due date when the owner supplies its missing customer',async()=>{

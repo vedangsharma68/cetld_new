@@ -1,10 +1,12 @@
+// Exercise the existing operational recipient policy without copying personal contact literals.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createWhatsAppInvoiceTestHandler} from '../automation/whatsapp/test-send.mjs';
 
 const workspaceId = '11111111-1111-4111-8111-111111111111';
 const userId = '33333333-3333-4333-8333-333333333333';
-const recipient = '+919871367051';
+const recipient = QA_POLICY_PHONE;
 const names = ['cetld_invoice_update_v3', 'cetld_invoice_update_btn_v3', 'cetld_invoice_gentle_v2', 'cetld_invoice_gentle_btn_v2', 'cetld_invoice_details_relaxed_v1', 'cetld_invoice_details_firm_v1', 'cetld_invoice_details_professional_v1'];
 const env = {WHATSAPP_TEST_OPERATOR_USER_ID: userId, WHATSAPP_OUTBOUND_ENABLED: 'true', WHATSAPP_TEST_ALLOWLIST: recipient,
   WHATSAPP_ACCESS_TOKEN: 'private-server-token', WHATSAPP_PHONE_NUMBER_ID: '1234567890', WHATSAPP_WABA_ID: '9876543210',

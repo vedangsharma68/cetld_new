@@ -94,7 +94,7 @@ test('commercial owner replies use actual code proof without any customer consen
 });
 
 for(const flag of [undefined,'false'])test(`flag ${flag}: original unbound routing makes no new service-authority calls`,async t=>{
-  const f=await setup(t,{environment:{WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED:flag,WHATSAPP_TEST_ALLOWLIST:'+919871367051'}});
+  const f=await setup(t,{environment:{WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED:flag,WHATSAPP_TEST_ALLOWLIST:'+12025550101'}});
   await f.signed('Hello');await f.runtime.processPending();
   assert.equal(f.graph.length,0,'main leaves an unbound non-QA sender without an outbound verification');
   assert.equal(f.requests.filter(r=>/\/rpc\/whatsapp_(?:resolve_service_owner|claim_service_owner_reply)$/.test(new URL(r.url).pathname)).length,0);
