@@ -131,3 +131,15 @@ test('scalar UUID and exponent-like fields never enter the JSON document decoder
   for(const key of ['party:willow','number:8654'])assert.ok(keys.includes(key));
  }finally{await f.close();}
 });
+
+
+test('legacy engine database fixture acknowledges and stores origins without bypassing the production wrapper',async()=>{
+ const {createOwnerChatDatabase,OWNER_CHAT_SCOPE}=await import('./fixtures/owner-chat-battery.mjs');
+ const {createOwnerMessageHandler}=await import('../automation/whatsapp/owner-handler.mjs');
+ const db=createOwnerChatDatabase(),wires=[];
+ const construct=()=>createOwnerMessageHandler({supabase:db.supabase,authorize:async()=>true,replyStore:null,providerFactory:factory(wires),logger:{error(){},warn(){},info(){}}});
+ let handler=construct();await handler({...OWNER_CHAT_SCOPE,message:'Invoice is from Willow Workshop, 8654, due 12 Nov',messageId:'fixture-origin'});
+ for(const term of ['party:willow','number:8654','date:*-11-12'])assert.ok(db.tables.whatsapp_private_invoice_terms.some(row=>row.term===term));
+ handler=construct();for(const message of ['Ask Willow for advice','send 8654 today','is it due 12 Nov?'])await handler({...OWNER_CHAT_SCOPE,message,messageId:message});
+ assert.equal(wires.length,0);
+});
