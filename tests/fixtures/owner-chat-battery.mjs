@@ -1,6 +1,4 @@
 import {CF_BACKUP_MODEL, CF_PRIMARY_MODEL, GEMINI_FALLBACK_MODEL} from '../../ai/provider.mjs';
-import {createHash} from 'node:crypto';
-import {privateOriginKeys} from '../../ai/private-value-matcher.mjs';
 import {installVerifiedOwnerRpc} from './verified-owner-rpc.mjs';
 
 export const OWNER_CHAT_SCOPE = Object.freeze({
@@ -155,17 +153,6 @@ export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallba
     rpcCalls.push({name,args:clone(args)});
     const ws=OWNER_CHAT_SCOPE.workspaceId;
     if (args.p_workspace_id != null && args.p_workspace_id !== ws) return {data:{ok:false,code:'OWNER_REQUIRED',reason:'unbound'}};
-    if(name==='whatsapp_retain_private_chat_origin'){
-      if(typeof args.p_text!=='string'||!args.p_text.length||args.p_text.length>4000)return {error:{code:'INVALID_PRIVATE_ORIGIN'}};
-      const keys=privateOriginKeys(args.p_text);
-      if(!keys.length)return {error:{code:'UNSUPPORTED_PRIVATE_ORIGIN'}};
-      const terms=tables.whatsapp_private_invoice_terms||=([]);
-      for(const term of keys){
-        const term_hash=createHash('sha256').update(term).digest('hex');
-        if(!terms.some(row=>row.workspace_id===ws&&row.term_hash===term_hash))terms.push({workspace_id:ws,term_hash,term});
-      }
-      return {data:true};
-    }
     if(name==='owner_assistant_append'){
       if(args.p_owner_id!==OWNER_CHAT_SCOPE.ownerId)return {error:{code:'DENIED'}};
       const turns=tables.owner_assistant_turns;

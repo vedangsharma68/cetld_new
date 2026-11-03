@@ -1,9 +1,10 @@
 import test from 'node:test';
+import {retainPrivateOriginFixture} from './fixtures/private-origin-store.mjs';
 import assert from 'node:assert/strict';
 import {createWhatsAppBoundMessageHandler, parseInvoiceCorrection} from '../automation/whatsapp/assistant-handler.mjs';
 
 const scope={workspaceId:'workspace-a',customerId:'customer-a',phone:'+919871367051'};
-function supabase(){return {from(table){return {select(){return this},eq(){return this},async maybeSingle(){if(table==='workspace_ai_settings')return {data:{primary_model:'space-bunny-free',fallback_model:null}};throw Error(table)}}}}}
+function supabase(){const origins={};return {rpc:async(name,args)=>name==='whatsapp_retain_private_chat_origin'?retainPrivateOriginFixture(origins,args):{data:null},from(table){return {select(){return this},eq(){return this},async maybeSingle(){if(table==='workspace_ai_settings')return {data:{primary_model:'space-bunny-free',fallback_model:null}};throw Error(table)}}}}}
 function handlerWith(store,{current=null}={}){
   return createWhatsAppBoundMessageHandler({audience:'owner',authorizeScope:async()=>true,supabase:supabase(),providerFactory:()=>({}),channelFactory:()=>({ask(){throw Error('planner must not write')}}),
     pendingActionStoreFactory:()=>({loadInvoiceReview:async()=>current}),invoiceStoreFactory:()=>store,clock:()=>new Date('2026-10-01T12:00:00Z')});
@@ -65,8 +66,9 @@ test('typo-tolerant correction names a customer and survives an AI outage',async
 test('misspelled field word parses and a bare invoice number resumes the pending correction',async()=>{
   assert.deepEqual(parseInvoiceCorrection('change the amont to 6767 usd'),{changes:{total:6767,currency:'USD'}});
   const turns=[];
-  const mem={from(table){const q={select(){return q},eq(){return q},order(){return q},limit(){return q},range(){return q},in(){return q},delete(){return q},
-    async maybeSingle(){return {data:{primary_model:'space-bunny-free',fallback_model:null}}},insert(row){turns.push(row);return Promise.resolve({data:null})},then(res){return res({data:[...turns].reverse().map((t,i)=>({...t,id:i,created_at:'x'}))})}};return q}};
+  const origins={};
+  const mem={rpc:async(name,args)=>name==='whatsapp_retain_private_chat_origin'?retainPrivateOriginFixture(origins,args):{data:null},from(table){const q={select(){return q},eq(){return q},order(){return q},limit(){return q},range(){return q},in(){return q},delete(){return q},
+    async maybeSingle(){return {data:{primary_model:'space-bunny-free',fallback_model:null}}},insert(row){turns.push(row);return Promise.resolve({data:null})},then(res){return res({data:table==='whatsapp_private_invoice_terms'?origins[table]||[]:[...turns].reverse().map((t,i)=>({...t,id:i,created_at:'x'}))})}};return q}};
   let applied;
   const store={findInvoices:async arg=>arg?.invoiceNumber?[{...invoice,invoiceNumber:'INV-2026-0003',id:'inv-3'}]:[{...invoice,clientName:null}],
     applyCorrection:async input=>{applied=input;return {invoice,changes:{total:{old:6190,new:6767}}}}};

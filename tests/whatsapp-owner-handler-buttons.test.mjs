@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {retainPrivateOriginFixture} from './fixtures/private-origin-store.mjs';
 import assert from 'node:assert/strict';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 import {createOwnerActionButtons} from '../automation/whatsapp/owner-action-buttons.mjs';
@@ -56,6 +57,7 @@ function database({ownerPreferences=preferences(),pendingAction=null}={}) {
     return query;
   },async rpc(name,args){
     calls.push({name,args});
+    if(name==='whatsapp_retain_private_chat_origin')return retainPrivateOriginFixture(tables,args);
     if(name==='invoice_lifecycle_action')return {data:{ok:true,pending:false}};
     if(name==='whatsapp_correct_owner_invoice'){
       const before=structuredClone(invoice);

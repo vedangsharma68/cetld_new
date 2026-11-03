@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {retainPrivateOriginFixture} from './fixtures/private-origin-store.mjs';
 import assert from 'node:assert/strict';
 import {classifyIntent, INTENT_ACTIONS} from '../automation/whatsapp/intent.mjs';
 
@@ -38,8 +39,9 @@ import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistan
 const scopeH={workspaceId:'workspace-a',customerId:'customer-a',phone:'+919871367051'};
 const inv={id:'i1',invoiceNumber:'INV-2026-0003',printedInvoiceNumber:'INV-2026-0720',clientName:'Global Dynamics Inc.',total:6190,currency:'USD',status:'draft'};
 function mkHandler({provider,store,channelAsk}){
-  const sb={from(){const q={select(){return q},eq(){return q},order(){return q},limit(){return q},range(){return q},in(){return q},delete(){return q},
-    async maybeSingle(){return {data:{primary_model:'space-bunny-free',fallback_model:null}}},insert(){return Promise.resolve({data:null})},then(r){return r({data:[]})}};return q}};
+  const origins={};
+  const sb={rpc:async(name,args)=>name==='whatsapp_retain_private_chat_origin'?retainPrivateOriginFixture(origins,args):{data:null},from(table){const q={select(){return q},eq(){return q},order(){return q},limit(){return q},range(){return q},in(){return q},delete(){return q},
+    async maybeSingle(){return {data:{primary_model:'space-bunny-free',fallback_model:null}}},insert(){return Promise.resolve({data:null})},then(r){return r({data:table==='whatsapp_private_invoice_terms'?origins[table]||[]:[]})}};return q}};
   return createWhatsAppBoundMessageHandler({audience:'owner',authorizeScope:async()=>true,supabase:sb,providerFactory:()=>provider,channelFactory:()=>({ask:channelAsk||(async()=>({answer:'planner',model:'m',usedFallback:false}))}),
     pendingActionStoreFactory:()=>({loadInvoiceReview:async()=>null}),invoiceStoreFactory:()=>store,clock:()=>new Date('2026-10-01T12:00:00Z')});
 }
