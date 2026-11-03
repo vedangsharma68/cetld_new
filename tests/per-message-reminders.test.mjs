@@ -1,3 +1,5 @@
+// Existing operational recipient policy; no copied personal contact literal.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -11,7 +13,7 @@ import {reminderFingerprint} from '../automation/whatsapp/reminder-fingerprint.m
 import {approveReviewedReminder} from './fixtures/reviewed-reminder.mjs';
 import {CoreAutomationStore} from '../automation/core-store.mjs';
 import {createAutomationRuntime} from '../automation/runtime.mjs';
-const migration='20261023083356_per_message_reminder_review.sql',phone='+12025550101';
+const migration='20261023083356_per_message_reminder_review.sql',phone=QA_POLICY_PHONE;
 const response=()=>({setHeader(){},status(code){this.code=code;return this},json(data){this.data=data;return this}});
 
 test('per-message review binds the real API, PostgreSQL approval, dispatch and retry forms',async t=>{

@@ -1,3 +1,5 @@
+// Existing operational recipient policy; no copied personal contact literal.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -8,7 +10,7 @@ import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createInboundRuntime, SupabaseInboundInbox, isResubscribe, isOptOut} from '../automation/whatsapp/cloud-inbound.mjs';
 import {getSendEligibility} from '../automation/whatsapp/consent.mjs';
 
-const phone = '+12025550101';
+const phone = QA_POLICY_PHONE;
 const logger = {log(){}, warn(){}, error(){}};
 
 test('verified owner STOP → START/UNSTOP preserves proof and resumes normal owner turns', async () => {

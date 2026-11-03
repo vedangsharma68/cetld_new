@@ -1,3 +1,5 @@
+// Existing operational recipient policy; no copied personal contact literal.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -145,7 +147,7 @@ test('supported test invoices require honest one-off words and preserve producti
    const before=f.graph.length;await f.tick(id);assert.equal(f.graph.length,before);
   });
   await t.test('configured recipient allowlist is still required after owner approval',async()=>{
-   const id=await f.seed();await f.approved(id);f.env.WHATSAPP_TEST_ALLOWLIST='+12025550101';
+   const id=await f.seed();await f.approved(id);f.env.WHATSAPP_TEST_ALLOWLIST=QA_POLICY_PHONE;
    const before=f.graph.length;await f.tick(id);assert.equal(f.graph.length,before);
   });
   await t.test('one-off remains a text send when the demand template is unavailable',async()=>{

@@ -1,3 +1,5 @@
+// Existing operational recipient policy; no copied personal contact literal.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 // Explicit planner/tool-state subsystem checks; production privacy is tested separately.
 const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
@@ -18,7 +20,7 @@ import {getSendEligibility,resolveActiveBindings,revokeConsentForPhone} from '..
 const quiet={info(){},warn(){},error(){}};
 async function fixture(){
  const network=await createOfflineSqlNetwork(),{db,supabase}=network;
- const ownerId=randomUUID(),phone='+12025550101',env={NODE_ENV:'test',WHATSAPP_APP_SECRET:'isolated-quoted-fixture',WHATSAPP_PHONE_NUMBER_ID:'123456789',WHATSAPP_WABA_ID:'987654321',
+ const ownerId=randomUUID(),phone=QA_POLICY_PHONE,env={NODE_ENV:'test',WHATSAPP_APP_SECRET:'isolated-quoted-fixture',WHATSAPP_PHONE_NUMBER_ID:'123456789',WHATSAPP_WABA_ID:'987654321',
   WHATSAPP_OUTBOUND_ENABLED:'true',WHATSAPP_TEST_ALLOWLIST:phone,WHATSAPP_ACCESS_TOKEN:'fixture-no-live-access',WHATSAPP_GRAPH_API_VERSION:'v24.0'};
  await db.query('insert into auth.users(id) values($1)',[ownerId]);
  await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);

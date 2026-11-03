@@ -1,3 +1,5 @@
+// Existing operational recipient policy; no copied personal contact literal.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 // Explicit planner/tool-state subsystem checks; production privacy is tested separately.
 const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
@@ -28,7 +30,7 @@ engineTest('shared owner context and dashboard commands use real authenticated s
   for(const file of ['20261018060000_customer_reminder_tone.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060100_invoice_details_templates.sql'])await db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
   await applyNoFooterMigration(db,{approve:true});
   for(const file of ['20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql',migration,'20261101120327_private_whatsapp_chat_memory.sql'])await db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
-  const ownerId=randomUUID(),otherOwner=randomUUID(),phone='+12025550107',recipient='+12025550101';
+  const ownerId=randomUUID(),otherOwner=randomUUID(),phone='+12025550107',recipient=QA_POLICY_PHONE;
   await db.query('insert into auth.users(id) values($1),($2)',[ownerId,otherOwner]);
   const asUser=async id=>db.exec(`reset role;set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${id}'`);
   const service=async()=>db.exec("reset role;set request.jwt.claim.role='service_role';set request.jwt.claim.sub=''");

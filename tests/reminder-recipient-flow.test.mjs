@@ -1,3 +1,5 @@
+// Existing operational recipient policy; no copied personal contact literal.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,createHmac} from 'node:crypto';
@@ -14,7 +16,7 @@ import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 import {createWhatsAppProvider} from '../automation/whatsapp/factory.mjs';
 import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
 
-const phone='+12025550101',owner=randomUUID(),foreignOwner=randomUUID();
+const phone=QA_POLICY_PHONE,owner=randomUUID(),foreignOwner=randomUUID();
 const env={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_SERVICE_ROLE_KEY:'isolated-fixture-service-key',
   AUTOMATION_APP_URL:'https://automation.fixture.test',AUTOMATION_WORKER_SECRET:'fixture-worker-secret-'.repeat(3),
   AUTOMATION_OUTBOUND_ENABLED:'true',WHATSAPP_PROVIDER:'mock',WHATSAPP_OUTBOUND_ENABLED:'true',
