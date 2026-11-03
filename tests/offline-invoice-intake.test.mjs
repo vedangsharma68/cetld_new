@@ -377,13 +377,17 @@ test('local owner review uses signed single-confirm buttons, preserves all print
 });
 
 test('offline intent edits never construct a provider or attempt a model classifier',async()=>{
-  const q={select(){return q;},eq(){return q;},maybeSingle:async()=>({data:null})};
-  const handler=createWhatsAppBoundMessageHandler({audience:'owner',supabase:{from:()=>q,rpc:async()=>({data:false})},env:{EXTRACTION_ROUTE:'offline'},providerFactory:deny,
+  const q={select(){return q;},eq(){return q;},maybeSingle:async()=>({data:null})},retained=[];
+  const handler=createWhatsAppBoundMessageHandler({audience:'owner',supabase:{from:()=>q,rpc:async(name,args)=>{
+    if(name==='whatsapp_retain_private_chat_origin'){assert.equal(args.p_workspace_id,'w');retained.push(args.p_text);return {data:true};}
+    return {data:false};
+  }},env:{EXTRACTION_ROUTE:'offline'},providerFactory:deny,
     authorizeScope:async()=>true,pendingActionStoreFactory:()=>({loadInvoiceReview:async()=>null,loadPendingAction:async()=>null}),
     invoiceStoreFactory:()=>({findInvoices:async()=>[]}),logger});
   assert.equal(await handler({workspaceId:'w',customerId:'c',phone,message:'chnge the bil details',messageId:'intent'}),
     'What would you like to change, and what should the new value be?');
   assert.match(await handler({workspaceId:'w',customerId:'c',phone,message:'set total to 100 INR',messageId:'edit'}),/find a recent invoice/);
+  assert.deepEqual(retained,['set total to 100 INR']);
 });
 
 for(const route of [undefined,'OFFLINE','offline ','local',''])test(`local extraction is mandatory for ${JSON.stringify(route)}`,async()=>{
