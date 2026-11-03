@@ -104,3 +104,15 @@ test('typed monetary declarations and evidence do not become wildcard dates thro
   for(const source of ['Total: 31.10','amount is 12.50']){const actual=(await f.db.query('select distinct term from app.private_invoice_origin_aliases($1) term order by term',[source])).rows.map(r=>r.term);assert.deepEqual(actual,privateOriginKeys(source).sort());}
  }finally{await f.close();}
 });
+
+
+test('party provenance uses decoded party values rather than printed evidence labels',async()=>{
+ const wires=[],f=await fixture({providerFactory:factory(wires)});try{
+  await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,{printedEvidence:{customerName:{text:'Bill to: Anurag Sharma',value:'Anurag Sharma'}}}]);
+  const keys=(await f.db.query('select term from whatsapp_private_invoice_terms')).rows.map(r=>r.term);
+  for(const key of ['party:anurag','party:sharma'])assert.ok(keys.includes(key),key);
+  for(const key of ['party:bill','party:to'])assert.ok(!keys.includes(key),key);
+  await f.turn('Here is Bill Gates');assert.equal(wires.length,1);
+  await f.turn('Ask Anurag for advice');assert.equal(wires.length,1);
+ }finally{await f.close();}
+});

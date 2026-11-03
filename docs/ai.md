@@ -381,7 +381,8 @@ A single generated declaration grammar now drives routing, SQL origin capture,
 JS screening and memory guards. Invoice/bill/receipt attribution does not require
 an introductory determiner: `Invoice is from ...`, nested forwarded declarations,
 field-only assignments and decoded private JSON all retain atomic fields and
-party components before returning locally. SQL origin aliases and JS origin keys
+party components before returning locally. Printed evidence contributes its typed
+party value; field labels are not treated as personal names. SQL origin aliases and JS origin keys
 are tested as complete sets. Monetary fields keep their number type so decimal
 amounts do not manufacture unrelated wildcard dates.
 

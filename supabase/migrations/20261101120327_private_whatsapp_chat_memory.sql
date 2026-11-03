@@ -413,6 +413,11 @@ language sql set search_path='' as $$
     select alias.term from strings s
     cross join lateral app.private_invoice_term_aliases(s.value) alias(term) where not s.numeric_source
     union all
+    -- Preserve unambiguous raw monetary aliases too. A date-shaped decimal
+    -- must stay typed: re-expanding its raw text would invent a wildcard date.
+    select app.private_invoice_normalize(s.value) from strings s where s.numeric_source
+      and not exists(select 1 from app.private_invoice_term_aliases(s.value) alias(term) where alias.term like 'date:%')
+    union all
     select alias.term from strings s cross join lateral app.private_invoice_number_aliases(s.value) alias(term) where s.numeric_source
     union all
     select alias.term from strings s cross join lateral app.private_invoice_word_number_aliases(s.value) alias(term) where s.numeric_source
@@ -425,9 +430,12 @@ language sql set search_path='' as $$
     union all
     select alias.term from jsonb_path_query(p_document,'$.** ? (@.type() == "object")') obj
     cross join lateral jsonb_each(obj) field(key,value)
-    cross join lateral jsonb_path_query(field.value,'$.** ? (@.type() == "string")') leaf(value)
+    -- Evidence objects carry a typed value and printed text. Only the value
+    -- is a party name; labels such as "Bill to" must not become name components.
+    cross join lateral (select case jsonb_typeof(field.value) when 'string' then field.value when 'object' then field.value->'value' end value) leaf
     cross join lateral app.private_invoice_party_aliases(leaf.value #>> '{}') alias(term)
-    where app.private_invoice_normalize(field.key) ~ '^(?:(?:customer|client|party|company|supplier|vendor|debtor|creditor)(?:[_ -]?names?)?|name)$'
+    where jsonb_typeof(leaf.value)='string'
+      and app.private_invoice_normalize(field.key) ~ '^(?:(?:customer|client|party|company|supplier|vendor|debtor|creditor)(?:[_ -]?names?)?|name)$'
     union all
     select alias.term from jsonb_path_query(p_document,'$.**.customerName ? (@.type() == "string")') value
     cross join lateral app.private_invoice_party_aliases(value #>> '{}') alias(term)
