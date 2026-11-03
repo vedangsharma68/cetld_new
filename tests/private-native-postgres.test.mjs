@@ -77,6 +77,7 @@ test('native PostgreSQL: realistic default ACLs, numeric watermarks, concurrent 
   await q('select app.retain_private_invoice_terms($1,$2)',[workspace,{notes:'Invoice is from Cedar Garden, 6961, due 25 Sep 2027'}]);
   for(const term of ['party:willow','party:workshop','number:8654','date:*-11-12','party:olive','number:6418','party:maple','number:5147','party:cedar','number:6961'])assert.equal((await one('select exists(select 1 from whatsapp_private_invoice_terms where workspace_id=$1 and term=$2) ok',[workspace,term])).ok,true,term);
   results.originWriteSinks='PASS; no ordinary-memory source row';
+  await q("insert into invoices(id,workspace_id,customer_id,invoice_number,total_amount,currency,status) values('3e501620-8765-44cd-bb78-ac435fc5a790',$1,$2,'NATIVE-UUID-NOT-JSON',137,'INR','draft')",[workspace,customer]);results.scalarUUIDDecoding='PASS';
   // Representative multi-row writes, with the reviewer-imposed 5-second cap.
   await q("set statement_timeout='5s'");const start=performance.now();assert.equal((await q("update invoices set notes='updated local note' where id=any($1::uuid[])",[seeded])).rowCount,59);const elapsed=performance.now()-start;
   results.triggerWrites={rows:59,totalMs:Math.round(elapsed),meanMs:Math.round(elapsed/59),statementLimitMs:5000};assert.ok(elapsed<5000,JSON.stringify(results.triggerWrites));

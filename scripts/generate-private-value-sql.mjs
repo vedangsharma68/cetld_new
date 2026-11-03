@@ -281,7 +281,7 @@ create function app.private_invoice_origin_aliases(p_term text) returns setof te
 language plpgsql immutable set search_path='' as $$
 declare document jsonb;term text; marker text[]; nested text[]; field text; prior text; party boolean; numeric_field boolean; first_field boolean:=true;
 begin
-  begin document:=p_term::jsonb;exception when invalid_text_representation then document:=null;end;
+  if p_term ~ '^[[:space:]]*[\[{]' then begin document:=p_term::jsonb;exception when invalid_text_representation then document:=null;end;end if;
   if jsonb_typeof(document) in ('object','array') then return;end if;
   term:=app.private_invoice_normalize(regexp_replace(p_term,E'[\\r\\n]+',',','g'));
   term:=regexp_replace(term,'ORIGIN_DATE_COMMA',E'\\1 \\2','g');
@@ -329,6 +329,7 @@ language plpgsql immutable set search_path='' as $$
 declare document jsonb; value jsonb;
 begin
  if app.private_invoice_normalize(p_term) ~ 'ORIGIN_HEADER' then return true;end if;
+ if p_term !~ '^[[:space:]]*[\[{]' then return false;end if;
  begin document:=p_term::jsonb;exception when invalid_text_representation then return false;end;
  if jsonb_typeof(document) not in ('object','array') then return false;end if;
  if app.private_invoice_is_document(document) then return true;end if;

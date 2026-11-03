@@ -116,3 +116,18 @@ test('party provenance uses decoded party values rather than printed evidence la
   await f.turn('Ask Anurag for advice');assert.equal(wires.length,1);
  }finally{await f.close();}
 });
+
+
+test('scalar UUID and exponent-like fields never enter the JSON document decoder',async()=>{
+ const f=await fixture();try{
+  for(const value of ['3e501620-8765-44cd-bb78-ac435fc5a790','1e99999999','12 Nov']){
+   assert.equal((await f.db.query('select app.private_invoice_has_origin($1) ok',[value])).rows[0].ok,false);
+   assert.deepEqual((await f.db.query('select term from app.private_invoice_origin_aliases($1) term',[value])).rows,[]);
+  }
+  await f.db.query("insert into invoices(id,workspace_id,customer_id,invoice_number,total_amount,currency,status) values('3e501620-8765-44cd-bb78-ac435fc5a790',$1,$2,'UUID-NOT-JSON',137,'INR','draft')",[f.scope.workspaceId,f.scope.customerId]);
+  const source='\n '+JSON.stringify({invoice:{customer_name:'Willow Workshop',total:8654}});
+  await f.db.query('select app.retain_private_origin_terms($1,$2)',[f.scope.workspaceId,source]);
+  const keys=(await f.db.query('select term from whatsapp_private_invoice_terms')).rows.map(r=>r.term);
+  for(const key of ['party:willow','number:8654'])assert.ok(keys.includes(key));
+ }finally{await f.close();}
+});

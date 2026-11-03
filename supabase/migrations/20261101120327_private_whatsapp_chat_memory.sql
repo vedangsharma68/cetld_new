@@ -340,7 +340,7 @@ create function app.private_invoice_origin_aliases(p_term text) returns setof te
 language plpgsql immutable set search_path='' as $$
 declare document jsonb;term text; marker text[]; nested text[]; field text; prior text; party boolean; numeric_field boolean; first_field boolean:=true;
 begin
-  begin document:=p_term::jsonb;exception when invalid_text_representation then document:=null;end;
+  if p_term ~ '^[[:space:]]*[\[{]' then begin document:=p_term::jsonb;exception when invalid_text_representation then document:=null;end;end if;
   if jsonb_typeof(document) in ('object','array') then return;end if;
   term:=app.private_invoice_normalize(regexp_replace(p_term,E'[\\r\\n]+',',','g'));
   term:=regexp_replace(term,'((?:the +)?(?:(?:[0-9]{1,2}(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|twenty[ -]+first|twenty[ -]+second|twenty[ -]+third|twenty[ -]+fourth|twenty[ -]+fifth|twenty[ -]+sixth|twenty[ -]+seventh|twenty[ -]+eighth|twenty[ -]+ninth|thirtieth|thirty[ -]+first)|एक|दो|तीन|चार|पाँच|छह|सात|आठ|नौ|दस|ग्यारह|बारह|तेरह|चौदह|पंद्रह|सोलह|सत्रह|अठारह|उन्नीस|बीस|इक्कीस|बाईस|तेईस|चौबीस|पच्चीस|छब्बीस|सत्ताईस|अट्ठाईस|उनतीस|तीस|इकतीस)[ ./-]*(?:of +)?(?:(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)|जनवरी|फ़रवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|सितम्बर|अक्टूबर|अक्तूबर|नवंबर|नवम्बर|दिसंबर|दिसम्बर)|(?:(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)|जनवरी|फ़रवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|सितम्बर|अक्टूबर|अक्तूबर|नवंबर|नवम्बर|दिसंबर|दिसम्बर)[ ./-]*(?:the +)?(?:(?:[0-9]{1,2}(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|twenty[ -]+first|twenty[ -]+second|twenty[ -]+third|twenty[ -]+fourth|twenty[ -]+fifth|twenty[ -]+sixth|twenty[ -]+seventh|twenty[ -]+eighth|twenty[ -]+ninth|thirtieth|thirty[ -]+first)|एक|दो|तीन|चार|पाँच|छह|सात|आठ|नौ|दस|ग्यारह|बारह|तेरह|चौदह|पंद्रह|सोलह|सत्रह|अठारह|उन्नीस|बीस|इक्कीस|बाईस|तेईस|चौबीस|पच्चीस|छब्बीस|सत्ताईस|अट्ठाईस|उनतीस|तीस|इकतीस))[ ./-]*,[ ./-]*([''’ʼ]?[0-9]{4}|[''’ʼ]?[0-9]{2})(?![0-9])',E'\\1 \\2','g');
@@ -388,6 +388,7 @@ language plpgsql immutable set search_path='' as $$
 declare document jsonb; value jsonb;
 begin
  if app.private_invoice_normalize(p_term) ~ '(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]* *, *due +[0-9]))|(?:(?:this|the|our|my|that|an?) +)?(?:invoices?|bills?|receipts?) +(?:(?:is|was|are|were) +)?(?:from|for|to|belongs? +to|issued +by|sent +by) +|(?:invoice|bill|receipt) *(?=[:,]))|(?<![a-z0-9_])(?:(?:new|नया) +invoice(?![a-z0-9_])|(?:set|change|correct|update|edit|modify|fix|create|log|save|record|mark)(?![a-z0-9_])(?:(?!(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_]))[^;.!?]){0,60}(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_])|(?:invoice(?: number| no| date)?|due date|total|subtotal|tax|amount|currency|notes?|customer(?: name)?|client(?: name)?)(?: +(?:is|was|are|were)(?![a-z0-9_]) *| *[:=] *))' then return true;end if;
+ if p_term !~ '^[[:space:]]*[\[{]' then return false;end if;
  begin document:=p_term::jsonb;exception when invalid_text_representation then return false;end;
  if jsonb_typeof(document) not in ('object','array') then return false;end if;
  if app.private_invoice_is_document(document) then return true;end if;
@@ -455,7 +456,7 @@ language plpgsql set search_path='' as $$
 declare document jsonb; value jsonb;
 begin
  if not app.private_invoice_has_origin(p_text) then return;end if;
- begin document:=p_text::jsonb;exception when invalid_text_representation then document:=null;end;
+ if p_text ~ '^[[:space:]]*[\[{]' then begin document:=p_text::jsonb;exception when invalid_text_representation then document:=null;end;end if;
  if jsonb_typeof(document) in ('object','array') then
   if app.private_invoice_is_document(document) then perform app.retain_private_invoice_terms(p_workspace_id,document);
   else

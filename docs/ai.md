@@ -393,6 +393,8 @@ source row instead of tagging it ordinary. The JS memory writer retains both
 message and answer before screening. Reads defensively retain previously
 mislabelled source rows, reload terms and filter the entire candidate window.
 Ordinary conversation still uses twenty eligible messages across reconstruction.
+Only object/array-shaped strings enter the JSON decoder; UUIDs and scalar
+exponent-like field values cannot cause JSON numeric overflow during capture.
 
 The native fixture always initializes UTF8 with the available C locale, regardless
 of caller LANG/LC_ALL. It copies native binaries into a disposable directory. A
