@@ -128,14 +128,21 @@ function wordNumber(words){
     const first=atom(actual[0]),tail=underHundred(actual.slice(1));
     if(first>0n&&first<100n&&tail!==null&&tail>=10n&&tail<100n)return [String(first*100n+tail)];
   }
-  // Split at the greatest scale. A smaller scale on its left composes
-  // multiplicatively (lakh crore); a right-hand remainder must be smaller.
-  const magnitude=actual.reduce((best,word)=>scales[word]>best?scales[word]:best,0n);
+  // Consecutive magnitude words form one multiplier, independent of their
+  // relative sizes: lakh crore, million million, or billion million. Explicit
+  // coefficients separate additive groups (one crore one lakh).
+  let magnitude=0n,index=-1,end=-1,repeated=false;
+  for(let i=0;i<actual.length;){
+    if(!scales[actual[i]]){i++;continue;}
+    const start=i;let cluster=1n;
+    while(i<actual.length&&scales[actual[i]])cluster*=scales[actual[i++]];
+    if(cluster>magnitude){magnitude=cluster;index=start;end=i;repeated=false;}
+    else if(cluster===magnitude)repeated=true;
+  }
   if(!magnitude){const value=group(actual);return value===null?[]:[String(value)];}
-  const index=actual.findIndex(word=>scales[word]===magnitude);
-  if(actual.slice(index+1).some(word=>scales[word]===magnitude))return [];
+  if(repeated)return [];
   const heads=index?wordNumber(actual.slice(0,index)):['1'];
-  const tails=index===actual.length-1?['0']:wordNumber(actual.slice(index+1));
+  const tails=end===actual.length?['0']:wordNumber(actual.slice(end));
   return heads.flatMap(head=>tails.filter(tail=>/^\d+$/.test(tail)&&BigInt(tail)<magnitude).flatMap(tail=>{const value=shift(head,magnitude.toString().length-1);return /^\d+$/.test(value)?[String(BigInt(value)+BigInt(tail))]:[];}));
 }
 // A valid complete numeral is atomic. Otherwise take longest valid members;

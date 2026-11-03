@@ -14,7 +14,7 @@ const providerFactory=(wires,reply)=>options=>new AIProvider({...options,cfAccou
 const nested=(name='Birch Works',amount=6847)=>JSON.stringify({quote:JSON.stringify({invoice:{customer_name:name,total:amount,due_date:'2027-07-16'}})});
 const boundaries=['history','model-response','tool-arguments','tool-result','memory-write'];
 const samples=['1250,77,2500','The figures are 1250,77','Is Sharma coming tomorrow? Explain the etymology of that surname.','Sharma was here yesterday; what is the meaning of this surname?',
- 'Ask Green1 for advice','Ask 李 for advice','Ask 𠀀 for advice','one point two five trillion','one lakh crore',nested(),...['\u200b','\ufeff','\u0085','\u00a0'].map(prefix=>prefix+nested())];
+ 'Ask Green1 for advice','Ask 李 for advice','Ask 𠀀 for advice','one point two five trillion','one lakh crore','one million million','one thousand billion',nested(),...['\u200b','\ufeff','\u0085','\u00a0'].map(prefix=>prefix+nested())];
 
 test('round6 all decoded privacy boundaries use production memory, real provider serialization and actual SQL retention',async t=>{
  const f=await fixture();let n=0;
@@ -47,7 +47,7 @@ test('round6 structured origin traversal, key construction and header-role conti
   const corpus=[nested(),JSON.stringify({wrapper:[{other:JSON.stringify([JSON.stringify({invoice:{total:5318}})])}]}),'ordinary text',JSON.stringify({question:'ordinary gardening'}),
    'Here is the bill, Anurag Sharma, 1250, due 31 Oct 2026','Forwarded: Here is the bill,, Anurag Sharma,1250,due 31 Oct 2026',
    'The Cedar Studio','A Green1 Materials','Saar Cedar','Sar Cedar','Noor Cedar','Nor Cedar','𠀀 王','𐐀 王','𠀀𠀁 王','李 王','किरण','करण','कमल','कोमल',
-   'one lakh crore','two lakh crore','one point two five trillion','one and a quarter trillion','twelve hundred billion','one billion two hundred million',
+   'one lakh crore','two lakh crore','one million million','one billion million two hundred','one crore one lakh','one point two five trillion','one and a quarter trillion','twelve hundred billion','one billion two hundred million',
    ...['thousand','lakh','crore','million','billion','trillion','quadrillion','quintillion'].flatMap(scale=>['one','twelve fifty','one point two five','one and a quarter','1.25'].map(head=>head+' '+scale))];
   corpus.push(...['\u200b','\ufeff','\u0085','\u00a0','\u2060'].flatMap(prefix=>[prefix+nested(),JSON.stringify({quote:prefix+nested()})]));
   for(const value of corpus){
@@ -111,4 +111,21 @@ test('round6 decoded source provenance survives every retention sink and handler
    assert.equal((await f.db.query('select count(*)::int n from whatsapp_provider_memory')).rows[0].n,0);
   }finally{await f.close();}
  });
+});
+
+test('round6 party specificity preserves Latin vowel identity and Indic name distinctions at the actual HTTP boundary',async t=>{
+ const wires=[],factory=providerFactory(wires,()=>({content:'Birds enjoy the sunshine.'})),f=await fixture({providerFactory:factory});let sequence=0;
+ try{
+  for(const [stored,other]of [['Saar Cedar','Sar'],['Noor Cedar','Nor'],['किरण शर्मा','करण'],['कमल शर्मा','कोमल']]){
+   const customer=(await f.db.query('insert into customers(workspace_id,name) values($1,$2) returning id',[f.scope.workspaceId,stored])).rows[0];
+   await f.db.query("insert into invoices(workspace_id,customer_id,invoice_number,total_amount,currency,status) values($1,$2,$3,43,'INR','draft')",[f.scope.workspaceId,customer.id,'R6-IDENTITY-'+(++sequence)]);
+   for(const audience of ['owner','customer'])await t.test(audience+'/'+stored+' != '+other,async()=>{
+    f.restart();const handler=createWhatsAppBoundMessageHandler({supabase:f.supabase,audience:'customer',authorizeScope:async()=>true,providerFactory:factory,logger:{error(){}}});
+    const turn=message=>audience==='owner'?f.turn(message):handler({...f.scope,message,messageId:'r6-identity-'+(++sequence)});
+    const before=wires.length;await turn('Ask '+other+' for advice');assert.equal(wires.length,before+1);
+    assert.equal(wires.at(-1).body.messages.at(-1).content,'Ask '+other+' for advice');
+    await turn('Ask '+stored.split(' ')[0]+' for advice');assert.equal(wires.length,before+1);
+   });
+  }
+ }finally{await f.close();}
 });

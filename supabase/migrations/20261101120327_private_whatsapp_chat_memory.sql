@@ -160,7 +160,7 @@ declare
   small jsonb:='{"zero":"0","one":"1","two":"2","three":"3","four":"4","five":"5","six":"6","seven":"7","eight":"8","nine":"9","ten":"10","eleven":"11","twelve":"12","thirteen":"13","fourteen":"14","fifteen":"15","sixteen":"16","seventeen":"17","eighteen":"18","nineteen":"19","twenty":"20","thirty":"30","forty":"40","fifty":"50","sixty":"60","seventy":"70","eighty":"80","ninety":"90"}'::jsonb; scales jsonb:='{"thousand":"1000","lakh":"100000","lac":"100000","million":"1000000","crore":"10000000","billion":"1000000000","trillion":"1000000000000","quadrillion":"1000000000000000","quintillion":"1000000000000000000"}'::jsonb; fractions jsonb:='{"half":"2","halves":"2","quarter":"4","quarters":"4","third":"3","fifth":"5","sixth":"6","seventh":"7","eighth":"8","ninth":"9","tenth":"10"}'::jsonb;
   factor numeric; split_at integer; base_key text; numerator_key text; head text[]; tail_words text[];
   word text; total numeric:=0; part numeric; tail numeric; last_scale numeric; start_at integer:=1; i integer;
-  actual text[]; point integer;
+  actual text[]; point integer; cluster numeric; scale_start integer; scale_end integer; magnitude numeric:=0; repeated boolean:=false;
 begin
   if cardinality(words)=0 or not exists(select 1 from unnest(words) w where w not in ('and','a')) then return;end if;
   if cardinality(words)=1 then
@@ -199,16 +199,24 @@ begin
     part:=app.private_invoice_group_number(actual[1:1]);tail:=app.private_invoice_group_number(actual[2:cardinality(actual)]);
     if part>0 and part<100 and tail>=10 and tail<100 then return next 'number:'||trim_scale(part*100+tail)::text;return;end if;
   end if;
-  -- Greatest-scale recursive composition matches wordNumber() exactly.
-  select max((scales->>w)::numeric) into factor from unnest(actual) w where scales ? w;
-  if factor is null then
+  -- Consecutive magnitude words form the same multiplier as in JS.
+  i:=1;
+  while i<=cardinality(actual) loop
+    if not scales ? actual[i] then i:=i+1;continue;end if;
+    start_at:=i;cluster:=1;
+    while i<=cardinality(actual) and scales ? actual[i] loop
+      cluster:=cluster*(scales->>actual[i])::numeric;i:=i+1;
+    end loop;
+    if cluster>magnitude then magnitude:=cluster;scale_start:=start_at;scale_end:=i;repeated:=false;
+    elsif cluster=magnitude then repeated:=true;end if;
+  end loop;
+  if magnitude=0 then
     part:=app.private_invoice_group_number(actual);
     if part is not null then return next 'number:'||trim_scale(part)::text;end if;return;
   end if;
-  select min(n)::integer into i from unnest(actual) with ordinality p(w,n) where (scales->>w)::numeric=factor;
-  if exists(select 1 from unnest(actual[i+1:cardinality(actual)]) w where (scales->>w)::numeric=factor) then return;end if;
-  head:=case when i=1 then array['one'] else actual[1:i-1] end;
-  tail_words:=case when i=cardinality(actual) then array['zero'] else actual[i+1:cardinality(actual)] end;
+  if repeated then return;end if;factor:=magnitude;
+  head:=case when scale_start=1 then array['one'] else actual[1:scale_start-1] end;
+  tail_words:=case when scale_end>cardinality(actual) then array['zero'] else actual[scale_end:cardinality(actual)] end;
   for base_key in select * from app.private_invoice_word_number_value(head) loop
     for numerator_key in select * from app.private_invoice_word_number_value(tail_words) loop
       part:=substring(base_key from 8)::numeric*factor;tail:=substring(numerator_key from 8)::numeric;

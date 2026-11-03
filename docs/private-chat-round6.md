@@ -40,8 +40,8 @@ outputs, including supplementary-plane letters and nested serialized JSON.
   between/among, pair/couple), never because a noun appears elsewhere. Thus
   `The figures are 1250,77` is a list while `Put 1250,77 on the shopping list`
   remains a decimal. Unrelated members never inherit another value's provenance.
-* Greatest-scale recursive number composition handles decimal/fraction heads and
-  English/Indian scales, including lakh crore and trillion through quintillion.
+* Consecutive-scale clusters and greatest-scale recursive number composition handle decimal/fraction heads and
+  English/Indian scales, including lakh crore, million million, billion million, and trillion through quintillion.
   Descending remainders must fit their scale. Existing spoken lists, mixed
   digit/word numbers, grouping, locale decimals, native digits and dates remain
   under the same shared boundary.
