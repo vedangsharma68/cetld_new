@@ -6,7 +6,7 @@ import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistan
 const scope = {workspaceId: 'workspace-a', customerId: 'customer-a', phone: '+919871367051', message:'Can you help me plan my day?'};
 
 function fakeSupabase({customerId = 'customer-a', turns = [], memoryError = null} = {}) {
-  return {rpc() {}, from(table) {
+  return {async rpc(name,args) {if(name==='whatsapp_retain_private_chat_origin'){assert.equal(args.p_workspace_id,'workspace-a');assert.equal(typeof args.p_text,'string');return {data:true};}}, from(table) {
     if(['whatsapp_provider_memory','whatsapp_private_invoice_terms','whatsapp_private_invoice_backfill'].includes(table)){const q={select(){return q},eq(){return q},order(){return q},limit:async()=>({data:table==='whatsapp_private_invoice_backfill'?Array.from({length:4},()=>({complete:true})):[]}),range:async()=>({data:[]}),insert:async()=>({data:[]})};return q;}
     if (table === 'whatsapp_conversation_turns') {
       if (memoryError) throw memoryError;

@@ -22,9 +22,18 @@ export const namedDatePatterns=[
  `(?:the +)?(${namedDayPattern})${dateSeparator}(?:of +)?(${monthPattern})${namedYearTail}`,
  `(${monthPattern})${dateSeparator}(?:the +)?(${namedDayPattern})${namedYearTail}`,
 ];
+export const privateDocumentKeyPattern='invoice|payment|receipt|customer|client|total|subtotal|tax|amount|currency|notes?|balance|printedevidence|ownerprovidedfacts';
+// One data-bearing declaration grammar owns routing, durable origin capture,
+// history screening and write guards. Domain questions alone are not origins.
+export const privateDataDeclaration=`(?<![a-z0-9_])(?:(?:new|नया) +invoice(?![a-z0-9_])|(?:set|change|correct|update|edit|modify|fix|create|log|save|record|mark)(?![a-z0-9_])(?:(?!(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_]))[^;.!?]){0,60}(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_])|(?:invoice(?: number| no| date)?|due date|total|subtotal|tax|amount|currency|notes?|customer(?: name)?|client(?: name)?)(?: +(?:is|was|are|were)(?![a-z0-9_]) *| *[:=] *))`;
 const financialQuoteHint='(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]* *, *due +[0-9])';
-export const privateOriginHeader=`(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*${financialQuoteHint})|(?:this|the|our|my|that) +(?:invoice|bill|receipt) +(?:is +)?(?:from|for|to) +|(?:invoice|bill|receipt) *(?=[:,]))`;
-export const privateOriginFieldLabel='^(?:due(?: +date)?|invoice +date|bill +to|customer(?: +name)?|client(?: +name)?|amount|total) *(?::|=|is +)? *';
+const documentAttribution='(?:(?:this|the|our|my|that|an?) +)?(?:invoices?|bills?|receipts?) +(?:(?:is|was|are|were) +)?(?:from|for|to|belongs? +to|issued +by|sent +by) +';
+export const privateOriginHeader=`(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*${financialQuoteHint})|${documentAttribution}|(?:invoice|bill|receipt) *(?=[:,]))|${privateDataDeclaration}`;
+export const privateOriginPartyHeader='^(?:(?:(?:here|below|following|attached) +(?:is|are) +)?(?:(?:the|an?|my|our|this|that) +)?(?:invoices?|bills?|receipts?)(?![a-z0-9_]| +(?:number|no|date))|(?:forwarded|quoted|copied|pasted)|(?:customer|client)(?: +name)?|(?:set|change|correct|update|edit|modify|fix) +(?:customer|client)(?: +name)?)';
+export const privateOriginPartyLabel='^(?:bill +to|ship +to|customer(?: +name)?|client(?: +name)?|party(?: +name)?|company(?: +name)?|from|to)(?![a-z0-9_])';
+export const privateOriginNumberLabel='^(?:(?:set|change|correct|update|edit|modify|fix) +)?(?:total|subtotal|tax|amount|balance|rate|quantity)(?![a-z0-9_])';
+export const privateOriginFieldPrefix='^(?:from|to|for|belongs? +to|(?:issued|sent) +by) +';
+export const privateOriginFieldLabel='^(?:due(?: +date)?|invoice +date|bill +to|ship +to|customer(?: +name)?|client(?: +name)?|party(?: +name)?|company(?: +name)?|amount|total) *(?::|=|(?:is|was) +)? *';
 
 // Lexical translations preserve offsets and do not alter names/Unicode keys.
 // Hindi cardinal atoms (0..99) feed the same scale/group grammar as English.

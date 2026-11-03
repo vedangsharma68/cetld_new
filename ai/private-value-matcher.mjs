@@ -1,5 +1,5 @@
 import {PRIVATE_UNICODE_FOLD} from './private-value-unicode.mjs';
-import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,namedDatePatterns,privateOriginHeader,privateOriginFieldLabel,originDateCommaPattern,lexicalAliases,partyTransliteration,partyReference} from './private-value-language.mjs';
+import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,namedDatePatterns,privateDocumentKeyPattern,privateOriginHeader,privateOriginPartyHeader,privateOriginPartyLabel,privateOriginNumberLabel,privateOriginFieldPrefix,privateOriginFieldLabel,originDateCommaPattern,lexicalAliases,partyTransliteration,partyReference} from './private-value-language.mjs';
 // One code-point fold, shared verbatim with SQL, independent of DB/OS locale.
 export const normalizePrivateValue=value=>Array.from(String(value??''),ch=>PRIVATE_UNICODE_FOLD[ch]??ch).join('').replace(/ +/g,' ').trim();
 const clean=normalizePrivateValue;
@@ -192,20 +192,47 @@ export function privateEvidenceValues(value){
   }
   return [...new Set(values.filter(Boolean))];
 }
+function structuredPrivateOrigin(value){
+ if(typeof value!=='string'||!/^\s*[\[{]/u.test(value))return false;
+ let parsed;try{parsed=JSON.parse(value);}catch{return false;}
+ const pending=[parsed];
+ while(pending.length){const node=pending.pop();if(Array.isArray(node))pending.push(...node);else if(node&&typeof node==='object'){for(const [key,item]of Object.entries(node)){if(new RegExp(privateDocumentKeyPattern,'u').test(clean(key)))return true;pending.push(item);}}else if(typeof node==='string'&&new RegExp(privateOriginHeader,'u').test(clean(node)))return true;}
+ return false;
+}
 export function privateOriginStart(value){
+  if(structuredPrivateOrigin(value))return 0;
   const normalized=normalizePrivateText(value),match=new RegExp(privateOriginHeader,'u').exec(normalized.text);
   return match?normalized.origins[match.index]?.start??0:null;
 }
-export function privateOriginValues(value){
+function privateOriginFields(value){
+  try{const decoded=JSON.parse(String(value));if(decoded&&typeof decoded==='object')return null;}catch{}
   let text=clean(String(value??'').replace(/[\r\n]+/g,',')).replace(new RegExp(originDateCommaPattern,'gu'),'$1 $2');
-  const match=new RegExp(privateOriginHeader,'u').exec(text);if(!match)return [];
+  const match=new RegExp(privateOriginHeader,'u').exec(text);if(!match)return null;
   text=text.slice(match.index);const protectedDates=dates(text).spans,parts=[];let start=0;
   for(const sep of text.matchAll(/[,;]/g)){
     if(protectedDates.some(([a,b])=>a<=sep.index&&b>sep.index)||sep[0]===','&&/[0-9]/.test(text[sep.index-1]||'')&&/[0-9]/.test(text[sep.index+1]||''))continue;
     parts.push(text.slice(start,sep.index));start=sep.index+1;
   }
   parts.push(text.slice(start));
-  return [text,...parts.map((part,index)=>{let field=part.trim();if(index===0&&field.startsWith(match[0]))field=field.slice(match[0].length);return field.replace(/^[:> ]+/u,'').replace(/^[\p{Quotation_Mark}ʼ]+|[\p{Quotation_Mark}ʼ]+$/gu,'').replace(/^(?:from|to|for) +/u,'').replace(new RegExp(privateOriginFieldLabel,'u'),'').replace(/^[\p{Quotation_Mark}ʼ]+|[\p{Quotation_Mark}ʼ]+$/gu,'');})].filter(Boolean);
+  const fields=parts.map((part,index)=>{
+    let field=part.trim(),party=index===0&&new RegExp(privateOriginPartyHeader,'u').test(match[0]),number=index===0&&new RegExp(privateOriginNumberLabel,'u').test(match[0]);
+    // Forwarded/quoted declarations can have nested headers. Strip those using
+    // the same grammar rather than retaining function words as party names.
+    for(let prior;prior!==field;){
+      prior=field;field=field.replace(/^[:> ]+/u,'').replace(/^[\p{Quotation_Mark}ʼ]+|[\p{Quotation_Mark}ʼ]+$/gu,'');
+      party ||= new RegExp(privateOriginPartyLabel,'u').test(field);number ||= new RegExp(privateOriginNumberLabel,'u').test(field);
+      const header=new RegExp(privateOriginHeader,'u').exec(field);
+      if(header?.index===0){party ||= new RegExp(privateOriginPartyHeader,'u').test(header[0]);number ||= new RegExp(privateOriginNumberLabel,'u').test(header[0]);field=field.slice(header[0].length);}
+      field=field.replace(new RegExp(privateOriginFieldPrefix,'u'),'').replace(new RegExp(privateOriginFieldLabel,'u'),'');
+    }
+    return {value:field,number,party:party&&!privateFieldKeys(field).some(key=>/^(?:number|date):/.test(key))};
+  }).filter(field=>field.value);
+  return {source:text,fields};
+}
+export const privateOriginValues=value=>{const parsed=privateOriginFields(value);return parsed?[parsed.source,...parsed.fields.map(field=>field.value)]:[];};
+export function privateOriginKeys(value){
+  const parsed=privateOriginFields(value);if(!parsed)return [];
+  return [...new Set(['origin:'+parsed.source,...privateFieldKeys(parsed.source),...parsed.fields.flatMap(field=>{const keys=privateFieldKeys(field.value),numeric=keys.filter(key=>key.startsWith('number:'));return [...(field.number&&numeric.length?numeric:keys),...(field.party?privatePartyKeys(field.value):[])];})])];
 }
 // Canonical keys for a retained atomic field. SQL term_aliases is generated
 // from the same grammar; parity tests compare these exact key sets.
@@ -221,7 +248,7 @@ export function privateFieldKeys(value){
 }
 export function createPrivateValueMatcher(terms=[]){
   const retainedNumbers=new Set(),retainedDates=[],literals=[],parties=new Set(),nativeParties=new Set(),latinParties=new Set();
-  const expanded=terms.flatMap(raw=>String(raw??'').startsWith('evidence:')?privateEvidenceValues(String(raw).slice(9)):String(raw??'').startsWith('origin:')?privateOriginValues(String(raw).slice(7)):[raw]);
+  const expanded=terms.flatMap(raw=>String(raw??'').startsWith('evidence:')?privateEvidenceValues(String(raw).slice(9)):String(raw??'').startsWith('origin:')?privateOriginKeys(String(raw).slice(7)).filter(key=>!key.startsWith('origin:')):[raw]);
   const compile=term=>{
     if(/^number:[0-9]+(?:\.[0-9]+)?$/.test(term)){const [a,b]=term.slice(7).split('.');retainedNumbers.add(exact(a,b));return true;}
     const tagged=/^date:(\*|[0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(term);

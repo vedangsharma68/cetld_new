@@ -1,3 +1,4 @@
+import {privateDocumentKeyPattern} from './private-value-language.mjs';
 import {ordinaryPart,normalizePrivateValue,normalizePrivateText,privateOriginStart} from './private-value-matcher.mjs';
 import {OFFLINE_CONFIRMATION_REPLY,OFFLINE_CANCEL_REPLY} from './offline-invoice-review.mjs';
 import {CF_PRIMARY_MODEL, CF_BACKUP_MODEL, isCloudflareModelId} from './provider.mjs';
@@ -9,11 +10,9 @@ export const CHAT_UNAVAILABLE_REPLY = 'Chat is temporarily unavailable. Please t
 // Unparsed create/correction values can themselves contain punctuation or
 // sentences. Their payload extends to the end of the turn; only an independent
 // prefix can be separated before this explicit local-data statement.
-const privateStatement=/\b(?:(?:new|नया)\s+invoice\b|(?:set|change|correct|update|edit|modify|fix|create|log|save|record|mark)\b[^;.!?\n]{0,60}\b(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)\b|(?:invoice(?: number| no| date)?|due date|total|subtotal|tax|amount|currency|notes?|customer(?: name)?|client(?: name)?)\s*(?:is\b|:|=))/iu;
 export function privateChatSpans(message){
-  const {text,origins}=normalizePrivateText(message),match=privateStatement.exec(text);
-  const starts=[privateOriginStart(message),match&&origins[match.index]?origins[match.index].start:null].filter(value=>value!==null);
-  return starts.length?[[Math.min(...starts),String(message??'').length]]:[];
+  const start=privateOriginStart(message);
+  return start===null?[]:[[start,String(message??'').length]];
 }
 
 // This is a routing hint, NOT the privacy boundary. The boundary below never
@@ -23,7 +22,7 @@ export function privateChatTopic(message,depth=0) {
   if(depth>32)return true;
   if(message&&typeof message==='object'){
     if(Array.isArray(message))return message.some(value=>privateChatTopic(value,depth+1));
-    return Object.entries(message).some(([key,value])=>/invoice|payment|receipt|customer|client|total|subtotal|tax|amount|currency|notes?|balance|printedevidence|ownerprovidedfacts/.test(normalizePrivateValue(key))||privateChatTopic(value,depth+1));
+    return Object.entries(message).some(([key,value])=>new RegExp(privateDocumentKeyPattern,'u').test(normalizePrivateValue(key))||privateChatTopic(value,depth+1));
   }
   if(typeof message==='string'&&/^\s*[\[{"]/.test(message)){
     try{const decoded=JSON.parse(message);if(decoded!==message&&privateChatTopic(decoded,depth+1))return true;}catch{}

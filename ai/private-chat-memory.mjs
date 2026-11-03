@@ -21,9 +21,10 @@ export function createPrivateChatMemory({supabase,scope}) {
   const containsPrivate=text=>matchPrivate(text);
   const containsOrdinary=text=>matchPrivate.ordinary?matchPrivate.ordinary(text):matchPrivate(text);
   const retainOrigin=async message=>{
-    if(privateOriginStart(message)===null)return;
+    if(privateOriginStart(message)===null)return false;
     const retained=data(await supabase.rpc('whatsapp_retain_private_chat_origin',{p_workspace_id:workspaceId,p_text:message}));
     if(retained!==true)throw Object.assign(new Error('Private origin retention unavailable'),{code:'CHAT_MEMORY_UNAVAILABLE'});
+    return true;
   };
   return {
     containsPrivate,containsOrdinary,retainOrigin,
@@ -37,28 +38,34 @@ export function createPrivateChatMemory({supabase,scope}) {
       await retainOrigin(message);
       const [historyResult,termsResult]=await Promise.all([query().order('id',{ascending:false}).limit(20),
         supabase.from('whatsapp_private_invoice_terms').select('term').eq('workspace_id',workspaceId).order('term_hash').range(0,499)]);
-      const rows=data(historyResult)||[];
-      let page=data(termsResult)||[];
-      privateTerms=page.map(row=>row.term);
-      for(let offset=500;page.length===500;offset+=500){
-        page=data(await supabase.from('whatsapp_private_invoice_terms').select('term').eq('workspace_id',workspaceId).order('term_hash').range(offset,offset+499))||[];
-        privateTerms.push(...page.map(row=>row.term));
-      }
-      matchPrivate=createPrivateValueMatcher(privateTerms);
-      if(!allowPrivateCurrent&&containsOrdinary(message))return null;
+      const loadTerms=async first=>{
+        let page=data(first??await supabase.from('whatsapp_private_invoice_terms').select('term').eq('workspace_id',workspaceId).order('term_hash').range(0,499))||[];
+        privateTerms=page.map(row=>row.term);
+        for(let offset=500;page.length===500;offset+=500){
+          page=data(await supabase.from('whatsapp_private_invoice_terms').select('term').eq('workspace_id',workspaceId).order('term_hash').range(offset,offset+499))||[];
+          privateTerms.push(...page.map(row=>row.term));
+        }
+        matchPrivate=createPrivateValueMatcher(privateTerms);
+      };
+      await loadTerms(termsResult);
       const eligible=row=>row.provenance===PROVENANCE&&['user','assistant'].includes(row.role)
         &&typeof row.content==='string'&&row.content.length<=4000&&!privateChatTopic(row.content)&&!containsOrdinary(row.content);
-      const ordinary=rows.filter(eligible);
-      let historyPage=rows;
-      // Later invoice evidence can taint a previously ordinary quotation. Fill
-      // the window with older eligible messages instead of shortening memory.
-      for(let offset=20;ordinary.length<20&&historyPage.length===20;offset+=20){
+      const allRows=data(historyResult)||[];let historyPage=allRows,ordinary;
+      for(let offset=20;;offset+=20){
+        // Defense for previously mislabelled history: retain its origin before
+        // deciding which newer fragments may enter this request or later ones.
+        let retained=false;for(const row of historyPage)retained=(await retainOrigin(row.content))||retained;
+        if(retained)await loadTerms();
+        ordinary=allRows.filter(eligible);
+        if(ordinary.length>=20||historyPage.length<20)break;
         historyPage=data(await query().order('id',{ascending:false}).range(offset,offset+19))||[];
-        ordinary.push(...historyPage.filter(eligible));
+        allRows.push(...historyPage);
       }
+      if(!allowPrivateCurrent&&containsOrdinary(message))return null;
       return ordinary.slice(0,20).reverse().map(({role,content})=>({role,content}));
     },
     async append(message,answer){
+      await retainOrigin(message);await retainOrigin(answer);
       if(appended||privateChatTopic(message)||privateChatTopic(answer)||containsOrdinary(message)||containsPrivate(answer))return;
       const rows=[['user',message],['assistant',answer]].map(([role,content])=>({workspace_id:workspaceId,
         owner_id:audience==='owner'?ownerId:null,customer_id:audience==='customer'?customerId:null,

@@ -283,7 +283,7 @@ backfill, local review, menus, both audiences, memory, receipts and failures.
 
 The **unapplied** `20261101120327_private_whatsapp_chat_memory.sql` retains
 shared Unicode folding, canonical numeric/word/date/name/evidence aliases, linked
-customer retention and company-name backfill. All ten canonicalization helpers
+customer retention and company-name backfill. All twelve canonicalization/classification helpers
 are immutable invokers with empty search_path and direct EXECUTE revoked from
 PUBLIC/anon/authenticated/service_role. Retention helpers and trigger functions
 are also restricted; the one runtime origin-retention RPC is service-role only.
@@ -316,8 +316,8 @@ reviews (including printed evidence/owner corrections), owner audit quotations a
 customer audit quotations. No existing history is imported as ordinary memory.
 RLS is enabled on every new public table; completion metadata is read-only for
 service_role. No new provider, external service, schema rollback or unmark is used.
-Rollback means restoring application code first; removal of additive objects is a
-separate operator operation, and original source data remains intact.
+Rollback requires the external fence and a drain first; old provider chat must
+not reopen. Additive objects and original source data remain intact.
 
 `tests/private-invoice-backfill.test.mjs` captures pg_locks inside actual batches,
 checks transaction boundaries, OLD/NEW capture, retry/rollback, RLS and ACLs.
@@ -373,3 +373,30 @@ then grants only the intended access. No post-migration fixture ACL repair is
 allowed. The release glob includes a pinned, test-only embedded native PostgreSQL
 server proving effective ACLs, adversarial watermarks, locks/timeouts/rollback/
 resume and representative 59-row write latency. No external database is used.
+
+
+### Durable declaration provenance and portable native proofs
+
+A single generated declaration grammar now drives routing, SQL origin capture,
+JS screening and memory guards. Invoice/bill/receipt attribution does not require
+an introductory determiner: `Invoice is from ...`, nested forwarded declarations,
+field-only assignments and decoded private JSON all retain atomic fields and
+party components before returning locally. SQL origin aliases and JS origin keys
+are tested as complete sets. Monetary fields keep their number type so decimal
+amounts do not manufacture unrelated wildcard dates.
+
+Durability closes at every write sink: terms inserts recursively retain source
+fields with conflict-safe inserts; owner/customer audit triggers retain OLD/NEW
+origins; direct provider-memory writes retain private fields and exclude the
+source row instead of tagging it ordinary. The JS memory writer retains both
+message and answer before screening. Reads defensively retain previously
+mislabelled source rows, reload terms and filter the entire candidate window.
+Ordinary conversation still uses twenty eligible messages across reconstruction.
+
+The native fixture always initializes UTF8 with the available C locale, regardless
+of caller LANG/LC_ALL. It copies native binaries into a disposable directory. A
+root build spawns PostgreSQL under an existing nobody/daemon UID; a non-root build
+uses its own UID. No system user is created, no checkout permissions are changed,
+and no native proof is skipped. The test asserts UTF8 and a non-root server UID
+and retains the production-default ACL, watermark, timeout and write-latency
+assertions. The automatic Vercel check verifies the root build path.

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {AIProvider} from '../ai/provider.mjs';
 import {createPrivateChatProvider,PRIVATE_CHAT_REPLY,PRIVATE_CHAT_SYSTEM_MESSAGE} from '../ai/private-chat.mjs';
 import {createPrivateChatMemory} from '../ai/private-chat-memory.mjs';
-import {createPrivateValueMatcher,privateFieldKeys,privateOriginValues} from '../ai/private-value-matcher.mjs';
+import {createPrivateValueMatcher,privateFieldKeys,privateOriginValues,privateOriginKeys} from '../ai/private-value-matcher.mjs';
 import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
 import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistant-handler.mjs';
 import {fixture,png} from './fixtures/private-invoice.mjs';
@@ -153,7 +153,7 @@ test('round4 SQL and JS construct exactly the same canonical field and private-o
   }
   for(const value of ['Here is the bill, Cedar Studio, 7500, due 12 Nov',"Here is the bill, Cedar Studio, 7500, due October 31, '26",'Forwarded: Cedar Studio,7500,due 12 Nov','Here is the bill from Cedar Studio,7500,due 12 Nov']){
    const sql=(await f.db.query('select app.private_invoice_origin_aliases($1) term',[value])).rows.map(row=>row.term),fields=privateOriginValues(value);
-   const js=['origin:'+fields[0],...fields.flatMap(privateFieldKeys)];assert.deepEqual([...new Set(sql)].sort(),[...new Set(js)].sort(),value);
+   const js=privateOriginKeys(value);assert.deepEqual([...new Set(sql)].sort(),[...new Set(js)].sort(),value);
   }
  }finally{await f.close();}
 });

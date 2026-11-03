@@ -338,33 +338,96 @@ revoke all on function app.private_invoice_evidence_aliases(text) from public,an
 -- fields, including source dates, before any provider-bound request.
 create function app.private_invoice_origin_aliases(p_term text) returns setof text
 language plpgsql immutable set search_path='' as $$
-declare term text; marker text[]; field text;
+declare document jsonb;term text; marker text[]; nested text[]; field text; prior text; party boolean; numeric_field boolean; first_field boolean:=true;
 begin
+  begin document:=p_term::jsonb;exception when invalid_text_representation then document:=null;end;
+  if jsonb_typeof(document) in ('object','array') then return;end if;
   term:=app.private_invoice_normalize(regexp_replace(p_term,E'[\\r\\n]+',',','g'));
   term:=regexp_replace(term,'((?:the +)?(?:(?:[0-9]{1,2}(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|twenty[ -]+first|twenty[ -]+second|twenty[ -]+third|twenty[ -]+fourth|twenty[ -]+fifth|twenty[ -]+sixth|twenty[ -]+seventh|twenty[ -]+eighth|twenty[ -]+ninth|thirtieth|thirty[ -]+first)|एक|दो|तीन|चार|पाँच|छह|सात|आठ|नौ|दस|ग्यारह|बारह|तेरह|चौदह|पंद्रह|सोलह|सत्रह|अठारह|उन्नीस|बीस|इक्कीस|बाईस|तेईस|चौबीस|पच्चीस|छब्बीस|सत्ताईस|अट्ठाईस|उनतीस|तीस|इकतीस)[ ./-]*(?:of +)?(?:(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)|जनवरी|फ़रवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|सितम्बर|अक्टूबर|अक्तूबर|नवंबर|नवम्बर|दिसंबर|दिसम्बर)|(?:(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)|जनवरी|फ़रवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|सितम्बर|अक्टूबर|अक्तूबर|नवंबर|नवम्बर|दिसंबर|दिसम्बर)[ ./-]*(?:the +)?(?:(?:[0-9]{1,2}(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|twenty[ -]+first|twenty[ -]+second|twenty[ -]+third|twenty[ -]+fourth|twenty[ -]+fifth|twenty[ -]+sixth|twenty[ -]+seventh|twenty[ -]+eighth|twenty[ -]+ninth|thirtieth|thirty[ -]+first)|एक|दो|तीन|चार|पाँच|छह|सात|आठ|नौ|दस|ग्यारह|बारह|तेरह|चौदह|पंद्रह|सोलह|सत्रह|अठारह|उन्नीस|बीस|इक्कीस|बाईस|तेईस|चौबीस|पच्चीस|छब्बीस|सत्ताईस|अट्ठाईस|उनतीस|तीस|इकतीस))[ ./-]*,[ ./-]*([''’ʼ]?[0-9]{4}|[''’ʼ]?[0-9]{2})(?![0-9])',E'\\1 \\2','g');
-  marker:=regexp_match(term,'(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]* *, *due +[0-9]))|(?:this|the|our|my|that) +(?:invoice|bill|receipt) +(?:is +)?(?:from|for|to) +|(?:invoice|bill|receipt) *(?=[:,]))');if marker is null then return;end if;
-  term:=substring(term from regexp_instr(term,'(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]* *, *due +[0-9]))|(?:this|the|our|my|that) +(?:invoice|bill|receipt) +(?:is +)?(?:from|for|to) +|(?:invoice|bill|receipt) *(?=[:,]))'));
+  marker:=regexp_match(term,'(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]* *, *due +[0-9]))|(?:(?:this|the|our|my|that|an?) +)?(?:invoices?|bills?|receipts?) +(?:(?:is|was|are|were) +)?(?:from|for|to|belongs? +to|issued +by|sent +by) +|(?:invoice|bill|receipt) *(?=[:,]))|(?<![a-z0-9_])(?:(?:new|नया) +invoice(?![a-z0-9_])|(?:set|change|correct|update|edit|modify|fix|create|log|save|record|mark)(?![a-z0-9_])(?:(?!(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_]))[^;.!?]){0,60}(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_])|(?:invoice(?: number| no| date)?|due date|total|subtotal|tax|amount|currency|notes?|customer(?: name)?|client(?: name)?)(?: +(?:is|was|are|were)(?![a-z0-9_]) *| *[:=] *))');if marker is null then return;end if;
+  term:=substring(term from regexp_instr(term,'(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]* *, *due +[0-9]))|(?:(?:this|the|our|my|that|an?) +)?(?:invoices?|bills?|receipts?) +(?:(?:is|was|are|were) +)?(?:from|for|to|belongs? +to|issued +by|sent +by) +|(?:invoice|bill|receipt) *(?=[:,]))|(?<![a-z0-9_])(?:(?:new|नया) +invoice(?![a-z0-9_])|(?:set|change|correct|update|edit|modify|fix|create|log|save|record|mark)(?![a-z0-9_])(?:(?!(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_]))[^;.!?]){0,60}(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_])|(?:invoice(?: number| no| date)?|due date|total|subtotal|tax|amount|currency|notes?|customer(?: name)?|client(?: name)?)(?: +(?:is|was|are|were)(?![a-z0-9_]) *| *[:=] *))'));
   if length(term) between 1 and 3993 then return next 'origin:'||term;end if;
   return query select * from app.private_invoice_term_aliases(term);
   for field in select regexp_split_to_table(term,';|(?<![0-9]),|,(?![0-9])') loop
-    field:=btrim(field);if left(field,length(marker[1]))=marker[1] then field:=substring(field from length(marker[1])+1);end if;
-    field:=regexp_replace(field,'^[:> ]+','');field:=regexp_replace(field,U&'^[\0022\0027\00ab\00bb\2018-\201f\2039-\203a\2e42\300c-\300f\301d-\301f\fe41-\fe44\ff02\ff07\ff62-\ff63\02bc]+|[\0022\0027\00ab\00bb\2018-\201f\2039-\203a\2e42\300c-\300f\301d-\301f\fe41-\fe44\ff02\ff07\ff62-\ff63\02bc]+$','','g');field:=regexp_replace(field,'^(?:from|to|for) +','');
-    field:=regexp_replace(field,'^(?:due(?: +date)?|invoice +date|bill +to|customer(?: +name)?|client(?: +name)?|amount|total) *(?::|=|is +)? *','');field:=regexp_replace(field,U&'^[\0022\0027\00ab\00bb\2018-\201f\2039-\203a\2e42\300c-\300f\301d-\301f\fe41-\fe44\ff02\ff07\ff62-\ff63\02bc]+|[\0022\0027\00ab\00bb\2018-\201f\2039-\203a\2e42\300c-\300f\301d-\301f\fe41-\fe44\ff02\ff07\ff62-\ff63\02bc]+$','','g');
-    return query select * from app.private_invoice_term_aliases(field);
+    field:=btrim(field);party:=first_field and marker[1] ~ '^(?:(?:(?:here|below|following|attached) +(?:is|are) +)?(?:(?:the|an?|my|our|this|that) +)?(?:invoices?|bills?|receipts?)(?![a-z0-9_]| +(?:number|no|date))|(?:forwarded|quoted|copied|pasted)|(?:customer|client)(?: +name)?|(?:set|change|correct|update|edit|modify|fix) +(?:customer|client)(?: +name)?)';numeric_field:=first_field and marker[1] ~ '^(?:(?:set|change|correct|update|edit|modify|fix) +)?(?:total|subtotal|tax|amount|balance|rate|quantity)(?![a-z0-9_])';first_field:=false;
+    loop
+      prior:=field;
+      field:=regexp_replace(field,'^[:> ]+','');field:=regexp_replace(field,U&'^[\0022\0027\00ab\00bb\2018-\201f\2039-\203a\2e42\300c-\300f\301d-\301f\fe41-\fe44\ff02\ff07\ff62-\ff63\02bc]+|[\0022\0027\00ab\00bb\2018-\201f\2039-\203a\2e42\300c-\300f\301d-\301f\fe41-\fe44\ff02\ff07\ff62-\ff63\02bc]+$','','g');
+      party:=party or field ~ '^(?:bill +to|ship +to|customer(?: +name)?|client(?: +name)?|party(?: +name)?|company(?: +name)?|from|to)(?![a-z0-9_])';numeric_field:=numeric_field or field ~ '^(?:(?:set|change|correct|update|edit|modify|fix) +)?(?:total|subtotal|tax|amount|balance|rate|quantity)(?![a-z0-9_])';
+      nested:=regexp_match(field,'^(?:(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]* *, *due +[0-9]))|(?:(?:this|the|our|my|that|an?) +)?(?:invoices?|bills?|receipts?) +(?:(?:is|was|are|were) +)?(?:from|for|to|belongs? +to|issued +by|sent +by) +|(?:invoice|bill|receipt) *(?=[:,]))|(?<![a-z0-9_])(?:(?:new|नया) +invoice(?![a-z0-9_])|(?:set|change|correct|update|edit|modify|fix|create|log|save|record|mark)(?![a-z0-9_])(?:(?!(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_]))[^;.!?]){0,60}(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_])|(?:invoice(?: number| no| date)?|due date|total|subtotal|tax|amount|currency|notes?|customer(?: name)?|client(?: name)?)(?: +(?:is|was|are|were)(?![a-z0-9_]) *| *[:=] *)))');
+      if nested is not null then
+        party:=party or nested[1] ~ '^(?:(?:(?:here|below|following|attached) +(?:is|are) +)?(?:(?:the|an?|my|our|this|that) +)?(?:invoices?|bills?|receipts?)(?![a-z0-9_]| +(?:number|no|date))|(?:forwarded|quoted|copied|pasted)|(?:customer|client)(?: +name)?|(?:set|change|correct|update|edit|modify|fix) +(?:customer|client)(?: +name)?)';numeric_field:=numeric_field or nested[1] ~ '^(?:(?:set|change|correct|update|edit|modify|fix) +)?(?:total|subtotal|tax|amount|balance|rate|quantity)(?![a-z0-9_])';field:=substring(field from length(nested[1])+1);
+      end if;
+      field:=regexp_replace(field,'^(?:from|to|for|belongs? +to|(?:issued|sent) +by) +','');field:=regexp_replace(field,'^(?:due(?: +date)?|invoice +date|bill +to|ship +to|customer(?: +name)?|client(?: +name)?|party(?: +name)?|company(?: +name)?|amount|total) *(?::|=|(?:is|was) +)? *','');
+      exit when prior=field;
+    end loop;
+    if numeric_field and (exists(select 1 from app.private_invoice_number_aliases(field)) or exists(select 1 from app.private_invoice_word_number_aliases(field))) then
+      return query select * from app.private_invoice_number_aliases(field);return query select * from app.private_invoice_word_number_aliases(field);
+    else return query select * from app.private_invoice_term_aliases(field);end if;
+    if party and not exists(select 1 from app.private_invoice_term_aliases(field) k where k ~ '^(number|date):') then
+      return query select * from app.private_invoice_party_aliases(field);
+    end if;
   end loop;
 end $$;
 revoke all on function app.private_invoice_origin_aliases(text) from public,anon,authenticated,service_role;
 
+create function app.private_invoice_is_document(p_document jsonb) returns boolean
+language plpgsql immutable set search_path='' as $$
+declare value jsonb;
+begin
+ for value in select * from jsonb_path_query(p_document,'$.** ? (@.type() == "object")') loop
+  if exists(select 1 from jsonb_object_keys(value) k where app.private_invoice_normalize(k) ~ 'invoice|payment|receipt|customer|client|total|subtotal|tax|amount|currency|notes?|balance|printedevidence|ownerprovidedfacts') then return true;end if;
+ end loop;
+ return false;
+end $$;
+revoke all on function app.private_invoice_is_document(jsonb) from public,anon,authenticated,service_role;
+
+-- One origin predicate, shared by audit/memory write guards and the RPC.
+create function app.private_invoice_has_origin(p_term text) returns boolean
+language plpgsql immutable set search_path='' as $$
+declare document jsonb; value jsonb;
+begin
+ if app.private_invoice_normalize(p_term) ~ '(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]* *, *due +[0-9]))|(?:(?:this|the|our|my|that|an?) +)?(?:invoices?|bills?|receipts?) +(?:(?:is|was|are|were) +)?(?:from|for|to|belongs? +to|issued +by|sent +by) +|(?:invoice|bill|receipt) *(?=[:,]))|(?<![a-z0-9_])(?:(?:new|नया) +invoice(?![a-z0-9_])|(?:set|change|correct|update|edit|modify|fix|create|log|save|record|mark)(?![a-z0-9_])(?:(?!(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_]))[^;.!?]){0,60}(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_])|(?:invoice(?: number| no| date)?|due date|total|subtotal|tax|amount|currency|notes?|customer(?: name)?|client(?: name)?)(?: +(?:is|was|are|were)(?![a-z0-9_]) *| *[:=] *))' then return true;end if;
+ begin document:=p_term::jsonb;exception when invalid_text_representation then return false;end;
+ if jsonb_typeof(document) not in ('object','array') then return false;end if;
+ if app.private_invoice_is_document(document) then return true;end if;
+ return exists(select 1 from jsonb_path_query(document,'$.** ? (@.type() == "string")') v where app.private_invoice_normalize(v #>> '{}') ~ '(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]* *, *due +[0-9]))|(?:(?:this|the|our|my|that|an?) +)?(?:invoices?|bills?|receipts?) +(?:(?:is|was|are|were) +)?(?:from|for|to|belongs? +to|issued +by|sent +by) +|(?:invoice|bill|receipt) *(?=[:,]))|(?<![a-z0-9_])(?:(?:new|नया) +invoice(?![a-z0-9_])|(?:set|change|correct|update|edit|modify|fix|create|log|save|record|mark)(?![a-z0-9_])(?:(?!(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_]))[^;.!?]){0,60}(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_])|(?:invoice(?: number| no| date)?|due date|total|subtotal|tax|amount|currency|notes?|customer(?: name)?|client(?: name)?)(?: +(?:is|was|are|were)(?![a-z0-9_]) *| *[:=] *))');
+end $$;
+revoke all on function app.private_invoice_has_origin(text) from public,anon,authenticated,service_role;
+
 create function app.retain_private_invoice_terms(p_workspace_id uuid,p_document jsonb) returns void
 language sql set search_path='' as $$
+  with strings as materialized (
+    select value,bool_and(numeric_source) numeric_source from (
+      select field->>'value' value,
+        app.private_invoice_normalize(field->>'key') ~ '^(total|subtotal|tax|amount|balance|price|rate|quantity)([_ -]?(amount|paid|due|minor))?$'
+        and (exists(select 1 from app.private_invoice_number_aliases(field->>'value')) or exists(select 1 from app.private_invoice_word_number_aliases(field->>'value'))) numeric_source
+      from jsonb_path_query(p_document,'strict $.** ? (@.type() == "object").keyvalue()') field where jsonb_typeof(field->'value')='string'
+      union all
+      select value #>> '{}',false from jsonb_path_query(p_document,'strict $.** ? (@.type() == "array")[*] ? (@.type() == "string")') value
+      union all select p_document #>> '{}',false where jsonb_typeof(p_document)='string'
+    ) typed_strings group by value
+  )
   insert into public.whatsapp_private_invoice_terms(workspace_id,term_hash,term)
   select distinct p_workspace_id,encode(sha256(convert_to(term,'UTF8')),'hex'),term from (
-    select alias.term from jsonb_path_query(p_document,
-      '$.** ? (@.type() == "string")') value
-    cross join lateral app.private_invoice_term_aliases(value #>> '{}') alias(term)
+    select alias.term from strings s
+    cross join lateral app.private_invoice_term_aliases(s.value) alias(term) where not s.numeric_source
+    union all
+    select alias.term from strings s cross join lateral app.private_invoice_number_aliases(s.value) alias(term) where s.numeric_source
+    union all
+    select alias.term from strings s cross join lateral app.private_invoice_word_number_aliases(s.value) alias(term) where s.numeric_source
+    union all
+    select alias.term from strings s
+    cross join lateral app.private_invoice_origin_aliases(s.value) alias(term)
     union all
     select alias.term from jsonb_path_query(p_document,'$.**.partyNames.** ? (@.type() == "string")') value
     cross join lateral app.private_invoice_party_aliases(value #>> '{}') alias(term)
+    union all
+    select alias.term from jsonb_path_query(p_document,'$.** ? (@.type() == "object")') obj
+    cross join lateral jsonb_each(obj) field(key,value)
+    cross join lateral jsonb_path_query(field.value,'$.** ? (@.type() == "string")') leaf(value)
+    cross join lateral app.private_invoice_party_aliases(leaf.value #>> '{}') alias(term)
+    where app.private_invoice_normalize(field.key) ~ '^(?:(?:customer|client|party|company|supplier|vendor|debtor|creditor)(?:[_ -]?names?)?|name)$'
     union all
     select alias.term from jsonb_path_query(p_document,'$.**.customerName ? (@.type() == "string")') value
     cross join lateral app.private_invoice_party_aliases(value #>> '{}') alias(term)
@@ -380,13 +443,40 @@ $$;
 revoke all on function app.retain_private_invoice_terms(uuid,jsonb) from public,anon,authenticated,service_role;
 
 create function app.retain_private_origin_terms(p_workspace_id uuid,p_text text) returns void
-language sql set search_path='' as $$
+language plpgsql set search_path='' as $$
+declare document jsonb; value jsonb;
+begin
+ if not app.private_invoice_has_origin(p_text) then return;end if;
+ begin document:=p_text::jsonb;exception when invalid_text_representation then document:=null;end;
+ if jsonb_typeof(document) in ('object','array') then
+  if app.private_invoice_is_document(document) then perform app.retain_private_invoice_terms(p_workspace_id,document);
+  else
+   for value in select distinct v from jsonb_path_query(document,'$.** ? (@.type() == "string")') v loop
+    perform app.retain_private_origin_terms(p_workspace_id,value #>> '{}');
+   end loop;
+  end if;
+  return;
+ end if;
  insert into public.whatsapp_private_invoice_terms(workspace_id,term_hash,term)
  select distinct p_workspace_id,encode(sha256(convert_to(term,'UTF8')),'hex'),term
  from app.private_invoice_origin_aliases(p_text) term where length(term) between 1 and 4000
  and exists(select 1 from public.workspaces w where w.id=p_workspace_id) on conflict do nothing;
-$$;
+end $$;
 revoke all on function app.retain_private_origin_terms(uuid,text) from public,anon,authenticated,service_role;
+
+-- Close provenance at the terms write boundary too. A quoted document stored
+-- as a JSON/string field cannot bypass decomposition through a different sink.
+create function app.retain_private_term_origin() returns trigger
+language plpgsql security definer set search_path='' as $$
+declare source text;
+begin
+ if new.term ~ '^(number|date|identifier|party|party-native|party-latin):' then return new;end if;
+ source:=regexp_replace(new.term,'^(origin|evidence):','');
+ perform app.retain_private_origin_terms(new.workspace_id,source);return new;
+end $$;
+revoke all on function app.retain_private_term_origin() from public,anon,authenticated,service_role;
+create trigger retain_private_term_origin after insert on public.whatsapp_private_invoice_terms
+ for each row execute function app.retain_private_term_origin();
 
 create function public.whatsapp_retain_private_chat_origin(p_workspace_id uuid,p_text text) returns boolean
 language plpgsql security definer set search_path='' as $$
@@ -459,6 +549,23 @@ create trigger retain_private_owner_origin after insert or update of content or 
  for each row execute function app.retain_private_chat_origin_terms();
 create trigger retain_private_customer_origin after insert or update of content or delete on public.whatsapp_conversation_turns
  for each row execute function app.retain_private_chat_origin_terms();
+
+-- Origin-bearing content cannot acquire ordinary provenance through a direct
+-- service write. Retain its fields in this transaction, then exclude that row;
+-- raising would roll back the retention too. Ordinary rows continue unchanged.
+create function app.guard_private_provider_memory() returns trigger
+language plpgsql security definer set search_path='' as $$
+begin
+ if tg_op<>'INSERT' then perform app.retain_private_origin_terms(old.workspace_id,old.content);end if;
+ if tg_op='DELETE' then return old;end if;
+ if app.private_invoice_has_origin(new.content) then
+  perform app.retain_private_origin_terms(new.workspace_id,new.content);return null;
+ end if;
+ return new;
+end $$;
+revoke all on function app.guard_private_provider_memory() from public,anon,authenticated,service_role;
+create trigger guard_private_provider_memory before insert or update of content or delete on public.whatsapp_provider_memory
+ for each row execute function app.guard_private_provider_memory();
 
 -- No source scan or backfill under DDL locks. Watermarks are captured by
 -- the first separately committed batch for each source after this DDL commits.

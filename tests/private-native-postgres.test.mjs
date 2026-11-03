@@ -1,21 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile} from 'node:fs/promises';
+import {readFile} from 'node:fs/promises';
 import {createServer} from 'node:net';
 import {randomUUID,createHash} from 'node:crypto';
-import EmbeddedPostgres from 'embedded-postgres';
+import {createNativePostgresFixture} from './fixtures/native-postgres.mjs';
 import {OFFLINE_SQL_BOOTSTRAP,offlineSqlMigrationSources} from './fixtures/offline-sql-network.mjs';
 import {privateBackfillBatchSQL,runPrivateInvoiceBackfill} from '../scripts/backfill-private-invoice-terms.mjs';
 const migrationName='20261101120327_private_whatsapp_chat_memory.sql';
 const port=async()=>{const s=createServer();await new Promise(r=>s.listen(0,'127.0.0.1',r));const p=s.address().port;await new Promise(r=>s.close(r));return p;};
 
 test('native PostgreSQL: realistic default ACLs, numeric watermarks, concurrent locks, rollback/resume and write latency',async()=>{
- const dir=await mkdtemp('/tmp/cetld-private-native-'),pg=new EmbeddedPostgres({databaseDir:dir,user:'postgres',password:'local-fixture-only',port:await port(),persistent:false,onLog(){},onError(){}});
+ const pg=await createNativePostgresFixture({port:await port()});
  let db,locker;const results={};
  try{
   await pg.initialise();await pg.start();db=pg.getPgClient();await db.connect();locker=pg.getPgClient();await locker.connect();
   const q=(sql,args)=>db.query(sql,args),one=async(sql,args)=>(await q(sql,args)).rows[0];
   results.version=(await one('select version()')).version;
+  results.serverEncoding=(await one('show server_encoding')).server_encoding;assert.equal(results.serverEncoding,'UTF8');
+  results.parentOSUid=process.getuid?.();results.postgresOSUid=pg.identity.uid;assert.ok(results.postgresOSUid>0,'Native postgres always runs unprivileged');
   await q(OFFLINE_SQL_BOOTSTRAP);
   for(const [,sql]of await offlineSqlMigrationSources([migrationName]))await q(sql);
   const owner=randomUUID();await q('insert into auth.users(id) values($1)',[owner]);
@@ -66,6 +68,15 @@ test('native PostgreSQL: realistic default ACLs, numeric watermarks, concurrent 
   for(const n of ids)for(const amount of [45678+n,70000+n,80000+n])assert.equal((await one('select exists(select 1 from whatsapp_private_invoice_terms where term=$1) ok',['number:'+amount])).ok,true,'Untouched historical ID '+n);
   assert.equal((await one("select exists(select 1 from whatsapp_private_invoice_terms where term='number:90909') ok")).ok,true);results.watermarks={ids,nilUUID:'PASS',allAliases:'PASS'};
   await q("update customers set name='After Native Name' where id=$1",[customer]);assert.equal((await one("select exists(select 1 from whatsapp_private_invoice_terms where term='party:anurag') ok")).ok,true);
+  // New declarations are retained atomically at every SQL write sink, even
+  // after completed cursors; they never gain ordinary-memory provenance.
+  const origin='Invoice is from Willow Workshop, 8654, due 12 Nov';
+  const inserted=await q("insert into whatsapp_provider_memory(workspace_id,owner_id,phone,audience,source_message_id,role,content,provenance) values($1,$2,'+919871367051','owner','native-private-origin','user',$3,'ordinary_chat_v1')",[workspace,owner,origin]);assert.equal(inserted.rowCount,0);
+  await q("insert into owner_assistant_turns(id,workspace_id,owner_id,event_key,channel,role,content) overriding system value values(1001,$1,$2,'native-new-origin','whatsapp','user','Invoice is from Olive Desk, 6418, due 23 Sep 2027')",[workspace,owner]);
+  await q("insert into whatsapp_conversation_turns(id,workspace_id,customer_id,phone,role,content) values(1001,$1,$2,'+919871367051','user','Receipt from Maple Craft, 5147, due 24 Sep 2027')",[workspace,customer]);
+  await q('select app.retain_private_invoice_terms($1,$2)',[workspace,{notes:'Invoice is from Cedar Garden, 6961, due 25 Sep 2027'}]);
+  for(const term of ['party:willow','party:workshop','number:8654','date:*-11-12','party:olive','number:6418','party:maple','number:5147','party:cedar','number:6961'])assert.equal((await one('select exists(select 1 from whatsapp_private_invoice_terms where workspace_id=$1 and term=$2) ok',[workspace,term])).ok,true,term);
+  results.originWriteSinks='PASS; no ordinary-memory source row';
   // Representative multi-row writes, with the reviewer-imposed 5-second cap.
   await q("set statement_timeout='5s'");const start=performance.now();assert.equal((await q("update invoices set notes='updated local note' where id=any($1::uuid[])",[seeded])).rowCount,59);const elapsed=performance.now()-start;
   results.triggerWrites={rows:59,totalMs:Math.round(elapsed),meanMs:Math.round(elapsed/59),statementLimitMs:5000};assert.ok(elapsed<5000,JSON.stringify(results.triggerWrites));
