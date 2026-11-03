@@ -88,7 +88,7 @@ test('native PostgreSQL: realistic default ACLs, numeric watermarks, concurrent 
     values($1,$2,$3,'+12025550101',$4,$5,'user',$6,'ordinary_chat_v1') returning id`,[workspace,audience==='owner'?owner:null,audience==='customer'?customer:null,audience,'native-nested-'+audience+prefix,source]);
    assert.equal(row.rows.length,0);await q('commit');nativeOrigins.push({audience,prefix:prefix.codePointAt(0)??null,kind,inserted:0});
   }
-  for(const helper of ['private_invoice_decode_json(text)','private_invoice_origin_documents(jsonb,integer)']){
+  for(const helper of ['private_invoice_number_scalar(text)','private_invoice_numeric_candidates(text,boolean)','private_invoice_decode_json(text)','private_invoice_origin_documents(jsonb,integer)']){
    const meta=await one('select provolatile,prosecdef,proconfig from pg_proc where oid=$1::regprocedure',['app.'+helper]);
    assert.equal(meta.provolatile,'i');assert.equal(meta.prosecdef,false);assert.deepEqual(meta.proconfig,['search_path=""']);
    for(const role of ['anon','authenticated','service_role'])assert.equal((await one("select has_function_privilege($1,$2,'execute') ok",[role,'app.'+helper])).ok,false);

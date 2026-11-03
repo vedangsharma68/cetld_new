@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {fixture} from './fixtures/private-invoice.mjs';
+import {fixture,png} from './fixtures/private-invoice.mjs';
 import {AIProvider} from '../ai/provider.mjs';
 import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistant-handler.mjs';
 import {createPrivateChatMemory} from '../ai/private-chat-memory.mjs';
 import {createPrivateChatProvider,privateChatTopic,PRIVATE_CHAT_REPLY} from '../ai/private-chat.mjs';
-import {decodePrivateJSON,privateOriginDocuments,privateOriginKeys,privateFieldKeys,privatePartyKeys} from '../ai/private-value-matcher.mjs';
+import {decodePrivateJSON,privateOriginDocuments,privateOriginKeys,privateFieldKeys,privatePartyKeys,privateNumberKeys} from '../ai/private-value-matcher.mjs';
 
 const providerFactory=(wires,reply)=>options=>new AIProvider({...options,cfAccountId:'synthetic-round6',cfApiToken:'synthetic-round6',maxAttempts:1,logger:{info(){},warn(){}},fetchImpl:async(url,init)=>{
  assert.equal(new URL(url).hostname,'api.cloudflare.com');const body=JSON.parse(init.body);wires.push({body,serializedMessages:JSON.stringify(body.messages)});
@@ -13,7 +13,7 @@ const providerFactory=(wires,reply)=>options=>new AIProvider({...options,cfAccou
 }});
 const nested=(name='Birch Works',amount=6847)=>JSON.stringify({quote:JSON.stringify({invoice:{customer_name:name,total:amount,due_date:'2027-07-16'}})});
 const boundaries=['history','model-response','tool-arguments','tool-result','memory-write'];
-const samples=['1250,77,2500','The figures are 1250,77','Is Sharma coming tomorrow? Explain the etymology of that surname.','Sharma was here yesterday; what is the meaning of this surname?',
+const samples=['The figures are 1,250.00','Choose between 1250,77,2500',Array.from({length:33},(_,i)=>String(600+i)).join(','),'1250,77,2500','The figures are 1250,77','Is Sharma coming tomorrow? Explain the etymology of that surname.','Sharma was here yesterday; what is the meaning of this surname?',
  'Ask Green1 for advice','Ask 李 for advice','Ask 𠀀 for advice','one point two five trillion','one lakh crore','one million million','one thousand billion',nested(),...['\u200b','\ufeff','\u0085','\u00a0'].map(prefix=>prefix+nested())];
 
 test('round6 all decoded privacy boundaries use production memory, real provider serialization and actual SQL retention',async t=>{
@@ -44,7 +44,7 @@ test('round6 all decoded privacy boundaries use production memory, real provider
 
 test('round6 structured origin traversal, key construction and header-role continuation agree byte-for-byte with SQL',async()=>{
  const f=await fixture();try{
-  const corpus=[nested(),JSON.stringify({wrapper:[{other:JSON.stringify([JSON.stringify({invoice:{total:5318}})])}]}),'ordinary text',JSON.stringify({question:'ordinary gardening'}),
+  const corpus=['1250,77,2500','1250 77','1,250.00','1250,77','Rs.1,250/-',Array.from({length:33},(_,i)=>String(100+i)).join(','),nested(),JSON.stringify({wrapper:[{other:JSON.stringify([JSON.stringify({invoice:{total:5318}})])}]}),'ordinary text',JSON.stringify({question:'ordinary gardening'}),
    'Here is the bill, Anurag Sharma, 1250, due 31 Oct 2026','Forwarded: Here is the bill,, Anurag Sharma,1250,due 31 Oct 2026',
    'The Cedar Studio','A Green1 Materials','Saar Cedar','Sar Cedar','Noor Cedar','Nor Cedar','𠀀 王','𐐀 王','𠀀𠀁 王','李 王','किरण','करण','कमल','कोमल',
    'one lakh crore','two lakh crore','one million million','one billion million two hundred','one crore one lakh','one point two five trillion','one and a quarter trillion','twelve hundred billion','one billion two hundred million',
@@ -52,6 +52,7 @@ test('round6 structured origin traversal, key construction and header-role conti
   for(const outer of ['', 'Notes: ', 'Set notes to ', 'Forwarded: '])for(const header of ['Here is the bill','This invoice is from','Customer is'])for(const separator of [', ', ',, ', '; ', '\n'])corpus.push(outer+header+separator+'Anurag Sharma,1250,due 31 Oct 2026');
   corpus.push(...['\u200b','\ufeff','\u0085','\u00a0','\u2060'].flatMap(prefix=>[prefix+nested(),JSON.stringify({quote:prefix+nested()})]));
   for(const value of corpus){
+   for(const enumeration of [false,true]){const actual=(await f.db.query('select distinct term from app.private_invoice_numeric_candidates($1,$2) term order by term',[value,enumeration])).rows.map(row=>row.term);assert.deepEqual(actual,[...new Set(privateNumberKeys(value,enumeration))].sort(),'number candidates/'+enumeration+'/'+value);}
    for(const [sqlFunction,js]of[['private_invoice_term_aliases',privateFieldKeys],['private_invoice_party_aliases',privatePartyKeys],['private_invoice_origin_aliases',privateOriginKeys]]){
     const sql=(await f.db.query(`select distinct term from app.${sqlFunction}($1) term order by term`,[value])).rows.map(row=>row.term);
     assert.deepEqual(sql,[...new Set(js(value))].sort(),sqlFunction+'/'+value);
@@ -127,6 +128,42 @@ test('round6 party specificity preserves Latin vowel identity and Indic name dis
     assert.equal(wires.at(-1).body.messages.at(-1).content,'Ask '+other+' for advice');
     await turn('Ask '+stored.split(' ')[0]+' for advice');assert.equal(wires.length,before+1);
    });
+  }
+ }finally{await f.close();}
+});
+
+test('round6 numeric interpretations never discard a private whole value; retain lists without inventing members in a stored decimal',async()=>{
+ for(const stored of [{total:1250.77},{notes:'1250,77,2500'}]){
+  const wires=[],factory=providerFactory(wires,()=>({content:'An ordinary answer'})),f=await fixture({providerFactory:factory});let sequence=0;
+  try{
+   await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,stored]);
+   const terms=(await f.db.query('select term from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId])).rows.map(row=>row.term);
+   assert.ok(terms.includes('number:1250.77'));
+   if(stored.total)assert.ok(!terms.includes('number:1250'),'A stored decimal is atomic, never its integer prefix');
+   else for(const value of [1250,77,2500])assert.ok(terms.includes('number:'+value));
+   for(const uploaded of [false,true]){
+    if(uploaded){await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});await f.turn('cancel');}
+    f.restart();const customer=createWhatsAppBoundMessageHandler({supabase:f.supabase,audience:'customer',authorizeScope:async()=>true,providerFactory:factory,logger:{error(){}}});
+    for(const audience of ['owner','customer']){
+     const turn=message=>audience==='owner'?f.turn(message):customer({...f.scope,message,messageId:'r6-number-'+(++sequence)});
+     for(const message of ['Choose between 1250,77,2500','The figures are 1250,77','The price is 1250,77','send 1250.77 today']){const before=wires.length;await turn(message);assert.equal(wires.length,before,JSON.stringify(wires.slice(before)));}
+     const ordinary=stored.total?'send 1250 today':'send 7513 today',before=wires.length;await turn(ordinary);assert.equal(wires.length,before+1);assert.equal(wires.at(-1).body.messages.at(-1).content,ordinary);
+    }
+   }
+  }finally{await f.close();}
+ }
+});
+
+test('round6 long numeric runs stay local without consuming an independent ordinary clause with an unrelated number',async()=>{
+ const wires=[],f=await fixture();try{
+  await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,{total:1250}]);
+  for(const audience of ['owner','customer']){
+   const memory=createPrivateChatMemory({supabase:f.supabase,scope:{...f.scope,audience,messageId:'numeric-bound-'+audience}}),run=Array.from({length:33},(_,i)=>String(600+i)).join(',');
+   const message='Help me plan a walk for 2 people; '+run;
+   const provider=createPrivateChatProvider({memory,message,options:{},providerFactory:providerFactory(wires,()=>({content:'An ordinary answer'}))});
+   const before=wires.length;await provider.generate();assert.equal(wires.length,before+1);
+   assert.equal(wires.at(-1).body.messages.at(-1).content,'Help me plan a walk for 2 people');
+   assert.ok(!wires.at(-1).serializedMessages.includes(run));
   }
  }finally{await f.close();}
 });

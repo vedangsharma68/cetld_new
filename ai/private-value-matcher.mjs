@@ -1,5 +1,5 @@
 import {PRIVATE_UNICODE_FOLD} from './private-value-unicode.mjs';
-import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,namedDatePatterns,privateDocumentKeyPattern,privateOriginHeader,privateOriginPartyHeader,privateOriginPartyLabel,privateOriginNumberLabel,privateOriginFieldPrefix,privateOriginFieldLabel,originDateCommaPattern,lexicalAliases,partyTransliteration,partyReference,partyFunctionWords,numericEnumerationFrame,privateJSONPadding} from './private-value-language.mjs';
+import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,namedDatePatterns,privateDocumentKeyPattern,privateOriginHeader,privateOriginPartyHeader,privateOriginPartyLabel,privateOriginNumberLabel,privateOriginFieldPrefix,privateOriginFieldLabel,originDateCommaPattern,lexicalAliases,partyTransliteration,partyReference,partyFunctionWords,numericEnumerationFrame,privateJSONPadding,PRIVATE_NUMBER_LIST_MAX_GROUPS} from './private-value-language.mjs';
 // One code-point fold, shared verbatim with SQL, independent of DB/OS locale.
 export const normalizePrivateValue=value=>Array.from(String(value??''),ch=>PRIVATE_UNICODE_FOLD[ch]??ch).join('').replace(/ +/g,' ').trim();
 const clean=normalizePrivateValue;
@@ -45,23 +45,34 @@ function numeric(input){
   if(last>=0){const whole=groupedInteger(value.slice(0,last));if(whole!==null)values.add(exact(whole,value.slice(last+1)));}
   return new Set([...values].map(n=>places?shift(n,places):n));
 }
-// Grouping wins when the complete candidate has a valid grouping shape. If it
-// does not, comma+space separates lists and invalid whitespace chains are
-// segmented into longest valid groups. Thus 1 250 != [1,250], but 1250 77 is a list.
-function numericList(value,enumeration=false){
-  const prepared=scalar(value),whole=groupedInteger(prepared);
-  if(whole!==null)return numeric(value);
-  const direct=numeric(value);
-  const list=value.split(enumeration||!direct.size&&prepared.includes(',')?/, */u:/, +/u);
-  if(list.length>1)return new Set(list.flatMap(part=>[...numericList(part)]));
+// Atomic stored values keep their complete numeric interpretations. A list
+// frame adds possible members; it never removes a valid whole-value parse.
+// Comma partitions are bounded. Longer runs retain individual values linearly
+// and signal the screening boundary to keep the complete run local.
+function numericList(value,enumeration=false,onOverflow){
+  const prepared=scalar(value),direct=numeric(value);
+  if(!/^[0-9][0-9.,' ]*(?:[kmb])?$/u.test(prepared))return direct;
+  const parts=value.split(/, */u);if(parts.length>PRIVATE_NUMBER_LIST_MAX_GROUPS)onOverflow?.();
+  if(direct.size&&!enumeration&&!/, +/u.test(value))return direct;
+  const result=new Set(direct);
+  if(parts.length>1){
+    if(parts.length>PRIVATE_NUMBER_LIST_MAX_GROUPS){onOverflow?.();for(const part of parts)numericList(part).forEach(n=>result.add(n));return result;}
+    for(let i=0;i<parts.length;i++)for(let end=i+1;end<=parts.length;end++){
+      const span=parts.slice(i,end).join(',');
+      const found=end===i+1?numericList(span):numeric(span);
+      found.forEach(n=>result.add(n));
+    }
+    return result;
+  }
   if(direct.size)return direct;
-  const groups=value.split(/ +/u),result=new Set();
+  const groups=prepared.split(/ +/u);
   for(let i=0;i<groups.length;){let end=groups.length,keys=new Set();
     for(;end>i;end--){keys=numeric(groups.slice(i,end).join(' '));if(keys.size)break;}
     if(end===i){i++;continue;}keys.forEach(n=>result.add(n));i=end;
   }
   return result;
 }
+export const privateNumberKeys=(value,enumeration=false)=>[...numericList(clean(value),enumeration)].map(number=>'number:'+number);
 const dayPattern=`(?:[0-9]{1,2}(?:st|nd|rd|th)?|${ordinals.map(day=>day.replaceAll(' ','[ -]+')).join('|')})`;
 const dayValue=value=>/^\d/.test(value)?parseInt(value,10):ordinals.indexOf(value.replace(/[ -]+/g,' '))+1;
 const yearValue=value=>value==null?null:value.length===2?Number(value)+(Number(value)<=PRIVATE_DATE_YEAR_PIVOT?2000:1900):Number(value);
@@ -172,7 +183,10 @@ function numbers(text,onSpan){
   text=separateUnits(text);const masked=text.split(''),keys=wordRuns(text,(values,start,end)=>{onSpan?.(values,start,end);for(let i=start;i<end;i++)masked[i]=' ';});text=masked.join('');
   for(const match of text.matchAll(/[0-9]+(?:[., \p{Quotation_Mark}ʼ]+[0-9]+)*(?:[kmb])?/gu)){
     if(/[\p{L}\p{N}_]$/u.test(text.slice(0,match.index))||/^[\p{L}\p{N}_]/u.test(text.slice(match.index+match[0].length)))continue;
-    const found=[...numericList(match[0],new RegExp(numericEnumerationFrame,'u').test(text.slice(0,match.index)))];found.forEach(value=>keys.add(value));if(found.length)onSpan?.(found,match.index,match.index+match[0].length);
+    let overflow=false;
+    const found=[...numericList(match[0],new RegExp(numericEnumerationFrame,'u').test(text.slice(0,match.index)),()=>{overflow=true;})];
+    found.forEach(value=>keys.add(value));if(overflow)keys.add('numeric-bound-exceeded');
+    if(found.length||overflow)onSpan?.(overflow?[...found,'numeric-bound-exceeded']:found,match.index,match.index+match[0].length);
   }
   return keys;
 }
@@ -268,7 +282,7 @@ export function privateOriginKeys(value){
 export function privateFieldKeys(value){
   const raw=clean(value);if(!raw||Array.from(raw).length>4000)return [];
   const term=raw.replace(/^[\p{Quotation_Mark}ʼ]+|[\p{Quotation_Mark}ʼ]+$/gu,''),keys=new Set([raw]),parsed=dates(term),date=parsed.values.filter((value,index)=>{const [a,b]=parsed.spans[index];return ['','the'].includes(term.slice(0,a).trim())&&/^[., ]*$/.test(term.slice(b));});
-  for(const n of numeric(term))keys.add('number:'+n);
+  for(const key of privateNumberKeys(term))keys.add(key);
   const spoken=stripCurrency(lexicalText(stripCurrency(term)).text),words=spoken.match(/[a-z]+/g)||[];
   if(words.every(word=>numberWords.has(word))){for(const n of numeric(spoken))keys.add('number:'+n);for(const n of wordRuns(lexicalText(term).text===term?spoken:term))keys.add('number:'+n);}
   for(const {year,month,day} of date)keys.add('date:'+(year==null?'*':String(year).padStart(4,'0'))+'-'+String(month).padStart(2,'0')+'-'+String(day).padStart(2,'0'));
@@ -315,7 +329,7 @@ export function createPrivateValueMatcher(terms=[]){
     if(found.spans.some(([start,end])=>[...numeric(content.slice(start,end))].some(n=>retainedNumbers.has(n))))return true;
     // Do not reinterpret the parts of an explicit non-matching date as amounts.
     const masked=content.split('');for(const [start,end] of found.spans)for(let i=start;i<end;i++)masked[i]=' ';
-    return retainedNumbers.size>0&&[...numbers(masked.join(''))].some(n=>retainedNumbers.has(n));
+    return retainedNumbers.size>0&&[...numbers(masked.join(''))].some(n=>retainedNumbers.has(n)||n==='numeric-bound-exceeded');
   };
   // Decode protocol JSON before checking its values. Keys are data too. The
   // same traversal owns current text, history, tools, responses and writes.
@@ -344,7 +358,7 @@ export function createPrivateValueMatcher(terms=[]){
         ||[...numeric(content.slice(start,end))].some(n=>retainedNumbers.has(n)))add(start,end);
       for(let j=start;j<end;j++)masked[j]=' ';
     }
-    numbers(masked.join(''),(keys,start,end)=>{if(keys.some(key=>retainedNumbers.has(key)))add(start,end);});
+    numbers(masked.join(''),(keys,start,end)=>{if(keys.some(key=>retainedNumbers.has(key)||key==='numeric-bound-exceeded'&&retainedNumbers.size>0))add(start,end);});
     return ranges;
   };
   return contains;

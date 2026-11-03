@@ -60,3 +60,5 @@ export const numericEnumerationFrame='(?:\\b(?:between|among)|\\b[\\p{L}\\p{M}]+
 // Only transport padding is removed before JSON decoding. String values are
 // decoded first, then canonically screened; normalization must not change JSON.
 export const privateJSONPadding=/[\p{White_Space}\p{Cf}]/u;
+
+export const PRIVATE_NUMBER_LIST_MAX_GROUPS=32; // Full partition graph; longer runs use linear retention and fail-closed screening.

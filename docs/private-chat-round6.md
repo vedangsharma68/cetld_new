@@ -34,12 +34,16 @@ outputs, including supplementary-plane letters and nested serialized JSON.
 * A linguistic exception binds only a term in its own linguistic clause. A
   second etymology clause cannot exempt a private party reference elsewhere.
   Tools and model answers use strict screening without that exception.
-* Numeric candidates use valid grouping first. Invalid multi-comma grouping is
-  segmented into list members. An ambiguous two-part decimal is interpreted as a
-  list only in an enumeration frame before the candidate (plural predication,
-  between/among, pair/couple), never because a noun appears elsewhere. Thus
-  `The figures are 1250,77` is a list while `Put 1250,77 on the shopping list`
-  remains a decimal. Unrelated members never inherit another value's provenance.
+* Numeric candidates preserve every complete value interpretation. An
+  enumeration frame adds possible comma-list members rather than discarding a
+  valid whole amount. Atomic stored decimals never gain their integer prefix.
+  Invalid grouped lists also retain their possible members, including whole
+  decimal members spanning comma positions. `The figures are 1250,77` can be a
+  list, while `Put 1250,77 on the shopping list` remains an atomic decimal.
+  Plain grouped `1 250` is never split into 1 and 250. The shared SQL/JS candidate
+  graph explores at most 32 comma groups; longer incoming runs stay local when
+  private numeric values exist. Longer retained lists keep full atomic parses
+  or individual scalar members linearly, without unbounded partition work.
 * Consecutive-scale clusters and greatest-scale recursive number composition handle decimal/fraction heads and
   English/Indian scales, including lakh crore, million million, billion million, and trillion through quintillion.
   Descending remainders must fit their scale. Existing spoken lists, mixed
@@ -68,10 +72,14 @@ SQL changes in this round:
    the expanded shared scale vocabulary.
 3. Generated origin aliases carry the first field role over empty headers and
    use the shared JSON decoder to distinguish structured sources.
-4. Add pure immutable invoker helpers `private_invoice_decode_json(text)` and
-   `private_invoice_origin_documents(jsonb,integer)`, empty search_path, execution
+4. Add pure immutable invoker helpers `private_invoice_decode_json(text)`,
+   `private_invoice_origin_documents(jsonb,integer)`,
+   `private_invoice_number_scalar(text)` and
+   `private_invoice_numeric_candidates(text,boolean)`, empty search_path, execution
    explicitly revoked from PUBLIC, anon, authenticated and service_role.
-5. `private_invoice_is_document` and `private_invoice_has_origin` delegate to that
+5. Scalar normalization is shared by numeric alias and candidate construction.
+   Atomic field aliases use that same bounded candidate graph in SQL and JS.
+6. `private_invoice_is_document` and `private_invoice_has_origin` delegate to that
    traversal; `retain_private_origin_terms` consumes its decoded documents.
    Existing term/history/memory triggers consequently capture the same origins.
 
@@ -104,7 +112,9 @@ stay local. Existing different-year/nearby-date, Sharmila/Anuradha, and
 Residuals retain their narrow prior scope: arithmetic-derived expressions,
 scientific notation, hostile encodings/homoglyphs beyond the shared normalization,
 relative dates without a stored restatement, arbitrary translations and invented
-semantic name aliases. No ordinary large-magnitude wording or formal component
+semantic name aliases. Compound regroupings inferred from retained lists beyond
+32 comma groups are outside the partition bound; their incoming complete runs
+stay local. No ordinary large-magnitude wording or formal component
 is waived. Ambiguous comma notation uses the grouping/enumeration rules above;
 there is no claim that an unmarked decimal expresses a two-member list.
 
