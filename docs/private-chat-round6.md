@@ -22,7 +22,7 @@ outputs, including supplementary-plane letters and nested serialized JSON.
   therefore agree about nested documents and format-prefixed sources. The memory
   trigger retains their fields atomically and refuses ordinary provenance.
 * Carry header party/numeric roles across empty comma-separated header fragments
-  until a nonempty field consumes them. Customer full names, formal components,
+  until a nonempty field consumes them, including nested role-bearing headers inside notes or correction declarations. Customer full names, formal components,
   amounts and dates persist through cancellation and handler reconstruction.
 * Party components use Unicode L/M/N tokens and code-point lengths in both
   implementations. Single non-Latin letters remain identifying formal components;

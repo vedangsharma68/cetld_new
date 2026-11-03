@@ -291,17 +291,18 @@ revoke all on function app.private_invoice_evidence_aliases(text) from public,an
 -- fields, including source dates, before any provider-bound request.
 create function app.private_invoice_origin_aliases(p_term text) returns setof text
 language plpgsql immutable set search_path='' as $$
-declare document jsonb;term text; marker text[]; nested text[]; field text; prior text; party boolean; numeric_field boolean; first_field boolean:=true;
+declare document jsonb;term text; marker text[]; nested text[]; field text; prior text; party boolean; numeric_field boolean; pending_party boolean;pending_number boolean;
 begin
   document:=app.private_invoice_decode_json(p_term);if document is not null then return;end if;
   term:=app.private_invoice_normalize(regexp_replace(p_term,E'[\\r\\n]+',',','g'));
   term:=regexp_replace(term,'ORIGIN_DATE_COMMA',E'\\1 \\2','g');
   marker:=regexp_match(term,'ORIGIN_HEADER');if marker is null then return;end if;
   term:=substring(term from regexp_instr(term,'ORIGIN_HEADER'));
+  pending_party:=marker[1] ~ 'ORIGIN_PARTY_HEADER';pending_number:=marker[1] ~ 'ORIGIN_NUMBER_LABEL';
   if length(term) between 1 and 3993 then return next 'origin:'||term;end if;
   return query select * from app.private_invoice_term_aliases(term);
   for field in select regexp_split_to_table(term,';|(?<![0-9]),|,(?![0-9])') loop
-    field:=btrim(field);party:=first_field and marker[1] ~ 'ORIGIN_PARTY_HEADER';numeric_field:=first_field and marker[1] ~ 'ORIGIN_NUMBER_LABEL';
+    field:=btrim(field);party:=pending_party;numeric_field:=pending_number;
     loop
       prior:=field;
       field:=regexp_replace(field,'^[:> ]+','');field:=regexp_replace(field,U&'^[QUOTES\02bc]+|[QUOTES\02bc]+$','','g');
@@ -313,7 +314,8 @@ begin
       field:=regexp_replace(field,'ORIGIN_PREFIX','');field:=regexp_replace(field,'ORIGIN_LABEL','');
       exit when prior=field;
     end loop;
-    if field='' then continue;end if;first_field:=false;
+    pending_party:=field='' and party;pending_number:=field='' and numeric_field;
+    if field='' then continue;end if;
     if numeric_field and (exists(select 1 from app.private_invoice_number_aliases(field)) or exists(select 1 from app.private_invoice_word_number_aliases(field))) then
       return query select * from app.private_invoice_number_aliases(field);return query select * from app.private_invoice_word_number_aliases(field);
     else return query select * from app.private_invoice_term_aliases(field);end if;

@@ -49,6 +49,7 @@ test('round6 structured origin traversal, key construction and header-role conti
    'The Cedar Studio','A Green1 Materials','Saar Cedar','Sar Cedar','Noor Cedar','Nor Cedar','𠀀 王','𐐀 王','𠀀𠀁 王','李 王','किरण','करण','कमल','कोमल',
    'one lakh crore','two lakh crore','one million million','one billion million two hundred','one crore one lakh','one point two five trillion','one and a quarter trillion','twelve hundred billion','one billion two hundred million',
    ...['thousand','lakh','crore','million','billion','trillion','quadrillion','quintillion'].flatMap(scale=>['one','twelve fifty','one point two five','one and a quarter','1.25'].map(head=>head+' '+scale))];
+  for(const outer of ['', 'Notes: ', 'Set notes to ', 'Forwarded: '])for(const header of ['Here is the bill','This invoice is from','Customer is'])for(const separator of [', ', ',, ', '; ', '\n'])corpus.push(outer+header+separator+'Anurag Sharma,1250,due 31 Oct 2026');
   corpus.push(...['\u200b','\ufeff','\u0085','\u00a0','\u2060'].flatMap(prefix=>[prefix+nested(),JSON.stringify({quote:prefix+nested()})]));
   for(const value of corpus){
    for(const [sqlFunction,js]of[['private_invoice_term_aliases',privateFieldKeys],['private_invoice_party_aliases',privatePartyKeys],['private_invoice_origin_aliases',privateOriginKeys]]){
@@ -92,10 +93,10 @@ test('round6 actual service_role writes retain nested private documents and reje
 });
 
 test('round6 decoded source provenance survives every retention sink and handler reconstruction for both audiences',async t=>{
- for(const sink of ['terms','owner-audit','customer-audit','provider-memory','memory-append'])await t.test(sink,async t=>{
+ for(const [sink,kind] of ['terms','owner-audit','customer-audit','provider-memory','memory-append'].flatMap(sink=>['structured','composed-header'].map(kind=>[sink,kind])))await t.test(sink+'/'+kind,async t=>{
   const wires=[],factory=providerFactory(wires,()=>({content:'An ordinary answer'})),f=await fixture({providerFactory:factory});
   try{
-   const source='\u200b\ufeff\u0085\u00a0'+JSON.stringify({quote:JSON.stringify({packet:[JSON.stringify({invoice:{customer_name:'Anurag Sharma',total:6847,due_date:'2027-07-16'}})]})});
+   const source=kind==='composed-header'?'Notes: Here is the bill, Anurag Sharma,6847,due 16 Jul 2027':'\u200b\ufeff\u0085\u00a0'+JSON.stringify({quote:JSON.stringify({packet:[JSON.stringify({invoice:{customer_name:'Anurag Sharma',total:6847,due_date:'2027-07-16'}})]})});
    if(sink==='terms')await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,{notes:source}]);
    if(sink==='owner-audit')await f.db.query("insert into owner_assistant_turns(workspace_id,owner_id,event_key,channel,role,content) values($1,$2,'r6-source','whatsapp','user',$3)",[f.scope.workspaceId,f.scope.ownerId,source]);
    if(sink==='customer-audit')await f.db.query('insert into whatsapp_conversation_turns(workspace_id,customer_id,phone,role,content) values($1,$2,$3,\'user\',$4)',[f.scope.workspaceId,f.scope.customerId,f.scope.phone,source]);

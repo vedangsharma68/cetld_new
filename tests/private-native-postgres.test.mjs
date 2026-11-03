@@ -79,21 +79,21 @@ test('native PostgreSQL: realistic default ACLs, numeric watermarks, concurrent 
   for(const term of ['party:willow','party:workshop','number:8654','date:*-11-12','party:olive','number:6418','party:maple','number:5147','party:cedar','number:6961'])assert.equal((await one('select exists(select 1 from whatsapp_private_invoice_terms where workspace_id=$1 and term=$2) ok',[workspace,term])).ok,true,term);
   results.originWriteSinks='PASS; no ordinary-memory source row';
   const nativeOrigins=[];
-  for(const audience of ['owner','customer'])for(const prefix of ['', '\u200b','\ufeff','\u0085','\u00a0']){
-   const source=prefix+JSON.stringify({quote:JSON.stringify({invoice:{customer_name:'The Birch Works',total:6847,due_date:'2027-07-16'}})});
+  for(const audience of ['owner','customer'])for(const prefix of ['', '\u200b','\ufeff','\u0085','\u00a0'])for(const kind of ['structured','composed-header']){
+   const source=prefix+(kind==='structured'?JSON.stringify({quote:JSON.stringify({invoice:{customer_name:'The Birch Works',total:6847,due_date:'2027-07-16'}})}):'Notes: Here is the bill, Lilac Meadow,6847,due 16 Jul 2027');
    assert.equal((await one('select app.private_invoice_has_origin($1) yes',[source])).yes,true);
    await q('begin;set local role service_role');
    assert.equal((await one('select current_user name')).name,'service_role');
    const row=await q(`insert into whatsapp_provider_memory(workspace_id,owner_id,customer_id,phone,audience,source_message_id,role,content,provenance)
     values($1,$2,$3,'+12025550101',$4,$5,'user',$6,'ordinary_chat_v1') returning id`,[workspace,audience==='owner'?owner:null,audience==='customer'?customer:null,audience,'native-nested-'+audience+prefix,source]);
-   assert.equal(row.rows.length,0);await q('commit');nativeOrigins.push({audience,prefix:prefix.codePointAt(0)??null,inserted:0});
+   assert.equal(row.rows.length,0);await q('commit');nativeOrigins.push({audience,prefix:prefix.codePointAt(0)??null,kind,inserted:0});
   }
   for(const helper of ['private_invoice_decode_json(text)','private_invoice_origin_documents(jsonb,integer)']){
    const meta=await one('select provolatile,prosecdef,proconfig from pg_proc where oid=$1::regprocedure',['app.'+helper]);
    assert.equal(meta.provolatile,'i');assert.equal(meta.prosecdef,false);assert.deepEqual(meta.proconfig,['search_path=""']);
    for(const role of ['anon','authenticated','service_role'])assert.equal((await one("select has_function_privilege($1,$2,'execute') ok",[role,'app.'+helper])).ok,false);
   }
-  for(const term of ['party:birch','party:works','number:6847','date:2027-07-16'])assert.equal((await one('select exists(select 1 from whatsapp_private_invoice_terms where workspace_id=$1 and term=$2) yes',[workspace,term])).yes,true);
+  for(const term of ['party:birch','party:works','party:lilac','party:meadow','number:6847','date:2027-07-16'])assert.equal((await one('select exists(select 1 from whatsapp_private_invoice_terms where workspace_id=$1 and term=$2) yes',[workspace,term])).yes,true);
   assert.equal((await one("select exists(select 1 from whatsapp_private_invoice_terms where workspace_id=$1 and term='party:the') yes",[workspace])).yes,false);
   results.decodedOriginServiceRole=nativeOrigins;results.newCanonicalHelperACLs='PASS';
   for(const value of ['𠀀 王','𐐀 王','𠀀𠀁 王','李 王','The Cedar Studio','Green1 Materials','किरण','करण','Saar Cedar']){
