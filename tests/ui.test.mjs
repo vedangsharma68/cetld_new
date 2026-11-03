@@ -1,3 +1,5 @@
+// Preserve the existing public/QA contact contract without a copied personal literal.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import {isExternallyManagedInvoice} from '../invoice/business-fields.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -244,7 +246,7 @@ test('client wording, official integration logos and global contact links are pr
   for (const infrastructure of ["['supabase'", "['whatsapp'", "['resend'", "['sentry'"]) assert.doesNotMatch(app, new RegExp(infrastructure.replace('[', '\\[')));
   assert.match(app, /cdn\.simpleicons\.org/);
   assert.match(app, /mailto:vedangsharma52@gmail\.com/);
-  assert.match(app, /tel:\+12025550101/);
+  assert.match(app, new RegExp('tel:'+QA_POLICY_PHONE.replace('+','\\+')));
   const csp=JSON.parse(vercel).headers[0].headers.find(({key})=>key==='Content-Security-Policy').value;
   assert.match(csp,/img-src[^;]*https:\/\/cdn\.simpleicons\.org/);
 });
