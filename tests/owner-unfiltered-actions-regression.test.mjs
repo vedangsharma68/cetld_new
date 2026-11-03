@@ -1,3 +1,4 @@
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 // Explicit planner/tool-state subsystem checks; production privacy is tested separately.
 const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
@@ -6,14 +7,15 @@ import {randomUUID} from 'node:crypto';
 import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {planOwnerNextActions} from '../automation/whatsapp/owner-next-actions.mjs';
 import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
-import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as scope,DEFAULT_NOW,JOHN_CUSTOMER_ID} from './fixtures/owner-chat-battery.mjs';
+import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as baseScope,DEFAULT_NOW,JOHN_CUSTOMER_ID} from './fixtures/owner-chat-battery.mjs';
+const scope=Object.freeze({...baseScope,phone:QA_POLICY_PHONE});
 import {CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 const clock=()=>DEFAULT_NOW,phone='+919818685252';
 const env={WHATSAPP_APP_SECRET:'isolated-unfiltered-actions',WHATSAPP_OUTBOUND_ENABLED:'true',WHATSAPP_TEST_ALLOWLIST:scope.phone,
  WHATSAPP_ACCESS_TOKEN:'isolated-fake-token',WHATSAPP_PHONE_NUMBER_ID:'1234567890',WHATSAPP_GRAPH_API_VERSION:'v24.0'};
 const logger={info(){},warn(){},error(){}};
 function fixtures(){
- const db=createOwnerChatDatabase();
+ const db=createOwnerChatDatabase({scope});
  db.tables.customers.find(row=>row.id===JOHN_CUSTOMER_ID).phone=phone;
  for(const name of ['Mary Johnson','Alice Brown','Ava Lee','Bob Jones','Jane Doe'])
   db.tables.customers.push({id:randomUUID(),workspace_id:scope.workspaceId,name,phone:'+12025550123',updated_at:DEFAULT_NOW.toISOString(),metadata:{}});

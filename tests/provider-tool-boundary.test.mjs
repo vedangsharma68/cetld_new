@@ -1,3 +1,4 @@
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 // Explicit planner/tool-state subsystem checks; production privacy is tested separately.
 const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
@@ -7,7 +8,8 @@ import {normalizeProviderToolCalls,internalToolEnvelope} from '../ai/tool-calls.
 import {createOwnerEngineHarness,standaloneOwnerGreeting} from './fixtures/owner-engine-unit.mjs';
 import {ownerReplySafetyIssue,runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
-import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as scope,DEFAULT_NOW,JOHN_CUSTOMER_ID} from './fixtures/owner-chat-battery.mjs';
+import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as baseScope,DEFAULT_NOW,JOHN_CUSTOMER_ID} from './fixtures/owner-chat-battery.mjs';
+const scope=Object.freeze({...baseScope,phone:QA_POLICY_PHONE});
 const tools=[{type:'function',function:{name:'workspaceData',parameters:{type:'object'}}}];
 const raw=String.raw`{"name": "workspaceData", "parameters": {"request": "What\'s John Smith\'s phone?", "operation": "read", "table": "customers"}}`;
 const logger={info(){},warn(){},error(){}};
@@ -33,7 +35,7 @@ engineTest('known complete provider envelopes normalize without choosing an oper
 });
 
 engineTest('real Cloudflare adapter handles the exact malformed live envelope through scoped planner, durable receipt and native buttons',async()=>{
- const db=createOwnerChatDatabase(),phone='+919818685252';
+ const db=createOwnerChatDatabase({scope}),phone='+919818685252';
  db.tables.customers.find(row=>row.id===JOHN_CUSTOMER_ID).phone=phone;
  const before=structuredClone({customers:db.tables.customers,invoices:db.tables.invoices,payments:db.tables.payments});
  const env={WHATSAPP_APP_SECRET:'isolated-provider-boundary',WHATSAPP_OUTBOUND_ENABLED:'true',WHATSAPP_TEST_ALLOWLIST:scope.phone,
@@ -75,7 +77,7 @@ engineTest('protocol text in a tools-off final round is repaired, never executed
 });
 
 engineTest('standalone greetings are authorized, saved and replayed without model/context calls; mixed requests use the model',async()=>{
- const db=createOwnerChatDatabase();let providers=0,contexts=0,allowed=true;
+ const db=createOwnerChatDatabase({scope});let providers=0,contexts=0,allowed=true;
  const handler=createOwnerEngineHarness({supabase:db.supabase,env:{},logger,clock:()=>DEFAULT_NOW,authorize:async()=>allowed,
   historyReader:async()=>{contexts++;return []},providerFactory:()=>{providers++;return {async generate(){return {content:'How can I help?'}}}}});
  for(const [index,message]of ['Hi','HOW ARE YOU?','What do you do?'].entries()){

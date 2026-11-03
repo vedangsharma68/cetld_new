@@ -97,7 +97,9 @@ The Indian-default parser test keeps its existing synthetic sequential landline
 pattern to cover national/trunk/country-code normalization. Operational QA policy
 tests read the existing production policy constant instead of copying a personal
 contact literal. Their transport remains mocked. No operational allowlist or
-historical reminder migration changes. A gate regression scans test source for
+historical reminder migration changes. The engine subsystem database fixture
+accepts an explicit seed scope for policy-specific transport tests; its ordinary
+chat default remains fictional. A gate regression scans test source for
 the removed contact fingerprint without retaining its personal literal.
 
 ## Controls and scope
