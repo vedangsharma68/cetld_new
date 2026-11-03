@@ -1,6 +1,7 @@
 // Explicit planner/tool-state subsystem checks; production privacy is tested separately.
 const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
-import test from 'node:test';
+import test,{mock} from 'node:test';
+import {retainPrivateOriginFixture} from './fixtures/private-origin-store.mjs';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
@@ -10,6 +11,10 @@ import {createWhatsAppInvoiceStore} from '../automation/whatsapp/invoice-store.m
 import {mergeWhatsAppMessages} from '../conversations-ui.mjs';
 import {ownerWhatsAppSettings} from '../owner-whatsapp-ui.mjs';
 
+// Every transport in this subsystem suite must remain an explicit local mock.
+test.before(()=>mock.method(globalThis,'fetch',async()=>assert.fail('Ledger subsystem tests must never make a live fetch')));
+test.after(()=>mock.restoreAll());
+
 const scope={workspaceId:'00000000-0000-4000-8000-000000000001',ownerId:'00000000-0000-4000-8000-000000000002',customerId:'owner-placeholder',phone:'+919871367051'};
 const invoices=[
  {id:'a',invoiceNumber:'INV-005',clientName:'Green1 Materials LLC',currency:'USD',total:1564,amountPaid:1564,status:'paid',updatedAt:'v1',metadata:{}},
@@ -18,9 +23,9 @@ const invoices=[
  {id:'d',invoiceNumber:'GST-3425-26',clientName:'Shiv Engineering',currency:'INR',total:4490,amountPaid:0,status:'draft',updatedAt:'v1',metadata:{}},
  {id:'e',invoiceNumber:'INV-20260929-72FCD5',clientName:'facebook.com',currency:'INR',total:50000,amountPaid:0,status:'draft',updatedAt:'v1',metadata:{}}
 ];
-function setup(history=[],{plans={},answers={}}={}){
+function setup(history=[],{plans={},answers={},retentionAvailable=true}={}){
  let action=null,authorized=true,confirmCalls=0,generation=0,id=0;
- const modelCalls=[],toolOutputs=[];
+ const modelCalls=[],toolOutputs=[],events=[],retained={};
  const store={findInvoices:async()=>invoices,latestInvoiceFile:async invoiceId=>({file_name:invoiceId+'.pdf',mime_type:'application/pdf',bytes:Buffer.from('test')})};
  const customerIds=new Map();
  const customerIdFor=name=>{if(!customerIds.has(name))customerIds.set(name,`00000000-0000-4000-8000-${String(customerIds.size+1).padStart(12,'0')}`);return customerIds.get(name);};
@@ -44,10 +49,10 @@ function setup(history=[],{plans={},answers={}}={}){
   loadPendingAction:async()=>action?{id,version:1,action}:null,
   consumePendingAction:async()=>{if(!action)return null;const old=id;action=null;generation++;return {id:old}}};
  const supabase={from(table){assert.equal(table,'workspace_ai_settings');const q={select(){return q;},eq(){return q;},async maybeSingle(){return {data:null};}};return q;},
-  rpc:async(name,args)=>{if(name==='whatsapp_confirm_owner_invoice_action'){assert.ok(args.p_confirmation_message_id);confirmCalls++;return {data:{ok:true,invoiceNumber:'1223113',actionType:action?.type||'owner_invoice_update',duplicate:confirmCalls>1}};}return {data:{ok:false,code:'FEATURE_UNAVAILABLE'}};}};
- const handler=createOwnerEngineHarness({toolsFactory:createOwnerAgentTools,supabase,authorize:async()=>authorized,invoiceStoreFactory:()=>store,ownerStoreFactory:()=>ownerStore,
+  rpc:async(name,args)=>{if(name==='whatsapp_retain_private_chat_origin'){assert.equal(args.p_workspace_id,scope.workspaceId);events.push('retain');return retentionAvailable?retainPrivateOriginFixture(retained,args):{data:{ok:false,code:'FEATURE_UNAVAILABLE'}};}if(name==='whatsapp_confirm_owner_invoice_action'){assert.ok(args.p_confirmation_message_id);confirmCalls++;return {data:{ok:true,invoiceNumber:'1223113',actionType:action?.type||'owner_invoice_update',duplicate:confirmCalls>1}};}return {data:{ok:false,code:'FEATURE_UNAVAILABLE'}};}};
+ const handler=createOwnerEngineHarness({env:{},toolsFactory:createOwnerAgentTools,supabase,authorize:async()=>authorized,invoiceStoreFactory:()=>store,ownerStoreFactory:()=>ownerStore,
   pendingActionStoreFactory:()=>pending,historyReader:async()=>history,logger:{error(){}},providerFactory:options=>({async generate({messages,tools}){
-   modelCalls.push(messages);
+   events.push('model');modelCalls.push(messages);
    assert.ok(tools.length>0,'owner model call must include tools');
    const current=messages.filter(item=>item.role==='user').at(-1)?.content||'';
    const plan=plans[current];const priorTool=messages.some(item=>item.role==='tool');
@@ -56,8 +61,21 @@ function setup(history=[],{plans={},answers={}}={}){
    return {model:options.primaryModel,content:answers[current]||'I can help with that invoice question.'};
   }})});
  const h=async input=>{const result=await handler(input);return result?.answer??result;};
- return {h,get action(){return action},get confirmCalls(){return confirmCalls},get modelCalls(){return modelCalls},get toolOutputs(){return toolOutputs},revoke(){authorized=false},customerIdFor};
+ return {h,get action(){return action},get confirmCalls(){return confirmCalls},get modelCalls(){return modelCalls},get toolOutputs(){return toolOutputs},get retainedTerms(){return retained.whatsapp_private_invoice_terms||[]},events,revoke(){authorized=false},customerIdFor};
 }
+engineTest('origin retention is acknowledged and canonical keys are stored before the mocked model runs',async()=>{
+ const message='change its amount to 2000 USD';
+ const s=setup([{role:'assistant',content:'Invoice 1223113, MineralTree'}],{plans:{[message]:{tool:'proposeInvoiceChange',args:{target:'1223113',changes:{total:2000}}}},answers:{[message]:'Proposed changing invoice 1223113 for MineralTree to USD 2,000. Reply yes to apply, or cancel.'}});
+ assert.match(await s.h({...scope,message,messageId:'retention-contract'}),/Reply yes/);
+ assert.equal(s.events[0],'retain');assert.ok(s.events.includes('model'));
+ assert.ok(s.retainedTerms.some(row=>row.workspace_id===scope.workspaceId&&row.term==='number:2000'));
+ assert.ok(s.retainedTerms.some(row=>row.term.startsWith('origin:')));
+});
+engineTest('unacknowledged origin retention stops before a model call or proposal',async()=>{
+ const message='mark invoice 1223113 paid',s=setup([],{retentionAvailable:false});
+ assert.match(await s.h({...scope,message,messageId:'retention-unavailable'}),/did not return a usable reply/);
+ assert.deepEqual(s.events,['retain']);assert.equal(s.modelCalls.length,0);assert.equal(s.action,null);
+});
 engineTest('owner reads existing dashboard invoices through a model-selected scoped tool',async()=>{
  const message='which invoices do i have logged';const s=setup([],{plans:{[message]:{tool:'getInvoices',args:{limit:10}}},answers:{[message]:'I found five invoices across five customers.'}});
  const response=await s.h({...scope,message,messageId:'m1'});
