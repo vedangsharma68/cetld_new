@@ -1,5 +1,5 @@
 import {PRIVATE_UNICODE_FOLD} from './private-value-unicode.mjs';
-import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,namedDatePatterns,privateDocumentKeyPattern,privateOriginHeader,privateOriginPartyHeader,privateOriginPartyLabel,privateOriginNumberLabel,privateOriginFieldPrefix,privateOriginFieldLabel,originDateCommaPattern,lexicalAliases,partyTransliteration,partyReference,partyFunctionWords,numericEnumerationFrame,privateJSONPadding,PRIVATE_NUMBER_LIST_MAX_GROUPS} from './private-value-language.mjs';
+import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,namedDatePatterns,privateDocumentKeyPattern,privateOriginHeader,privateOriginRecordHeader,privateOriginDocumentStart,privateOriginAmountFirst,privateOriginPartyFirst,privateOriginTailDate,privateOriginPartyHeader,privateOriginPartyLabel,privateOriginNumberLabel,privateOriginFieldPrefix,privateOriginFieldLabel,originDateCommaPattern,lexicalAliases,partyTransliteration,partyReference,partyReferenceBefore,partyReferenceAfter,partyGrammarWords,partyDeterminerBefore,partyPredicateAfter,partyQuestionBefore,partyFunctionWords,numericEnumerationFrame,privateJSONPadding,PRIVATE_NUMBER_LIST_MAX_GROUPS} from './private-value-language.mjs';
 // One code-point fold, shared verbatim with SQL, independent of DB/OS locale.
 export const normalizePrivateValue=value=>Array.from(String(value??''),ch=>PRIVATE_UNICODE_FOLD[ch]??ch).join('').replace(/ +/g,' ').trim();
 const clean=normalizePrivateValue;
@@ -49,15 +49,14 @@ function numeric(input){
 // frame adds possible members; it never removes a valid whole-value parse.
 // Comma partitions are bounded. Longer runs retain individual values linearly
 // and signal the screening boundary to keep the complete run local.
-function numericList(value,enumeration=false,onOverflow){
+function numericList(value,enumeration=false,window=PRIVATE_NUMBER_LIST_MAX_GROUPS){
   const prepared=scalar(value),direct=numeric(value);
   if(!/^[0-9][0-9.,' ]*(?:[kmb])?$/u.test(prepared))return direct;
-  const parts=value.split(/, */u);if(parts.length>PRIVATE_NUMBER_LIST_MAX_GROUPS)onOverflow?.();
-  if(direct.size&&!enumeration&&!/, +/u.test(value))return direct;
+  const parts=value.split(/, */u);
+  if(parts.length<=PRIVATE_NUMBER_LIST_MAX_GROUPS&&direct.size&&!enumeration&&!/, +/u.test(value))return direct;
   const result=new Set(direct);
   if(parts.length>1){
-    if(parts.length>PRIVATE_NUMBER_LIST_MAX_GROUPS){onOverflow?.();for(const part of parts)numericList(part).forEach(n=>result.add(n));return result;}
-    for(let i=0;i<parts.length;i++)for(let end=i+1;end<=parts.length;end++){
+    for(let i=0;i<parts.length;i++)for(let end=i+1;end<=Math.min(parts.length,i+window);end++){
       const span=parts.slice(i,end).join(',');
       const found=end===i+1?numericList(span):numeric(span);
       found.forEach(n=>result.add(n));
@@ -179,14 +178,14 @@ function wordRuns(original,onSpan){
   flush();return values;
 }
 
-function numbers(text,onSpan){
+function numbers(text,onSpan,targets=new Set()){
+  let window=PRIVATE_NUMBER_LIST_MAX_GROUPS;for(const n of targets)window=Math.max(window,n.replace('.','').length+2);
   text=separateUnits(text);const masked=text.split(''),keys=wordRuns(text,(values,start,end)=>{onSpan?.(values,start,end);for(let i=start;i<end;i++)masked[i]=' ';});text=masked.join('');
   for(const match of text.matchAll(/[0-9]+(?:[., \p{Quotation_Mark}ʼ]+[0-9]+)*(?:[kmb])?/gu)){
     if(/[\p{L}\p{N}_]$/u.test(text.slice(0,match.index))||/^[\p{L}\p{N}_]/u.test(text.slice(match.index+match[0].length)))continue;
-    let overflow=false;
-    const found=[...numericList(match[0],new RegExp(numericEnumerationFrame,'u').test(text.slice(0,match.index)),()=>{overflow=true;})];
-    found.forEach(value=>keys.add(value));if(overflow)keys.add('numeric-bound-exceeded');
-    if(found.length||overflow)onSpan?.(overflow?[...found,'numeric-bound-exceeded']:found,match.index,match.index+match[0].length);
+    const found=[...numericList(match[0],new RegExp(numericEnumerationFrame,'u').test(text.slice(0,match.index)),window)];
+    found.forEach(value=>keys.add(value));
+    if(found.length)onSpan?.(found,match.index,match.index+match[0].length);
   }
   return keys;
 }
@@ -201,8 +200,8 @@ export function partyKey(value){return clean(value).replace(/[\p{L}\p{M}]+/gu,te
  for(const ch of term){if(Object.hasOwn(partyTransliteration,ch)){if(/[\u093e-\u094d]/u.test(ch)&&out.endsWith('a'))out=out.slice(0,-1);out+=partyTransliteration[ch];}else out+=ch;}
  if(native)out=out.replace(/a$/u,'').replace(/aa/g,'a').replace(/ii/g,'i').replace(/uu/g,'u');return out;
 });}
-const partyComponent=part=>/\p{L}/u.test(part)&&!partyFunctionWords.includes(part)&&(Array.from(part).length>=2||!/\p{Script=Latin}/u.test(part));
-export const privatePartyKeys=value=>clean(value).split(/[^\p{L}\p{M}\p{N}]+/u).filter(partyComponent).flatMap(part=>/[\u0900-\u097f]/u.test(part)?['party-native:'+part,'party-latin:'+partyKey(part)]:['party:'+partyKey(part)]);
+const partyComponent=part=>/\p{L}/u.test(part)&&(Array.from(part).length>=2||!/\p{Script=Latin}/u.test(part));
+export const privatePartyKeys=value=>clean(value).split(/[^\p{L}\p{M}\p{N}]+/u).filter(partyComponent).flatMap(part=>/[\u0900-\u097f]/u.test(part)?['party-native:'+part,'party-latin:'+partyKey(part)]:[(partyFunctionWords.includes(part)?'party-ref:':'party:')+partyKey(part)]);
 
 export function privateEvidenceValues(value){
   const values=[clean(value)];
@@ -245,6 +244,22 @@ export function privateOriginStart(value){
   const normalized=normalizePrivateText(value),match=new RegExp(privateOriginHeader,'u').exec(normalized.text);
   return match?normalized.origins[match.index]?.start??0:null;
 }
+function proseOriginFields(source){
+  const start=new RegExp(privateOriginDocumentStart,'u').exec(source);if(!start)return [];
+  source=source.slice(start.index);
+  for(const [pattern,reversed] of [[privateOriginAmountFirst,false],[privateOriginPartyFirst,true]]){
+    const match=new RegExp(pattern,'u').exec(source);if(!match)continue;
+    let amount=match[reversed?2:1],party=match[reversed?1:2];const fields=[];
+    const amountTail=new RegExp(privateOriginTailDate,'u').exec(amount);
+    if(amountTail&&privateFieldKeys(amountTail[1]).some(key=>key.startsWith('date:'))){fields.push({value:amountTail[1],number:false,party:false});amount=amount.slice(0,amountTail.index);}
+    if(!privateFieldKeys(amount).some(key=>key.startsWith('number:')))continue;
+    fields.push({value:amount,number:true,party:false});
+    const tail=new RegExp(privateOriginTailDate,'u').exec(party);
+    if(tail&&privateFieldKeys(tail[1]).some(key=>key.startsWith('date:'))){fields.push({value:tail[1],number:false,party:false});party=party.slice(0,tail.index);}
+    fields.push({value:party,number:false,party:true});return fields;
+  }
+  return [];
+}
 function privateOriginFields(value){
   if(decodePrivateJSON(String(value))!==undefined)return null;
   let text=clean(String(value??'').replace(/[\r\n]+/g,',')).replace(new RegExp(originDateCommaPattern,'gu'),'$1 $2');
@@ -258,11 +273,13 @@ function privateOriginFields(value){
   let pendingParty=new RegExp(privateOriginPartyHeader,'u').test(match[0]),pendingNumber=new RegExp(privateOriginNumberLabel,'u').test(match[0]);
   const fields=parts.map(part=>{
     let field=part.trim(),party=pendingParty,number=pendingNumber;
+    if(new RegExp(privateOriginRecordHeader,'u').test(field)){pendingParty=true;pendingNumber=false;return {value:field.replace(new RegExp(privateOriginRecordHeader,'u'),''),number:false,party:false};}
     // Forwarded/quoted declarations can have nested headers. Strip those using
     // the same grammar rather than retaining function words as party names.
     for(let prior;prior!==field;){
       prior=field;field=field.replace(/^[:> ]+/u,'').replace(/^[\p{Quotation_Mark}ʼ]+|[\p{Quotation_Mark}ʼ]+$/gu,'');
       party ||= new RegExp(privateOriginPartyLabel,'u').test(field);number ||= new RegExp(privateOriginNumberLabel,'u').test(field);
+      if(new RegExp(privateOriginRecordHeader,'u').test(field)){pendingParty=true;pendingNumber=false;return {value:field.replace(new RegExp(privateOriginRecordHeader,'u'),''),number:false,party:false};}
       const header=new RegExp(privateOriginHeader,'u').exec(field);
       if(header?.index===0){party ||= new RegExp(privateOriginPartyHeader,'u').test(header[0]);number ||= new RegExp(privateOriginNumberLabel,'u').test(header[0]);field=field.slice(header[0].length);}
       field=field.replace(new RegExp(privateOriginFieldPrefix,'u'),'').replace(new RegExp(privateOriginFieldLabel,'u'),'');
@@ -270,7 +287,7 @@ function privateOriginFields(value){
     pendingParty=field?'':party;pendingNumber=field?'':number;
     return {value:field,number,party:party&&!privateFieldKeys(field).some(key=>/^(?:number|date):/.test(key))};
   }).filter(field=>field.value);
-  return {source:text,fields};
+  fields.push(...proseOriginFields(text));return {source:text,fields};
 }
 export const privateOriginValues=value=>{const parsed=privateOriginFields(value);return parsed?[parsed.source,...parsed.fields.map(field=>field.value)]:[];};
 export function privateOriginKeys(value){
@@ -290,7 +307,7 @@ export function privateFieldKeys(value){
   return [...keys];
 }
 export function createPrivateValueMatcher(terms=[]){
-  const retainedNumbers=new Set(),retainedDates=[],literals=[],parties=new Set(),nativeParties=new Set(),latinParties=new Set();
+  const retainedNumbers=new Set(),retainedDates=[],literals=[],parties=new Set(),nativeParties=new Set(),latinParties=new Set(),referenceParties=new Set();
   const expanded=terms.flatMap(raw=>String(raw??'').startsWith('evidence:')?privateEvidenceValues(String(raw).slice(9)):String(raw??'').startsWith('origin:')?privateOriginKeys(String(raw).slice(7)).filter(key=>!key.startsWith('origin:')):[raw]);
   const compile=term=>{
     if(/^number:[0-9]+(?:\.[0-9]+)?$/.test(term)){const [a,b]=term.slice(7).split('.');retainedNumbers.add(exact(a,b));return true;}
@@ -298,6 +315,7 @@ export function createPrivateValueMatcher(terms=[]){
     if(tagged){const value=dateValue(tagged[1]==='*'?null:Number(tagged[1]),Number(tagged[2]),Number(tagged[3]));if(value)retainedDates.push(value);return true;}
     if(term.startsWith('party-native:')){nativeParties.add(term.slice(13));return true;}
     if(term.startsWith('party-latin:')){latinParties.add(term.slice(12));return true;}
+    if(term.startsWith('party-ref:')){referenceParties.add(term.slice(10));return true;}
     if(term.startsWith('party:')){parties.add(term.slice(6));return true;}
     if(term.startsWith('identifier:')){literals.push(identifierPattern(term.slice(11)));return true;}return false;
   };
@@ -309,11 +327,14 @@ export function createPrivateValueMatcher(terms=[]){
   const partyMatches=(content,ordinary=false)=>{
     return [...content.matchAll(/[\p{L}\p{M}\p{N}]+/gu)].filter(m=>{
       const term=m[0],matched=/[\u0900-\u097f]/u.test(term)?nativeParties.has(term)||parties.has(partyKey(term)):parties.has(partyKey(term))||latinParties.has(partyKey(term));
-      if(!matched||!partyComponent(term))return false;
+      const referenceKey=referenceParties.has(partyKey(term));if(!matched&&!referenceKey)return false;
+      const before=content.slice(0,m.index).split(/[;.!?\n]/u).at(-1),after=content.slice(m.index+term.length).split(/[;.!?\n]/u)[0];
+      const personalParticle=!partyGrammarWords.includes(term)&&!new RegExp(partyDeterminerBefore,'u').test(before)&&(new RegExp(partyReferenceAfter,'u').test(after)||new RegExp(partyPredicateAfter,'u').test(after)||new RegExp(partyQuestionBefore,'u').test(before));
+      const reference=referenceKey&&(content===term||personalParticle||new RegExp(partyReferenceBefore,'u').test(before)&&new RegExp(partyReferenceAfter,'u').test(after));
+      if((!matched&&!reference)||!partyComponent(term))return false;
       if(!ordinary)return true;
       // Exempt only the occurrence bound to a linguistic label within its own
       // clause. An etymology question cannot launder another private reference.
-      const before=content.slice(0,m.index).split(/[;.!?\n]/u).at(-1),after=content.slice(m.index+term.length).split(/[;.!?\n]/u)[0];
       const clause=before+term+after;
       if(new RegExp(partyReference,'u').test(clause))return true;
       return !(/(?:surname|given name|word|name) +$/u.test(before)&&!after.trim()||/^ +is +(?:a +)?common +(?:surname|given name|word|name) *$/u.test(after)&&!before.trim());
@@ -329,7 +350,7 @@ export function createPrivateValueMatcher(terms=[]){
     if(found.spans.some(([start,end])=>[...numeric(content.slice(start,end))].some(n=>retainedNumbers.has(n))))return true;
     // Do not reinterpret the parts of an explicit non-matching date as amounts.
     const masked=content.split('');for(const [start,end] of found.spans)for(let i=start;i<end;i++)masked[i]=' ';
-    return retainedNumbers.size>0&&[...numbers(masked.join(''))].some(n=>retainedNumbers.has(n)||n==='numeric-bound-exceeded');
+    return retainedNumbers.size>0&&[...numbers(masked.join(''),undefined,retainedNumbers)].some(n=>retainedNumbers.has(n));
   };
   // Decode protocol JSON before checking its values. Keys are data too. The
   // same traversal owns current text, history, tools, responses and writes.
@@ -358,7 +379,7 @@ export function createPrivateValueMatcher(terms=[]){
         ||[...numeric(content.slice(start,end))].some(n=>retainedNumbers.has(n)))add(start,end);
       for(let j=start;j<end;j++)masked[j]=' ';
     }
-    numbers(masked.join(''),(keys,start,end)=>{if(keys.some(key=>retainedNumbers.has(key)||key==='numeric-bound-exceeded'&&retainedNumbers.size>0))add(start,end);});
+    numbers(masked.join(''),(keys,start,end)=>{if(keys.some(key=>retainedNumbers.has(key)))add(start,end);},retainedNumbers);
     return ranges;
   };
   return contains;

@@ -27,12 +27,19 @@ export const privateDocumentKeyPattern='invoice|payment|receipt|customer|client|
 // history screening and write guards. Domain questions alone are not origins.
 export const privateDataDeclaration=`(?<![a-z0-9_])(?:(?:new|नया) +invoice(?![a-z0-9_])|(?:set|change|correct|update|edit|modify|fix|create|log|save|record|mark)(?![a-z0-9_])(?:(?!(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_]))[^;.!?]){0,60}(?<![a-z0-9_])(?:invoices?|receipts?|payments?|paid|unpaid|total|subtotal|tax|notes?|currency|due date|invoice date|amount|customer|client|balance)(?![a-z0-9_])|(?:invoice(?: number| no| date)?|due date|total|subtotal|tax|amount|currency|notes?|customer(?: name)?|client(?: name)?)(?: +(?:is|was|are|were)(?![a-z0-9_]) *| *[:=] *))`;
 const financialQuoteHint='(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]* *, *due +[0-9])';
-const documentAttribution='(?:(?:this|the|our|my|that|an?) +)?(?:invoices?|bills?|receipts?) +(?:(?:is|was|are|were) +)?(?:from|for|to|belongs? +to|issued +by|sent +by) +';
-export const privateOriginHeader=`(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*${financialQuoteHint})|${documentAttribution}|(?:invoice|bill|receipt) *(?=[:,]))|${privateDataDeclaration}`;
+const documentAttribution='(?:(?:this|the|our|my|that|an?) +)?(?:invoices?|bills?|receipts?) +(?:(?:is|was|are|were) +)?(?:from|for|to|of|belongs? +to|issued +by|sent +by) +';
+// Record identity and relational prose are declarative source forms. All
+// downstream sinks consume this same grammar before ordinary-clause separation.
+export const privateOriginDocumentStart='(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +)?(?:(?:the|an?|my|our|this|that) +)?(?:invoices?|bills?|receipts?)(?![a-z0-9_])';
+export const privateOriginRecordHeader='^(?:(?:here|below|following|attached) +(?:is|are) +)?(?:(?:the|an?|my|our|this|that) +)?(?:invoices?|bills?|receipts?)(?: +number(?![a-z0-9_]) *[:#=]? *| +no\\.?(?= *[:#=]| +|[a-z0-9._/-]*[0-9]) *[:#=]? *| *[#№] *)';
+export const privateOriginAmountFirst='^(?:(?:here|below|following|attached) +(?:is|are) +)?(?:(?:the|an?|my|our|this|that) +)?(?:invoices?|bills?|receipts?)(?: +(?:of|for|amount(?: +of)?|total(?: +of)?))? +(.+?) +(?:to|from|for) +(.+)$';
+export const privateOriginPartyFirst='^(?:(?:here|below|following|attached) +(?:is|are) +)?(?:(?:the|an?|my|our|this|that) +)?(?:invoices?|bills?|receipts?) +(?:to|from|for) +(.+?) +(?:of|for|total(?: +of)?|amount(?: +of)?) +(.+)$';
+export const privateOriginTailDate='(?: *, *| +)(?:due(?: +date)?|invoice +date) *(?::|=|(?:is|was) +)? *(.+)$';
+export const privateOriginHeader=`(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*${financialQuoteHint})|${privateOriginRecordHeader.slice(1)}|${documentAttribution}|(?:invoice|bill|receipt) *(?=[:,]))|${privateDataDeclaration}`;
 export const privateOriginPartyHeader='^(?:(?:(?:here|below|following|attached) +(?:is|are) +)?(?:(?:the|an?|my|our|this|that) +)?(?:invoices?|bills?|receipts?)(?![a-z0-9_]| +(?:number|no|date))|(?:forwarded|quoted|copied|pasted)|(?:customer|client)(?: +name)?|(?:set|change|correct|update|edit|modify|fix) +(?:customer|client)(?: +name)?)';
 export const privateOriginPartyLabel='^(?:bill +to|ship +to|customer(?: +name)?|client(?: +name)?|party(?: +name)?|company(?: +name)?|from|to)(?![a-z0-9_])';
 export const privateOriginNumberLabel='^(?:(?:set|change|correct|update|edit|modify|fix) +)?(?:total|subtotal|tax|amount|balance|rate|quantity)(?![a-z0-9_])';
-export const privateOriginFieldPrefix='^(?:from|to|for|belongs? +to|(?:issued|sent) +by) +';
+export const privateOriginFieldPrefix='^(?:from|to|for|of|belongs? +to|(?:issued|sent) +by) +';
 export const privateOriginFieldLabel='^(?:due(?: +date)?|invoice +date|bill +to|ship +to|customer(?: +name)?|client(?: +name)?|party(?: +name)?|company(?: +name)?|amount|total) *(?::|=|(?:is|was) +)? *';
 
 // Lexical translations preserve offsets and do not alter names/Unicode keys.
@@ -51,14 +58,23 @@ export const originDateCommaPattern=`(${namedBareDates.join('|')})[ ./-]*,[ ./-]
 export const partyTransliteration=Object.fromEntries(Object.entries({'अ':'a','आ':'aa','इ':'i','ई':'ii','उ':'u','ऊ':'uu','ऋ':'ri','ए':'e','ऐ':'ai','ओ':'o','औ':'au','क':'ka','ख':'kha','ग':'ga','घ':'gha','ङ':'nga','च':'cha','छ':'chha','ज':'ja','झ':'jha','ञ':'nya','ट':'ta','ठ':'tha','ड':'da','ढ':'dha','ण':'na','त':'ta','थ':'tha','द':'da','ध':'dha','न':'na','प':'pa','फ':'pha','ब':'ba','भ':'bha','म':'ma','य':'ya','र':'ra','ल':'la','व':'va','श':'sha','ष':'sha','स':'sa','ह':'ha','ळ':'la','ा':'aa','ि':'i','ी':'ii','ु':'u','ू':'uu','ृ':'ri','े':'e','ै':'ai','ो':'o','ौ':'au','्':'','ं':'n','ँ':'n','ः':'h','़':''}));
 export const partyReference='(?:ask|contact|call|pay|send(?: +to)?|tell +me +about|advice +from|talk +to|message|email|फोन|पूछो|पूछें|भेजो)';
 
-// Grammatical function words are not independently identifying party components.
-// Complete field/identifier keys still protect the complete formal name.
+// Formal components that also serve as grammar remain reference-scoped keys.
+// They are protected as personal targets, not as articles in unrelated prose.
 export const partyFunctionWords=['a','an','the','and','or','of','for','to','in','on','at','by','with','from','de','del','la','le','van','von','da','di'];
 // Enumeration is a syntactic frame before the candidate, never a noun found
 // elsewhere in a message (e.g. a singular decimal on a shopping list).
-export const numericEnumerationFrame='(?:\\b(?:between|among)|\\b[\\p{L}\\p{M}]+s +(?:are|were|include|contain|equal)|\\b(?:pair|couple) +(?:is|was)) *$';
+export const numericEnumerationFrame='(?:\\b(?:between|among)|\\b[\\p{L}\\p{M}]+s +(?:are|were|include|contain|equal)|\\b[\\p{L}\\p{M}]+s(?= *:)|\\b(?:pair|couple) +(?:is|was)) *(?:: *)?$';
 // Only transport padding is removed before JSON decoding. String values are
 // decoded first, then canonically screened; normalization must not change JSON.
 export const privateJSONPadding=/[\p{White_Space}\p{Cf}]/u;
+export const PRIVATE_NUMBER_LIST_MAX_GROUPS=32; // Bounded ambiguity windows, not a message-length wall.
 
-export const PRIVATE_NUMBER_LIST_MAX_GROUPS=32; // Full partition graph; longer runs use linear retention and fail-closed screening.
+// A grammatical formal component is a target only in its own reference slot.
+export const partyReferenceBefore='(?:'+partyReference+'|(?:to|from|with|about|by|for)|(?:customer|client|party|company|given|family|sur) *name *(?::|=|is)?) +$';
+export const partyReferenceAfter='^(?: *$| *[,;.!?]| +(?:for|to|from|about|with|at|today|tomorrow|yesterday|please)(?![a-z0-9_]))';
+
+// English grammar roles are distinct from formal name particles.
+export const partyGrammarWords=['a','an','the','and','or','of','for','to','in','on','at','by','with','from'];
+export const partyDeterminerBefore='(?:^| +)(?:a|an|the|some|this|that|my|our|your|his|her|their) +$';
+export const partyPredicateAfter='^ +(?:is|was|are|were|has|had|will|can|could|would|did|does|came|comes|went|said)(?![a-z0-9_])';
+export const partyQuestionBefore='(?:^| +)(?:is|was|are|were|has|had|will|can|could|would|did|does) +$';

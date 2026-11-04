@@ -8,7 +8,7 @@ for(let cp=0;cp<=0x10ffff;cp++){
   let normalized='';
   for(const part of ch.normalize('NFKD').replace(/[\u0300-\u036f\uFE00-\uFE0F\u{E0100}-\u{E01EF}\p{Cf}]/gu,'').toUpperCase().toLowerCase().normalize('NFKD')){
     if(/[\u0300-\u036f\uFE00-\uFE0F\u{E0100}-\u{E01EF}\p{Cf}]/u.test(part))continue;
-    normalized+=/\p{White_Space}/u.test(part)?' ':part==='\u066b'?'.':/[\u066c\u060c]/u.test(part)?',':digit.get(part.codePointAt(0))??part;
+    normalized+=/\p{White_Space}/u.test(part)?' ':/[\p{Pd}\u2212]/u.test(part)?'-':part==='\u066b'?'.':/[\u066c\u060c]/u.test(part)?',':digit.get(part.codePointAt(0))??part;
   }
   const fraction=ch.normalize('NFKD').match(/^([0-9]+)⁄([0-9]+)$/u);
   if(fraction){const words=['zero','one','two','three','four','five','six','seven','eight','nine'];const denominators={2:'half',3:'third',4:'quarter',5:'fifth',6:'sixth',7:'seventh',8:'eighth',9:'ninth',10:'tenth'};if(denominators[fraction[2]])normalized=' and '+words[Number(fraction[1])]+' '+denominators[fraction[2]]+' ';}

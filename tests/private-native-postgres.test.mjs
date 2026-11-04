@@ -56,6 +56,13 @@ test('native PostgreSQL: realistic default ACLs, numeric watermarks, concurrent 
   assert.equal((await one("select relrowsecurity from pg_class where oid='app.private_invoice_canonical_inputs'::regclass")).relrowsecurity,true);
   for(const role of ['anon','authenticated','service_role'])for(const permission of ['select','insert','update','delete'])assert.equal((await one("select has_table_privilege($1,'app.private_invoice_canonical_inputs',$2) ok",[role,permission])).ok,false);
   for(const role of ['anon','authenticated','service_role'])for(const helper of ['app.retain_private_invoice_field(uuid,text,text)','app.invalidate_private_canonical_inputs()'])assert.equal((await one("select has_function_privilege($1,$2,'execute') ok",[role,helper])).ok,false);
+  for(const table of ['app.private_invoice_capture_epochs','app.private_invoice_capture_state']){
+   assert.equal((await one('select relrowsecurity from pg_class where oid=$1::regclass',[table])).relrowsecurity,true);
+   for(const role of ['anon','authenticated','service_role'])for(const permission of ['select','insert','update','delete','truncate'])assert.equal((await one('select has_table_privilege($1,$2,$3) ok',[role,table,permission])).ok,false);
+  }
+  const captureMeta=await one("select provolatile,prosecdef,proconfig from pg_proc where oid='app.private_invoice_capture_revision(uuid)'::regprocedure");
+  assert.equal(captureMeta.provolatile,'s');assert.equal(captureMeta.prosecdef,false);assert.deepEqual(captureMeta.proconfig,['search_path=""']);
+  for(const role of ['anon','authenticated','service_role'])for(const helper of ['app.private_invoice_capture_revision(uuid)','app.truncate_private_canonical_inputs()'])assert.equal((await one("select has_function_privilege($1,$2,'execute') ok",[role,helper])).ok,false);
   results.defaultACLs='PASS';
   const execute=async sql=>{const r=await q(sql);return (Array.isArray(r)?r:[r]).find(r=>r.rows?.[0]?.result)?.rows[0].result;};
   let preBatches=0;while(!(await one("select complete from whatsapp_private_invoice_backfill where source='customer_quotes'")).complete){await execute(privateBackfillBatchSQL(100));preBatches++;} // respect soft yield
@@ -139,6 +146,19 @@ test('native PostgreSQL: realistic default ACLs, numeric watermarks, concurrent 
   results.warmCanonicalCalls=(await q("select funcname,calls from pg_stat_xact_user_functions where schemaname='app' and funcname in ('private_invoice_term_aliases','private_invoice_origin_documents','retain_private_invoice_field') order by funcname")).rows;
   assert.ok(Number(results.warmCanonicalCalls.find(r=>r.funcname==='private_invoice_term_aliases')?.calls??0)<59,JSON.stringify(results.warmCanonicalCalls));await q('commit');
   for(const n of [60,250,1000])assert.equal((await one('select exists(select 1 from whatsapp_private_invoice_terms where workspace_id=$1 and term=$2) ok',[workspace,'number:'+(1250+n)])).ok,true);
+  // Maintenance invalidation is transactional. It changes neither API grants
+  // nor surviving aliases/cache when the privileged maintenance is rolled back.
+  const maintenanceBefore={revision:await one('select app.private_invoice_capture_revision($1) v',[workspace]),counts:await one('select (select count(*) from whatsapp_private_invoice_terms) terms,(select count(*) from app.private_invoice_canonical_inputs) inputs')};
+  await q('begin');await q("delete from whatsapp_private_invoice_terms where workspace_id=$1 and term='number:1251'",[workspace]);
+  assert.notDeepEqual(await one('select app.private_invoice_capture_revision($1) v',[workspace]),maintenanceBefore.revision);
+  assert.equal((await one('select count(*)::int n from app.private_invoice_canonical_inputs where workspace_id=$1',[workspace])).n,0);await q('rollback');
+  assert.deepEqual(await one('select app.private_invoice_capture_revision($1) v',[workspace]),maintenanceBefore.revision);
+  await q('begin');await q('truncate whatsapp_private_invoice_terms');
+  assert.equal((await one('select count(*)::int n from app.private_invoice_canonical_inputs')).n,0);
+  assert.notDeepEqual(await one('select app.private_invoice_capture_revision($1) v',[workspace]),maintenanceBefore.revision);await q('rollback');
+  assert.deepEqual(await one('select app.private_invoice_capture_revision($1) v',[workspace]),maintenanceBefore.revision);
+  assert.deepEqual(await one('select (select count(*) from whatsapp_private_invoice_terms) terms,(select count(*) from app.private_invoice_canonical_inputs) inputs'),maintenanceBefore.counts);
+  results.maintenanceEpochRollback='PASS: workspace DELETE and global TRUNCATE epochs/cache/aliases roll back together';
   const timeoutTerm='number:'+(45678+Math.min(...ids));await q("update whatsapp_private_invoice_backfill set complete=source<>'reviews',last_key=null,upper_key=null");await q('delete from whatsapp_private_invoice_terms where term=$1',[timeoutTerm]);
   assert.equal((await one('select count(*)::int n from app.private_invoice_canonical_inputs where workspace_id=$1',[workspace])).n,0,'Privileged alias removal invalidates completion before timeout/rebuild');
   await q(`create function app.r5_timeout() returns trigger language plpgsql as $$begin if new.term='${timeoutTerm}' then perform pg_sleep(8);end if;return new;end $$;create trigger r5_timeout before insert on whatsapp_private_invoice_terms for each row execute function app.r5_timeout()`);

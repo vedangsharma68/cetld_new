@@ -19,7 +19,7 @@ const samples=['The figures are 1,250.00','Choose between 1250,77,2500',Array.fr
 test('round6 all decoded privacy boundaries use production memory, real provider serialization and actual SQL retention',async t=>{
  const f=await fixture();let n=0;
  try{
-  await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,{total:1250,amount:1250000000000,balance:1000000000000,partyNames:['Anurag Sharma','Green1 Materials LLC','李 王','𠀀 王']}]);
+  await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,{total:1250,amount:1250000000000,balance:1000000000000,privateListMember:600,partyNames:['Anurag Sharma','Green1 Materials LLC','李 王','𠀀 王']}]);
   for(const audience of ['owner','customer'])for(const surface of boundaries)for(const value of samples)await t.test(audience+'/'+surface+'/'+value,async()=>{
    await f.db.query('delete from whatsapp_provider_memory where workspace_id=$1',[f.scope.workspaceId]);
    const scope={...f.scope,audience,messageId:'r6-'+(++n)},memory=createPrivateChatMemory({supabase:f.supabase,scope}),wires=[];let leg=0;
@@ -156,7 +156,7 @@ test('round6 numeric interpretations never discard a private whole value; retain
 
 test('round6 long numeric runs stay local without consuming an independent ordinary clause with an unrelated number',async()=>{
  const wires=[],f=await fixture();try{
-  await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,{total:1250}]);
+  await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,{total:1250,privateListMember:600}]);
   for(const audience of ['owner','customer']){
    const memory=createPrivateChatMemory({supabase:f.supabase,scope:{...f.scope,audience,messageId:'numeric-bound-'+audience}}),run=Array.from({length:33},(_,i)=>String(600+i)).join(',');
    const message='Help me plan a walk for 2 people; '+run;
