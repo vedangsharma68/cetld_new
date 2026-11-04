@@ -83,9 +83,50 @@ SQL changes in this round:
    traversal; `retain_private_origin_terms` consumes its decoded documents.
    Existing term/history/memory triggers consequently capture the same origins.
 
-No tables, cursor ordering, role grants, source-table capture events, dispatcher,
-Zoho provenance, dashboard, commercial-send policy or older migration change.
+7. Optimize the SQL fold with an ASCII fast path and a single pass over Unicode
+   code points. The generated map and JS semantics are unchanged; a test compares
+   every generated mapping, ASCII controls and unmapped Unicode samples.
+8. Add the internal RLS-protected `app.private_invoice_canonical_inputs` table.
+   Only hashes of workspace, raw input, semantic field role and the generated
+   canonicalizer revision are stored. PUBLIC, anon, authenticated and service_role
+   receive no privileges. The append-only aliases and completion marker commit
+   together; a failure leaves neither completion nor partial aliases. Repeated
+   inputs can skip completed work without discarding OLD/NEW capture.
+9. Add restricted invoker `retain_private_invoice_field(uuid,text,text)` and the
+   immutable generated `private_invoice_canonical_revision()`. Distinct typed
+   fields are captured once per workspace/revision. Generic, monetary, party,
+   numeric and printed-evidence roles remain separate. Origin capture is revisited
+   on revision changes even when the old raw term already exists; ordinary audit
+   turns do not create negative origin-cache entries. The revision includes SQL,
+   Unicode/JS canonicalization and capture rules, so changed semantics invalidate
+   prior completions automatically without deleting data.
+10. Add a restricted statement-level alias-deletion trigger. API roles still
+    cannot delete aliases. If a privileged repair removes any, workspace-local
+    completion markers are invalidated atomically, so a rebuild cannot skip
+    missing aliases. No private aliases or provenance are deleted by this trigger.
+
+No cursor ordering, existing role grants, source-table capture events, dispatcher,
+Zoho provenance, dashboard, commercial-send policy or older migration changes.
 The migration filename is unchanged. Repin the final file before rollout.
+
+## Vercel scope and performance follow-up
+
+The LF/CRLF scope probe used `now()-2 minutes` against a review created at
+`now()-1 minute`. After a slow test, that timestamp becomes newer than the review,
+so accepting it is correct. The stale source now precedes the actual review by
+one microsecond. The existing rejection assertion is unchanged. Additional SQL
+tests simulate a ten-minute-old review and check before/exact/after boundaries
+for both source timestamps. No production authorization routine changed.
+
+Native profiling of 59 same-sized invoice updates found 23,656 normalization
+calls before optimization, while decoded-document traversal ran only twice.
+The completion cache removes repeated alias work rather than increasing any
+timeout. The five-second statement limit remains in force. The native gate now
+measures warm and cold unique-Unicode-note updates at 1, 10, 59, 250 and 1000
+invoices, with source statements bounded to 59 rows. It also checks cache ACLs,
+no completion on rollback, idempotent resume, semantic-role/workspace isolation
+and revision invalidation. Timing evidence must be reported for the final SHA;
+local timings are not a production SLA.
 
 ## Test contact data
 

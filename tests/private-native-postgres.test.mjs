@@ -53,6 +53,9 @@ test('native PostgreSQL: realistic default ACLs, numeric watermarks, concurrent 
   assert.equal((await one("select has_table_privilege('service_role','whatsapp_private_invoice_terms','delete') ok")).ok,false);
   for(const role of ['anon','authenticated'])assert.equal((await one("select has_sequence_privilege($1,'whatsapp_provider_memory_id_seq','usage') ok",[role])).ok,false);
   assert.equal((await one("select has_sequence_privilege('service_role','whatsapp_provider_memory_id_seq','update') ok")).ok,false);
+  assert.equal((await one("select relrowsecurity from pg_class where oid='app.private_invoice_canonical_inputs'::regclass")).relrowsecurity,true);
+  for(const role of ['anon','authenticated','service_role'])for(const permission of ['select','insert','update','delete'])assert.equal((await one("select has_table_privilege($1,'app.private_invoice_canonical_inputs',$2) ok",[role,permission])).ok,false);
+  for(const role of ['anon','authenticated','service_role'])for(const helper of ['app.retain_private_invoice_field(uuid,text,text)','app.invalidate_private_canonical_inputs()'])assert.equal((await one("select has_function_privilege($1,$2,'execute') ok",[role,helper])).ok,false);
   results.defaultACLs='PASS';
   const execute=async sql=>{const r=await q(sql);return (Array.isArray(r)?r:[r]).find(r=>r.rows?.[0]?.result)?.rows[0].result;};
   let preBatches=0;while(!(await one("select complete from whatsapp_private_invoice_backfill where source='customer_quotes'")).complete){await execute(privateBackfillBatchSQL(100));preBatches++;} // respect soft yield
@@ -88,7 +91,7 @@ test('native PostgreSQL: realistic default ACLs, numeric watermarks, concurrent 
     values($1,$2,$3,'+12025550101',$4,$5,'user',$6,'ordinary_chat_v1') returning id`,[workspace,audience==='owner'?owner:null,audience==='customer'?customer:null,audience,'native-nested-'+audience+prefix,source]);
    assert.equal(row.rows.length,0);await q('commit');nativeOrigins.push({audience,prefix:prefix.codePointAt(0)??null,kind,inserted:0});
   }
-  for(const helper of ['private_invoice_number_scalar(text)','private_invoice_numeric_candidates(text,boolean)','private_invoice_decode_json(text)','private_invoice_origin_documents(jsonb,integer)']){
+  for(const helper of ['private_invoice_canonical_revision()','private_invoice_number_scalar(text)','private_invoice_numeric_candidates(text,boolean)','private_invoice_decode_json(text)','private_invoice_origin_documents(jsonb,integer)']){
    const meta=await one('select provolatile,prosecdef,proconfig from pg_proc where oid=$1::regprocedure',['app.'+helper]);
    assert.equal(meta.provolatile,'i');assert.equal(meta.prosecdef,false);assert.deepEqual(meta.proconfig,['search_path=""']);
    for(const role of ['anon','authenticated','service_role'])assert.equal((await one("select has_function_privilege($1,$2,'execute') ok",[role,'app.'+helper])).ok,false);
@@ -107,9 +110,40 @@ test('native PostgreSQL: realistic default ACLs, numeric watermarks, concurrent 
   // Representative multi-row writes, with the reviewer-imposed 5-second cap.
   await q("set statement_timeout='5s'");const start=performance.now();assert.equal((await q("update invoices set notes='updated local note' where id=any($1::uuid[])",[seeded])).rowCount,59);const elapsed=performance.now()-start;
   results.triggerWrites={rows:59,totalMs:Math.round(elapsed),meanMs:Math.round(elapsed/59),statementLimitMs:5000};assert.ok(elapsed<5000,JSON.stringify(results.triggerWrites));
+  // Production has 56 invoices (JSON mean/max 1678/3063 bytes). Scale to 1000
+  // same-sized invoices; retain the same five-second limit on every source
+  // statement, including cold unique Unicode notes. Never enlarge it for CI.
+  const scaleIds=[...seeded],batchSize=59;
+  for(let first=60;first<=1000;first+=batchSize){
+   const last=Math.min(1000,first+batchSize-1);
+   scaleIds.push(...(await q(`insert into invoices(workspace_id,customer_id,invoice_number,total_amount,currency,status,metadata)
+    select $1,$2,'R6-SCALE-'||n,1250+n,'INR','draft',jsonb_build_object('description',repeat('native invoice details ',70)) from generate_series($3::int,$4::int)n returning id`,[workspace,customer,first,last])).rows.map(r=>r.id));
+  }
+  assert.equal(scaleIds.length,1000);results.triggerScale=[];
+  for(const volume of [1,10,59,250,1000]){
+   const timings={rows:volume,batchRows:batchSize,statementLimitMs:5000,warmMs:0,coldMs:0,maxBatchMs:0};
+   for(const mode of ['cold','warm'])for(let first=0;first<volume;first+=batchSize){
+    const batch=scaleIds.slice(first,Math.min(first+batchSize,volume)),started=performance.now();
+    const result=mode==='warm'
+     ?await q("update invoices set notes='shared synthetic local note' where id=any($1::uuid[])",[batch])
+     :await q("update invoices set notes='किरण Cedar '||id::text||$2||repeat(' confidential details ',20) where id=any($1::uuid[])",[batch,' scale '+volume]);
+    assert.equal(result.rowCount,batch.length);const ms=performance.now()-started;
+    timings[mode+'Ms']+=ms;timings.maxBatchMs=Math.max(timings.maxBatchMs,ms);assert.ok(ms<5000,JSON.stringify({volume,mode,rows:batch.length,ms}));
+   }
+   for(const key of ['warmMs','coldMs','maxBatchMs'])timings[key]=Math.round(timings[key]);results.triggerScale.push(timings);
+  }
+  results.scaledInvoiceBytes=await one('select round(avg(octet_length(to_jsonb(i)::text))) mean,max(octet_length(to_jsonb(i)::text)) max from invoices i where id=any($1::uuid[])',[scaleIds]);
+  // Prove speed comes from completed-input reuse, not omitted private capture.
+  await q("begin;set local track_functions='all'");
+  await q("update invoices set notes='shared synthetic local note' where id=any($1::uuid[])",[seeded]);
+  results.warmCanonicalCalls=(await q("select funcname,calls from pg_stat_xact_user_functions where schemaname='app' and funcname in ('private_invoice_term_aliases','private_invoice_origin_documents','retain_private_invoice_field') order by funcname")).rows;
+  assert.ok(Number(results.warmCanonicalCalls.find(r=>r.funcname==='private_invoice_term_aliases')?.calls??0)<59,JSON.stringify(results.warmCanonicalCalls));await q('commit');
+  for(const n of [60,250,1000])assert.equal((await one('select exists(select 1 from whatsapp_private_invoice_terms where workspace_id=$1 and term=$2) ok',[workspace,'number:'+(1250+n)])).ok,true);
   const timeoutTerm='number:'+(45678+Math.min(...ids));await q("update whatsapp_private_invoice_backfill set complete=source<>'reviews',last_key=null,upper_key=null");await q('delete from whatsapp_private_invoice_terms where term=$1',[timeoutTerm]);
+  assert.equal((await one('select count(*)::int n from app.private_invoice_canonical_inputs where workspace_id=$1',[workspace])).n,0,'Privileged alias removal invalidates completion before timeout/rebuild');
   await q(`create function app.r5_timeout() returns trigger language plpgsql as $$begin if new.term='${timeoutTerm}' then perform pg_sleep(8);end if;return new;end $$;create trigger r5_timeout before insert on whatsapp_private_invoice_terms for each row execute function app.r5_timeout()`);
   const before=await one("select * from whatsapp_private_invoice_backfill where source='reviews'");await assert.rejects(execute(privateBackfillBatchSQL(1)),e=>e.code==='57014');await q('rollback');assert.deepEqual(await one("select * from whatsapp_private_invoice_backfill where source='reviews'"),before);assert.equal((await one('select exists(select 1 from whatsapp_private_invoice_terms where term=$1) ok',[timeoutTerm])).ok,false);
+  assert.equal((await one("select exists(select 1 from app.private_invoice_canonical_inputs where input_kind='number' and input_hash=sha256(convert_to($1,'UTF8'))) ok",[timeoutTerm.slice(7)])).ok,false,'Failed alias work must not leave a completed cache marker');
   await q('drop trigger r5_timeout on whatsapp_private_invoice_terms');await runPrivateInvoiceBackfill({execute,batchSize:25});results.timeoutRollbackResume='PASS';
   console.log('NATIVE_PRIVACY_PROOF '+JSON.stringify(results));
  }finally{await locker?.end().catch(()=>{});await db?.end().catch(()=>{});await pg.stop();}
