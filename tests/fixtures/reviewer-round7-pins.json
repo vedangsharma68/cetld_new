@@ -1,0 +1,50 @@
+[
+  {
+    "file": "tests/reviewer-round7-independent-regressions.source.mjs",
+    "sha256": "2010b8bb8f7922735e64148d524581fe2ac7f52955330901a9366c39f0dece83"
+  },
+  {
+    "file": "tests/reviewer-round7-boundary-regressions.source.mjs",
+    "sha256": "b287cd31282664492ab5729cd7aa392239ee1245a5b9f3b6c8078eba64e301cc"
+  },
+  {
+    "file": "tests/reviewer-round7-origin-sinks.source.mjs",
+    "sha256": "e521ee849ff4593e03ab2c3b9cb6846e339ae9700b4c4d624825ede3d7fc854b"
+  },
+  {
+    "file": "tests/reviewer-round7-native-prose.source.mjs",
+    "sha256": "ad244d7c7cb072996069b181b675244783ff2b3fa32f9d8bfb1544672ed42562"
+  },
+  {
+    "file": "tests/reviewer-round7-question-origin.source.mjs",
+    "sha256": "17e8190cae279db3ab1a0a621d56f6d351410492a6bd9fe855bbcb79072fb8fd"
+  },
+  {
+    "file": "tests/reviewer-round7-status-usability.source.mjs",
+    "sha256": "94f8615b948ebcecd4672eece100e0442b0c2caf1e5e9b5cc0f1b9d93187633b"
+  },
+  {
+    "file": "tests/reviewer-round7-workspace-delete-scope.source.mjs",
+    "sha256": "848b0431256de4207cb6459b9cef65ee1c917c32c2d3180389012b7287ff0d2e"
+  },
+  {
+    "file": "tests/reviewer-round7-native-concurrency.source.mjs",
+    "sha256": "bb81e9c2bccddb059098b53a89cb65eec32fde86c638e5a379d2efdc46549ce6"
+  },
+  {
+    "file": "tests/reviewer-round7-numeric-budget-quiet.source.mjs",
+    "sha256": "a1e8b5cd7f553f191c69177c93ba1239d14fefd2833f93fc320e965728deacca"
+  },
+  {
+    "file": "tests/reviewer-round7-class-probes.source.mjs",
+    "sha256": "1e4028ab747036fceeb6fecb4883dec39ae5143966bc3c9feece447127fb5eeb"
+  },
+  {
+    "file": "tests/reviewer-round7-key-parity.source.mjs",
+    "sha256": "bfb3697b98e2a4c0efc05e5f8dd18699af1e6846445bb8dcc669dae358109380"
+  },
+  {
+    "file": "tests/fixtures/private-migration-61fea77.sql",
+    "sha256": "fb10f4572d5f5564dec15781e095f61e0ab4036f33e4062588f8fa3093fa941e"
+  }
+]
