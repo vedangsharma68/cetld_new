@@ -47,8 +47,10 @@ const financialSubject="(?:i|we|you|he|she|it|they)(?:['’ʼ](?:m|re|ve|ll|d|s)
 const financialPredicate='(?:invoic(?:es?|ing)|bill(?:s|ing)?)';
 const questionHeads='who|what|which|when|where|why|how';
 const requestHeads='explain|describe|discuss|define|show|tell|teach|help|compare';
+// Presentational/deictic heads are locations, not actors of a finite billing verb.
+const deicticHeads='here|there|below|above';
 const nominalActorToken='(?!(?:'+questionHeads+'|'+financialPredicate+')(?![a-z0-9_]))[^ ,:;.!?]+';
-const nominalActor='(?!(?:'+questionHeads+'|'+requestHeads+')(?![a-z0-9_]))'+nominalActorToken+'(?: +'+nominalActorToken+'){0,5}';
+const nominalActor='(?!(?:'+questionHeads+'|'+requestHeads+'|'+deicticHeads+')(?![a-z0-9_]))'+nominalActorToken+'(?: +'+nominalActorToken+'){0,5}';
 const actorPredicate=originClauseStart+nominalActor+' +(?:(?:(?:'+grammarAuxiliaries.join('|')+') +)+)'+financialPredicate;
 const actorThirdPerson=originClauseStart+nominalActor+' +(?:invoices|bills|invoiced|billed)(?![a-z0-9_])';
 // Finite subject/auxiliary/predicate roles accept tense and aspect without
