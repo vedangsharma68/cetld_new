@@ -72,6 +72,25 @@ test('typed source projections are order independent and public operational symb
    const keys=privateOriginKeys(source);
    assert.deepEqual((await f.db.query('select distinct k from app.private_invoice_origin_aliases($1) k order by k',[source])).rows.map(x=>x.k),[...new Set(keys)].sort());
   }
+  for(const document of [{invoice:{total:{value:'31.10'}},printedEvidence:{total:{value:'31.10'}}},{invoice:{total:{value:'Total: 31.10'}},printedEvidence:{amount:{value:'Amount 31.10'}}}]){
+   await f.db.query('delete from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId]);
+   await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,document]);
+   const typed=(await f.db.query('select * from app.private_invoice_typed_fields($1)',[document])).rows;
+   assert.ok(typed.some(r=>r.kind==='monetary'));assert.ok(!typed.some(r=>r.kind==='generic'));
+   const terms=(await f.db.query('select term from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId])).rows.map(x=>x.term);
+   assert.ok(terms.includes('number:31.1'));assert.ok(!terms.includes('date:*-10-31'));
+  }
+  for(const name of ['Van','An','May']){
+   await f.db.query('delete from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId]);
+   await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,{partyNames:[name],invoice:{customerName:{value:name}},linked_customer:{name},printedEvidence:{customerName:{value:name}}}]);
+   const terms=(await f.db.query('select term from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId])).rows.map(x=>x.term),matcher=createPrivateValueMatcher(terms);
+   assert.ok(terms.includes('party-ref:'+name.toLowerCase()));assert.ok(!terms.includes(name.toLowerCase()));assert.ok(!terms.includes('identifier:'+name.toLowerCase()));
+   assert.equal(matcher('Ask '+name+' for advice'),true);for(const input of ['Travel by van','An apple is tasty','May you explain photosynthesis'])assert.equal(matcher.ordinary(input),false,input);
+   await f.db.query('select app.retain_private_invoice_terms($1,$2)',[f.scope.workspaceId,{custom_fields:{name},notes:name}]);
+   const custom=(await f.db.query('select term from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId])).rows.map(x=>x.term);
+   assert.ok(custom.includes(name.toLowerCase()));assert.equal(createPrivateValueMatcher(custom)(name),true);
+  }
+  for(const role of ['anon','authenticated','service_role'])assert.equal((await f.db.query("select has_function_privilege($1,'app.private_invoice_typed_fields(jsonb)','execute') value",[role])).rows[0].value,false);
   const symbols=(await f.db.query('select unnest(enum_range(null::public.invoice_status))::text value')).rows.map(x=>x.value);
   for(const value of symbols){
    await f.db.query('delete from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId]);

@@ -1,5 +1,5 @@
 import {PRIVATE_UNICODE_FOLD} from './private-value-unicode.mjs';
-import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,numericCurrencyBefore,numericCurrencyAfter,namedDatePatterns,privateDocumentKeyPattern,privateOriginHeader,privateOriginRecordHeader,privateOriginClauseBoundary,originDateCommaPattern,lexicalAliases,partyTransliteration,partyReference,partyGrammarWords,grammarAuxiliaries,partyFunctionWords,numericSelectionWords,numericCollectiveWords,privateOriginEvent,privateOriginNoun,privateOriginCarrier,privateOriginDocumentPrefix,privateOriginPartyLabel,privateOriginMonetaryBefore,privateOriginDateBefore,privateOriginLiteralLabel,privateOriginRelationStart,privateOriginRelationEnd,privateOriginPronouns,privateOriginNameEdge,privateJSONPadding,PRIVATE_NUMBER_LIST_MAX_GROUPS} from './private-value-language.mjs';
+import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,numericCurrencyBefore,numericCurrencyAfter,namedDatePatterns,privateDocumentKeyPattern,privateOriginHeader,privateOriginLexicalHint,privateOriginRecordHeader,privateOriginClauseBoundary,privateNameAbbreviations,originDateCommaPattern,lexicalAliases,partyTransliteration,partyReference,partyGrammarWords,grammarAuxiliaries,partyFunctionWords,numericSelectionWords,numericCollectiveWords,privateOriginEvent,privateOriginNoun,privateOriginCarrier,privateOriginDocumentPrefix,privateOriginPartyLabel,privateOriginMonetaryBefore,privateOriginDateBefore,privateOriginLiteralLabel,privateOriginRelationStart,privateOriginRelationEnd,privateOriginPronouns,privateOriginCopulas,privateOriginGenericPartyStart,privateOriginActorTail,privateOriginPersonalSubject,privateOriginNameEdge,privateJSONPadding,PRIVATE_NUMBER_LIST_MAX_GROUPS} from './private-value-language.mjs';
 // One code-point fold, shared verbatim with SQL, independent of DB/OS locale.
 export const normalizePrivateValue=value=>Array.from(String(value??''),ch=>PRIVATE_UNICODE_FOLD[ch]??ch).join('').replace(/ +/g,' ').trim();
 const clean=normalizePrivateValue;
@@ -246,7 +246,7 @@ export function partyKey(value){return clean(value).replace(/[\p{L}\p{M}]+/gu,te
  if(native)out=out.replace(/a$/u,'').replace(/aa/g,'a').replace(/ii/g,'i').replace(/uu/g,'u');return out;
 });}
 const partyComponent=part=>/\p{L}/u.test(part)&&(Array.from(part).length>=2||!/\p{Script=Latin}/u.test(part));
-export const privatePartyKeys=value=>clean(value).split(/[^\p{L}\p{M}\p{N}]+/u).filter(partyComponent).flatMap(part=>/[\u0900-\u097f]/u.test(part)?['party-native:'+part,'party-latin:'+partyKey(part)]:[(partyFunctionWords.includes(part)?'party-ref:':'party:')+partyKey(part)]);
+export const privatePartyKeys=value=>{const term=clean(value),parts=term.split(/[^\p{L}\p{M}\p{N}]+/u).filter(Boolean);return parts.filter(part=>partyComponent(part)&&!(parts.length>1&&privateNameAbbreviations.includes(part)&&new RegExp('(?<![a-z0-9_])'+part+'[.]','u').test(term))).flatMap(part=>/[\u0900-\u097f]/u.test(part)?['party-native:'+part,'party-latin:'+partyKey(part)]:[(partyFunctionWords.includes(part)?'party-ref:':'party:')+partyKey(part)]);};
 
 export function privateEvidenceValues(value){
   const values=[clean(value)];
@@ -274,7 +274,7 @@ export function* privateOriginDocuments(value,depth=0){
  if(typeof value==='string'){
   const decoded=decodePrivateJSON(value);
   if(decoded!==undefined&&decoded!==value){yield* privateOriginDocuments(decoded,depth+1);return;}
-  const normalized=clean(value);if(/[a-z]/u.test(normalized)&&new RegExp(privateOriginHeader,'u').test(normalized))yield value;
+  const normalized=clean(value.replace(/[\r\n]/g,';'));if(new RegExp(privateOriginLexicalHint,'u').test(normalized)&&new RegExp(privateOriginHeader,'u').test(normalized))yield value;
  }else if(Array.isArray(value)){for(const item of value)yield* privateOriginDocuments(item,depth+1);}
  else if(value&&typeof value==='object'){
   if(Object.keys(value).some(key=>new RegExp(privateDocumentKeyPattern,'u').test(clean(key)))){yield value;return;}
@@ -296,16 +296,16 @@ function originPosition(text){
 }
 export function privateOriginStart(value){
  if(decodePrivateJSON(value)!==undefined&&structuredPrivateOrigin(value))return 0;
- const normalized=normalizePrivateText(value);if(!/[a-z]/u.test(normalized.text))return null;
+ const normalized=normalizePrivateText(String(value??'').replace(/[\r\n]/g,';'));if(!new RegExp(privateOriginLexicalHint,'u').test(normalized.text))return null;
  const start=originPosition(normalized.text);return start===null?null:normalized.origins[start]?.start??0;
 }
-function originClauseBoundary(prefix){let boundary=0;for(const match of prefix.matchAll(new RegExp(privateOriginClauseBoundary,'gu')))boundary=match.index+match[0].length;return boundary;}
+function* originBoundaries(text){for(const match of text.matchAll(new RegExp(privateOriginClauseBoundary,'gu'))){if(match[0]==='.'){const word=text.slice(0,match.index).match(/[\p{L}\p{M}]+$/u)?.[0];if(word&&(Array.from(word).length===1||privateNameAbbreviations.includes(word)))continue;}yield match.index;}}
+function originClauseBoundary(prefix){let boundary=0;for(const index of originBoundaries(prefix))boundary=index+1;return boundary;}
 const nameValue=value=>value.trim().replace(new RegExp(privateOriginNameEdge,'gu'),'').replace(/^[\p{Quotation_Mark}ʼ]+|[\p{Quotation_Mark}ʼ]+$/gu,'').trim();
 function privateOriginFields(value){
  if(decodePrivateJSON(String(value))!==undefined)return null;
- const text=clean(String(value??'').replace(/[\r\n]+/g,',')).replace(new RegExp(originDateCommaPattern,'gu'),'$1 $2'),start=originPosition(text);
- if(start===null)return null;
- const source=text.slice(start),working=lexicalText(source).text,fields=[],numberRanges=[],masked=working.split(''),mask=(a,b)=>{for(let i=a;i<b;i++)masked[i]=' ';};
+ const start=privateOriginStart(value);if(start===null)return null;
+ const source=clean(String(value??'').slice(start).replace(/[\r\n]+/g,',')).replace(new RegExp(originDateCommaPattern,'gu'),'$1 $2'),working=lexicalText(source).text,fields=[],numberRanges=[],masked=working.split(''),mask=(a,b)=>{for(let i=a;i<b;i++)masked[i]=' ';};
  let recordEnd=0;const record=new RegExp(privateOriginRecordHeader.slice(1),'u').exec(working);
  if(record){const a=record.index+record[0].length;recordEnd=a;const identity=/^[\p{L}\p{N}][\p{L}\p{N}._/-]*/u.exec(working.slice(a));if(identity){fields.push({value:identity[0],number:false,party:false});recordEnd=a+identity[0].length;}mask(record.index,recordEnd);}
  // A field's type precedes its interpretation: Total 31.10 is money, while
@@ -318,17 +318,18 @@ function privateOriginFields(value){
   fields.push({value:working.slice(a,b),number:false,party:false});mask(label?.index??a,b);
  }
  numbers(masked.join(''),(keys,a,b)=>{fields.push({value:working.slice(a,b),number:true,party:false});numberRanges.push([a,b]);mask(a,b);});
- const remaining=masked.join(''),stop=remaining.search(/[.!?]/u),limit=stop<0?remaining.length:stop,partyText=remaining.slice(0,limit);
- const addParty=(value,strong=false)=>{value=nameValue(value);if(!value||!/[\p{L}]/u.test(value))return;const words=value.match(/[\p{L}\p{M}]+/gu)||[];if(!strong&&words.length&&words.every(w=>privateOriginPronouns.includes(w)))return;fields.push({value,number:false,party:true});};
+ const remaining=masked.join(''),stop=[...originBoundaries(remaining)].find(index=>remaining[index]!==';'),limit=stop===undefined?remaining.length:stop,partyText=remaining.slice(0,limit);
+ const addParty=(value,strong=false)=>{value=nameValue(value);if(!value||!/[\p{L}]/u.test(value))return;const words=value.match(/[\p{L}\p{M}]+/gu)||[];if(!strong&&words.length&&(words.every(w=>privateOriginPronouns.includes(w))||words.slice(1).some(w=>privateOriginCopulas.includes(w))||new RegExp(privateOriginGenericPartyStart,'u').test(value)))return;fields.push({value,number:false,party:true,strong});};
  const label=new RegExp(privateOriginPartyLabel,'u').exec(partyText);
  if(label)addParty(partyText.slice(label.index+label[0].length),true);
   const doc=new RegExp(privateOriginNoun,'u').exec(working),event=new RegExp(privateOriginEvent,'u').exec(working),carrier=doc?[...working.slice(0,doc.index).matchAll(new RegExp(privateOriginCarrier,'gu'))].at(-1):null;
-  if(carrier){let before=partyText.slice(carrier.index+carrier[0].length,doc.index).trim().replace(/(?:^| +)(?:a|an|the|my|our|this|that)$/u,'');before=before.replace(new RegExp(privateOriginRelationStart,'u'),'');addParty(before);}
+ if(event){const actor=event[0].replace(new RegExp(privateOriginActorTail,'u'),'').trim();if(actor!==event[0].trim()&&!new RegExp(privateOriginPersonalSubject,'u').test(actor))addParty(actor);}
+  if(carrier){let before=partyText.slice(carrier.index+carrier[0].length,doc.index).trim().replace(/(?:^| +)(?:a|an|the|my|our|this|that)$/u,'');before=before.replace(new RegExp(privateOriginRelationStart,'u'),'');addParty(before,numberRanges.length>0);}
  if(record){
-  for(const part of partyText.slice(recordEnd).split(/[,;]/u)){
-   const candidate=nameValue(part);if(!candidate||/^(?:notes?|currency|date|due|total|subtotal|tax|amount|balance|rate|quantity)\b/u.test(candidate))continue;
+  for(const [index,part] of partyText.slice(recordEnd).split(/[,;]/u).entries()){
+   let candidate=nameValue(part);if(index===0&&!new RegExp(privateOriginRelationStart,'u').test(candidate))continue;candidate=candidate.replace(new RegExp(privateOriginRelationStart,'u'),'');if(!candidate||/^(?:notes?|currency|date|due|total|subtotal|tax|amount|balance|rate|quantity)\b/u.test(candidate))continue;
    if(new RegExp(privateOriginPartyLabel,'u').test(candidate))continue;
-   addParty(candidate);
+   addParty(candidate,true);
   }
  }else{
   const head=event??doc;
@@ -336,8 +337,8 @@ function privateOriginFields(value){
    const begin=head.index+head[0].length,rawTail=working.slice(begin),relation=new RegExp(privateOriginRelationStart,'u').test(rawTail.trim()),intro=/\b(?:here|below|following|attached) +(?:is|are)\b/u.test(working.slice(0,head.index));
    if(event||carrier||relation||intro||/^[ ,:]/u.test(rawTail)&&/^[,:]/u.test(rawTail.trim())){
     const amount=numberRanges.filter(([a])=>a>=begin&&a<limit).sort((a,b)=>a[0]-b[0])[0];
-    let before=nameValue(partyText.slice(begin,amount?.[0]??limit)).replace(new RegExp(privateOriginRelationStart,'u'),'').replace(new RegExp(privateOriginRelationEnd,'u'),'');before=nameValue(before);addParty(before);
-    if(amount){const after=partyText.slice(amount[1]).trim();if(new RegExp(privateOriginRelationStart,'u').test(after))addParty(after.replace(new RegExp(privateOriginRelationStart,'u'),''));}
+    let before=nameValue(partyText.slice(begin,amount?.[0]??limit)).replace(new RegExp(privateOriginRelationStart,'u'),'').replace(new RegExp(privateOriginRelationEnd,'u'),'');before=nameValue(before);addParty(before,Boolean(amount));
+    if(amount){const after=partyText.slice(amount[1]).trim();if(new RegExp(privateOriginRelationStart,'u').test(after))addParty(after.replace(new RegExp(privateOriginRelationStart,'u'),''),true);}
    }
   }
  }
@@ -347,7 +348,12 @@ function privateOriginFields(value){
 export const privateOriginValues=value=>{const parsed=privateOriginFields(value);return parsed?[parsed.source,...parsed.fields.map(field=>field.value)]:[];};
 export function privateOriginKeys(value){
   const parsed=privateOriginFields(value);if(!parsed)return [];
-  return [...new Set([...(Array.from(parsed.source).length<=3993?['origin:'+parsed.source]:[]),...privateFieldKeys(parsed.source),...parsed.fields.flatMap(field=>{const keys=field.party&&partyFunctionWords.includes(clean(field.value))?[]:privateFieldKeys(field.value),numeric=keys.filter(key=>/^number(?:-run)?:/.test(key));return [...(field.number&&numeric.length?numeric:keys),...(field.party?privatePartyKeys(field.value):[])];})])];
+  return [...new Set([...(Array.from(parsed.source).length<=3993?['origin:'+parsed.source]:[]),...privateFieldKeys(parsed.source),...parsed.fields.flatMap(field=>{
+  const words=field.value.match(/[\p{L}\p{M}]+/gu)||[],inferred=field.party&&!field.strong;
+  const keys=field.party&&(partyFunctionWords.includes(clean(field.value))||inferred&&words.length===1)?[]:privateFieldKeys(field.value),numeric=keys.filter(key=>/^number(?:-run)?:/.test(key));
+  const parties=field.party?privatePartyKeys(field.value).map(key=>inferred?key.replace(/^party(?:-ref)?:/u,'party-inferred:'):key):[];
+  return [...(field.number&&numeric.length?numeric:keys),...parties];
+ })])];
 }
 // Canonical keys for a retained atomic field. SQL term_aliases is generated
 // from the same grammar; parity tests compare these exact key sets.
@@ -362,7 +368,7 @@ export function privateFieldKeys(value){
   return [...keys];
 }
 export function createPrivateValueMatcher(terms=[]){
-  const retainedRuns=[],retainedNumbers=new Set(),retainedDates=[],literals=[],parties=new Set(),nativeParties=new Set(),latinParties=new Set(),referenceParties=new Set();
+  const retainedRuns=[],retainedNumbers=new Set(),retainedDates=[],literals=[],parties=new Set(),nativeParties=new Set(),latinParties=new Set(),referenceParties=new Set(),inferredParties=new Set();
   const expanded=terms.flatMap(raw=>String(raw??'').startsWith('evidence:')?privateEvidenceValues(String(raw).slice(9)):String(raw??'').startsWith('origin:')?privateOriginKeys(String(raw).slice(7)).filter(key=>!key.startsWith('origin:')):[raw]);
   const compile=term=>{
     if(term.startsWith('number-run:')){retainedRuns.push(compileNumericRun(term.slice(11)));return true;}
@@ -371,6 +377,7 @@ export function createPrivateValueMatcher(terms=[]){
     if(tagged){const value=dateValue(tagged[1]==='*'?null:Number(tagged[1]),Number(tagged[2]),Number(tagged[3]));if(value)retainedDates.push(value);return true;}
     if(term.startsWith('party-native:')){nativeParties.add(term.slice(13));return true;}
     if(term.startsWith('party-latin:')){latinParties.add(term.slice(12));return true;}
+    if(term.startsWith('party-inferred:')){inferredParties.add(term.slice(15));return true;}
     if(term.startsWith('party-ref:')){referenceParties.add(term.slice(10));return true;}
     if(term.startsWith('party:')){parties.add(term.slice(6));return true;}
     if(term.startsWith('identifier:')){literals.push(identifierPattern(term.slice(11)));return true;}return false;
@@ -395,13 +402,13 @@ export function createPrivateValueMatcher(terms=[]){
     const normalized=normalizePrivateText(original),occurrences=[...content.matchAll(/[\p{L}\p{M}\p{N}]+/gu)];
     // Han words do not use Latin-style whitespace boundaries. Match the exact
     // stored spelling inside a Han run; no translated or reordered alias.
-    for(const key of parties)if(/^\p{Script=Han}+$/u.test(key))for(const run of content.matchAll(/\p{Script=Han}+/gu)){
+    for(const key of new Set([...parties,...inferredParties]))if(/^\p{Script=Han}+$/u.test(key))for(const run of content.matchAll(/\p{Script=Han}+/gu)){
       if(run[0]===key)continue;
       for(let i=run[0].indexOf(key);i>=0;i=run[0].indexOf(key,i+key.length))occurrences.push(Object.assign([key],{index:run.index+i}));
     }
     return occurrences.filter(m=>{
       const term=m[0],matched=/[\u0900-\u097f]/u.test(term)?nativeParties.has(term)||parties.has(partyKey(term)):parties.has(partyKey(term))||latinParties.has(partyKey(term));
-      const referenceKey=referenceParties.has(partyKey(term));if(!matched&&!referenceKey)return false;
+      const referenceKey=referenceParties.has(partyKey(term)),inferredKey=inferredParties.has(partyKey(term)),weakOnly=inferredKey&&!referenceKey&&!matched;if(!matched&&!referenceKey&&!inferredKey)return false;
       const before=content.slice(0,m.index).split(/[;.!?\n]/u).at(-1),after=content.slice(m.index+term.length).split(/[;.!?\n]/u)[0];
       const beforeWords=before.match(/[\p{L}\p{M}]+/gu)||[],afterWords=after.match(/[\p{L}\p{M}]+/gu)||[],next=afterWords[0],last=beforeWords.at(-1);
       const offset=normalized.origins[m.index]?.start??m.index,end=normalized.origins[m.index+term.length-1]?.end??m.index+term.length;
@@ -413,10 +420,10 @@ export function createPrivateValueMatcher(terms=[]){
       const objectPronoun=['me','you','him','her','us','them','it'].includes(continuation),subjectSlot=!before.trim()||auxiliaries.has(last)||['that','when','if','whether','because','while'].includes(last);
       const regularS=/s$/u.test(next||'')&&!/(?:ss|us|is)$/u.test(next||'')&&(term!=='the'||objectPronoun);
       const predicate=(subjectSlot||objectPronoun||upper(raw)&&beforeWords.length>0)&&(auxiliaries.has(next)||(finitePast.has(next)||/ed$/u.test(next||'')||regularS)&&finiteTail);
-      const target=beforeWords.length>0&&(complements.has(next)||!next||/^[ ,;.!?]/u.test(after)&&!after.trim()||possessive);
+      const terminal=(!next||/^[ ,;.!?]/u.test(after)&&!after.trim())&&(!weakOnly||verbs.has(last)||relations.has(last)||upper(raw)),target=beforeWords.length>0&&(complements.has(next)||terminal||possessive);
       const differentName=upper(raw)&&upper(nextRaw)&&!parties.has(partyKey(next))&&!auxiliaries.has(next)&&!complements.has(next);
       const particle=!partyGrammarWords.includes(term);
-      const reference=referenceKey&&(content===term||!nounPhrase&&!differentName&&(possessive||predicate||target||auxiliaries.has(last)&&upper(raw)||particle&&upper(raw))&&!(last==='by'&&!upper(raw)));
+      const reference=(referenceKey||inferredKey)&&(/^\p{Script=Han}+$/u.test(term)||content===term||!nounPhrase&&!differentName&&(possessive||predicate||target||auxiliaries.has(last)&&upper(raw)||particle&&upper(raw))&&!(last==='by'&&!upper(raw)));
       if((!matched&&!reference)||!partyComponent(term))return false;
       if(!ordinary)return true;
       // A linguistic exemption applies only to this occurrence's own clause.

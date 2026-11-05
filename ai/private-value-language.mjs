@@ -33,11 +33,31 @@ const financialQuoteHint='(?:invoices?|bills?(?! +gates)|receipts?|[0-9][0-9,.]*
 const documentAttribution='(?:(?:this|the|our|my|that|an?) +)?(?:invoices?|bills?|receipts?) +(?:(?:is|was|are|were) +)?(?:from|for|to|of|belongs? +to|issued +by|sent +by) +';
 // Record identity and relational prose are declarative source forms. All
 // downstream sinks consume this same grammar before ordinary-clause separation.
-export const privateOriginRecordHeader='^(?:(?:here|below|following|attached) +(?:is|are) +)?(?:(?:the|an?|my|our|this|that) +)?(?:invoices?|bills?|receipts?)(?: +(?:number(?![a-z0-9_])|no\\.?) *(?:[:#=] *|(?=[a-z0-9._/-]*[0-9]))| *[#№] *)';
-export const privateOriginClauseBoundary='[;!?]|[.](?=[ ,])';
-export const privateOriginEvent='(?<![a-z0-9_])(?:invoiced|billed)(?![a-z0-9_])';
+const originDocumentIntro='(?:(?:here|below|following|attached) +(?:is|are) +)?(?:(?:the|an?|my|our|this|that) +)?(?:invoices?|bills?|receipts?)';
+const explicitRecordMarker='(?: +(?:number(?![a-z0-9_])|no\\.?) *(?:[:#=] *|(?=[a-z0-9._/-]*[0-9]))| *[#№] *)';
+const bareRecordMarker=' +(?=[a-z0-9._/-]*[0-9])';
+export const privateOriginRecordHeader='^'+originDocumentIntro+'(?:'+explicitRecordMarker+'|'+bareRecordMarker+')';
+const explicitRecordHeader=originDocumentIntro+explicitRecordMarker;
+const originClauseStart='(?:^|(?<=[;!?:]) *|(?<=[.]) *)';
+const bareRecordHeader=originClauseStart+originDocumentIntro+bareRecordMarker;
+export const privateOriginClauseBoundary='[;!?]|[.](?=[ ,]|$)';
+export const privateNameAbbreviations=['mr','mrs','ms','mx','dr','prof','sr','jr','st','rev','hon','fr','capt','sgt','lt','col','gen','inc','ltd','co','corp'];
+export const grammarAuxiliaries=['am','is','was','are','were','be','been','being','has','had','have','will','shall','can','could','would','did','does','do','may','might','must','should'];
+const financialSubject="(?:i|we|you|he|she|it|they)(?:['’ʼ](?:m|re|ve|ll|d|s))?";
+const financialPredicate='(?:invoic(?:es?|ing)|bill(?:s|ing)?)';
+const questionHeads='who|what|which|when|where|why|how';
+const requestHeads='explain|describe|discuss|define|show|tell|teach|help|compare';
+const nominalActorToken='(?!(?:'+questionHeads+'|'+financialPredicate+')(?![a-z0-9_]))[^ ,:;.!?]+';
+const nominalActor='(?!(?:'+questionHeads+'|'+requestHeads+')(?![a-z0-9_]))'+nominalActorToken+'(?: +'+nominalActorToken+'){0,5}';
+const actorPredicate=originClauseStart+nominalActor+' +(?:(?:(?:'+grammarAuxiliaries.join('|')+') +)+)'+financialPredicate;
+const actorThirdPerson=originClauseStart+nominalActor+' +(?:invoices|bills|invoiced|billed)(?![a-z0-9_])';
+// Finite subject/auxiliary/predicate roles accept tense and aspect without
+// treating the nominal topics "billing" and "invoicing" as declarations.
+export const privateOriginEvent=`(?:${actorPredicate}|${actorThirdPerson})(?![a-z0-9_])|(?<![a-z0-9_])(?:(?:invoiced|billed)|${financialSubject} +(?:(?:${grammarAuxiliaries.join('|')}) +)*${financialPredicate})(?![a-z0-9_])`;
+export const privateOriginCopulas=['am','is','are','was','were'];
+export const privateOriginGenericPartyStart='^(?:(?:(?:a|an|the|our|my|your|some|any|all) +)+(?:customers?|clients?|companies|company|business(?:es)?|studios?|teams?|organizations?|organisations?|suppliers?|vendors?|debtors?|creditors?|people)|(?:customers|clients|companies|businesses|studios|teams|organizations|organisations|suppliers|vendors|debtors|creditors|people))(?![a-z0-9_])';
 export const privateOriginNoun='(?<![a-z0-9_])(?:invoices?|bills?|receipts?)(?![a-z0-9_])';
-export const privateOriginCarrier='(?<![a-z0-9_])(?:issued|sent|received|generated|created)(?![a-z0-9_])';
+export const privateOriginCarrier='(?<![a-z0-9_])(?:issu(?:es?|ed|ing)|send(?:s|ing)?|sent|receiv(?:es?|ed|ing)|generat(?:es?|ed|ing)|creat(?:es?|ed|ing))(?![a-z0-9_])';
 export const privateOriginDocumentPrefix='^(?:(?:the|an?|my|our|this|that) +)?(?:invoices?|bills?|receipts?)(?![a-z0-9_])';
 export const privateOriginPartyLabel='(?<![a-z0-9_])(?:customer|client|party|company|supplier|vendor|debtor|creditor)(?: +name)? *(?:(?:is|was|to) +|[:=] *)';
 export const privateOriginMonetaryBefore=`(?<![a-z0-9_])(?:total|subtotal|tax|amount|balance|price|rate|quantity)(?![a-z0-9_]) *(?:(?:is|was|are|were|to)(?![a-z0-9_]) *)?[:=]? *(?:(?:${currencyUnitPattern}|\\p{Sc}) *)?[+−-]? *$`;
@@ -47,7 +67,13 @@ export const privateOriginRelationStart='^(?:(?:is|was|are|were) +)?(?:to|from|f
 export const privateOriginRelationEnd=' +(?:to|from|for|of|and) *$';
 export const privateOriginPronouns=['i','me','my','mine','myself','we','us','our','ours','ourselves','you','your','yours','yourself','yourselves','he','him','his','himself','she','her','hers','herself','it','its','itself','they','them','their','theirs','themselves'];
 export const privateOriginNameEdge='^[ ,:;>]+|[ ,:;>]+$';
-export const privateOriginHeader=`(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*${financialQuoteHint})|${privateOriginRecordHeader.slice(1)}|${documentAttribution}|(?:invoice|bill|receipt) *(?=[:,]))|${privateDataDeclaration}|${privateOriginEvent}`;
+const linkedRecordHeader=privateOriginCarrier+'(?:(?!'+privateOriginClauseBoundary+').)*?'+originDocumentIntro+bareRecordMarker;
+export const privateOriginActorTail=' +(?:(?:'+grammarAuxiliaries.join('|')+') +)*(?:'+financialPredicate+'|invoiced|billed)$';
+export const privateOriginPersonalSubject='^'+financialSubject+'$';
+// Necessary lexical terminals of the declaration grammar. This cheap superset
+// rejects ordinary/numeric fields before evaluating role and provenance rules.
+export const privateOriginLexicalHint='invoic|bill|receipt|payment|paid|total|subtotal|tax|note|currency|due|amount|customer|client|balance';
+export const privateOriginHeader=`${bareRecordHeader}|${linkedRecordHeader}|(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?(?! +gates)|receipts?)(?![a-z0-9_])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*${financialQuoteHint})|${explicitRecordHeader}|${documentAttribution}|(?:invoice|bill|receipt) *(?=[:,]))|${privateDataDeclaration}|${privateOriginEvent}`;
 
 // Lexical translations preserve offsets and do not alter names/Unicode keys.
 // Hindi cardinal atoms (0..99) feed the same scale/group grammar as English.
@@ -67,7 +93,6 @@ export const partyReference='(?:ask|contact|call|pay|send(?: +to)?|tell +me +abo
 
 // Formal components that also serve as grammar remain reference-scoped keys.
 // They are protected as personal targets, not as articles in unrelated prose.
-export const grammarAuxiliaries=['is','was','are','were','has','had','have','will','can','could','would','did','does','do','may','might','must','should'];
 export const partyGrammarWords=['a','an','the','and','or','of','for','to','in','on','at','by','with','from',...grammarAuxiliaries];
 export const partyFunctionWords=[...partyGrammarWords,'de','del','la','le','van','von','da','di'];
 // Enumeration is a syntactic frame before the candidate, never a noun found
