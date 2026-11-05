@@ -52,7 +52,9 @@ const deicticHeads='here|there|below|above';
 const nominalActorToken='(?!(?:'+questionHeads+'|'+financialPredicate+')(?![a-z0-9_]))[^ ,:;.!?]+';
 const nominalActor='(?!(?:'+questionHeads+'|'+requestHeads+'|'+deicticHeads+')(?![a-z0-9_]))'+nominalActorToken+'(?: +'+nominalActorToken+'){0,5}';
 const actorPredicate=originClauseStart+nominalActor+' +(?:(?:(?:'+grammarAuxiliaries.join('|')+') +)+)'+financialPredicate;
-const actorThirdPerson=originClauseStart+nominalActor+' +(?:invoices|bills|invoiced|billed)(?![a-z0-9_])';
+// A bare plural document label is a noun phrase. A present-tense event
+// needs a following argument; past predicates retain their explicit event role.
+const actorThirdPerson=originClauseStart+nominalActor+' +(?:(?:invoices|bills)(?![a-z0-9_])(?= +[^ ,:;.!?])|(?:invoiced|billed)(?![a-z0-9_]))';
 // Finite subject/auxiliary/predicate roles accept tense and aspect without
 // treating the nominal topics "billing" and "invoicing" as declarations.
 export const privateOriginEvent=`(?:${actorPredicate}|${actorThirdPerson})(?![a-z0-9_])|(?<![a-z0-9_])(?:(?:invoiced|billed)|${financialSubject} +(?:(?:${grammarAuxiliaries.join('|')}) +)*${financialPredicate})(?![a-z0-9_])`;
