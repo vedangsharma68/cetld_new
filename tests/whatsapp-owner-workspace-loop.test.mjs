@@ -52,9 +52,9 @@ test('the system prompt stays short and describes workspaceData generically',asy
  const history=Array.from({length:12},(_,index)=>({role:index%2?'assistant':'user',content:`history-${index}`}));
  // Captionless photos take the deterministic attachment path; use a current
  // question here to inspect the ordinary planner's generic system prompt.
- const message='What is the total on this attached invoice?';
+ const message='Explain how cetld works.';
  await runOwnerAgent({provider,tools:tools(),message,clock:()=>new Date('2026-10-02T12:00:00Z'),
-  history,attachmentDescriptor:{available:true,mimeType:'image/jpeg'},historyIssue:'HISTORY_UNAVAILABLE',settingsIssue:'MODEL_SETTINGS_UNAVAILABLE'});
+  history,attachmentDescriptor:{available:false},historyIssue:'HISTORY_UNAVAILABLE',settingsIssue:'MODEL_SETTINGS_UNAVAILABLE'});
  assert.ok(systemPrompt.length<1000,`system prompt was ${systemPrompt.length} characters`);
  assert.match(systemPrompt,/verified owner/i);
  assert.match(systemPrompt,/workspaceData/);
@@ -62,13 +62,13 @@ test('the system prompt stays short and describes workspaceData generically',asy
  assert.doesNotMatch(systemPrompt,/invoice|payment|delete|undo|attachment|confirmation/i);
  assert.deepEqual(historyContents.slice(0,20).slice(0,-1),history.slice(-20).map(turn=>turn.content));
  assert.equal(historyContents.at(-1),message);
- assert.deepEqual(context,{currentDate:'2026-10-02',calendar:{timezone:'Asia/Kolkata',currentDate:'2026-10-02',tomorrow:'2026-10-03',dayAfterTomorrow:'2026-10-04',yesterday:'2026-10-01',nextWeek:'2026-10-09'},attachment:{available:true,mimeType:'image/jpeg'},historyAvailable:false,settingsAvailable:false,toolsAvailable:true});
+ assert.deepEqual(context,{currentDate:'2026-10-02',calendar:{timezone:'Asia/Kolkata',currentDate:'2026-10-02',tomorrow:'2026-10-03',dayAfterTomorrow:'2026-10-04',yesterday:'2026-10-01',nextWeek:'2026-10-09'},attachment:{available:false},historyAvailable:false,settingsAvailable:false,toolsAvailable:true});
  const unavailable=await runOwnerAgent({provider:{async generate(request){
   const missingContext=JSON.parse(request.messages.filter(item=>item.role==='system')[1].content);
   assert.deepEqual(missingContext.attachment,{available:false,errorCode:'ATTACHMENT_UNAVAILABLE'});
   return answer('Please resend the attachment.');
  }},tools:tools(),message:'Can you read this attachment?',attachmentDescriptor:{available:false,errorCode:'ATTACHMENT_UNAVAILABLE'}});
- assert.match(unavailable.answer,/resend the attachment/i);
+ assert.match(unavailable.answer,/clearer photo or PDF/i);
 });
 
 test('a hung provider is aborted at the injected whole-loop budget',async()=>{

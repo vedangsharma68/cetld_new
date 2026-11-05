@@ -136,9 +136,9 @@ test('a real zero-total trial PDF returns structured extraction without calling 
   assert.equal(parsePdfInvoiceText(zeroText.replace('TOTAL 0.00','TOTAL 118.00\nBALANCE DUE 0.00')),null,'a zero balance cannot erase a positive invoice total');
 });
 
-test('extraction API converts unusable provider output to a safe structured review error',async()=>{
+test('extraction API converts unreadable local PDFs to a safe structured review error',async()=>{
   const response={status(code){this.code=code;return this;},json(body){this.body=body;return this;},setHeader(){}};
-  const handler=createAIHandler({authorize:async()=>({getSettings:async()=>({}),getBusinessName:async()=>''}),providerFactory:()=>({generateStructured:async()=>{throw Object.assign(Error('raw INVALID_OUTPUT'),{code:'INVALID_OUTPUT',status:502,name:'AIError'});}})});
+  const handler=createAIHandler({authorize:async()=>({getSettings:async()=>({}),getBusinessName:async()=>''}),providerFactory:()=>assert.fail('Local extraction must not construct a provider')});
   await handler({method:'POST',query:{action:'extract'},body:{workspaceId,file:{base64:Buffer.from('%PDF-1.7\ninvalid').toString('base64'),mimeType:'application/pdf',fileName:'trial.pdf'}}},response);
   assert.equal(response.code,502);assert.equal(response.body.error,'INVOICE_EXTRACTION_UNAVAILABLE');assert.match(response.body.message,/enter its details manually/);assert.doesNotMatch(JSON.stringify(response.body),/INVALID_OUTPUT/);
 });

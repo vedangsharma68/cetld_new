@@ -1,3 +1,5 @@
+// Existing operational recipient policy; no copied personal contact literal.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -11,7 +13,7 @@ import {reminderFingerprint} from '../automation/whatsapp/reminder-fingerprint.m
 import {approveReviewedReminder} from './fixtures/reviewed-reminder.mjs';
 import {CoreAutomationStore} from '../automation/core-store.mjs';
 import {createAutomationRuntime} from '../automation/runtime.mjs';
-const migration='20261023083356_per_message_reminder_review.sql',phone='+919871367051';
+const migration='20261023083356_per_message_reminder_review.sql',phone=QA_POLICY_PHONE;
 const response=()=>({setHeader(){},status(code){this.code=code;return this},json(data){this.data=data;return this}});
 
 test('per-message review binds the real API, PostgreSQL approval, dispatch and retry forms',async t=>{
@@ -22,7 +24,7 @@ test('per-message review binds the real API, PostgreSQL approval, dispatch and r
  try{
   for(const file of ['20261018060000_customer_reminder_tone.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060100_invoice_details_templates.sql'])await db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
   await applyNoFooterMigration(db,{approve:true});
-  for(const file of ['20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql','20261023061702_shared_owner_assistant.sql'])await db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
+  for(const file of ['20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql','20261023061702_shared_owner_assistant.sql','20261101120327_private_whatsapp_chat_memory.sql'])await db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
   const ownerId=randomUUID(),other=randomUUID();await db.query('insert into auth.users(id) values($1),($2)',[ownerId,other]);
   const asUser=async(id=ownerId)=>db.exec(`reset role;set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${id}'`);
   const service=async()=>db.exec("reset role;set request.jwt.claim.role='service_role';set request.jwt.claim.sub=''");
@@ -260,7 +262,7 @@ for(const [routine,old,replacement,expected] of [
  try{
   for(const file of ['20261018060000_customer_reminder_tone.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060100_invoice_details_templates.sql'])await f.db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
   await applyNoFooterMigration(f.db,{approve:true});
-  for(const file of ['20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql','20261023061702_shared_owner_assistant.sql'])await f.db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
+  for(const file of ['20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql','20261023061702_shared_owner_assistant.sql','20261101120327_private_whatsapp_chat_memory.sql'])await f.db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
   const definition=(await f.db.query('select pg_get_functiondef($1::regprocedure) definition',[routine])).rows[0].definition;
   assert.ok(definition.includes(old));await f.db.exec(definition.replace(old,replacement));
   await assert.rejects(f.db.exec(await readFile(new URL('../supabase/migrations/'+migration,import.meta.url),'utf8')),expected);

@@ -1,8 +1,10 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {createOwnerActionButtons,verifyOwnerActionButton} from '../automation/whatsapp/owner-action-buttons.mjs';
 
@@ -41,7 +43,7 @@ async function fixture({confirmationMode=null}={}){
    values($1,null,$2,'inbound','owner',$3,$4,'received',$5,$5)`,[workspaceId,phone,text,type==='interactive'?'interactive':'text',id]);
  };
  const workspaceCall=args=>({id:'deliberately-malformed-event259-create',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(args)}});
- const handler=createOwnerMessageHandler({supabase,env,logger:{info(){},warn(){},error(){}},
+ const handler=createOwnerEngineHarness({supabase,env,logger:{info(){},warn(){},error(){}},
   providerFactory:()=>({async generate(){providerCalls.push('malformed-create');return {toolCalls:[workspaceCall({operation:'create',table:'invoices',values:{invoice_number:'INVENTED',customer_name:'Invented customer',total_amount:1,currency:'USD'}})]};}}),
   toolsFactory:options=>{
    const tools=createOwnerWorkspaceTools(options);
@@ -88,7 +90,7 @@ async function sendButton(f,pending,id,offeredButtons=null){
  return signed;
 }
 
-test('event259: missing mode uses guarded typed confirmation and bypasses malformed create planning',async()=>{
+engineTest('event259: missing mode uses guarded typed confirmation and bypasses malformed create planning',async()=>{
  const f=await fixture();try{
   const initial=await f.snapshot();assert.equal(initial.payments.length,0);assert.equal(initial.directReceipts.length,0);
   const {pending:proposal,response:proposalReply}=await propose(f);const beforeClick=await f.snapshot();
@@ -125,7 +127,7 @@ test('event259: missing mode uses guarded typed confirmation and bypasses malfor
  }finally{await f.close();}
 });
 
-test('event259 explicit buttons mode confirms the actual signed interactive envelope once and rejects stale/wrong-scope buttons',async()=>{
+engineTest('event259 explicit buttons mode confirms the actual signed interactive envelope once and rejects stale/wrong-scope buttons',async()=>{
  const f=await fixture({confirmationMode:'buttons'});try{
   const {pending:proposal,response:proposalReply}=await propose(f,'event259-buttons-proposal');
   assert.equal(proposalReply.buttons?.length,2,JSON.stringify(proposalReply));

@@ -8,7 +8,7 @@ import {DEFAULT_FALLBACK_MODEL,DEFAULT_MODEL} from '../ai/provider.mjs';
 const A='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const U='11111111-1111-4111-8111-111111111111';
 const primary='@cf/qwen/qwen3-30b-a3b-fp8';
-const fallback='gemini-3.5-flash-lite';
+const fallback='@cf/meta/llama-4-scout-17b-16e-instruct';
 const env={SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUBLISHABLE_KEY:'public-test-key'};
 
 test('authenticated settings store round-trips new saved model choices through a fake REST transport',async()=>{

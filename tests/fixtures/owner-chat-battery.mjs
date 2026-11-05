@@ -5,7 +5,7 @@ export const OWNER_CHAT_SCOPE = Object.freeze({
   workspaceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   ownerId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
   customerId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-  phone: '+919871367051',
+  phone: '+12025550101',
 });
 export const OTHER_WORKSPACE_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 export const JOHN_CUSTOMER_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
@@ -17,42 +17,43 @@ const clone = value => value == null ? value : structuredClone(value);
 const matches = (row, filter) => filter(row);
 
 /** A small, strict Supabase-shaped store. All model-readable tenants are seeded. */
-export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallbackModel = GEMINI_FALLBACK_MODEL} = {}) {
+export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallbackModel = CF_BACKUP_MODEL, scope: databaseScope = OWNER_CHAT_SCOPE} = {}) {
   const now = DEFAULT_NOW.toISOString();
   const tables = {
-    workspace_ai_settings: [{workspace_id:OWNER_CHAT_SCOPE.workspaceId,primary_model:primaryModel,fallback_model:fallbackModel,updated_at:now}],
-    workspaces:[{id:OWNER_CHAT_SCOPE.workspaceId,owner_id:OWNER_CHAT_SCOPE.ownerId}],
-    workspace_members:[{workspace_id:OWNER_CHAT_SCOPE.workspaceId,user_id:OWNER_CHAT_SCOPE.ownerId,role:'owner'}],
-    whatsapp_owner_verifications:[{workspace_id:OWNER_CHAT_SCOPE.workspaceId,phone:OWNER_CHAT_SCOPE.phone,
-      requested_by:OWNER_CHAT_SCOPE.ownerId,verified_at:now}],
-    whatsapp_consents:[{workspace_id:OWNER_CHAT_SCOPE.workspaceId,customer_id:OWNER_CHAT_SCOPE.customerId,
-      phone:OWNER_CHAT_SCOPE.phone,consented_by:OWNER_CHAT_SCOPE.ownerId,revoked_at:null}],
+    whatsapp_private_invoice_backfill:['invoices','reviews','owner_quotes','customer_quotes'].map(source=>({source,complete:true})),
+    workspace_ai_settings: [{workspace_id:databaseScope.workspaceId,primary_model:primaryModel,fallback_model:fallbackModel,updated_at:now}],
+    workspaces:[{id:databaseScope.workspaceId,owner_id:databaseScope.ownerId}],
+    workspace_members:[{workspace_id:databaseScope.workspaceId,user_id:databaseScope.ownerId,role:'owner'}],
+    whatsapp_owner_verifications:[{workspace_id:databaseScope.workspaceId,phone:databaseScope.phone,
+      requested_by:databaseScope.ownerId,verified_at:now}],
+    whatsapp_consents:[{workspace_id:databaseScope.workspaceId,customer_id:databaseScope.customerId,
+      phone:databaseScope.phone,consented_by:databaseScope.ownerId,revoked_at:null}],
     whatsapp_global_suppressions:[],whatsapp_suppressions:[],
-    workspace_settings: [{workspace_id:OWNER_CHAT_SCOPE.workspaceId,business_name:'Northstar Studio',owner_bot_preferences:{confirmationMode:'buttons'},whatsapp_owner_phone:OWNER_CHAT_SCOPE.phone,default_currency:'INR',
+    workspace_settings: [{workspace_id:databaseScope.workspaceId,business_name:'Northstar Studio',owner_bot_preferences:{confirmationMode:'buttons'},whatsapp_owner_phone:databaseScope.phone,default_currency:'INR',
       default_timezone:'Asia/Kolkata',follow_up_preferences:{tone:'gentle',maxReminders:3,cadenceDays:4,firstReminderDays:2,
         contactStart:'09:00',contactEnd:'18:00',pauseOnReply:true,dailySummary:false},updated_at:now}],
     customers: [
-      {id:JOHN_CUSTOMER_ID,workspace_id:OWNER_CHAT_SCOPE.workspaceId,name:'John Smith',company_name:'John Smith Studio',
+      {id:JOHN_CUSTOMER_ID,workspace_id:databaseScope.workspaceId,name:'John Smith',company_name:'John Smith Studio',
         email:'john@example.test',phone:'+14155550101',created_at:now,updated_at:now,metadata:{}},
-      {id:OWNER_CHAT_SCOPE.customerId,workspace_id:OWNER_CHAT_SCOPE.workspaceId,name:'Northstar Owner',company_name:null,
-        email:null,phone:OWNER_CHAT_SCOPE.phone,created_at:now,updated_at:now,metadata:{whatsapp_owner:true}},
+      {id:databaseScope.customerId,workspace_id:databaseScope.workspaceId,name:'Northstar Owner',company_name:null,
+        email:null,phone:databaseScope.phone,created_at:now,updated_at:now,metadata:{whatsapp_owner:true}},
       {id:'e0000000-0000-4000-8000-000000000001',workspace_id:OTHER_WORKSPACE_ID,
         name:'John Smith Foreign Co',company_name:'Foreign John',email:'foreign@example.test',phone:'+14155550999',created_at:now,updated_at:now,metadata:{}},
     ],
     invoices: [
-      {id:'ffffffff-ffff-4fff-8fff-fffffffffff1',workspace_id:OWNER_CHAT_SCOPE.workspaceId,customer_id:JOHN_CUSTOMER_ID,
+      {id:'ffffffff-ffff-4fff-8fff-fffffffffff1',workspace_id:databaseScope.workspaceId,customer_id:JOHN_CUSTOMER_ID,
         invoice_number:'INV-001',issue_date:'2026-09-01',due_date:'2026-10-01',currency:'USD',total_amount:125,amount_paid:0,
         status:'sent',notes:null,metadata:{invoice_direction:'receivable'},created_at:now,updated_at:now,deleted_at:null},
-      {id:'ffffffff-ffff-4fff-8fff-fffffffffff3',workspace_id:OWNER_CHAT_SCOPE.workspaceId,customer_id:JOHN_CUSTOMER_ID,
+      {id:'ffffffff-ffff-4fff-8fff-fffffffffff3',workspace_id:databaseScope.workspaceId,customer_id:JOHN_CUSTOMER_ID,
         invoice_number:'INV-003',issue_date:'2026-09-12',due_date:'2026-10-12',currency:'USD',total_amount:450,amount_paid:0,
         status:'sent',notes:null,metadata:{invoice_direction:'receivable'},created_at:now,updated_at:now,deleted_at:null},
-      {id:'ffffffff-ffff-4fff-8fff-fffffffffff4',workspace_id:OWNER_CHAT_SCOPE.workspaceId,customer_id:JOHN_CUSTOMER_ID,
+      {id:'ffffffff-ffff-4fff-8fff-fffffffffff4',workspace_id:databaseScope.workspaceId,customer_id:JOHN_CUSTOMER_ID,
         invoice_number:'INV-004',issue_date:'2026-09-14',due_date:'2026-10-14',currency:'USD',total_amount:80,amount_paid:0,
         status:'sent',notes:null,metadata:{invoice_direction:'receivable',requires_exact_delete_confirmation:false},created_at:now,updated_at:now,deleted_at:null},
-      {id:'ffffffff-ffff-4fff-8fff-fffffffffff5',workspace_id:OWNER_CHAT_SCOPE.workspaceId,customer_id:JOHN_CUSTOMER_ID,
+      {id:'ffffffff-ffff-4fff-8fff-fffffffffff5',workspace_id:databaseScope.workspaceId,customer_id:JOHN_CUSTOMER_ID,
         invoice_number:'INV-005',issue_date:'2026-09-15',due_date:'2026-10-15',currency:'USD',total_amount:95,amount_paid:0,
         status:'sent',notes:null,metadata:{invoice_direction:'receivable',requires_exact_delete_confirmation:true},created_at:now,updated_at:now,deleted_at:null},
-      {id:'ffffffff-ffff-4fff-8fff-fffffffffff6',workspace_id:OWNER_CHAT_SCOPE.workspaceId,customer_id:JOHN_CUSTOMER_ID,
+      {id:'ffffffff-ffff-4fff-8fff-fffffffffff6',workspace_id:databaseScope.workspaceId,customer_id:JOHN_CUSTOMER_ID,
         invoice_number:'INV-006',issue_date:'2026-09-16',due_date:'2026-10-16',currency:'USD',total_amount:160,amount_paid:0,
         status:'sent',notes:null,metadata:{invoice_direction:'receivable'},created_at:now,updated_at:now,deleted_at:null},
       {id:'ffffffff-ffff-4fff-8fff-fffffffffff9',workspace_id:OTHER_WORKSPACE_ID,customer_id:JOHN_CUSTOMER_ID,
@@ -70,9 +71,9 @@ export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallba
 
   const currentPending = ({workspaceId, customerId, phone} = {}) => {
     const row = tables.whatsapp_pending_actions.find(item => item.consumed_at == null
-      && item.workspace_id === (workspaceId || OWNER_CHAT_SCOPE.workspaceId)
-      && item.customer_id === (customerId || OWNER_CHAT_SCOPE.customerId)
-      && item.phone === (phone || OWNER_CHAT_SCOPE.phone));
+      && item.workspace_id === (workspaceId || databaseScope.workspaceId)
+      && item.customer_id === (customerId || databaseScope.customerId)
+      && item.phone === (phone || databaseScope.phone));
     return row || null;
   };
   const fieldValue=(table,row,key)=>key.includes('->>')?row[key.split('->>')[0]]?.[key.split('->>')[1]]:
@@ -150,16 +151,16 @@ export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallba
   let offlineProvenance=false;
   const rpc = async (name,args={}) => {
     rpcCalls.push({name,args:clone(args)});
-    const ws=OWNER_CHAT_SCOPE.workspaceId;
+    const ws=databaseScope.workspaceId;
     if (args.p_workspace_id != null && args.p_workspace_id !== ws) return {data:{ok:false,code:'OWNER_REQUIRED',reason:'unbound'}};
     if(name==='owner_assistant_append'){
-      if(args.p_owner_id!==OWNER_CHAT_SCOPE.ownerId)return {error:{code:'DENIED'}};
+      if(args.p_owner_id!==databaseScope.ownerId)return {error:{code:'DENIED'}};
       const turns=tables.owner_assistant_turns;
       if(!turns.some(t=>t.event_key===args.p_event_key))turns.push({id:turns.length+1,event_key:args.p_event_key,workspace_id:ws,owner_id:args.p_owner_id,channel:args.p_channel,role:args.p_role,content:args.p_content,created_at:new Date().toISOString()});
       return {data:{id:turns.length}};
     }
     if(name==='owner_assistant_offline_provenance'){
-      if(args.p_owner_id!=null&&args.p_owner_id!==OWNER_CHAT_SCOPE.ownerId)return {error:{code:'DENIED'}};
+      if(args.p_owner_id!=null&&args.p_owner_id!==databaseScope.ownerId)return {error:{code:'DENIED'}};
       if(args.p_mark===true){
         offlineProvenance=true;
         tables.workspace_settings[0].offline_invoice_provenance=true;
@@ -291,11 +292,11 @@ export function createOwnerChatDatabase({primaryModel = CF_PRIMARY_MODEL, fallba
     return {data:{ok:false,code:'FEATURE_UNAVAILABLE'}};
   };
   const supabase={tables,readCalls,rpcCalls,from,rpc};
-  installVerifiedOwnerRpc(supabase,()=>tables,{expectedPhone:OWNER_CHAT_SCOPE.phone});
-  return {supabase,tables,readCalls,rpcCalls,scope:OWNER_CHAT_SCOPE,assertScopedReads(){
+  installVerifiedOwnerRpc(supabase,()=>tables,{expectedPhone:databaseScope.phone});
+  return {supabase,tables,readCalls,rpcCalls,scope:databaseScope,assertScopedReads(){
     for(const call of readCalls.filter(item=>['customers','invoices','payments','workspace_settings','workspace_ai_settings'].includes(item.table))) {
       const workspace=call.filters.find(filter=>filter[0]==='eq'&&filter[1]==='workspace_id');
-      if(!workspace||workspace[2]!==OWNER_CHAT_SCOPE.workspaceId)throw new Error(`owner query was not scoped to the verified workspace (${call.table})`);
+      if(!workspace||workspace[2]!==databaseScope.workspaceId)throw new Error(`owner query was not scoped to the verified workspace (${call.table})`);
     }
     if(readCalls.some(call=>call.filters.some(filter=>filter[1]==='workspace_id'&&filter[2]===OTHER_WORKSPACE_ID)))
       throw new Error('foreign workspace was queried');

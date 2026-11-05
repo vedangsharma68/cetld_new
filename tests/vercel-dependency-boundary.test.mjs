@@ -78,7 +78,7 @@ test('unchanged actual waitUntil delegates the original promise, validates input
 function signedInbound(){
  const env={WHATSAPP_APP_SECRET:'synthetic-only-secret',WHATSAPP_PHONE_NUMBER_ID:'123456789',WHATSAPP_WABA_ID:'987654321'};
  const body=JSON.stringify({object:'whatsapp_business_account',entry:[{id:env.WHATSAPP_WABA_ID,changes:[{field:'messages',value:{
-  metadata:{phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID},messages:[{id:'wamid.synthetic',from:'919871367051',timestamp:String(Math.floor(Date.now()/1000)),type:'text',text:{body:'hello'}}],
+  metadata:{phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID},messages:[{id:'wamid.synthetic',from:'12025550101',timestamp:String(Math.floor(Date.now()/1000)),type:'text',text:{body:'hello'}}],
  }}]}]});
  const req=Readable.from([Buffer.from(body)]);req.method='POST';req.url='/api/whatsapp';
  req.headers={'x-hub-signature-256':'sha256='+createHmac('sha256',env.WHATSAPP_APP_SECRET).update(body).digest('hex')};

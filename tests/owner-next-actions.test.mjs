@@ -8,7 +8,7 @@ import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {PGlite} from '@electric-sql/pglite';
 import {readFile} from 'node:fs/promises';
-const workspaceId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',phone='+919871367051',ownerId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const workspaceId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',phone='+12025550101',ownerId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const scope={workspaceId,phone,ownerId,messageId:'wamid.test',message:'Show invoice'};
 const now=new Date('2026-10-04T10:00:00Z'),clock=()=>now,env={WHATSAPP_APP_SECRET:'isolated-next-actions-secret'};
 const invoice={id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',workspace_id:workspaceId,invoice_number:'INV-1',status:'sent',total_amount:100,amount_paid:0,updated_at:now.toISOString(),created_at:now.toISOString(),deleted_at:null,custom_fields:{}};
@@ -125,7 +125,7 @@ test('a typed read adds contextual choices without an additional model call; fai
    lifecycleFactory:()=>({loadPendingDelete:async()=>({ok:true,pending:false})}),historyReader:async()=>[],
    ownerStoreFactory:()=>({workspaceId,userId:ownerId,role:'owner',query:async()=>[]}),providerFactory:()=>{providerCalls++;return {}},
    agentFactory:async({tools})=>{agentCalls++;const result=await tools.execute('workspaceData',{operation:'read',table:'invoices',columns:['invoice_number','total_amount','amount_paid','status'],filters:[{column:'invoice_number',operator:'eq',value:'INV-1'}]});assert.equal(result.ok,true);return {answer:'Invoice INV-1 has an outstanding balance of 100.'}},logger:{info(){},warn(){},error(){}}});
-  const output=await handler(scope);assert.equal(agentCalls,1);assert.equal(providerCalls,1);assert.match(output.answer,/INV-1/);
+  const output=await handler(scope);assert.equal(agentCalls,1);assert.equal(providerCalls,0);assert.match(output.answer,/INV-1/);
   assert.deepEqual(output.buttons?.map(b=>b.title),failed?undefined:['Edit details','Record payment']);
  }
 });
@@ -163,14 +163,14 @@ test('legacy invoice request cannot suppress persisted John phone choices or saf
    ownerStoreFactory:()=>({workspaceId,userId:ownerId,role:'owner',query:async()=>[]}),providerFactory:()=>{providerCalls++;return {}},
    agentFactory:async({tools})=>{agentCalls++;const result=await tools.execute('workspaceData',{operation:'read',table:'customers',columns:['phone'],filters:[{column:'name',operator:'eq',value:'John Smith'}]});assert.equal(result.ok,true);return {answer:"John Smith's phone number is +919818685252."}},logger:{info(){},warn(){},error(){}}});
   const output=await handler({...scope,message:'What is John Smith’s phone?'});
-  assert.equal(agentCalls,1);assert.equal(providerCalls,1);assert.deepEqual(pending,before);
+  assert.equal(agentCalls,1);assert.equal(providerCalls,0);assert.deepEqual(pending,before);
   if(type!=='owner_invoice_request'){assert.equal(output.buttons,undefined);continue;}
   assert.deepEqual(output.buttons.map(b=>b.title),['Edit details']);
   assert.equal(db.tables.whatsapp_messages[0].owner_next_action_ref.choices[0].id,customer.id);
   const click={...scope,messageId:'wamid.legacy-click',message:'Edit details',interactionId:output.buttons[0].id};
   const first=await handler(click),repeated=await handler(click);
   assert.match(first.answer,/field and new value/);assert.equal(repeated.answer,first.answer);assert.equal(repeated.replayed,true);
-  assert.equal(agentCalls,1);assert.equal(providerCalls,1);assert.deepEqual(pending,before);
+  assert.equal(agentCalls,1);assert.equal(providerCalls,0);assert.deepEqual(pending,before);
   assert.equal(db.tables.customers[0].phone,'+919818685252');
  }
 });
@@ -256,7 +256,7 @@ test('mixed menu requests retain ordinary AI path; standalone greetings remain m
  for(const message of ['menu please','show menu and delete invoice','menu!','hi menu','show  menu']){
   assert.equal(standaloneOwnerMenu(message),false);const {handler,counts}=menuHandler(database());
   assert.match((await handler({...scope,message})).answer,/Ordinary agent path/);
-  assert.equal(counts.provider,1);assert.equal(counts.agent,1);assert.equal(counts.network,0);
+  assert.equal(counts.provider,0);assert.equal(counts.agent,1);assert.equal(counts.network,0);
  }
  for(const message of ['hi','hello','how are you']){
   const {handler,counts}=menuHandler(database());assert((await handler({...scope,message})).answer);

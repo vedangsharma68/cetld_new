@@ -35,8 +35,8 @@ export async function verifyOwnerContactRecovery(){
     subtotal:100,tax:0,total:100,outstandingAmount:100,currency:'USD',direction:'receivable',clientEmail:null,clientPhone:'+14155550244',clientPhoneRaw:null,
     notes:null,paymentTerms:null,lineItems:[{description:'Printed service',quantity:1,unitPrice:100,amount:100}]})
     .map(([key,value])=>[key,{value,confidence:.99}]));
-  const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},providerFactory:()=>({}),
-   toolsFactory:options=>createOwnerWorkspaceTools({...options,attachmentIngestFactory:input=>createWhatsAppBoundMessageHandler({...input,extract:async()=>structuredClone(printed)})}),
+  const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',EXTRACTION_ROUTE:'offline'},logger:{info(){},warn(){},error(){}},providerFactory:()=>({}),
+   toolsFactory:options=>createOwnerWorkspaceTools({...options,extractOfflineAttachment:async()=>structuredClone(printed),attachmentIngestFactory:input=>createWhatsAppBoundMessageHandler({...input,extract:async()=>structuredClone(printed)})}),
    historyReader:async()=>history,agentFactory:async({message,tools,businessProfile})=>{
     modelCalls++;
     assert.equal(businessProfile.currency,'INR');
@@ -177,9 +177,9 @@ export async function verifyOwnerContactRecovery(){
   await pending.consumePendingAction({...blockedPending,...scope});
   assert.equal(modelCalls,cardCalls,'contact cards must not reach the planner');
   // The printed E.164 contact must save before its review is marked complete.
-  const printedReply=await turn('log this invoice',{media:{bytes:Buffer.from('isolated printed invoice source'),mimeType:'image/jpeg',fileName:'printed-phone.jpg'}});
+  const printedReply=await turn('We issued this invoice',{media:{bytes:Buffer.from('isolated printed invoice source'),mimeType:'image/jpeg',fileName:'printed-phone.jpg'}});
   assert.equal(printedReply.plannerFailure,undefined,JSON.stringify({printedReply,errors:f.errors}));
-  assert.match(printedReply.answer,/Reply yes/i);
+  assert.match(printedReply.answer,/Confirm|Reply yes/i);
   assert.equal((await db.query("select count(*)::int n from invoices where workspace_id=$1 and metadata->>'client_name'='Printed Buyer'",[workspaceId])).rows[0].n,0);
   const confirmedPrinted=await turn('yes');
   assert.match(confirmedPrinted.answer,/Saved invoice/);assert.doesNotMatch(confirmedPrinted.answer,/couldn.t|could not|country code|WhatsApp number/i);

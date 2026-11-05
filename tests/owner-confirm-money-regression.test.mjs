@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 
 test('legacy confirmed total edits reconcile canonical fees atomically and fail closed on fractional minor units or saved items',async()=>{
- const fixture=await createOfflineSqlNetwork(),{db}=fixture,owner=randomUUID(),phone='+919871367051';
+ const fixture=await createOfflineSqlNetwork(),{db}=fixture,owner=randomUUID(),phone='+12025550101';
  let sequence=0;
  try{
   await db.query('insert into auth.users(id) values($1)',[owner]);

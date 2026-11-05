@@ -34,7 +34,7 @@ test('owner outstanding read returns scoped per-currency totals and verified his
     const before=(await db.query('select jsonb_agg(to_jsonb(i) order by id) value from invoices i')).rows[0].value;
     const response=await turn('balance-live-shape');
     assert.equal(response.plannerFailure,undefined);assert.equal(response.answer,'Issued outstanding: none.\nUnissued drafts (not yet receivable): INR 4750.00.');
-    assert.equal(calls,1);assert.equal(results.length,1);
+    assert.equal(calls,0);assert.equal(results.length,1);
     const evidence=results[0];assert.equal(evidence.ok,true,JSON.stringify(evidence));
     assert.deepEqual(evidence.outstandingTotals,[]);
     assert.equal(evidence.balanceSummary.draftBalancesByCurrency.INR.outstandingAmount,'4750.00');

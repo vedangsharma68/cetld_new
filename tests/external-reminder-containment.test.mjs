@@ -1,3 +1,4 @@
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -72,7 +73,7 @@ test('saved linked payment check refuses without provider/RPC work',async()=>{
 });
 
 test('approved and cloud sender preflights block linked rows before review/approval RPC or dispatch',async()=>{
- const phone='+919871367051',env={WHATSAPP_REMINDERS_ENABLED:'true',AUTOMATION_OUTBOUND_ENABLED:'true',WHATSAPP_OUTBOUND_ENABLED:'true',
+ const phone=QA_POLICY_PHONE,env={WHATSAPP_REMINDERS_ENABLED:'true',AUTOMATION_OUTBOUND_ENABLED:'true',WHATSAPP_OUTBOUND_ENABLED:'true',
   WHATSAPP_TEST_ALLOWLIST:phone,WHATSAPP_WABA_ID:'1734116767674237',WHATSAPP_PHONE_NUMBER_ID:'1234567890',
   WHATSAPP_GRAPH_API_VERSION:'v24.0',WHATSAPP_ACCESS_TOKEN:'fixture-only'};
  let effects=0;

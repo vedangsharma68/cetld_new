@@ -1,3 +1,4 @@
+import {cloudflarePartsResponse,cloudflareToolResults} from './fixtures/cloudflare-wire.mjs';
 // All contacts are synthetic fixtures using reserved 555-01xx phone numbers.
 // Provider credential placeholders only reach the local stub; no network sends.
 import test from 'node:test';
@@ -20,7 +21,7 @@ test('typed correction preflight rejects security fields and malformed dates, mo
   {tax:1.25,notes:null,line_items:[{description:'Service',amount:5,quantity:2.5,unitPrice:2}]});
 });
 
-test('serialized Gemini, real SDK and SQL persist invoice corrections, resolve ExampleAlpha and recover interrupted replies',async()=>{
+test('serialized Cloudflare, real SDK and SQL persist invoice corrections, resolve ExampleAlpha and recover interrupted replies',async()=>{
  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+12025550101';
  try{
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -46,12 +47,12 @@ test('serialized Gemini, real SDK and SQL persist invoice corrections, resolve E
   const change=await tools(message,'fields-change');let calls=0,evidence,wireEvidence;
   const values={customer_name:'ExampleAlpha',line_items:[{description:'Service',quantity:2,unitPrice:40,amount:80}],subtotal:80,tax:25,discount:5,total_amount:100,
    due_date:'tomorrow',notes:'Corrected',invoice_direction:'receivable',seller_name:'Our company',buyer_name:'Example Alpha',payment_information:'Pay by bank transfer',custom_fields:{purchase_order:'PO-1'}};
-  const provider=new AIProvider({primaryModel:'gemini-3.5-flash-lite',fallbackModel:null,geminiApiKey:'isolated',maxAttempts:1,logger,
+  const provider=new AIProvider({primaryModel:'@cf/meta/llama-3.3-70b-instruct-fp8-fast',cfAccountId:'isolated',cfApiToken:'isolated',fallbackModel:null,geminiApiKey:'isolated',maxAttempts:1,logger,
    fetchImpl:async(_url,init)=>{calls++;const body=JSON.parse(init.body);
-    if(calls===1)return Response.json({candidates:[{content:{parts:[{functionCall:{name:'workspaceData',args:{operation:'update',table:'invoices',filters:target,values}}}]},finishReason:'STOP'}]});
+    if(calls===1)return cloudflarePartsResponse([{functionCall:{name:'workspaceData',args:{operation:'update',table:'invoices',filters:target,values}}}]);
     wireEvidence=body;
-    evidence=body.contents.flatMap(row=>row.parts).flatMap(part=>{try{return [part.functionResponse?.response||JSON.parse(part.text)];}catch{return [];}}).find(row=>row.action==='invoice.updated');
-    return Response.json({candidates:[{content:{parts:[{text:'Updated FIELD-1.'}]},finishReason:'STOP'}]});
+    evidence=cloudflareToolResults(body).find(row=>row.action==='invoice.updated');
+    return cloudflarePartsResponse([{text:'Updated FIELD-1.'}]);
    }});
   const result=await runOwnerAgent({provider,message,tools:change,timezone:'Asia/Kolkata',clock:()=>new Date('2026-10-04T22:00:00Z')});
   assert.equal(evidence?.completed,true,JSON.stringify(wireEvidence));
@@ -67,10 +68,10 @@ test('serialized Gemini, real SDK and SQL persist invoice corrections, resolve E
   assert.equal(viewed.rows[0].custom_fields.purchase_order,'PO-1');assert.equal(viewed.rows[0].line_items[0].amount,80);assert(!Object.hasOwn(viewed.rows[0],'metadata'));
   const instructionsMessage='Set FIELD-1 payment instructions to use bank transfer reference FIELD-1.';
   const instructions=await tools(instructionsMessage,'fields-payment-information');let instructionCalls=0;
-  const instructionProvider=new AIProvider({primaryModel:'gemini-3.5-flash-lite',fallbackModel:null,geminiApiKey:'isolated-fixture',maxAttempts:1,logger,
-   fetchImpl:async()=>Response.json({candidates:[{content:{parts:++instructionCalls===1
+  const instructionProvider=new AIProvider({primaryModel:'@cf/meta/llama-3.3-70b-instruct-fp8-fast',cfAccountId:'isolated',cfApiToken:'isolated',fallbackModel:null,geminiApiKey:'isolated-fixture',maxAttempts:1,logger,
+   fetchImpl:async()=>cloudflarePartsResponse(++instructionCalls===1
     ?[{functionCall:{name:'workspaceData',args:{operation:'update',table:'invoices',filters:target,values:{payment_information:'Use bank transfer reference FIELD-1'}}}}]
-    :[{text:'Updated FIELD-1 payment instructions.'}]},finishReason:'STOP'}]})});
+    :[{text:'Updated FIELD-1 payment instructions.'}])});
   const instructionAnswer=await runOwnerAgent({provider:instructionProvider,message:instructionsMessage,tools:instructions,history:[],logger});
   assert.equal(instructionAnswer.answer,'Updated FIELD-1 payment instructions.');assert.equal(instructionCalls,2);
   assert.equal((await db.query('select metadata->>\'payment_information\' value from invoices where id=$1',[invoice.id])).rows[0].value,'Use bank transfer reference FIELD-1');

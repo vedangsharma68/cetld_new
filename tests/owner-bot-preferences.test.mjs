@@ -79,7 +79,7 @@ test('owner preference store selects and updates one settings row in the verifie
 });
 
 test('owner WhatsApp settings expose customization only to the owner and escape saved text',()=>{
-  const owner=ownerWhatsAppSettings({owner:true,phone:'+919871367051',businessName:'Studio',preferences:{
+  const owner=ownerWhatsAppSettings({owner:true,phone:'+12025550101',businessName:'Studio',preferences:{
     assistantName:'<helper>',customInstruction:'Keep it calm',
   }});
   assert.match(owner,/id="owner-bot-preferences-form"/);

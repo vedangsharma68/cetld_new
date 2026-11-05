@@ -1,5 +1,5 @@
 import {spawn} from 'node:child_process';
-import {writeFile,readFile,unlink,mkdtemp,rm} from 'node:fs/promises';
+import {writeFile,readFile,readdir,unlink,mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
@@ -74,6 +74,11 @@ export async function writeReleaseManifest({outputPath='owner-chat-build.json'}=
   paths.push('automation/external-reminder-verification.mjs','automation/accounting/integration.mjs',
     'automation/accounting/providers.mjs','automation/accounting/http.mjs',
     'supabase/migrations/20261024094013_fresh_external_reminder_reads.sql');
+  paths.push('tests/fixtures/private-origin-store.mjs','tests/fixtures/verified-owner-rpc.mjs','tests/fixtures/native-postgres.mjs','tests/private-origin-lifecycle.test.mjs','package.json','package-lock.json','tests/fixtures/legacy-main-owner-handler.source','tests/private-rollout-compatibility.test.mjs','tests/private-native-postgres.test.mjs','tests/private-round5-production.test.mjs','tests/private-round6-production.test.mjs','tests/fictional-contact-fixtures.test.mjs','tests/owner-unfiltered-actions-regression.test.mjs','tests/provider-tool-boundary.test.mjs','tests/reviewer-round5-adversarial-production.test.mjs','tests/reviewer-round5-integrity.test.mjs','tests/reviewer-round5-origin-boundaries.test.mjs','tests/reviewer-round5-party-and-magnitude.test.mjs','tests/reviewer-round4-independent.test.mjs','tests/reviewer-round4-indic-overblock.test.mjs','tests/reviewer-round4-native-month.test.mjs','tests/reviewer-round4-watermark.test.mjs','scripts/backfill-private-invoice-terms.mjs','scripts/generate-private-value-sql.mjs','scripts/generate-private-value-unicode.mjs','tests/private-invoice-backfill.test.mjs','tests/private-round4-production.test.mjs','invoice/receivables.mjs','ai/assistant.mjs','tests/fixtures/owner-engine.mjs','tests/private-production-containment.test.mjs','ai/private-value-unicode.mjs','ai/private-value-language.mjs','ai/private-value-matcher.mjs','ai/private-chat-memory.mjs','supabase/migrations/20261101120327_private_whatsapp_chat_memory.sql','ai/private-chat.mjs','automation/whatsapp/private-invoice-read.mjs');
+  paths.push('tests/private-retention-cache.test.mjs','tests/owner-retained-general-currency-correction-sql.test.mjs');
+  paths.push('tests/private-round8-structure.test.mjs','tests/private-round8-provenance.test.mjs','tests/private-round8-native.test.mjs','tests/private-round8-numeric-scale.test.mjs');
+  paths.push(...(await readdir('tests')).filter(file=>file.startsWith('reviewer-round7-')).sort().map(file=>'tests/'+file),'tests/fixtures/reviewer-round7-pins.json','tests/fixtures/reviewer-round7-fixture-corrections.mjs','tests/fixtures/private-migration-61fea77.sql');
+  paths.push('tests/private-round7-production.test.mjs','tests/reviewer-round6-independent-regressions.test.mjs','tests/reviewer-round6-date-variants.test.mjs','tests/reviewer-round6-boundary-regressions.test.mjs','tests/reviewer-round6-long-list.test.mjs','tests/reviewer-round6-native-cache-audit.mjs','tests/reviewer-round6-native-cache.test.mjs','tests/reviewer-round6-integrity.test.mjs','tests/fixtures/reviewer-round6-pins.json');
   const files={};for(const path of paths)files[path]=createHash('sha256').update(await readFile(path)).digest('hex');
   let commit=process.env.VERCEL_GIT_COMMIT_SHA||process.env.GITHUB_SHA;
   if(!commit)try{commit=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();}catch{commit=null;}

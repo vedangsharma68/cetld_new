@@ -1,11 +1,14 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
+import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 
-test('failed extraction is closed safely and a fresh JPEG retries through the real owner handler',async()=>{
+engineTest('failed extraction is closed safely and a fresh JPEG retries through the real owner handler',async()=>{
   const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+15555550174';
   try{
     await db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -22,7 +25,7 @@ test('failed extraction is closed safely and a fresh JPEG retries through the re
       lineItems:[{description:'Fixture service',quantity:1,unitPrice:100,amount:100,confidence:.99}]};
     const wire={...Object.fromEntries(Object.entries(facts).flatMap(([key,value])=>[[key,value],[key+'Confidence',value==null?0:.99]])),lineItemsConfidence:.99};
     let extractionCalls=0;const toolResults=[];
-    const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
+    const handler=createOwnerEngineHarness({supabase,localExtraction:async input=>{extractionCalls++;if(extractionCalls===1)throw Error('isolated local reader unavailable');return localExtraction(wire);},env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
       providerFactory:options=>options.requestPurpose==='extraction'?{async generateStructured(call){
         extractionCalls++;
         if(extractionCalls===1)throw new Error('isolated structured extraction unavailable');

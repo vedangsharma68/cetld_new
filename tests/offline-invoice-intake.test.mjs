@@ -1,3 +1,5 @@
+import {createPrivateChatMemory} from '../ai/private-chat-memory.mjs';
+import {fixture,imageExtractor} from './fixtures/private-invoice.mjs';
 import test from 'node:test';
 import {createAIHandler} from '../ai/routes.mjs';
 import assert from 'node:assert/strict';
@@ -13,7 +15,7 @@ import {extractInvoiceFromImage} from '../ai/image-text.mjs';
 import {correctOfflineReview} from '../ai/offline-invoice-review.mjs';
 import {parseInvoiceCorrection} from '../automation/whatsapp/assistant-handler.mjs';
 
-const phone='+919871367051';
+const phone='+12025550101';
 const text=`Invoice No: INV-2026-0142
 Bill to: Kabir Textiles
 Invoice Date: 2026-10-20
@@ -201,41 +203,6 @@ test('F1 real owner handler cannot confirm a PAYMENT DATE as invoice issuance', 
   } finally { await f.close(); }
 });
 
-// Exercise the real image extractor with a local OCR worker fixture. The
-// preprocessing/recognition boundaries are local; all downstream parsing is real.
-const imageExtractor=printed=>request=>extractInvoiceFromImage({...request,preprocessor:async bytes=>bytes,
-  workerFactory:async()=>({recognize:async()=>({data:{text:printed,confidence:99}}),terminate:async()=>{}})});
-
-async function fixture({recording=false}={}){
-  const f=await createOfflineSqlNetwork(),ownerId=randomUUID();
-  await f.db.query('insert into auth.users(id) values($1)',[ownerId]);
-  await f.db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
-  const workspaceId=(await f.db.query('select (public.create_workspace($1,$2)).id',['Offline Studio',randomUUID()])).rows[0].id;
-  const verification=(await f.db.query('select * from public.owner_start_whatsapp_verification($1,$2)',[workspaceId,phone])).rows[0];
-  await f.db.exec("reset role;set request.jwt.claim.sub='';set request.jwt.claim.role='service_role'");
-  assert.equal((await f.db.query('select public.whatsapp_verify_owner_code($1,$2) value',[phone,verification.code])).rows[0].value.ok,true);
-  const binding=(await f.db.query('select * from public.whatsapp_resolve_verified_owner($1)',[phone])).rows[0];
-  const scope={workspaceId,ownerId,customerId:binding.customer_id,phone};
-  const pending=createWhatsAppPendingActionStore({supabase:f.supabase});
-  let printed=text, pdfText=null;
-  const providerRecord={constructions:0,calls:0,requests:[]};
-  const routeEnv={...env};
-  const makeHandler=()=>createOwnerMessageHandler({supabase:f.supabase,env:routeEnv,logger,providerFactory:recording?()=>{providerRecord.constructions++;return {async generate(request){providerRecord.calls++;providerRecord.requests.push(request);return {content:'Summary'};}};}:deny,fetchImpl:deny,
-    ...(recording?{}:{agentFactory:deny}),replyStore:null,
-    toolsFactory:options=>createOwnerWorkspaceTools({...options,extractOfflineAttachment:request=>extractInvoiceOffline({...request,
-      imageExtractor:imageExtractor(printed),pdfTextExtractor:async()=>pdfText})})});
-  let handler=makeHandler();
-  let sequence=0;
-  const turn=async(message,{media,interactionId,checkpoint}={})=>{
-    const messageId='offline-'+(++sequence);
-    await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'123456',$2,$3,$4,'processing')",[messageId,phone,media?'image':'text',message]);
-    await f.db.query("insert into whatsapp_messages(workspace_id,customer_id,phone,direction,audience,body,kind,status,provider_message_id,idempotency_key) values($1,$2,$3,'inbound','owner',$4,'normal','received',$5,$5)",[workspaceId,scope.customerId,phone,message,messageId]);
-    return handler({...scope,message,messageId,media,interactionId,checkpoint});
-  };
-  const count=async()=>Number((await f.db.query('select count(*) n from invoices')).rows[0].n);
-  return {...f,scope,pending,turn,count,providerRecord,routeEnv,restart:()=>{handler=makeHandler();},setPrinted:value=>{printed=value;},setPdfText:value=>{pdfText=value;}};
-}
-
 test('local owner review uses signed single-confirm buttons, preserves all printed values and keeps DB gates',async t=>{
   const f=await fixture();try{
     await t.test('photo preserves printed candidates and direction gates buttons and bare yes',async()=>{
@@ -410,24 +377,28 @@ test('local owner review uses signed single-confirm buttons, preserves all print
 });
 
 test('offline intent edits never construct a provider or attempt a model classifier',async()=>{
-  const q={select(){return q;},eq(){return q;},maybeSingle:async()=>({data:null})};
-  const handler=createWhatsAppBoundMessageHandler({supabase:{from:()=>q,rpc:async()=>({data:false})},env:{EXTRACTION_ROUTE:'offline'},providerFactory:deny,
+  const q={select(){return q;},eq(){return q;},maybeSingle:async()=>({data:null})},retained=[];
+  const handler=createWhatsAppBoundMessageHandler({audience:'owner',supabase:{from:()=>q,rpc:async(name,args)=>{
+    if(name==='whatsapp_retain_private_chat_origin'){assert.equal(args.p_workspace_id,'w');retained.push(args.p_text);return {data:true};}
+    return {data:false};
+  }},env:{EXTRACTION_ROUTE:'offline'},providerFactory:deny,
     authorizeScope:async()=>true,pendingActionStoreFactory:()=>({loadInvoiceReview:async()=>null,loadPendingAction:async()=>null}),
     invoiceStoreFactory:()=>({findInvoices:async()=>[]}),logger});
   assert.equal(await handler({workspaceId:'w',customerId:'c',phone,message:'chnge the bil details',messageId:'intent'}),
     'What would you like to change, and what should the new value be?');
   assert.match(await handler({workspaceId:'w',customerId:'c',phone,message:'set total to 100 INR',messageId:'edit'}),/find a recent invoice/);
+  assert.deepEqual(retained,['set total to 100 INR']);
 });
 
-for(const route of [undefined,'OFFLINE','offline ','local',''])test(`default provider route is preserved for ${JSON.stringify(route)}`,async()=>{
+for(const route of [undefined,'OFFLINE','offline ','local',''])test(`local extraction is mandatory for ${JSON.stringify(route)}`,async()=>{
   const q={select(){return q;},eq(){return q;},maybeSingle:async()=>({data:null})};
   let providerCalls=0,extractions=0;
-  const handler=createWhatsAppBoundMessageHandler({supabase:{from:()=>q,rpc:async()=>({data:false})},env:route===undefined?{}:{EXTRACTION_ROUTE:route},
+  const handler=createWhatsAppBoundMessageHandler({audience:'owner',supabase:{from:()=>q,rpc:async()=>({data:false})},env:route===undefined?{}:{EXTRACTION_ROUTE:route},
     authorizeScope:async()=>true,providerFactory:()=>{providerCalls++;return {};},
     pendingActionStoreFactory:()=>({beginInvoiceReview:async()=>({id:1,action:{stage:'extracting'}}),transitionInvoiceReview:async()=>({})}),
-    extract:async()=>{extractions++;throw Error('default extraction boundary');},extractOffline:deny,logger});
+    extract:deny,extractOffline:async()=>{extractions++;throw Error('local extraction boundary');},logger});
   await handler({workspaceId:'w',customerId:'c',phone,message:'log invoice',messageId:'default',media:{bytes:png,mimeType:'image/png'}});
-  assert.equal(providerCalls,2);assert.equal(extractions,1);
+  assert.equal(providerCalls,0);assert.equal(extractions,1);
 });
 
 
@@ -457,9 +428,9 @@ test('offline correction RPC preserves evidence, binding, version and the existi
 test('shared photo intake selects only the local extractor, preserving low-confidence printed dates and direction',async()=>{
   const q={select(){return q;},eq(){return q;},maybeSingle:async()=>({data:{business_name:'Owner',default_currency:'USD'}})};
   let action;
-  const handler=createWhatsAppBoundMessageHandler({supabase:{from:()=>q,rpc:async()=>({data:false})},env,providerFactory:deny,extract:deny,
+  const handler=createWhatsAppBoundMessageHandler({audience:'owner',supabase:{from:()=>q,rpc:async()=>({data:false})},env,providerFactory:deny,extract:deny,
     extractOffline:request=>extractInvoiceOffline({...request,imageExtractor:imageExtractor(text)}),
-    authorizeScope:async()=>true,audience:'owner',logger,
+    authorizeScope:async()=>true,logger,
     pendingActionStoreFactory:()=>({beginInvoiceReview:async()=>({id:1,action:{stage:'extracting'}}),
       transitionInvoiceReview:async input=>{assert.equal(input.fromStage,'extracting');action=input.action;return {action};}})});
   const answer=await handler({workspaceId:'w',customerId:'c',phone,message:'log invoice',messageId:'shared-photo',media:{bytes:png,mimeType:'image/png'}});
@@ -495,14 +466,13 @@ test('every established CONFIRMATION_REPLY form accepts a complete visible local
 });
 
 
-test('expired local review history cannot construct a provider or reach generate on conversation summary',async()=>{
+test('expired local review history is excluded while ordinary summaries continue',async()=>{
   const f=await fixture({recording:true});try{
-    const reply=await f.turn('log invoice',{media:{bytes:png,mimeType:'image/png'}});
-    assert.match(reply.answer,/Kabir Textiles/);
+    await f.turn('log invoice',{media:{bytes:png,mimeType:'image/png'}});
     await f.db.query("update whatsapp_pending_actions set expires_at=now()-interval '1 hour' where workspace_id=$1",[f.scope.workspaceId]);
-    const summary=await f.turn('Please summarize our conversation');
-    assert.match(summary.answer,/local invoice information/);
-    assert.deepEqual(f.providerRecord,{constructions:0,calls:0,requests:[]});
+    assert.equal((await f.turn('Please summarize our conversation')).answer,'Summary');
+    assert.equal(f.providerRecord.calls,1);
+    assert.doesNotMatch(JSON.stringify(f.providerRecord.requests),/Kabir|20060|INV-2026|Cotton|cetld:offline-intake/);
     const history=await f.supabase.rpc('owner_assistant_history',{p_workspace_id:f.scope.workspaceId,p_owner_id:f.scope.ownerId});
     assert.match(JSON.stringify(history.data),/cetld:offline-intake/);
   }finally{await f.close();}
@@ -604,13 +574,15 @@ test('durable offline provenance survives contact replies, pruning, restart and 
       await f.db.query("update whatsapp_pending_actions set expires_at=now()-interval '1 hour' where workspace_id=$1",[f.scope.workspaceId]);
       delete f.routeEnv.EXTRACTION_ROUTE;f.restart();
       const summary=await f.turn('Please summarize our conversation',{checkpoint:{phase:'planning',reply:'Kabir Textiles'}});
-      assert.match(summary.answer,/local invoice information/);
+      assert.equal(summary.answer,'Summary');
+      assert.doesNotMatch(JSON.stringify(f.providerRecord.requests.at(-1)),/Kabir|20060|INV-2026/);
       const handler=createAIHandler({env:{},authorize:async()=>({role:'owner',ownerConversation:{read:async()=>[],offlineProvenance:async()=>(await f.supabase.rpc('owner_assistant_offline_provenance',{p_workspace_id:f.scope.workspaceId,p_owner_id:f.scope.ownerId})).data},getSettings:deny}),providerFactory:deny});
       let response;
       await handler({method:'POST',query:{action:'assistant'},body:{workspaceId:f.scope.workspaceId,message:'Summarize'}},{setHeader(){},status(code){assert.equal(code,200);return this;},json(v){response=v;}});
       assert.match(response.answer,/local invoice information/);
     }
-    assert.deepEqual(f.providerRecord,{constructions:0,calls:0,requests:[]});
+    assert.equal(f.providerRecord.calls,2);
+    assert.doesNotMatch(JSON.stringify(f.providerRecord.requests),/Kabir|20060|INV-2026/);
   }finally{await f.close();}
 });
 
@@ -674,17 +646,18 @@ test('unsupported deterministic corrections clarify before SQL and keep candidat
 });
 
 test('default web route treats history phrases as ordinary text with byte-identical replies',async()=>{
-  const responses=[];
+  const responses=[],f=await fixture({recording:true});try{
   for(const phrase of ['Ordinary business discussion.','I saw the words Local invoice review. in the manual.','[cetld:offline-intake] is a token in our docs.']){
     let constructions=0,calls=0;
-    const handler=createAIHandler({env:{},clock:()=>new Date('2026-10-30T00:00:00Z'),authorize:async()=>({role:'admin',offlineProvenance:async()=>false,getSettings:async()=>({}),query:async()=>[]}),
-      providerFactory:()=>{constructions++;return {generate:async()=>{calls++;return {content:'The same answer.'};}};},logger});
+    const handler=createAIHandler({env:{},clock:()=>new Date('2026-10-30T00:00:00Z'),authorize:async()=>({role:'admin',privateChatMemory:({messageId})=>createPrivateChatMemory({supabase:f.supabase,scope:{...f.scope,audience:'owner',phone:'web:'+f.scope.ownerId,messageId}}),offlineProvenance:async()=>false,getSettings:async()=>({}),query:async()=>[]}),
+      providerFactory:()=>{constructions++;return {generate:async request=>{calls++;assert.ok(!JSON.stringify(request.messages).includes(phrase),'caller history cannot enter the production payload');return {content:'The same answer.'};}};},logger});
     let response;
     await handler({method:'POST',query:{action:'assistant'},body:{workspaceId:randomUUID(),message:'Please summarize our conversation',history:[{role:'user',content:phrase}]}},
       {setHeader(){},status(code){assert.equal(code,200);return this;},json(v){response=JSON.stringify(v);}});
     assert.equal(constructions,1);assert.equal(calls,1);responses.push(response);
   }
   assert.equal(responses[0],responses[1]);assert.equal(responses[0],responses[2]);
+  }finally{await f.close();}
 });
 
 test('default owner route ignores local-review phrases in ordinary server history',async()=>{
@@ -703,24 +676,27 @@ test('default owner route ignores local-review phrases in ordinary server histor
       const reply=await f.turn('Please summarize our conversation');answers.push(reply.answer);
       assert.equal(f.providerRecord.constructions,before.constructions+1);
       assert.ok(f.providerRecord.calls>before.calls);
-      assert.ok(JSON.stringify(f.providerRecord.requests.at(-1)).includes(content));
+      assert.equal(JSON.stringify(f.providerRecord.requests.at(-1)).includes(content),false);
     }
     assert.equal(answers[0],answers[1]);assert.equal(answers[0],answers[2]);
   }finally{await f.close();}
 });
 
-test('durable business provenance blocks shared intake after route changes and fails closed on lookup errors',async()=>{
+test('durable provenance scopes shared history without blocking unrelated chat or depending on the old lookup',async()=>{
   const f=await fixture({recording:true});try{
     await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
-    const handler=createWhatsAppBoundMessageHandler({supabase:f.supabase,env:{},providerFactory:deny,authorizeScope:async()=>true,logger});
-    for(const request of [{message:'Summarize our conversation'},{message:'Read this',media:{bytes:png,mimeType:'image/png'}},{message:'set total to 100 INR'}]){
-      assert.match(await handler({...f.scope,messageId:'changed-route',...request}),/local invoice information/);
-    }
-    const broken=createWhatsAppBoundMessageHandler({supabase:{from:f.supabase.from.bind(f.supabase),rpc:async()=>({error:{code:'UNAVAILABLE'}})},env:{EXTRACTION_ROUTE:'offline'},providerFactory:deny,authorizeScope:async()=>true,logger});
-    await assert.rejects(broken({...f.scope,message:'Summarize'}),/provenance unavailable/);
+    const requests=[];
+    const handler=createWhatsAppBoundMessageHandler({supabase:f.supabase,env:{},authorizeScope:async()=>true,logger,
+      providerFactory:()=>({async generate(request){requests.push(request);return {content:'Ordinary answer',model:'cf'};}})});
+    assert.equal(await handler({...f.scope,message:'Summarize our conversation',messageId:'changed-route'}),'Ordinary answer');
+    assert.doesNotMatch(JSON.stringify(requests),/Kabir|20060|INV-2026/);
+    const broken=createWhatsAppBoundMessageHandler({supabase:{from:f.supabase.from.bind(f.supabase),rpc:(name,args)=>name==='owner_assistant_offline_provenance'?Promise.resolve({error:{code:'UNAVAILABLE'}}):f.supabase.rpc(name,args)},env:{EXTRACTION_ROUTE:'offline'},authorizeScope:async()=>true,logger,
+      providerFactory:()=>({async generate(){return {content:'Still available',model:'cf'};}})});
+    assert.equal(await broken({...f.scope,message:'Tell me a joke',messageId:'no-old-rpc'}),'Still available');
   }finally{await f.close();}
 });
-test('offline route without a provenance record permits ordinary owner planning and distinguishes lookup failure',async()=>{
+
+test('offline route without a provenance record permits ordinary owner chat independently of the obsolete workspace lookup',async()=>{
   const f=await fixture({recording:true});try{
     assert.equal((await f.supabase.rpc('owner_assistant_offline_provenance',{p_workspace_id:f.scope.workspaceId})).data,false);
     assert.equal((await f.turn('Please summarize our conversation')).answer,'Summary');
@@ -728,9 +704,9 @@ test('offline route without a provenance record permits ordinary owner planning 
     const before={...f.providerRecord};
     const rpc=f.supabase.rpc.bind(f.supabase);
     f.supabase.rpc=(name,args)=>name==='owner_assistant_offline_provenance'?Promise.resolve({error:{code:'DATABASE_UNAVAILABLE'}}):rpc(name,args);
-    const failed=await f.turn('Please summarize our conversation');
-    assert.equal(failed.plannerFailure.code,'FEATURE_UNAVAILABLE');
-    assert.equal(f.providerRecord.constructions,before.constructions);assert.equal(f.providerRecord.calls,before.calls);
+    const continued=await f.turn('Please summarize our conversation');
+    assert.equal(continued.answer,'Summary');
+    assert.equal(f.providerRecord.constructions,before.constructions+1);assert.equal(f.providerRecord.calls,before.calls+1);
   }finally{await f.close();}
 });
 
@@ -756,21 +732,22 @@ test('offline provenance survives corrected and derived replies across all pruni
         return rpc(name,args);
       };
       const reply=await f.turn('Please summarize our conversation',{checkpoint:{phase:'planning',reply:'Fresh Caption Customer Private caption detail 20060'}});
-      assert.match(reply.answer,/local invoice information/);
+      assert.equal(reply.answer,'Summary');
+      assert.doesNotMatch(JSON.stringify(f.providerRecord.requests),/Fresh Caption Customer|Private caption detail|20060/);
       const tools=createOwnerSafetyTools({supabase:f.supabase,scope:f.scope,env:{},authorize:async()=>true,ownerStore:{query:deny},
         media:{bytes:png,mimeType:'image/png'},providerFactory:deny,logger});
       for(const name of ['readInvoiceAttachment','checkInvoiceAttachmentDuplicate']){
         const result=await tools.execute(name,{});
-        assert.equal(result.ok,false);assert.match(result.message,/local invoice information/);
+        assert.equal(result.ok,false);assert.doesNotMatch(result.message||'',/local invoice information/);
       }
-      assert.deepEqual(f.providerRecord,{constructions:0,calls:0,requests:[]});
+      assert.equal(f.providerRecord.calls,1);
     }finally{await f.close();}
   }
 });
 test('real web owner and admin stores reuse settings/history metadata without the offline RPC',async()=>{
   const f=await fixture({recording:true});try{
     let userId=f.scope.ownerId,constructions=0,calls=0;
-    const handler=createAIHandler({env:{NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_PUBLISHABLE_KEY:'fixture-key'},logger,
+    const handler=createAIHandler({env:{NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_PUBLISHABLE_KEY:'fixture-key',SUPABASE_SERVICE_ROLE_KEY:'fixture-service-key'},logger,
       fetchImpl:async(url,options)=>{
         const path=new URL(url).pathname;
         assert.notEqual(path,'/rest/v1/rpc/owner_assistant_offline_provenance');
@@ -799,20 +776,18 @@ test('real web owner and admin stores reuse settings/history metadata without th
     assert.deepEqual({constructions,calls},recorded);
   }finally{await f.close();}
 });
-test('shared offline route permits ordinary chat without provenance and isolates later derived context',async()=>{
+test('shared local invoice route preserves ordinary chat before and after upload with scoped exclusion',async()=>{
   const f=await fixture();try{
-    let constructions=0,calls=0;
+    const requests=[];
     const handler=createWhatsAppBoundMessageHandler({supabase:f.supabase,env:{EXTRACTION_ROUTE:'offline'},logger,authorizeScope:async()=>true,
-      providerFactory:()=>{constructions++;return {generate:async()=>{calls++;return {content:'Ordinary answer'};}};}});
-    const ask=(message='Analyze payment trends')=>handler({...f.scope,message,messageId:'shared-summary'});
-    const ordinary=await ask();
-    assert.doesNotMatch(typeof ordinary==='string'?ordinary:ordinary.answer,/local invoice information/);
-    assert.equal(constructions,1);assert.ok(calls>0,JSON.stringify(ordinary));
+      providerFactory:()=>({async generate(request){requests.push(request);return {content:'Ordinary answer',model:'cf'};}})});
+    let sequence=0;const ask=(message='Tell me about music')=>handler({...f.scope,message,messageId:'shared-'+(++sequence)});
+    assert.equal(await ask(),'Ordinary answer');
     await f.turn('We issued this invoice',{media:{bytes:png,mimeType:'image/png'}});
     await f.db.query('delete from whatsapp_pending_actions where workspace_id=$1',[f.scope.workspaceId]);
-    const before={constructions,calls};
-    assert.match(await ask(),/local invoice information/);
-    assert.match(await ask('Please summarize our conversation'),/local invoice information/);
-    assert.deepEqual({constructions,calls},before);
+    assert.equal(await ask(),'Ordinary answer');
+    assert.equal(await ask('Please summarize our conversation'),'Ordinary answer');
+    assert.equal(requests.length,3);assert.doesNotMatch(JSON.stringify(requests),/Kabir|20060|INV-2026/);
+    assert.ok(requests.at(-1).messages.some(turn=>turn.content==='Tell me about music'));
   }finally{await f.close();}
 });

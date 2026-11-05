@@ -3,10 +3,13 @@ import {APIError, uuid, readJSON, readBounded} from './http.mjs';
 import {DEFAULT_FALLBACK_MODEL, DEFAULT_MODEL, sanitizeModelSettings} from './provider.mjs';
 import {createDeletedAtCompatibility} from '../invoice/deleted-at-compat.mjs';
 import {createOwnerConversation} from './owner-conversation.mjs';
+import {createClient} from '@supabase/supabase-js';
+import {createPrivateChatMemory} from './private-chat-memory.mjs';
 
 const TABLES = new Set(['invoices', 'customers', 'payments', 'invoice_files']);
 
-// No service-role credential is used: both REST and Storage enforce caller RLS.
+// Ledger REST and Storage enforce caller RLS. Only the internal privacy store
+// uses service access, after this same membership authorization succeeds.
 export async function authorizeAIWorkspace(req, workspaceId, {env = process.env, fetchImpl = fetch} = {}) {
   if (typeof window !== 'undefined') throw new APIError(500, 'SERVER_ONLY');
   workspaceId = uuid(workspaceId);
@@ -47,6 +50,13 @@ export async function authorizeAIWorkspace(req, workspaceId, {env = process.env,
   let provenanceSettings;
   const store = {
     workspaceId, userId, role,
+    privateChatMemory({messageId}) {
+      // Membership was authorized above with the caller JWT. Only positive
+      // provider memory/private terms use the internal service-only store.
+      if(!env.SUPABASE_SERVICE_ROLE_KEY)throw new APIError(503,'CHAT_MEMORY_UNAVAILABLE');
+      const supabase=createClient(base,env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:fetchImpl}});
+      return createPrivateChatMemory({supabase,scope:{workspaceId,ownerId:userId,audience:'owner',phone:'web:'+userId,messageId}});
+    },
     async createTestInvoice(requestId) {
       if (role !== 'owner') throw new APIError(403, 'OWNER_REQUIRED');
       const result = await request('/rest/v1/rpc/create_test_invoice', {method:'POST', body:JSON.stringify({p_workspace_id:workspaceId,p_request_id:uuid(requestId)})});

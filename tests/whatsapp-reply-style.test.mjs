@@ -6,7 +6,7 @@ import {createWhatsAppAssistantChannel,WHATSAPP_REPLY_GUIDANCE} from '../ai/what
 import {runOwnerAgent,ownerAgentFailureReply,ownerReplySafetyIssue} from '../automation/whatsapp/owner-agent.mjs';
 import {invoiceReviewClarification} from '../automation/whatsapp/assistant-handler.mjs';
 import {ownerGroundingIssue} from '../automation/whatsapp/owner-grounding.mjs';
-import {standaloneOwnerGreeting} from '../automation/whatsapp/owner-handler.mjs';
+import {standaloneOwnerGreeting} from './fixtures/owner-engine.mjs';
 import {businessNameReminderNotice} from '../business-name-reminders.mjs';
 import {INVOICE_IMAGE_REPLIES} from '../ai/extraction.mjs';
 import {TEXT_INVOICE_FORMAT,textInvoiceFailure} from '../automation/whatsapp/text-invoice.mjs';

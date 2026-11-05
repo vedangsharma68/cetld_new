@@ -8,7 +8,7 @@ test('neutral invoice claim is atomic and refuses stale, suppressed, or unconsen
   const ws = '11111111-1111-4111-8111-111111111111';
   const customer = '22222222-2222-4222-8222-222222222222';
   const invoice = '33333333-3333-4333-8333-333333333333';
-  const phone = '+919871367051';
+  const phone = '+12025550101';
   const at = '2026-09-27T12:00:00Z';
   try {
     await db.exec(`create role anon; create role authenticated; create role service_role bypassrls;

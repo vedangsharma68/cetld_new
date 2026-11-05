@@ -1,3 +1,5 @@
+import {retainPrivateOriginFixture} from './private-origin-store.mjs';
+
 export function verifiedOwnerRows(tables,phone) {
   const results=[];
   const proofs=tables.whatsapp_owner_verifications||[];
@@ -32,6 +34,7 @@ export function installVerifiedOwnerRpc(supabase,getTables,{expectedPhone=null}=
   const calls=supabase.rpcCalls||(supabase.rpcCalls=[]);
   supabase.rpc=async(name,args={})=>{
     calls.push({name,args:structuredClone(args)});
+    if(name==='whatsapp_retain_private_chat_origin')return retainPrivateOriginFixture(getTables(),args);
     if(name==='owner_assistant_append'){
       const turns=getTables().owner_assistant_turns||sharedTurns;
       if(!turns.some(t=>t.event_key===args.p_event_key))turns.push({id:turns.length+1,event_key:args.p_event_key,workspace_id:args.p_workspace_id,owner_id:args.p_owner_id,channel:args.p_channel,role:args.p_role,content:args.p_content,created_at:new Date().toISOString(),source_message_id:args.p_channel==='whatsapp'&&args.p_role==='user'?args.p_event_key.slice(3,-5):null});

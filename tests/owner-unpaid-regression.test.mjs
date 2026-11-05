@@ -1,6 +1,8 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs';
 import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as scope,DEFAULT_NOW,JOHN_INVOICE_ID} from './fixtures/owner-chat-battery.mjs';
 import {CF_PRIMARY_MODEL} from '../ai/provider.mjs';
@@ -15,7 +17,7 @@ function isolatedDatabase({paid=false,ambiguous=false}={}){
  return db;
 }
 
-test('customer-name unpaid checks reach payment facts, without any ledger or proposal mutation',async()=>{
+engineTest('customer-name unpaid checks reach payment facts, without any ledger or proposal mutation',async()=>{
  for(const paid of [false,true]){
   const db=isolatedDatabase({paid}),before=structuredClone(db.tables.invoices);
   const tool=createWorkspaceDataTool({supabase:db.supabase,scope,authorize:async()=>true,message:'mark the invoice as unpaid'});
@@ -29,17 +31,17 @@ test('customer-name unpaid checks reach payment facts, without any ledger or pro
  assert.equal(result.code,'AMBIGUOUS');assert.equal(db.rpcCalls.length,0);
 });
 
-test('missing target and unsupported fields return specific model-facing validation reasons',async()=>{
+engineTest('missing target and unsupported fields return specific model-facing validation reasons',async()=>{
  const db=isolatedDatabase(),tool=createWorkspaceDataTool({supabase:db.supabase,scope,authorize:async()=>true});
  const missing=await tool.execute(request([]));assert.equal(missing.validationCode,'TARGET_REQUIRED');assert.match(missing.message,/Which invoice/);
  const fields=await tool.execute({...request(),values:{payment_status:'unpaid'}});assert.equal(fields.validationCode,'INVALID_FIELDS');assert.match(fields.message,/preserves original payments/);
  assert(fields.catalog.tables.invoices.writeValueConstraints.update.status.includes('unpaid'));assert.equal(db.readCalls.length,0);
 });
 
-test('post-release unpaid, explanation and model question remain separate durable turns',async()=>{
+engineTest('post-release unpaid, explanation and model question remain separate durable turns',async()=>{
  const db=isolatedDatabase({paid:true}),before=structuredClone({invoices:db.tables.invoices,payments:db.tables.payments});let calls=0;
  db.tables.whatsapp_messages.push({id:'old-failure',workspace_id:scope.workspaceId,phone:scope.phone,audience:'owner',direction:'outbound',kind:'normal',status:'delivered',created_at:DEFAULT_NOW.toISOString(),body:"I couldn't mark John Smith's invoice as unpaid because the operation failed due to invalid input."});
- const handler=createOwnerMessageHandler({supabase:db.supabase,authorize:async()=>true,env:{},clock:()=>DEFAULT_NOW,logger:{info(){},warn(){},error(){}},
+ const handler=createOwnerEngineHarness({supabase:db.supabase,authorize:async()=>true,env:{},clock:()=>DEFAULT_NOW,logger:{info(){},warn(){},error(){}},
   providerFactory:()=>({async generate({messages}){
    calls++;const evidence=messages.filter(row=>row.role==='tool').map(row=>JSON.parse(row.content));
    const original=messages.find(row=>row.role==='system'&&row.content.startsWith('Answer this current owner request only:'))?.content||'';

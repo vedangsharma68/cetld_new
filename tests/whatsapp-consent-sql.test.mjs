@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
 
 const id=n=>`00000000-0000-0000-0000-${String(n).padStart(12,'0')}`;
-const phone='+919871367051';
+const phone='+12025550101';
 
 test('migration gates phone saves, isolates consent, and makes STOP idempotent',async()=>{
   const db=new PGlite();
@@ -93,7 +93,7 @@ test('inbound event payloads and claim RPCs are service-role only', async () => 
       grant usage on schema public to anon,authenticated,service_role;`);
     await db.exec(await readFile(new URL('../supabase/migrations/20260927110000_whatsapp_inbound_events.sql',import.meta.url),'utf8'));
     await db.exec(`insert into public.whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text)
-      values ('wamid-private','1234567890','+919871367051','text','Private message');`);
+      values ('wamid-private','1234567890','+12025550101','text','Private message');`);
     await db.exec('set role authenticated');
     await assert.rejects(db.query('select * from public.whatsapp_inbound_events'),/permission denied/);
     await assert.rejects(db.query('select * from public.whatsapp_claim_inbound_events(1)'),/permission denied/);

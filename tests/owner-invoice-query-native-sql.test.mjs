@@ -1,8 +1,10 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 
 const question='How much does Offline Ledger Company still owe on QA-2048, and what payments have been recorded?';
@@ -42,7 +44,7 @@ function nativeQueryHandler(f,{transformRead=null}={}){
  const executions=[],providerRequests=[],outputs=[];let providerCalls=0;
  const selectedRead={operation:'read',table:'invoices',columns:['invoice_number','currency','total_amount','amount_paid','status'],
   filters:[{column:'invoice_number',operator:'eq',value:'QA-2048'},{column:'customer_name',operator:'eq',value:'Offline Ledger Company'}]};
- const handler=createOwnerMessageHandler({supabase:f.supabase,
+ const handler=createOwnerEngineHarness({supabase:f.supabase,
   env:{NODE_ENV:'test',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
   logger:{info(){},warn(){},error(){}},
   toolsFactory:options=>{
@@ -73,7 +75,7 @@ async function runQuery(f,id,{transformRead=null,message=question}={}){
  return {reply,run};
 }
 
-test('natural invoice payment-history question recovers from cached reread and an unsafe draft using verified SQL evidence',async()=>{
+engineTest('natural invoice payment-history question recovers from cached reread and an unsafe draft using verified SQL evidence',async()=>{
  const f=await fixture();try{
   const before=await f.snapshot(),{reply,run}=await runQuery(f,'event266-natural-history');
   assert.equal(run.executions.filter(x=>x.name==='workspaceData'&&x.args.operation==='read'&&x.args.table==='invoices').length,1,JSON.stringify({reply,executions:run.executions}));
@@ -88,7 +90,7 @@ test('natural invoice payment-history question recovers from cached reread and a
  }finally{await f.close();}
 });
 
-test('missing verified payment-history proof fails closed instead of repeating the model draft',async()=>{
+engineTest('missing verified payment-history proof fails closed instead of repeating the model draft',async()=>{
  const f=await fixture();try{
   const before=await f.snapshot(),{reply,run}=await runQuery(f,'event266-history-proof-missing',{transformRead:result=>{const {paymentHistory,...rest}=result;return rest;}});
   assert.equal(run.executions.filter(x=>x.name==='workspaceData'&&x.args.operation==='read').length,1);
@@ -98,7 +100,7 @@ test('missing verified payment-history proof fails closed instead of repeating t
  }finally{await f.close();}
 });
 
-test('a verified owner cannot use the same invoice alias to read another workspace',async()=>{
+engineTest('a verified owner cannot use the same invoice alias to read another workspace',async()=>{
  const f=await fixture();try{
   const run=nativeQueryHandler(f),before=await f.snapshot();
   const foreignBefore=(await f.db.query('select to_jsonb(i) value from invoices i where id=$1',[f.foreignInvoice.id])).rows[0].value;
@@ -110,7 +112,7 @@ test('a verified owner cannot use the same invoice alias to read another workspa
  }finally{await f.close();}
 });
 
-test('ambiguous invoice and a workspace version change cannot produce a verified balance summary',async t=>{
+engineTest('ambiguous invoice and a workspace version change cannot produce a verified balance summary',async t=>{
  for(const fault of ['ambiguous','changed-version'])await t.test(fault,async()=>{
   const f=await fixture();try{
    if(fault==='ambiguous'){
@@ -135,7 +137,7 @@ test('ambiguous invoice and a workspace version change cannot produce a verified
  });
 });
 
-test('verified payment history retains an immutable payment and reversal in the safe summary',async()=>{
+engineTest('verified payment history retains an immutable payment and reversal in the safe summary',async()=>{
  const f=await fixture();try{
   await f.inbound('event266-reversal-prepare','Reopen invoice QA-2048');
   const prepare=(await f.db.query("select public.whatsapp_invoice_reopening($1,$2,$3,$4,$5,'prepare',$6) value",[

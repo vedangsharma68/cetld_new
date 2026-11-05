@@ -1,3 +1,5 @@
+// Existing operational recipient policy; no copied personal contact literal.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -53,7 +55,7 @@ for(const fullReview of [false,true])test(`linked reminder provenance containmen
   assert.deepEqual((await businessProtections()).rows,beforeBusiness.map(row=>({...row,definition:row.definition.replaceAll("status='sent'","status in ('sent','overdue')")})));
   assert.deepEqual((await db.query("select proacl::text acl from pg_proc where oid='app.reminder_local_status_payable(public.invoices)'::regprocedure")).rows[0],helperAcl);
   await db.exec(await readFile(new URL('../supabase/migrations/'+containmentMigration,import.meta.url),'utf8'));
-  const ownerId=randomUUID(),phone='+12025550107',recipient='+919871367051';
+  const ownerId=randomUUID(),phone='+12025550107',recipient=QA_POLICY_PHONE;
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
   await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}';set role authenticated`);
   const workspaceId=(await db.query("select (create_workspace('External fixture',$1)).id",[randomUUID()])).rows[0].id;

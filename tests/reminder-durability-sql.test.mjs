@@ -1,3 +1,5 @@
+// Existing operational recipient policy; no copied personal contact literal.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import {reminderDeliveryForm} from '../automation/whatsapp/reminder-approval.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +15,7 @@ import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
 import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 import {reminderFingerprint} from '../automation/whatsapp/reminder-fingerprint.mjs';
 
-const phone='+919871367051';
+const phone=QA_POLICY_PHONE;
 const template={status:'APPROVED',category:'UTILITY',useCase:'first_party_invoice_reminder',name:'fixture_first_party_invoice_reminder',language:'en',
   revision:'fixture-approved-v1',wabaId:'654321',phoneNumberId:'123456',
   body:'Hello {{2}}, invoice {{3}} has {{4}} {{5}} remaining, due {{6}}. Reply STOP anytime.\n\n{{1}}'};
@@ -388,7 +390,7 @@ test('accepted receipt committed before connection interruption is recovered thr
 });
 
 for(const [label,mutation] of [
-  ['STOP',"insert into whatsapp_global_suppressions(phone) values('+919871367051')"],
+  ['STOP',`insert into whatsapp_global_suppressions(phone) values('${QA_POLICY_PHONE}')`],
   ['current phone',"update customers set phone=null where id=(select customer_id from invoices where id=$1)"],
   ['invoice version',"update invoices set notes='changed during final gate' where id=$1"],
   ['payable direction',"update invoices set metadata=metadata||'{\"invoice_direction\":\"payable\"}' where id=$1"],

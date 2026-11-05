@@ -1,9 +1,7 @@
-import {randomUUID} from 'node:crypto';
 import {providerHealthIdentity} from './provider-health.mjs';
 import {normalizeProviderToolCalls} from './tool-calls.mjs';
 import {zenResponsesRequest, zenResponsesResult, zenChatMessages, stripNativeProviderMetadata} from './zen-responses.mjs';
 
-const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const ZEN_CHAT_COMPLETIONS_URL = 'https://opencode.ai/zen/v1/chat/completions';
 const ZEN_RESPONSES_URL = 'https://opencode.ai/zen/v1/responses';
@@ -311,10 +309,17 @@ function stripJsonFence(content) {
   return match ? match[1].trim() : text;
 }
 function validateMessages(messages) {
+  for(const message of Array.isArray(messages)?messages:[]){
+    for(const part of Array.isArray(message?.content)?message.content:[]){
+      const url=part?.image_url?.url??part?.file?.file_data;
+      if(typeof url==='string'&&url.startsWith('data:')&&!/^data:[^;,]+;base64,[A-Za-z0-9+/]+={0,2}$/.test(url))throw invalidArgument();
+    }
+  }
   if (!Array.isArray(messages) || !messages.length || messages.length > 200 || safeJsonStringify(messages).length > 15 * 1024 * 1024) throw invalidArgument();
 }
 
 export async function verifyModel(modelId, {fetchImpl = globalThis.fetch, timeoutMs = 10_000, geminiApiKey = globalThis.process?.env?.GEMINI_API_KEY, openRouterApiKey = globalThis.process?.env?.OPENROUTER_API_KEY, zenApiKey = globalThis.process?.env?.OPENCODE_ZEN_API_KEY, cfAccountId = globalThis.process?.env?.CLOUDFLARE_ACCOUNT_ID, cfApiToken = globalThis.process?.env?.CLOUDFLARE_API_TOKEN} = {}) {
+  if(isGeminiModelId(modelId))throw new AIError('INVALID_MODEL',400);
   assertServerRuntime();
   if (!isModelId(modelId)) throw new AIError('INVALID_MODEL', 400);
   const controller = new AbortController();
@@ -344,12 +349,7 @@ export async function verifyModel(modelId, {fetchImpl = globalThis.fetch, timeou
       if (!body?.success || !listed.some(entry => entry?.id === modelId || entry?.model_id === modelId || entry?.model === modelId || entry?.name === modelId || entry?.name === shortName)) throw new AIError('INVALID_MODEL', 404);
       return {id: modelId, provider: 'cloudflare'};
     }
-    if (!geminiApiKey) throw new AIError('API_KEY_MISSING', 503);
-    const response = await fetchImpl(`${GEMINI_BASE_URL}/models/${encodeURIComponent(modelId)}?key=${encodeURIComponent(geminiApiKey)}`, {signal: controller.signal});
-    if (!response.ok) throw statusError(response.status);
-    const body = JSON.parse(await readBoundedText(response));
-    if (!Array.isArray(body?.supportedGenerationMethods) || !body.supportedGenerationMethods.includes('generateContent')) throw new AIError('INVALID_MODEL', 400);
-    return {id: modelId, provider: 'google'};
+    throw new AIError('INVALID_MODEL',400);
   } catch (error) {
     if (error instanceof AIError) throw error;
     if (error?.name === 'AbortError') throw new AIError('TIMEOUT', 504);
@@ -357,88 +357,7 @@ export async function verifyModel(modelId, {fetchImpl = globalThis.fetch, timeou
   } finally { clearTimeout(timer); }
 }
 
-function parseDataUrl(url) {
-  const match = typeof url === 'string' && url.match(/^data:([^;,]+);base64,([A-Za-z0-9+/]+={0,2})$/);
-  if (!match) throw invalidArgument();
-  return {mimeType: match[1], data: match[2]};
-}
-function geminiRequest(messages, {tools, tool_choice: toolChoice, response_format: responseFormat, max_tokens: maxTokens, temperature, geminiJsonMode=false} = {}) {
-  const system = [];
-  const contents = [];
-  const responses=new Map();
-  const addContent=(role,parts)=>{
-    if(!parts.length)return;
-    const last=contents.at(-1);
-    if(last?.role===role)last.parts.push(...parts);
-    else contents.push({role,parts});
-  };
-  for (const message of messages) {
-    if (!message || typeof message !== 'object') throw invalidArgument();
-    if (message.role === 'system') { system.push(String(message.content || '')); continue; }
-    if(message.role==='assistant'&&Array.isArray(message.tool_calls)&&message.tool_calls.length){
-      if(Array.isArray(message.googleParts)&&message.googleParts.some(part=>part?.functionCall)){
-        // Preserve native parts/signatures exactly as received. The executor can
-        // normalize or atomically coalesce calls; return its verified result to
-        // each original call represented by that executed call.
-        const original=message.googleParts.filter(part=>part?.functionCall);
-        for(const [index,part] of original.entries()){
-          const call=message.tool_calls[index]||(message.googleBatchCoalesced?message.tool_calls[0]:null);
-          const executed=Boolean(call);
-          const resultCall=call||message.tool_calls[0];
-          if(!resultCall?.id)throw invalidArgument();
-          const list=responses.get(resultCall.id)||[];list.push({call:part.functionCall,executed});responses.set(resultCall.id,list);
-        }
-        addContent('model',structuredClone(message.googleParts));
-      }else{
-        // Cross-provider/synthetic calls have no Google signature. Preserve their
-        // named context as text instead of fabricating a native signed call.
-        addContent('model',[{text:JSON.stringify({tool_calls:message.tool_calls})}]);
-      }
-      continue;
-    }
-    if(message.role==='tool'){
-      let response;try{response=JSON.parse(message.content);}catch{throw invalidArgument();}
-      if(!response||typeof response!=='object'||Array.isArray(response))response={result:response};
-      const calls=responses.get(message.tool_call_id);
-      if(calls?.length)addContent('user',calls.map(({call,executed})=>({functionResponse:{name:call.name,...(call.id?{id:call.id}:{}),response:executed?response:{ok:false,code:'NOT_EXECUTED',message:'This requested call did not execute. Use only the actual operation result as evidence.'}}})));
-      else addContent('user',[{text:JSON.stringify({...response,toolName:message.name,toolCallId:message.tool_call_id})}]);
-      continue;
-    }
-    const role = message.role === 'assistant' ? 'model' : 'user';
-    const parts = [];
-    if (typeof message.content === 'string') parts.push({text: message.content});
-    else if (Array.isArray(message.content)) {
-      for (const part of message.content) {
-        if (part?.type === 'text') parts.push({text: String(part.text || '')});
-        else if (part?.type === 'image_url') parts.push({inlineData: parseDataUrl(part.image_url?.url)});
-        else if (part?.type === 'file') parts.push({inlineData: parseDataUrl(part.file?.file_data)});
-        else throw invalidArgument();
-      }
-    } else throw invalidArgument();
-    addContent(role,parts);
-  }
-  const generationConfig = {};
-  if (Number.isInteger(maxTokens)) generationConfig.maxOutputTokens = maxTokens;
-  if (typeof temperature === 'number') generationConfig.temperature = temperature;
-  if (responseFormat?.type === 'json_schema') {
-    generationConfig.responseMimeType = 'application/json';
-    if(geminiJsonMode!==true)generationConfig.responseJsonSchema = responseFormat.json_schema?.schema;
-  }
-  const body = {contents, generationConfig};
-  if (system.length) body.systemInstruction = {parts: [{text: system.join('\n\n')}]};
-  if (Array.isArray(tools) && tools.length) {
-    body.tools = [{functionDeclarations: tools.map(tool => ({
-      name: tool.function?.name,
-      description: tool.function?.description,
-      parametersJsonSchema: tool.function?.parameters,
-    }))}];
-    if (toolChoice === 'required') body.toolConfig = {functionCallingConfig: {mode: 'ANY'}};
-  }
-  return body;
-}
-function openRouterRequest(messages, options) {
-  return {...options, model: OPENROUTER_FREE_MODEL, messages, stream: false};
-}
+function openRouterRequest(messages,options){return {...options,model:OPENROUTER_FREE_MODEL,messages,stream:false};}
 
 export class AIProvider {
   #geminiApiKey;
@@ -540,37 +459,16 @@ export class AIProvider {
         ...(quotaLegs===consideredLegs?{providerReason:'quota_exceeded',quotaExhausted:true,quotaProviders:[...quotaProviders]}:{}),
       });
     }
+    assertActive(options.signal,options.deadlineAt);
     throw lastError || new AIError('PROVIDER_UNAVAILABLE', 503);
   }
 
   #candidates() {
-    if(isRetiredModelId(this.primaryModel))return this.fallbackModel&&!isRetiredModelId(this.fallbackModel)?[this.fallbackModel]:[];
-    let candidates = [this.primaryModel];
-    if (this.requestPurpose === 'extraction') {
-      if (this.fallbackModel) {
-        candidates.push(this.fallbackModel);
-        candidates.push(GEMINI_FALLBACK_MODEL, ZEN_PRIMARY_MODEL);
-      }
-    } else if (this.primaryModel === CF_PRIMARY_MODEL) {
-      const defaultCfFallback = this.fallbackModel === null || this.fallbackModel === CF_BACKUP_MODEL || this.fallbackModel === GEMINI_FALLBACK_MODEL;
-      if (defaultCfFallback) candidates.push(CF_BACKUP_MODEL);
-      if (this.fallbackModel) candidates.push(this.fallbackModel);
-      if (!defaultCfFallback) candidates.push(CF_BACKUP_MODEL);
-      candidates.push(GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL);
-    } else if (isCfModel(this.primaryModel)) {
-      if(this.fallbackModel){
-        candidates.push(this.fallbackModel, GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL);
-      }
-    } else if (!this.fallbackModel) {
-      return candidates;
-    } else if (this.primaryModel === ZEN_PRIMARY_MODEL) {
-      candidates.push(this.fallbackModel);
-      candidates.push(GEMINI_FALLBACK_MODEL);
-    } else {
-      candidates.push(this.fallbackModel);
-      candidates.push(GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL);
-    }
-    return [...new Set(candidates)].filter(model=>model&&!isRetiredModelId(model));
+    const candidates=[this.primaryModel,this.fallbackModel];
+    if(isCfModel(this.primaryModel)&&this.fallbackModel!==null) candidates.push(CF_BACKUP_MODEL);
+    // Saved legacy Gemini choices cannot become an implicit fallback.
+    return [...new Set(candidates)].filter(model=>model&&!isRetiredModelId(model)
+      && !isGeminiModelId(model));
   }
 
   async generateStructured({messages, schema, name, validate, maxTokens, ...options} = {}) {
@@ -831,26 +729,7 @@ export class AIProvider {
         return {content, finishReason: choice.finish_reason || null, toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [], model, usedFallback};
       }, {signal, deadlineAt});
     }
-    if (!this.#geminiApiKey) throw new AIError('API_KEY_MISSING', 503);
-    return this.#fetch(`${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.#geminiApiKey)}`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: safeJsonStringify(geminiRequest(messages, {...wireOptions,geminiJsonMode})),
-    }, async response => {
-      const body = await readBoundedJson(response);
-      if (!response.ok || body?.error) throw responseStatusError(response, body, 'google');
-      const parts = body?.candidates?.[0]?.content?.parts;
-      if (!Array.isArray(parts)) throw new AIError('INVALID_RESPONSE');
-      const content = parts.filter(part => part?.thought!==true&&typeof part?.text === 'string').map(part => part.text).join('');
-      const finishReason = body?.candidates?.[0]?.finishReason || null;
-      const toolCalls = parts.filter(part => part?.functionCall?.name).map((part, index) => ({
-        id: `gemini-call-${randomUUID()}-${index}`,
-        type: 'function',
-        function: {name: part.functionCall.name, arguments: safeJsonStringify(part.functionCall.args || {})},
-      }));
-      if (!content && !toolCalls.length) throw new AIError('INVALID_RESPONSE');
-      return {content, finishReason, toolCalls, model, usedFallback,...(toolCalls.length?{googleParts:structuredClone(parts)}:{})};
-    }, {signal, deadlineAt});
+    throw new AIError('INVALID_MODEL',400);
   }
 
   async #fetch(url, init, consumeResponse = response => response, {signal, deadlineAt} = {}) {

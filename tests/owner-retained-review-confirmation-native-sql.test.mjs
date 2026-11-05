@@ -1,9 +1,12 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
+import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 
 const caption='Log this public sample invoice for testing. Keep customer messages and reminders off.';
@@ -28,7 +31,7 @@ async function fixture({throwAfterConfirm=false,mutateBeforeConfirm=null}={}){
  const wire={...Object.fromEntries(Object.entries(facts).flatMap(([key,value])=>[[key,value],[key+'Confidence',value==null?0:.99]])),
   lineItems:[{description:'Web Design',quantity:1,unitPrice:85,amount:85,confidence:.99}],lineItemsConfidence:.99};
  const providerCalls=[],executions=[];let currentMessage='';let confirmationFaultArmed=throwAfterConfirm;
- const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
+ const handler=createOwnerEngineHarness({supabase,localExtraction:async input=>{return localExtraction(wire);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
   logger:{info(){},warn(){},error(){}},toolsFactory:options=>{
    const tools=createOwnerWorkspaceTools(options);
    return {...tools,async execute(name,args,context){
@@ -91,7 +94,7 @@ async function fixture({throwAfterConfirm=false,mutateBeforeConfirm=null}={}){
  }catch(error){await f.close();throw error;}
 }
 
-test('event257 retained PDF proposal uses the guarded confirmation writer after a later yes without a provider decision',async()=>{
+engineTest('event257 retained PDF proposal uses the guarded confirmation writer after a later yes without a provider decision',async()=>{
  const f=await fixture();try{
   const executionStart=f.executions.length,providerStart=f.providerCalls.length;
   const savedReply=await f.turn('pdf-confirm','yes');
@@ -117,7 +120,7 @@ test('event257 retained PDF proposal uses the guarded confirmation writer after 
  }finally{await f.close();}
 });
 
-test('a nonconfirming later message, confirmation embedded in the correction, and a foreign owner scope cannot save the retained PDF',async()=>{
+engineTest('a nonconfirming later message, confirmation embedded in the correction, and a foreign owner scope cannot save the retained PDF',async()=>{
  const f=await fixture();try{
   const proposal=f.proposal,before=f.before;
   const nonconfirm=await f.turn('pdf-not-confirm','Thanks, I will check it.');
@@ -130,7 +133,7 @@ test('a nonconfirming later message, confirmation embedded in the correction, an
  }finally{await f.close();}
 });
 
-test('expired and stale retained proposals cannot be confirmed by a later yes',async()=>{
+engineTest('expired and stale retained proposals cannot be confirmed by a later yes',async()=>{
  const expired=await fixture({mutateBeforeConfirm:'expire'});try{
   const reply=await expired.turn('expired-yes','yes');assert.doesNotMatch(reply.answer,/Saved invoice/);
   assert.equal((await expired.ledger()).invoices.length,0);assert.equal(expired.executions.filter(({args})=>args.operation==='confirm').length,1);
@@ -142,7 +145,7 @@ test('expired and stale retained proposals cannot be confirmed by a later yes',a
  }finally{await stale.close();}
 });
 
-test('an explicit cancel retires the proposal without saving its invoice or source file',async()=>{
+engineTest('an explicit cancel retires the proposal without saving its invoice or source file',async()=>{
  const f=await fixture();try{
   const reply=await f.turn('pdf-cancel','cancel');assert.doesNotMatch(reply.answer,/Saved invoice/);
   const review=await f.review();assert.equal(review.action.stage,'canceled');assert.equal((await f.ledger()).invoices.length,0);
@@ -151,7 +154,7 @@ test('an explicit cancel retires the proposal without saving its invoice or sour
  }finally{await f.close();}
 });
 
-test('lost confirmation acknowledgement resumes safely without retrying or duplicating the saved invoice and source PDF',async()=>{
+engineTest('lost confirmation acknowledgement resumes safely without retrying or duplicating the saved invoice and source PDF',async()=>{
  const f=await fixture({throwAfterConfirm:true});try{
   const scope={...f.scope,messageId:'pdf-confirm',message:'yes',allowDeferred:true};
   await f.persist('pdf-confirm','yes');
