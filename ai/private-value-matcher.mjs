@@ -1,5 +1,5 @@
 import {PRIVATE_UNICODE_FOLD} from './private-value-unicode.mjs';
-import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,namedDatePatterns,privateDocumentKeyPattern,privateOriginHeader,privateOriginRecordHeader,privateOriginClauseBoundary,originDateCommaPattern,lexicalAliases,partyTransliteration,partyReference,partyGrammarWords,grammarAuxiliaries,partyFunctionWords,numericSelectionWords,numericCollectiveWords,privateOriginEvent,privateOriginNoun,privateOriginCarrier,privateOriginDocumentPrefix,privateOriginPartyLabel,privateOriginMonetaryBefore,privateOriginDateBefore,privateOriginLiteralLabel,privateOriginRelationStart,privateOriginRelationEnd,privateOriginPronouns,privateOriginNameEdge,privateJSONPadding,PRIVATE_NUMBER_LIST_MAX_GROUPS} from './private-value-language.mjs';
+import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,numericCurrencyBefore,numericCurrencyAfter,namedDatePatterns,privateDocumentKeyPattern,privateOriginHeader,privateOriginRecordHeader,privateOriginClauseBoundary,originDateCommaPattern,lexicalAliases,partyTransliteration,partyReference,partyGrammarWords,grammarAuxiliaries,partyFunctionWords,numericSelectionWords,numericCollectiveWords,privateOriginEvent,privateOriginNoun,privateOriginCarrier,privateOriginDocumentPrefix,privateOriginPartyLabel,privateOriginMonetaryBefore,privateOriginDateBefore,privateOriginLiteralLabel,privateOriginRelationStart,privateOriginRelationEnd,privateOriginPronouns,privateOriginNameEdge,privateJSONPadding,PRIVATE_NUMBER_LIST_MAX_GROUPS} from './private-value-language.mjs';
 // One code-point fold, shared verbatim with SQL, independent of DB/OS locale.
 export const normalizePrivateValue=value=>Array.from(String(value??''),ch=>PRIVATE_UNICODE_FOLD[ch]??ch).join('').replace(/ +/g,' ').trim();
 const clean=normalizePrivateValue;
@@ -217,7 +217,11 @@ function wordRuns(original,onSpan){
 }
 
 function numbers(text,onSpan,targets=new Set()){
-  text=separateUnits(text);const masked=text.split(''),keys=wordRuns(text,(values,start,end)=>{onSpan?.(values,start,end);for(let i=start;i<end;i++)masked[i]=' ';});text=masked.join('');
+  const original=text,emit=(values,start,end)=>{
+    const before=new RegExp(numericCurrencyBefore,'u').exec(original.slice(0,start)),after=new RegExp(numericCurrencyAfter,'u').exec(original.slice(end));
+    onSpan?.(values,before?.index??start,end+(after?.[0].length??0));
+  };
+  text=separateUnits(text);const masked=text.split(''),keys=wordRuns(text,(values,start,end)=>{emit(values,start,end);for(let i=start;i<end;i++)masked[i]=' ';});text=masked.join('');
   for(const match of text.matchAll(/[0-9]+(?:[., \p{Quotation_Mark}ʼ]+[0-9]+)*(?:[kmb])?/gu)){
     if(/[\p{L}\p{N}_]$/u.test(text.slice(0,match.index))||/^[\p{L}\p{N}_]/u.test(text.slice(match.index+match[0].length)))continue;
     const enumeration=enumerationContext(text.slice(0,match.index)),found=[...numericList(match[0],enumeration)];
@@ -226,7 +230,7 @@ function numbers(text,onSpan,targets=new Set()){
       const graph=compileNumericRun(run);for(const key of targets)if(!found.includes(key)&&runHas(graph,key))found.push(key);
     }
     found.forEach(value=>keys.add(value));
-    if(found.length)onSpan?.(found,match.index,match.index+match[0].length);
+    if(found.length)emit(found,match.index,match.index+match[0].length);
   }
   return keys;
 }

@@ -15,6 +15,9 @@ export const evidenceNumericLabel='^[a-z_][a-z_ .#%()/-]{0,80} +(?=[0-9+−\\p{S
 export const evidenceDateLabel='^(?:invoice +date|due(?: +date)?|date)(?![a-z])';
 // Shared canonical grammar: SQL is generated from these same expressions.
 export const currencyUnitPattern=units.replace('|rs|','|rs\\.?|');
+// Currency belongs to its numeric field span, including abbreviation punctuation.
+export const numericCurrencyBefore=`(?:\\p{Sc}|(?<![a-z0-9_])${currencyUnitPattern}) *$`;
+export const numericCurrencyAfter=`^ *(?:\\p{Sc}|${currencyUnitPattern}(?![a-z0-9_]))`;
 export const namedDayPattern=`(?:[0-9]{1,2}(?:st|nd|rd|th)?|${ordinals.map(day=>day.replaceAll(' ','[ -]+')).join('|')})`;
 export const dateSeparator='[ ./-]*';
 export const namedYearTail=`(?:[ ,./-]*['’ʼ]? *([0-9]{4}|[0-9]{2}|[0-9]{1,3}))?`;

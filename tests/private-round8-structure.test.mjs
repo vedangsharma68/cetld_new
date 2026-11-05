@@ -63,6 +63,15 @@ test('typed source projections are order independent and public operational symb
    assert.ok(keys.includes('number:1250'));assert.ok(keys.includes('party:mark'));assert.ok(keys.includes('date:2026-10-31'));
    assert.deepEqual((await f.db.query('select distinct k from app.private_invoice_origin_aliases($1) k order by k',[source])).rows.map(x=>x.k),[...new Set(keys)].sort());
   }
+  for(const amount of ['Rs.1,250','USD1,250','$1,250','1,250 USD','one thousand two hundred and fifty dollars']){
+   const source='Invoice of '+amount+' to Harbor Rowan, due 31 Oct 2026',keys=privateOriginKeys(source);
+   assert.ok(keys.includes('number:1250'),amount);assert.ok(keys.includes('party:harbor'),amount);assert.ok(keys.includes('party:rowan'),amount);
+   assert.deepEqual((await f.db.query('select distinct k from app.private_invoice_origin_aliases($1) k order by k',[source])).rows.map(x=>x.k),[...new Set(keys)].sort());
+  }
+  for(const source of ['I issued the invoice: the watermark is false','I billed Harbor Rowan']){
+   const keys=privateOriginKeys(source);
+   assert.deepEqual((await f.db.query('select distinct k from app.private_invoice_origin_aliases($1) k order by k',[source])).rows.map(x=>x.k),[...new Set(keys)].sort());
+  }
   const symbols=(await f.db.query('select unnest(enum_range(null::public.invoice_status))::text value')).rows.map(x=>x.value);
   for(const value of symbols){
    await f.db.query('delete from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId]);
