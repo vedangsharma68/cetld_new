@@ -112,3 +112,15 @@ test('typed source projections are order independent and public operational symb
 
  }finally{await f.close();}
 });
+
+test('ASCII identifier fast path and UUID fields preserve complete SQL/JS aliases',async()=>{
+ const f=await fixture();try{
+  const values=[...Array.from({length:127},(_,i)=>'A'+String.fromCodePoint(i+1)+'B'),
+   'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE','12345678-1234-1234-1234-123456789012',
+   '3e501620-8765-44cd-bb78-ac435fc5a790','1,250','31.10','31/10/26','one thousand two hundred and fifty'];
+  for(const value of values){
+   const sql=(await f.db.query('select distinct key from app.private_invoice_term_aliases($1) key order by key',[value])).rows.map(r=>r.key);
+   assert.deepEqual(sql,[...new Set(privateFieldKeys(value))].sort(),JSON.stringify(value));
+  }
+ }finally{await f.close();}
+});
