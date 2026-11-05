@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:net';
 import {randomUUID} from 'node:crypto';
-import {writeFile} from 'node:fs/promises';
+import {writeFile,mkdir} from 'node:fs/promises';
 import {createNativePostgresFixture} from './fixtures/native-postgres.mjs';
 import {OFFLINE_SQL_BOOTSTRAP,offlineSqlMigrationSources} from './fixtures/offline-sql-network.mjs';
 import {privateBackfillBatchSQL} from '../scripts/backfill-private-invoice-terms.mjs';
 
 test('native dense numeric writes and a thousand-source cold rebuild obey unchanged statement and batch budgets',async()=>{
+ await mkdir('work',{recursive:true});
  const server=createServer();await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const port=server.address().port;await new Promise(resolve=>server.close(resolve));
  const pg=await createNativePostgresFixture({port});let db;const evidence={statementTimeout:'5s',numbersPerNote:900,sourceRows:1000,seedStatements:[],backfill:[]};
  const note=offset=>Array.from({length:900},(_,i)=>String(101+(i+offset)%900)).join(',');
@@ -40,5 +41,5 @@ test('native dense numeric writes and a thousand-source cold rebuild obey unchan
   evidence.aliasRows=(await db.query('select count(*)::int n from whatsapp_private_invoice_terms where workspace_id=$1',[workspace])).rows[0].n;
   assert.equal((await db.query("select count(*)::int n from whatsapp_private_invoice_backfill where complete")).rows[0].n,4);
   console.log(JSON.stringify({denseSourceRows:1000,cold59RowUpdateMs:evidence.cold59RowUpdateMs,maxSeedStatementMs:Math.max(...evidence.seedStatements.map(x=>x.ms)),maxBackfillStatementMs:Math.max(...evidence.backfill.map(x=>x.ms)),aggregateBackfillMs:evidence.aggregateBackfillMs,aliasRows:evidence.aliasRows}));
- }finally{await writeFile('work/r8-numeric-scale.json',JSON.stringify(evidence,null,2));if(db)await db.end().catch(()=>{});await pg.stop();}
+ }finally{if(db)await db.end().catch(()=>{});await pg.stop();await writeFile('work/r8-numeric-scale.json',JSON.stringify(evidence,null,2));}
 });

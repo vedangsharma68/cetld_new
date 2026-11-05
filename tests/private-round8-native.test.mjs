@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:net';
 import {randomUUID} from 'node:crypto';
-import {writeFile} from 'node:fs/promises';
+import {writeFile,mkdir} from 'node:fs/promises';
 import {createNativePostgresFixture} from './fixtures/native-postgres.mjs';
 import {OFFLINE_SQL_BOOTSTRAP,offlineSqlMigrationSources} from './fixtures/offline-sql-network.mjs';
 
 test('native workspace lifecycle and maintenance preserve ownership, rollback, committed identity and API privileges',async t=>{
+ await mkdir('work',{recursive:true});
  const server=createServer();await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const port=server.address().port;await new Promise(resolve=>server.close(resolve));
  const pg=await createNativePostgresFixture({port}),clients=[],evidence={};
  try{
@@ -51,8 +52,8 @@ test('native workspace lifecycle and maintenance preserve ownership, rollback, c
    evidence.maintenance={truncateCommitted:true,writerCommitted:true,requestedSourceNumber:actual.source_number,canonicalNumber:row.invoice_number,apiTruncate:false};
   });
  }finally{
-  await writeFile('work/r8-native-lifecycle.json',JSON.stringify(evidence,null,2));
   for(const c of clients)await c.query('select pg_advisory_unlock_all()').catch(()=>{});
   for(const c of clients)await c.end().catch(()=>{});await pg.stop();
+  await writeFile('work/r8-native-lifecycle.json',JSON.stringify(evidence,null,2));
  }
 });
