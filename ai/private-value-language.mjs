@@ -1,6 +1,6 @@
 // Declarative grammar shared by the JS matcher and SQL generation.
-import lexicon from 'wink-lexicon';
-const lexicalWords=Object.entries(lexicon.lexicon).filter(([word])=>/^[a-z]+$/.test(word));
+import lexicon from 'wink-lexicon/src/lexicon.js';
+const lexicalWords=Object.entries(lexicon).filter(([word])=>/^[a-z]+$/.test(word));
 export const grammarDeterminers=lexicalWords.filter(([,tags])=>tags.some(tag=>['DT','PRP$'].includes(tag))).map(([word])=>word);
 export const grammarAdverbs=lexicalWords.filter(([,tags])=>tags.some(tag=>['RB','RBR','RBS'].includes(tag))).map(([word])=>word);
 const closedGrammar=lexicalWords.filter(([,tags])=>tags.some(tag=>['DT','PRP','PRP$','MD','IN','CC','TO'].includes(tag))).map(([word])=>word);

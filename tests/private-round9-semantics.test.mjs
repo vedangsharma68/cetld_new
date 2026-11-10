@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
 import {fixture} from './fixtures/private-invoice.mjs';
 import {createPrivateValueMatcher,privateNumberKeys,privateOriginKeys,privateOriginStart,privateFieldKeys,privatePartyKeys} from '../ai/private-value-matcher.mjs';
 import {invoiceReadQuestion} from '../automation/whatsapp/private-invoice-read.mjs';
@@ -12,6 +13,10 @@ test('whole-clause number roles survive arbitrary nominal modifiers and preserve
   const input=frame(adjective+noun);assert.equal(match(input),true,input);assert.equal(match(input.replace('1250','2500')),false,input);
  }
  for(const input of ['The price comes to 1250,77','It costs 1250,77','Put 1250,77 on the shopping list','1250,77 is the decimal price','The price shown below is 1250,77'])assert.equal(match(input),false,input);
+ const probe=spawnSync(process.execPath,['--input-type=module','-e',`import {createPrivateValueMatcher,privatePartyKeys} from './ai/private-value-matcher.mjs';const match=createPrivateValueMatcher(['number:1250',...privatePartyKeys('An Harper')]);for(let i=0;i<1000;i++){match('Numbers below: 1250,77');match.ordinary('My friend An enjoys hiking');}console.log(JSON.stringify({peakRssKiB:process.resourceUsage().maxRSS}));`],{encoding:'utf8',env:{PATH:process.env.PATH,TMPDIR:'/tmp'}});
+ const generated=spawnSync(process.execPath,['scripts/generate-private-language-model.mjs','--check'],{encoding:'utf8',env:{PATH:process.env.PATH,TMPDIR:'/tmp'}});assert.equal(generated.status,0,generated.stderr);
+ assert.equal(probe.status,0,probe.stderr);assert.ok(JSON.parse(probe.stdout).peakRssKiB<=100*1024,probe.stdout);
+
 });
 
 test('registered homographs use nominal roles across unrestricted objects, predicates and appositions',()=>{

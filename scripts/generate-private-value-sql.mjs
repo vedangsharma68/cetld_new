@@ -647,7 +647,7 @@ const end=original.indexOf('-- The completion key also includes privileged maint
 const captureEnd=original.indexOf('-- No source scan or backfill');
 if(end<0||captureEnd<end)throw Error('Canonical capture boundaries missing');
 const revision=createHash('sha256').update(sql).update(original.slice(0,start)).update(original.slice(end,captureEnd));
-for(const file of ['../ai/private-value-language.mjs','../ai/private-value-matcher.mjs','../ai/private-value-unicode.mjs','../ai/private-language-syntax.mjs','../package-lock.json'])revision.update(await readFile(new URL(file,import.meta.url),'utf8'));
+for(const file of ['../ai/private-value-language.mjs','../ai/private-value-matcher.mjs','../ai/private-value-unicode.mjs','../ai/private-language-syntax.mjs','../ai/private-language-model.mjs','../package-lock.json'])revision.update(await readFile(new URL(file,import.meta.url),'utf8'));
 const canonicalRevision=revision.digest('hex');
 const artifact=sql+`-- Semantic revision covers shared JS/Unicode/SQL and field-role capture rules.
 create function app.private_invoice_canonical_revision() returns text

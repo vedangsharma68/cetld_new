@@ -27,6 +27,11 @@ The English POS model is `wink-pos-tagger@2.2.2`, pinned with its transitive dat
 package-lock.json. It runs locally, retains no transcript cache, and makes no network
 requests. The canonicalizer revision covers its adapter and the dependency lockfile.
 It supplies grammatical categories; it never supplies invoice facts or authorizes access.
+Its complete 77,262-word membership/category inventory is compiled into sorted text
+and typed offsets. The same unigram and contextual POS rules run without unused lemma
+or sense object graphs. The compact adapter is checked against the upstream model
+for every lexicon and WordNet entry; grammatical capabilities remain intact.
+A fresh child-process probe enforces the unchanged 100 MB peak RSS limit after 1,000 matching cycles.
 
 ## Preservation and safety
 
