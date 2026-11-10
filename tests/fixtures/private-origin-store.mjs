@@ -1,12 +1,17 @@
 import {createHash} from 'node:crypto';
-import {privateOriginKeys} from '../../ai/private-value-matcher.mjs';
+import {privateOriginKeys,privateFieldKeys,decodePrivateJSON} from '../../ai/private-value-matcher.mjs';
 
 // RPC contract for strict in-memory subsystem stores. Production integration
 // coverage uses the SQL migration, not this simulator. Unsupported document
 // forms reject rather than acknowledge retention without storing canonical keys.
 export function retainPrivateOriginFixture(tables,args){
  if(typeof args.p_workspace_id!=='string'||!args.p_workspace_id||typeof args.p_text!=='string'||!args.p_text.length||args.p_text.length>4000)return {error:{code:'INVALID_PRIVATE_ORIGIN'}};
- const keys=privateOriginKeys(args.p_text);
+ const document=decodePrivateJSON(args.p_text),derived=document?.invoice?.amount;
+ // Model the newly required typed-result capture, including durable keys.
+ // Unsupported structured forms still reject instead of acknowledging a no-op.
+ const keys=Array.isArray(derived)&&derived.every(v=>/^[0-9]+(?:\.[0-9]+)?$/.test(String(v)))
+  ?derived.flatMap(v=>privateFieldKeys(String(v)).filter(k=>/^number(?:-run)?:/.test(k)))
+  :privateOriginKeys(args.p_text);
  if(!keys.length)return {error:{code:'UNSUPPORTED_PRIVATE_ORIGIN'}};
  const terms=tables.whatsapp_private_invoice_terms||=([]);
  for(const term of keys){

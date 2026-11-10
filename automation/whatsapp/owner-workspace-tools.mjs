@@ -6,6 +6,7 @@ import {createOwnerSafetyTools} from './owner-agent.mjs';
 import {createWorkspaceDataTool} from './workspace-data.mjs';
 import {createOwnerActionButtons} from './owner-action-buttons.mjs';
 import {createInvoiceReopeningRuntime} from './invoice-reopening.mjs';
+import {retainReceivablesResult} from '../../invoice/receivables.mjs';
 
 // These adapters retain atomic invoice/payment/attachment safeguards. They are
 // private server operations, never additional functions offered to the model.
@@ -109,6 +110,7 @@ export function createOwnerWorkspaceTools(options = {}) {
           return {...result,ok:result?.ok!==false,readOnly:true,operation:'configuration'};
         }
         const result=trackAccountingBlock(await tool.execute(args,context));
+        await retainReceivablesResult(result,options.retainPrivateResult);
         if(result?.code==='INVALID_PHONE')phoneFailureReply=result.message;
         else if(result?.ok&&['create','update','batch','confirm'].includes(args?.operation))phoneFailureReply=null;
         if(args?.operation==='pending')pendingWasRead=result?.ok!==false&&result?.pending===true;

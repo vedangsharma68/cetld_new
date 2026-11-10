@@ -1,4 +1,5 @@
-import {receivablesReadAnswer, receivableBalanceLabel} from '../../invoice/receivables.mjs';
+import {receivablesReadAnswer, receivableBalanceLabel,retainReceivablesResult} from '../../invoice/receivables.mjs';
+import {financialChatIntent} from '../../invoice/chat-intent.mjs';
 
 export function invoiceReadQuestion(message) {
   const text=String(message||'').trim()
@@ -7,7 +8,7 @@ export function invoiceReadQuestion(message) {
   if(/\b(?:work[- ]life|balance between)\b/i.test(text))return false;
   if(/^(?:(?:my|our|total|current) )?(?:balances?|outstanding|receivables?)[.!?\s]*$/i.test(text))return true;
   return /^(?:please[ ,]+)?(?:what|who|which|how|show|list|tell|view|read|check|is|are|has|have|did|does|can you show|could you show|menu)\b/i.test(text)
-    && /\b(?:invoices?|bills?|balance|outstanding|owes?|owed|owing|unpaid|overdue|receivable)\b/i.test(text)
+    && financialChatIntent(text)
     && !/\b(?:change|edit|update|set|mark|record|save|log|create|delete|cancel|confirm|send|remind|correct|fix)\b/i.test(text);
 }
 
@@ -17,7 +18,7 @@ export function customerInvoiceRows(invoices) {
     metadata:{...row.metadata,invoice_direction:row.metadata?.invoice_direction||row.direction}}));
 }
 
-export function invoiceRowsAnswer(message,result,{history=[]}={}) {
+export function invoiceRowsAnswer(message,result,{history=[],captureResult}={}) {
   const unavailable='I could not verify the complete invoice records for that question. Use the invoice menu or specify one invoice.';
   if(result?.ok!==true||result.readOnly!==true||result.truncated!==false||!Array.isArray(result.rows))return unavailable;
   let rows=result.rows;
@@ -44,9 +45,17 @@ export function invoiceRowsAnswer(message,result,{history=[]}={}) {
   if(!rows.length)return 'No matching invoices were found. No changes were made.';
   const balances=receivablesReadAnswer({...result,rows,balanceSummary:undefined,invoiceReadAnalysis:undefined});
   if(!balances)return unavailable;
+  captureResult?.({...result,rows,balanceSummary:undefined,invoiceReadAnalysis:undefined});
   if(/\b(?:who|which|status|invoices?|bills?)\b/i.test(message)||number||customer){
     if(rows.length>10)return balances+'\nThere are more than 10 matching invoices. Use the invoice menu or specify a customer.';
     return balances+'\n'+rows.map(row=>`${row.invoice_number}${row.customer_name?` (${row.customer_name})`:''}: ${row.status}; ${receivableBalanceLabel(row)} ${row.currency} ${Math.max(0,Number(row.total_amount)-Number(row.amount_paid||0)).toFixed(2)}. Current paid balance: ${row.currency} ${Number(row.amount_paid||0).toFixed(2)}.`).join('\n');
   }
   return balances;
+}
+
+export async function retainedInvoiceRowsAnswer(message,result,{retain,...options}={}) {
+  let disclosure;
+  const answer=invoiceRowsAnswer(message,result,{...options,captureResult:value=>{disclosure=value;}});
+  if(disclosure)await retainReceivablesResult(disclosure,retain);
+  return answer;
 }

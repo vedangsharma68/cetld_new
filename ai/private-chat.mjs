@@ -2,6 +2,7 @@ import {privateDocumentKeyPattern} from './private-value-language.mjs';
 import {ordinaryPart,normalizePrivateValue,normalizePrivateText,privateOriginStart,decodePrivateJSON} from './private-value-matcher.mjs';
 import {OFFLINE_CONFIRMATION_REPLY,OFFLINE_CANCEL_REPLY} from './offline-invoice-review.mjs';
 import {CF_PRIMARY_MODEL, CF_BACKUP_MODEL, isCloudflareModelId} from './provider.mjs';
+import {financialChatIntent} from '../invoice/chat-intent.mjs';
 
 export const PRIVATE_CHAT_SYSTEM_MESSAGE='You are cetld, a helpful WhatsApp assistant. Answer ordinary conversation concisely using the supplied ordinary chat memory. Use available tools for current non-invoice requests. You have no access to private invoice records. Never invent invoice, customer, payment, balance or reminder facts. Ask the user to use the invoice menu for those questions.';
 export const PRIVATE_CHAT_REPLY = 'I can only answer invoice questions from verified records. I kept the private details local. Use the invoice menu to check a balance or status, or continue the upload review to correct or confirm it. You can send an unrelated chat request separately.';
@@ -27,10 +28,7 @@ export function privateChatTopic(message,depth=0) {
   if(typeof message==='string'){const decoded=decodePrivateJSON(message);if(decoded!==undefined&&decoded!==message&&privateChatTopic(decoded,depth+1))return true;}
   const text=normalizePrivateValue(message);
   if(privateChatSpans(message).length)return true;
-  return /\b(?:invoice\w*|receipts?|payments?|paid|unpaid|overdue|owes?|owed|owing|outstanding|receivables?|payables?|customers?|clients?|debtors?|creditors?|remind\w*)\b|[₹$€£]|\[cetld:/i.test(text)
-    || /\bbills?\b/i.test(text)&&!/\bbill gates\b/i.test(text)
-    || !/\b(?:work[- ]life|balance between)\b/i.test(text)&&/\b(?:my|our|the|your|current|remaining|account)\s+(?:balance|total)\b/i.test(text)
-    || /\b(?:set|change|correct|update|edit|fix)\b.{0,60}\b(?:total|tax|notes?|currency|due date|invoice date)\b/i.test(text)
+  return financialChatIntent(message)
     || /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(text);
 }
 

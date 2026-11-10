@@ -1,6 +1,6 @@
 import {parseTextInvoice} from './text-invoice.mjs';
 import {ordinaryPart} from '../../ai/private-value-matcher.mjs';
-import {invoiceReadQuestion, invoiceRowsAnswer} from './private-invoice-read.mjs';
+import {invoiceReadQuestion, retainedInvoiceRowsAnswer} from './private-invoice-read.mjs';
 import {createPrivateChatMemory} from '../../ai/private-chat-memory.mjs';
 import {ownerInvoiceReadAnalysis} from './owner-invoice-read-analysis.mjs';
 import {createPrivateChatProvider, localReviewTurn, privateChatSpans, privateChatModelSettings, privateChatTopic, CHAT_UNAVAILABLE_REPLY} from '../../ai/private-chat.mjs';
@@ -303,7 +303,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     onProgress('tools');
     try{tools=toolsFactory({supabase,botPreferences,timezone,ownerConversation:scope.ownerConversation,interactiveAvailable:Boolean(env.WHATSAPP_APP_SECRET||env.CRON_SECRET),scope:{...scope,workspaceId,ownerId,phone},ownerStore,pending,pendingAtStart,pendingInitialState,
       lifecyclePending,invoiceStoreFactory:invoiceStore,settingsStore:createOwnerSettingsStore(supabase),config,signal,deadlineAt,ownerHistory:history,
-      sourceMediaReader:input=>readOwnerSourceMedia({supabase,...input}),
+      sourceMediaReader:input=>readOwnerSourceMedia({supabase,...input}),retainPrivateResult:privateMemory.retainOrigin,
       configurationAvailable:settingsAvailable,configurationSource,historyAvailable,ownerStoreAvailable,lifecycleAvailable,
       invoiceEditContext:menuEditTarget?.stale?null:menuEditTarget?{...menuEditTarget,values:menuEditValues}:null,
       planRequest:createOwnerWorkspacePlanner({provider,message,history,timezone,clock,signal,deadlineAt}),
@@ -576,7 +576,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
       const read=await tools.execute('workspaceData',{operation:'read',table:'invoices',
         columns:['invoice_number','customer_name','currency','total_amount','amount_paid','status','invoice_direction'],limit:50,offset:0},{signal});
       if(!await authorizeTurn(scope))return '';
-      invoiceReadReply=invoiceRowsAnswer(message,read,{history});
+      invoiceReadReply=await retainedInvoiceRowsAnswer(message,read,{history,retain:privateMemory.retainOrigin});
     }
     const response=verifiedDecisionReply?{answer:verifiedDecisionReply,deterministicWriteReply:true}:invoiceReadReply?{answer:invoiceReadReply}:tools.getConsentReply?.()?{answer:tools.getConsentReply()}:businessNameReply?{answer:businessNameReply}:phoneCorrectionReply?{answer:phoneCorrectionReply}:profileReply?{answer:profileReply}:tools.getReminderReply?.()?{answer:tools.getReminderReply()}:reminderResult?.ok===false
       ?{answer:reminderResult.message||'The reminder request could not be prepared. Nothing was sent.'}:(!pendingAtStart||!ownerIsConfirmation(message))&&!initialToolResults.length&&!privateChatTopic(message)&&agentFactory===runOwnerAgent&&!/\b(?:model|usin|configuration|business|supplier|contact|phone|record)\b/i.test(message)?await provider.generate({signal,deadlineAt}).then(r=>({answer:r.content})).catch(()=>({answer:CHAT_UNAVAILABLE_REPLY})):await agentFactory({provider,config,store:ownerStore,tools,history,message,signal,deadlineAt,clock,timezone,logger,traceId:messageId,botPreferences,businessProfile,initialToolResults,

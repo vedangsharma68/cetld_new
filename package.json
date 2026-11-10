@@ -26,7 +26,9 @@
     "@vercel/oidc": "file:vendor/vercel-oidc-disabled",
     "pdfjs-dist": "5.4.394",
     "sharp": "0.35.5",
-    "tesseract.js": "7.0.0"
+    "tesseract.js": "7.0.0",
+    "wink-lexicon": "2.2.0",
+    "wink-pos-tagger": "2.2.2"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.8",

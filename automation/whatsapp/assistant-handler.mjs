@@ -1,7 +1,7 @@
 import {ordinaryPart,privateOriginStart} from '../../ai/private-value-matcher.mjs';
 import {createPrivateChatMemory} from '../../ai/private-chat-memory.mjs';
 import {createPrivateChatProvider, localReviewTurn, privateChatSpans, privateChatTopic, PRIVATE_CHAT_REPLY, CHAT_UNAVAILABLE_REPLY} from '../../ai/private-chat.mjs';
-import {invoiceReadQuestion, invoiceRowsAnswer, customerInvoiceRows} from './private-invoice-read.mjs';
+import {invoiceReadQuestion, retainedInvoiceRowsAnswer, customerInvoiceRows} from './private-invoice-read.mjs';
 import {offlineReviewDraft, offlineReviewClarification, correctOfflineReview, offlineCorrectionInputIssue, OFFLINE_CANCEL_REPLY, OFFLINE_CONFIRMATION_REPLY} from '../../ai/offline-invoice-review.mjs';
 import {normalizeOwnerPhone,PHONE_FORMAT_GUIDANCE} from './owner-phone.mjs';
 import {AIProvider, sanitizeModelSettings} from '../../ai/provider.mjs';
@@ -568,7 +568,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       if(!eligibility.allowed||eligibility.customer?.id!==customerId)return 'Verify your number in cetld to discuss account details.';
       try {
         const rows=customerInvoiceRows(await invoiceStoreFactory({supabase,workspaceId,customerId}).findInvoices({limit:50}));
-        return invoiceRowsAnswer(message,{ok:true,readOnly:true,operation:'read',table:'invoices',rows,truncated:rows.length>=50,offset:0});
+        return await retainedInvoiceRowsAnswer(message,{ok:true,readOnly:true,operation:'read',table:'invoices',rows,truncated:rows.length>=50,offset:0},{retain:privateMemory.retainOrigin});
       } catch { return 'I could not verify your invoice records right now. Try again shortly.'; }
     }
     if (privateChatTopic(message)&&!(ordinaryPart(message,privateChatTopic,privateChatSpans).mixed&&ordinaryPart(message,privateChatTopic,privateChatSpans).text)) return PRIVATE_CHAT_REPLY;

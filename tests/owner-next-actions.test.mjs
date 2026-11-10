@@ -8,6 +8,7 @@ import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {PGlite} from '@electric-sql/pglite';
 import {readFile} from 'node:fs/promises';
+import {retainPrivateOriginFixture} from './fixtures/private-origin-store.mjs';
 const workspaceId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',phone='+12025550101',ownerId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const scope={workspaceId,phone,ownerId,messageId:'wamid.test',message:'Show invoice'};
 const now=new Date('2026-10-04T10:00:00Z'),clock=()=>now,env={WHATSAPP_APP_SECRET:'isolated-next-actions-secret'};
@@ -20,7 +21,7 @@ function database(overrides={}) {
  const q={select(){return q},eq(k,v){call.filters.push([k,v]);filters.push(r=>k.includes('->>')?r[k.split('->>')[0]]?.[k.split('->>')[1]]===v:k==='customer.name'?r.customer?.name===v:r[k]===v);return q},is(k,v){filters.push(r=>(r[k]??null)===v);return q},in(k,v){filters.push(r=>v.includes(r[k]));return q},gt(k,v){filters.push(r=>r[k]>v);return q},ilike(k,v){filters.push(r=>String(k==='customer.name'?r.customer?.name:r[k]).toLowerCase().includes(String(v).replaceAll('%','').toLowerCase()));return q},order(){return q},limit(n){take=n;return q},range(a,b){start=a;take=b-a+1;return q},
  upsert(row){if(!tables[table].some(r=>r.workspace_id===row.workspace_id&&r.idempotency_key===row.idempotency_key))tables[table].push(structuredClone(row));return q},
  maybeSingle:async()=>({data:rows()[0]||null}),then(a,b){return Promise.resolve({data:rows()}).then(a,b)}};
- const rows=()=>(tables[table]||[]).filter(r=>filters.every(f=>f(r))).slice(start,start+take);return q},rpc:async()=>({data:{ok:false}})};return db;
+ const rows=()=>(tables[table]||[]).filter(r=>filters.every(f=>f(r))).slice(start,start+take);return q},rpc:async(name,args)=>name==='whatsapp_retain_private_chat_origin'?retainPrivateOriginFixture(tables,args):{data:{ok:false}}};return db;
 }
 const stored=(ref,extras={})=>({workspace_id:workspaceId,phone,audience:'owner',direction:'outbound',kind:'normal',status:'accepted',body:'Invoice details',idempotency_key:'reply:original',owner_next_action_ref:ref,...extras});
 const mint=ref=>createOwnerNextButtons({scope,reference:ref,env,clock});
@@ -212,7 +213,7 @@ test('next-action migration keeps receipts bounded, owner-only and separate from
 // Synthetic fixtures only; invoice labels in real menu results are private business data.
 function menuHandler(db,{pending=null,lifecyclePending=false,unavailable=false,clockOverride=clock,authorize,replyStore}={}){
  const counts={provider:0,agent:0,network:0,rpc:0};
- db.rpc=async(name)=>{counts.rpc++;if(name==='whatsapp_resolve_verified_owner')return {data:[{
+ db.rpc=async(name,args)=>{counts.rpc++;if(name==='whatsapp_retain_private_chat_origin')return retainPrivateOriginFixture(db.tables,args);if(name==='whatsapp_resolve_verified_owner')return {data:[{
   workspace_id:workspaceId,owner_id:ownerId,customer_id:customer.id,business_name:'Synthetic business'}]};
   throw Error('No business RPC allowed: '+name);};
  const handler=createOwnerMessageHandler({supabase:db,env,clock:clockOverride,
