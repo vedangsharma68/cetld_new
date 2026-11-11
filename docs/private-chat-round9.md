@@ -51,7 +51,7 @@ Only the permitted 20261101120327 migration is edited. Lock order, workspace del
 parent checks, cache generations, rollback, ownership and API grants are preserved.
 New SQL helpers remain immutable with pinned search_path and explicit execution revocations.
 SQL scans the exact grammar branches once and merges spans by grammar precedence.
-A 528-case span audit compares this traversal with the shared JS grammar. Completed
+A 624-case span audit compares this traversal with the shared JS grammar. Completed
 origin proofs are checked before decoding, with completion still written last; every
 event projection retains the original source context for formal names.
 The unchanged five-second source statement and 100 MB resource budgets remain in the gates.

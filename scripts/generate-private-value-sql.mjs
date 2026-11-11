@@ -464,7 +464,7 @@ begin
  for i in 1..cardinality(patterns) loop
   if p_events and i<=ORIGIN_BASE_COUNT then continue;end if;pattern:='('||patterns[i]||')';cursor_at:=1;
   for marker in select regexp_matches(p_text,pattern,'g') loop
-   first_at:=strpos(substring(p_text from cursor_at),marker[1])+cursor_at-1;head:=marker[1];last_at:=first_at+length(head);priority:=i;cursor_at:=greatest(last_at,first_at+1);return next;
+   first_at:=regexp_instr(p_text,pattern,cursor_at);head:=marker[1];last_at:=first_at+length(head);priority:=i;cursor_at:=greatest(last_at,first_at+1);return next;
   end loop;
  end loop;
 end $$;
@@ -597,16 +597,15 @@ revoke all on function app.private_invoice_origin_segment_aliases(text) from pub
 -- One traversal supplies every independent event to the same projection.
 create function app.private_invoice_origin_aliases(p_term text) returns setof text
 language plpgsql immutable set search_path='' as $$
-declare source text;prepared text;proper_names jsonb;cursor_at integer:=1;a integer;b integer;starts integer[]:=array[]::integer[];i integer;marker text[];
+declare source text;prepared text;proper_names jsonb;cursor_at integer:=1;a integer;b integer;starts integer[]:=array[]::integer[];i integer;marker text[];head_span record;
 begin
  if app.private_invoice_decode_json(p_term) is not null then return;end if;
  source:=app.private_invoice_normalize(regexp_replace(p_term,E'[\\r\\n]+',',','g'));source:=regexp_replace(source,'ORIGIN_DATE_COMMA',E'\\1 \\2','g');
  prepared:=app.private_invoice_normalize(regexp_replace(p_term,E'[\\r\\n]+',';','g'));prepared:=regexp_replace(prepared,'ORIGIN_DATE_COMMA',E'\\1 \\2','g');
  -- One regex cursor owns all head spans; repeated suffix searches would
  -- recompile the large grammar between every projected frame.
- for marker in select array[head] from app.private_invoice_language_heads(prepared,false) loop
-  a:=strpos(substring(prepared from cursor_at),marker[1])+cursor_at-1;
-  starts:=array_append(starts,a);cursor_at:=a+greatest(1,length(marker[1]));
+ for head_span in select * from app.private_invoice_language_heads(prepared,false) loop
+  starts:=array_append(starts,head_span.first_at);
  end loop;
  if cardinality(starts)=0 then return;end if;
  select coalesce(jsonb_object_agg(app.private_invoice_normalize(m[1]),true),'{}'::jsonb) into proper_names from regexp_matches(p_term,U&'[LETTERS_MARKS]+','g') m where m[1] ~ U&'^[UPPERCASE_LETTERS]';
