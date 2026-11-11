@@ -41,8 +41,8 @@ The eight new review sources and harness are pinned separately; executable copie
 only relative imports and harness directory creation. Release integrity tests compare
 the complete copies to those transformations. No supplied assertion, skip or timeout changes.
 
-The owner-next-actions simulator now implements the required existing retention RPC via
-its strict fixture store. That store acknowledges derived monetary documents only after
+The owner-next-actions and workspace-integration simulators implement the required existing retention RPC via
+the strict fixture store. That store acknowledges derived monetary documents only after
 storing canonical keys. Its original assertions and business-operation rejection remain.
 
 The older 20261028030825 migration remains byte-identical with SHA-256
@@ -50,6 +50,10 @@ The older 20261028030825 migration remains byte-identical with SHA-256
 Only the permitted 20261101120327 migration is edited. Lock order, workspace deletion
 parent checks, cache generations, rollback, ownership and API grants are preserved.
 New SQL helpers remain immutable with pinned search_path and explicit execution revocations.
+SQL scans the exact grammar branches once and merges spans by grammar precedence.
+A 528-case span audit compares this traversal with the shared JS grammar. Completed
+origin proofs are checked before decoding, with completion still written last; every
+event projection retains the original source context for formal names.
 The unchanged five-second source statement and 100 MB resource budgets remain in the gates.
 
 All database mutation proofs use disposable local databases. Production remains held:

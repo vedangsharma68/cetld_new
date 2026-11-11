@@ -60,7 +60,7 @@ test('every event and coordinated argument has matching SQL/JS provenance, irres
    const js=[...new Set(privateOriginKeys(source))].sort(),sql=(await f.db.query('select distinct k from app.private_invoice_origin_aliases($1) k order by k',[source])).rows.map(x=>x.k);assert.deepEqual(sql,js,String(length));
    const match=createPrivateValueMatcher(sql);for(const input of ['send 6847 today','send 2749 today','Ask Brook for guidance'])assert.equal(match(input),true,String(length)+input);
   }
-  for(const source of ['I billed Alder','I invoiced Van','I billed May','I billed An']){
+  for(const source of ['I billed Alder','I invoiced Van','I billed May','I billed An','I billed Alder. I billed May']){
    const js=[...new Set(privateOriginKeys(source))].sort(),sql=(await f.db.query('select distinct k from app.private_invoice_origin_aliases($1) k order by k',[source])).rows.map(x=>x.k);assert.deepEqual(sql,js,source);assert.equal(createPrivateValueMatcher(sql).ordinary('Ask '+source.split(' ').at(-1)+' for advice'),true,source);
   }
   for(const source of ['Are invoices numbered sequentially?','My bills are confusing','I will invoice you later','I will invoice you alone','Have invoices always been numbered?','I received an ordinary letter','I received 3 books from Alder Finch','I charged the batteries today']){

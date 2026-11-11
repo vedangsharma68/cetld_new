@@ -2,6 +2,7 @@
 const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {retainPrivateOriginFixture} from './fixtures/private-origin-store.mjs';
 import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {CF_QWEN_MODEL, CF_PRIMARY_MODEL, CF_BACKUP_MODEL} from '../ai/provider.mjs';
 
@@ -40,7 +41,7 @@ function database() {
       return output;
     });}
     return q;
-  },rpc:async()=>({data:{ok:false,code:'FEATURE_UNAVAILABLE'}})};
+  },rpc:async(name,args)=>name==='whatsapp_retain_private_chat_origin'?retainPrivateOriginFixture(tables,args):({data:{ok:false,code:'FEATURE_UNAVAILABLE'}})};
 }
 const pendingFactory=()=>({loadPendingAction:async()=>null,loadPendingActionState:async()=>({generation:0,id:null,version:null,action:null})});
 const call=args=>({id:'workspace-call',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(args)}});

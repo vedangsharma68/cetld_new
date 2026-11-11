@@ -329,10 +329,10 @@ export function privateOriginStart(value){
 function* originBoundaries(text){for(const match of text.matchAll(new RegExp(privateOriginClauseBoundary,'gu'))){if(match[0]==='.'){const word=text.slice(0,match.index).match(/[\p{L}\p{M}]+$/u)?.[0];if(word&&(Array.from(word).length===1||privateNameAbbreviations.includes(word)))continue;}yield match.index;}}
 function originClauseBoundary(prefix){let boundary=0;for(const index of originBoundaries(prefix))boundary=index+1;return boundary;}
 const nameValue=value=>value.trim().replace(new RegExp(privateOriginNameEdge,'gu'),'').replace(/^[\p{Quotation_Mark}ʼ]+|[\p{Quotation_Mark}ʼ]+$/gu,'').trim();
-function privateOriginFields(value){
+function privateOriginFields(value,sourceNames){
  if(decodePrivateJSON(String(value))!==undefined)return null;
  const start=privateOriginStart(value);if(start===null)return null;
- const properNames=new Set([...String(value??'').matchAll(/[\p{L}\p{M}]+/gu)].filter(m=>/^\p{Lu}/u.test(Array.from(m[0])[0])).map(m=>clean(m[0])));
+ const properNames=sourceNames||new Set([...String(value??'').matchAll(/[\p{L}\p{M}]+/gu)].filter(m=>/^\p{Lu}/u.test(Array.from(m[0])[0])).map(m=>clean(m[0])));
  const source=clean(String(value??'').slice(start).replace(/[\r\n]+/g,',')).replace(new RegExp(originDateCommaPattern,'gu'),'$1 $2'),working=lexicalText(source).text,fields=[],numberRanges=[],masked=working.split(''),mask=(a,b)=>{for(let i=a;i<b;i++)masked[i]=' ';};
  let recordEnd=0;const record=new RegExp(privateOriginRecordHeader.slice(1),'u').exec(working);
  if(record){const a=record.index+record[0].length;recordEnd=a;const identity=/^[\p{L}\p{N}][\p{L}\p{N}._/-]*/u.exec(working.slice(a));if(identity){fields.push({value:identity[0],number:false,party:false});recordEnd=a+identity[0].length;}mask(record.index,recordEnd);}
@@ -387,8 +387,8 @@ function privateOriginFields(value){
  return {source,fields};
 }
 export const privateOriginValues=value=>{const parsed=privateOriginFields(value);return parsed?[parsed.source,...parsed.fields.map(field=>field.value)]:[];};
-function privateOriginSegmentKeys(value){
-  const parsed=privateOriginFields(value);if(!parsed)return [];
+function privateOriginSegmentKeys(value,sourceNames){
+  const parsed=privateOriginFields(value,sourceNames);if(!parsed)return [];
   return [...new Set([...(Array.from(parsed.source).length<=3993?['origin:'+parsed.source]:[]),...privateFieldKeys(parsed.source),...parsed.fields.flatMap(field=>{
   const words=field.value.match(/[\p{L}\p{M}]+/gu)||[],inferred=field.party&&!field.strong;
   const keys=field.party&&(partyFunctionWords.includes(clean(field.value))||inferred)?[]:privateFieldKeys(field.value),numeric=keys.filter(key=>/^number(?:-run)?:/.test(key));
@@ -406,7 +406,8 @@ export function privateOriginSegments(value){
  return heads.slice(1).map((head,i)=>source.slice(head.index,heads[i+2]?.index??source.length));
 }
 export function privateOriginKeys(value){
- return [...new Set([privateOriginSegmentKeys(value),...privateOriginSegments(value).map(privateOriginSegmentKeys)].flat())];
+ const names=new Set([...String(value??'').matchAll(/[\p{L}\p{M}]+/gu)].filter(m=>/^\p{Lu}/u.test(Array.from(m[0])[0])).map(m=>clean(m[0])));
+ return [...new Set([privateOriginSegmentKeys(value,names),...privateOriginSegments(value).map(segment=>privateOriginSegmentKeys(segment,names))].flat())];
 }
 // Canonical keys for a retained atomic field. SQL term_aliases is generated
 // from the same grammar; parity tests compare these exact key sets.

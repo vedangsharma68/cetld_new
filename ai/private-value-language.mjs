@@ -117,6 +117,16 @@ const monetaryEvent=originClauseStart+'(?:'+nominalActor+' +)?(?:charg(?:e|es|ed
 const transferEvent=originClauseStart+'(?:'+nominalActor+' +)?receiv(?:e|es|ed|ing)(?![a-z0-9_])(?= +(?:(?:'+currencyUnitPattern+'|\\p{Sc}) *)?'+sourceNumeral+' *(?:(?:'+currencyUnitPattern+'|\\p{Sc}) +)?from +[^;.!?]+)';
 export const privateOriginEvent='(?:(?:'+eventHead+')(?:'+eventData+')|'+monetaryEvent+'|'+transferEvent+'|(?<![a-z0-9_])(?:invoiced|billed)(?![a-z0-9_]))';
 export const privateOriginHeader=`${bareRecordHeader}|${linkedRecordHeader}|(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?|receipts?)(?![a-z0-9_])(?= *[,;:]| +(?:from|to|for|of)(?![a-z0-9_])|[^;.!?]*[0-9])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*${financialQuoteHint})|${explicitRecordHeader}|${documentAttribution}|(?:invoice|bill|receipt|payment) *(?=[:,])|payment +(?:from|to|for) +)|${privateDataDeclaration}|${privateOriginEvent}`;
+// Exact branches of the same grammar, exposed for bounded SQL regex cursors.
+export const privateOriginEventParts=['(?:'+eventHead+')(?:'+quantityAhead+')','(?:'+eventHead+')(?:'+eventData.slice(quantityAhead.length+1)+')',monetaryEvent,transferEvent,'(?<![a-z0-9_])(?:invoiced|billed)(?![a-z0-9_])'];
+const grammarAlternatives=pattern=>{
+ const parts=[];let depth=0,quoted=false,escaped=false,start=0;
+ for(let i=0;i<pattern.length;i++){const ch=pattern[i];if(escaped){escaped=false;continue;}if(ch==='\\'){escaped=true;continue;}if(ch==='['){quoted=true;continue;}if(ch===']'){quoted=false;continue;}if(quoted)continue;if(ch==='(')depth++;else if(ch===')')depth--;else if(ch==='|'&&depth===0){parts.push(pattern.slice(start,i));start=i+1;}}
+ parts.push(pattern.slice(start));return parts;
+};
+const originBaseParts=grammarAlternatives(privateOriginHeader.slice(0,-privateOriginEvent.length-1));
+export const privateOriginHeaderBaseCount=originBaseParts.length;
+export const privateOriginHeaderParts=[...originBaseParts,...privateOriginEventParts];
 
 const originMonths='(?:'+monthPattern+'|'+Object.entries(lexicalAliases).filter(([,value])=>months.includes(value)).map(([key])=>key).join('|')+')';
 const originDays='(?:'+namedDayPattern+'|'+nativeCardinals.slice(1,32).join('|')+')';

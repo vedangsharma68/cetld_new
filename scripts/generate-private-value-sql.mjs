@@ -1,6 +1,6 @@
 // SQL algorithms mirror the JS matcher; vocabulary/pivot/Unicode are shared data.
 import {createHash} from 'node:crypto';
-import {magnitudeAliases,fractionModifiers,numeralContentWords,privateNumeralSpanPattern,grammarAuxiliaries,grammarAdverbs} from '../ai/private-value-language.mjs';
+import {magnitudeAliases,fractionModifiers,numeralContentWords,privateNumeralSpanPattern,grammarAuxiliaries,grammarAdverbs,privateOriginHeaderParts,privateOriginHeaderBaseCount} from '../ai/private-value-language.mjs';
 import {readFile,writeFile} from 'node:fs/promises';
 import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,numericCurrencyBefore,numericCurrencyAfter,namedDatePatterns,privateDocumentKeyPattern,privateOriginHeader,privateOriginLexicalHint,privateOriginRecordHeader,privateOriginClauseBoundary,privateNameAbbreviations,originDateCommaPattern,lexicalAliases,partyTransliteration,partyFunctionWords,privateOriginEvent,privateOriginNoun,privateOriginCarrier,privateOriginDocumentPrefix,privateOriginPartyLabel,privateOriginMonetaryBefore,privateOriginDateBefore,privateOriginLiteralLabel,privateOriginRelationStart,privateOriginRelationEnd,privateOriginPronouns,privateOriginCopulas,privateOriginGenericPartyStart,privateOriginActorTail,privateOriginPersonalSubject,privateOriginNameEdge,privateJSONPadding,PRIVATE_NUMBER_LIST_MAX_GROUPS} from '../ai/private-value-language.mjs';
 const pairs=object=>JSON.stringify(Object.fromEntries(Object.entries(object).map(([key,value])=>[key,String(value)])));
@@ -455,17 +455,50 @@ begin
 end $$;
 revoke all on function app.private_invoice_origin_boundaries(text) from public,anon,authenticated,service_role;
 
+-- Bounded regex branches share the declarative grammar. Scan each branch once,
+-- merge by source position/grammar precedence, and preserve global nonoverlap.
+create function app.private_invoice_language_candidates(p_text text,p_events boolean) returns table(first_at integer,last_at integer,head text,priority integer)
+language plpgsql immutable set search_path='' as $$
+declare patterns constant text[]:=array[ORIGIN_HEADER_PARTS];pattern text;marker text[];cursor_at integer;i integer;
+begin
+ for i in 1..cardinality(patterns) loop
+  if p_events and i<=ORIGIN_BASE_COUNT then continue;end if;pattern:='('||patterns[i]||')';cursor_at:=1;
+  for marker in select regexp_matches(p_text,pattern,'g') loop
+   first_at:=strpos(substring(p_text from cursor_at),marker[1])+cursor_at-1;head:=marker[1];last_at:=first_at+length(head);priority:=i;cursor_at:=greatest(last_at,first_at+1);return next;
+  end loop;
+ end loop;
+end $$;
+revoke all on function app.private_invoice_language_candidates(text,boolean) from public,anon,authenticated,service_role;
+create function app.private_invoice_language_heads(p_text text,p_events boolean) returns table(first_at integer,last_at integer,head text)
+language plpgsql immutable set search_path='' as $$
+declare candidate record;cursor_at integer:=1;
+begin
+ for candidate in select c.* from app.private_invoice_language_candidates(p_text,p_events) c order by c.first_at,c.priority loop
+  if candidate.first_at<cursor_at then continue;end if;first_at:=candidate.first_at;last_at:=candidate.last_at;head:=candidate.head;cursor_at:=greatest(last_at,first_at+1);return next;
+ end loop;
+end $$;
+revoke all on function app.private_invoice_language_heads(text,boolean) from public,anon,authenticated,service_role;
+create function app.private_invoice_language_origin(p_text text) returns boolean
+language plpgsql immutable set search_path='' as $$
+declare patterns constant text[]:=array[ORIGIN_HEADER_PARTS];pattern text;
+begin
+ foreach pattern in array patterns loop if regexp_match(p_text,'('||pattern||')') is not null then return true;end if;end loop;return false;
+end $$;
+revoke all on function app.private_invoice_language_origin(text) from public,anon,authenticated,service_role;
+
 -- A typed projection owns declarations irrespective of field order. Nominal
 -- arguments are bound to document/event roles, never every leftover word.
-create function app.private_invoice_origin_segment_aliases(p_term text) returns setof text
+create function app.private_invoice_origin_projection(p_term text,p_head integer,p_proper_names jsonb) returns setof text
 language plpgsql immutable set search_path='' as $$
-declare document jsonb;proper_names jsonb;term text;working text;prepared text;marker text[];candidate text[];keys text[];prefix text[];span integer[];ranges integer[]:=array[]::integer[];n record;field text;pattern text;idx integer;a integer;b integer;cursor_at integer;label_at integer;record_at integer:=0;record_end integer:=0;doc_at integer:=0;event_at integer:=0;carrier_at integer:=0;head_at integer;head_end integer;part_index integer;limit_at integer;amount_at integer;amount_end integer;party_text text;before_value text;after_value text;raw_tail text;relation boolean;intro boolean;
+declare document jsonb;proper_names jsonb;term text;working text;prepared text;marker text[];event_head text[];candidate text[];keys text[];prefix text[];span integer[];ranges integer[]:=array[]::integer[];n record;field text;pattern text;idx integer;a integer;b integer;cursor_at integer;label_at integer;record_at integer:=0;record_end integer:=0;doc_at integer:=0;event_at integer:=0;carrier_at integer:=0;head_at integer;head_end integer;part_index integer;limit_at integer;amount_at integer;amount_end integer;party_text text;before_value text;after_value text;raw_tail text;relation boolean;intro boolean;
 begin
  document:=app.private_invoice_decode_json(p_term);if document is not null then return;end if;
+ if p_proper_names is not null then proper_names:=p_proper_names;else
  select coalesce(jsonb_object_agg(app.private_invoice_normalize(m[1]),true),'{}'::jsonb) into proper_names from regexp_matches(p_term,U&'[LETTERS_MARKS]+','g') m where m[1] ~ U&'^[UPPERCASE_LETTERS]';
+ end if;
  term:=app.private_invoice_normalize(regexp_replace(p_term,E'[\\r\\n]+',',','g'));term:=regexp_replace(term,'ORIGIN_DATE_COMMA',E'\\1 \\2','g');
  prepared:=app.private_invoice_normalize(regexp_replace(p_term,E'[\\r\\n]+',';','g'));prepared:=regexp_replace(prepared,'ORIGIN_DATE_COMMA',E'\\1 \\2','g');
- idx:=regexp_instr(prepared,'ORIGIN_HEADER');if idx=0 then return;end if;
+ idx:=p_head;if idx is null then select first_at into idx from app.private_invoice_language_heads(prepared,false) limit 1;end if;if idx is null then return;end if;
  if btrim(substring(prepared from idx)) ~ 'ORIGIN_DOCUMENT_PREFIX' then
   a:=coalesce((select max(boundary.position) from app.private_invoice_origin_boundaries(left(prepared,idx-1)) boundary(position)),0);
   prefix:=regexp_match(substring(left(prepared,idx-1) from a+1),'^(.*)(?:ORIGIN_CARRIER)');
@@ -504,8 +537,8 @@ begin
  limit_at:=(select min(boundary.position) from app.private_invoice_origin_boundaries(prepared) boundary(position) where substring(prepared from boundary.position for 1)<>';' );if limit_at is null then limit_at:=length(prepared)+1;end if;party_text:=left(prepared,limit_at-1);
  marker:=regexp_match(party_text,'ORIGIN_PARTY_LABEL');
  if marker is not null then a:=regexp_instr(party_text,'ORIGIN_PARTY_LABEL')+length(marker[1]);return query select * from app.private_invoice_nominal_aliases(substring(party_text from a),true,proper_names);end if;
- doc_at:=regexp_instr(working,'ORIGIN_NOUN');event_at:=regexp_instr(working,'ORIGIN_EVENT');
- if event_at>0 then marker:=regexp_match(working,'ORIGIN_EVENT');before_value:=btrim(regexp_replace(marker[1],'ORIGIN_ACTOR_TAIL',''));if before_value<>btrim(marker[1]) and before_value !~ 'ORIGIN_PERSONAL_SUBJECT' then return query select * from app.private_invoice_nominal_aliases(before_value,false,proper_names);end if;end if;
+ doc_at:=regexp_instr(working,'ORIGIN_NOUN');select first_at,array[head] into event_at,event_head from app.private_invoice_language_heads(working,true) limit 1;event_at:=coalesce(event_at,0);
+ if event_at>0 then marker:=event_head;before_value:=btrim(regexp_replace(marker[1],'ORIGIN_ACTOR_TAIL',''));if before_value<>btrim(marker[1]) and before_value !~ 'ORIGIN_PERSONAL_SUBJECT' then return query select * from app.private_invoice_nominal_aliases(before_value,false,proper_names);end if;end if;
  if doc_at>0 then
   prefix:=regexp_match(left(working,doc_at-1),'^(.*)(?:ORIGIN_CARRIER)');
   if prefix is not null then
@@ -526,7 +559,7 @@ begin
  else
   head_at:=case when event_at>0 then event_at else doc_at end;
   if head_at>0 then
-   marker:=regexp_match(working,case when event_at>0 then 'ORIGIN_EVENT' else 'ORIGIN_NOUN' end);head_end:=head_at+length(marker[1]);raw_tail:=substring(working from head_end);
+   if event_at>0 then marker:=event_head;else marker:=regexp_match(working,'ORIGIN_NOUN');end if;head_end:=head_at+length(marker[1]);raw_tail:=substring(working from head_end);
    relation:=btrim(raw_tail) ~ 'ORIGIN_RELATION_START';intro:=left(working,head_at-1) ~ '(?<![a-z0-9_])(?:here|below|following|attached) +(?:is|are)(?![a-z0-9_])';
    if event_at>0 or carrier_at>0 or relation or intro or raw_tail ~ '^[ ,:]' and btrim(raw_tail) ~ '^[,:]' then
     amount_at:=null;amount_end:=null;
@@ -556,25 +589,32 @@ begin
  end if;
  marker:=regexp_match(working,'ORIGIN_LITERAL_LABEL');if marker is not null then field:=btrim(substring(working from regexp_instr(working,'ORIGIN_LITERAL_LABEL')+length(marker[1])));if field<>'' then return query select * from app.private_invoice_term_aliases(field);end if;end if;
 end $$;
+revoke all on function app.private_invoice_origin_projection(text,integer,jsonb) from public,anon,authenticated,service_role;
+create function app.private_invoice_origin_segment_aliases(p_term text) returns setof text
+language sql immutable set search_path='' as $$select * from app.private_invoice_origin_projection(p_term,null,null)$$;
 revoke all on function app.private_invoice_origin_segment_aliases(text) from public,anon,authenticated,service_role;
 
 -- One traversal supplies every independent event to the same projection.
 create function app.private_invoice_origin_aliases(p_term text) returns setof text
 language plpgsql immutable set search_path='' as $$
-declare source text;prepared text;cursor_at integer:=1;a integer;b integer;starts integer[]:=array[]::integer[];i integer;marker text[];
+declare source text;prepared text;proper_names jsonb;cursor_at integer:=1;a integer;b integer;starts integer[]:=array[]::integer[];i integer;marker text[];
 begin
- return query select * from app.private_invoice_origin_segment_aliases(p_term);
  if app.private_invoice_decode_json(p_term) is not null then return;end if;
  source:=app.private_invoice_normalize(regexp_replace(p_term,E'[\\r\\n]+',',','g'));source:=regexp_replace(source,'ORIGIN_DATE_COMMA',E'\\1 \\2','g');
  prepared:=app.private_invoice_normalize(regexp_replace(p_term,E'[\\r\\n]+',';','g'));prepared:=regexp_replace(prepared,'ORIGIN_DATE_COMMA',E'\\1 \\2','g');
- loop
-  a:=regexp_instr(prepared,'ORIGIN_HEADER',cursor_at);exit when a=0;
-  marker:=regexp_match(substring(prepared from a),'ORIGIN_HEADER');starts:=array_append(starts,a);cursor_at:=a+greatest(1,length(marker[1]));
+ -- One regex cursor owns all head spans; repeated suffix searches would
+ -- recompile the large grammar between every projected frame.
+ for marker in select array[head] from app.private_invoice_language_heads(prepared,false) loop
+  a:=strpos(substring(prepared from cursor_at),marker[1])+cursor_at-1;
+  starts:=array_append(starts,a);cursor_at:=a+greatest(1,length(marker[1]));
  end loop;
+ if cardinality(starts)=0 then return;end if;
+ select coalesce(jsonb_object_agg(app.private_invoice_normalize(m[1]),true),'{}'::jsonb) into proper_names from regexp_matches(p_term,U&'[LETTERS_MARKS]+','g') m where m[1] ~ U&'^[UPPERCASE_LETTERS]';
+ return query select * from app.private_invoice_origin_projection(p_term,starts[1],proper_names);
  if cardinality(starts)>1 then
   for i in 2..cardinality(starts) loop
    b:=coalesce(starts[i+1],length(source)+1);
-   return query select * from app.private_invoice_origin_segment_aliases(substring(source from starts[i] for b-starts[i]));
+   return query select * from app.private_invoice_origin_projection(substring(source from starts[i] for b-starts[i]),1,proper_names);
   end loop;
  end if;
 end $$;
@@ -608,7 +648,7 @@ begin
    normalized:=app.private_invoice_normalize(regexp_replace(p_value #>> '{}',E'[\\r\\n]+',';','g'));
    -- Every declaration token in this grammar contains folded ASCII letters.
    -- Pure numeric fields cannot be an origin; avoid the full regex per node.
-   if normalized ~ 'ORIGIN_LEXICAL_HINT' and normalized ~ 'ORIGIN_HEADER' then return next p_value;end if;
+   if normalized ~ 'ORIGIN_LEXICAL_HINT' and app.private_invoice_language_origin(normalized) then return next p_value;end if;
   end if;
  when 'object' then
   if exists(select 1 from jsonb_object_keys(p_value) k where app.private_invoice_normalize(k) ~ 'PRIVATE_DOCUMENT_KEY') then return next p_value;return;end if;
@@ -636,7 +676,7 @@ language sql immutable set search_path='' as $$
 $$;
 revoke all on function app.private_invoice_has_origin(text) from public,anon,authenticated,service_role;
 
-`.replaceAll('DATE_START_PATTERN',dateStart.replaceAll("'","''")).replaceAll('HAS_ASCII_LEXICAL',String(Object.keys(lexicalAliases).some(key=>/^[\x00-\x7f]+$/u.test(key)))).replaceAll('ASCII_IDENTIFIER_INPUT',unicodeClass(/[\p{L}\p{N}\p{M}\p{P}]/u,127)).replaceAll('ORIGIN_LEXICAL_HINT',privateOriginLexicalHint).replaceAll('NAME_ABBREVIATIONS',privateNameAbbreviations.map(word=>"'"+word+"'").join(',')).replaceAll('ORIGIN_ACTOR_TAIL',privateOriginActorTail.replaceAll("'","''")).replaceAll('ORIGIN_PERSONAL_SUBJECT',privateOriginPersonalSubject.replaceAll("'","''")).replaceAll('ORIGIN_COPULAS',privateOriginCopulas.map(word=>"'"+word+"'").join(',')).replaceAll('ORIGIN_GENERIC_PARTY',privateOriginGenericPartyStart.replaceAll("'","''")).replaceAll('NUMERIC_CURRENCY_BEFORE',numericCurrencyBefore.replaceAll('\\.','\\\\.').replace('\\p{Sc}','['+unicodeClass(/\p{Sc}/u)+']')).replaceAll('NUMERIC_CURRENCY_AFTER',numericCurrencyAfter.replaceAll('\\.','\\\\.').replace('\\p{Sc}','['+unicodeClass(/\p{Sc}/u)+']')).replaceAll('ORIGIN_UNICODE_UNIT',currencyUnitPattern.replaceAll('\\','\\\\')).replaceAll('ORIGIN_RECORD_UNANCHORED',privateOriginRecordHeader.slice(1).replaceAll("'","''")).replaceAll('ORIGIN_NOUN',privateOriginNoun.replaceAll("'","''")).replaceAll('ORIGIN_EVENT',originSQLPattern(privateOriginEvent)).replaceAll('ORIGIN_CARRIER',privateOriginCarrier.replaceAll("'","''")).replaceAll('ORIGIN_DOCUMENT_PREFIX',privateOriginDocumentPrefix.replaceAll("'","''")).replaceAll('ORIGIN_PARTY_LABEL',privateOriginPartyLabel.replaceAll("'","''")).replaceAll('ORIGIN_MONETARY_BEFORE',privateOriginMonetaryBefore.replaceAll('\\.','\\\\.').replace('\\p{Sc}','['+unicodeClass(/\p{Sc}/u)+']').replaceAll("'","''")).replaceAll('ORIGIN_DATE_BEFORE',privateOriginDateBefore.replaceAll("'","''")).replaceAll('ORIGIN_LITERAL_LABEL',privateOriginLiteralLabel.replaceAll("'","''")).replaceAll('ORIGIN_RELATION_START',privateOriginRelationStart.replaceAll("'","''")).replaceAll('ORIGIN_RELATION_END',privateOriginRelationEnd.replaceAll("'","''")).replaceAll('ORIGIN_NAME_EDGE',privateOriginNameEdge.replaceAll("'","''")).replaceAll('ORIGIN_PRONOUNS',privateOriginPronouns.map(word=>"'"+word+"'").join(',')).replaceAll('NUMBER_CONTENT_WORDS',numeralContentWords.join('|')).replaceAll('ORIGIN_CLAUSE_BOUNDARY',privateOriginClauseBoundary).replaceAll('DATE_SCAN_PATTERNS',dateScans.map(pattern=>"U&'"+pattern.replaceAll("'","''")+"'").join(',')).replaceAll('NUMBER_SCAN_PATTERN',numberScan.replaceAll("'","''")).replaceAll('UNITS',currencyUnitPattern).replaceAll('QUOTES',unicodeClass(/\p{Quotation_Mark}/u)).replaceAll('CURRENCY',unicodeClass(/\p{Sc}/u))
+`.replaceAll('ORIGIN_BASE_COUNT',String(privateOriginHeaderBaseCount)).replaceAll('ORIGIN_HEADER_PARTS',privateOriginHeaderParts.map(p=>"'"+originSQLPattern(p)+"'").join(',')).replaceAll('DATE_START_PATTERN',dateStart.replaceAll("'","''")).replaceAll('HAS_ASCII_LEXICAL',String(Object.keys(lexicalAliases).some(key=>/^[\x00-\x7f]+$/u.test(key)))).replaceAll('ASCII_IDENTIFIER_INPUT',unicodeClass(/[\p{L}\p{N}\p{M}\p{P}]/u,127)).replaceAll('ORIGIN_LEXICAL_HINT',privateOriginLexicalHint).replaceAll('NAME_ABBREVIATIONS',privateNameAbbreviations.map(word=>"'"+word+"'").join(',')).replaceAll('ORIGIN_ACTOR_TAIL',privateOriginActorTail.replaceAll("'","''")).replaceAll('ORIGIN_PERSONAL_SUBJECT',privateOriginPersonalSubject.replaceAll("'","''")).replaceAll('ORIGIN_COPULAS',privateOriginCopulas.map(word=>"'"+word+"'").join(',')).replaceAll('ORIGIN_GENERIC_PARTY',privateOriginGenericPartyStart.replaceAll("'","''")).replaceAll('NUMERIC_CURRENCY_BEFORE',numericCurrencyBefore.replaceAll('\\.','\\\\.').replace('\\p{Sc}','['+unicodeClass(/\p{Sc}/u)+']')).replaceAll('NUMERIC_CURRENCY_AFTER',numericCurrencyAfter.replaceAll('\\.','\\\\.').replace('\\p{Sc}','['+unicodeClass(/\p{Sc}/u)+']')).replaceAll('ORIGIN_UNICODE_UNIT',currencyUnitPattern.replaceAll('\\','\\\\')).replaceAll('ORIGIN_RECORD_UNANCHORED',privateOriginRecordHeader.slice(1).replaceAll("'","''")).replaceAll('ORIGIN_NOUN',privateOriginNoun.replaceAll("'","''")).replaceAll('ORIGIN_EVENT',originSQLPattern(privateOriginEvent)).replaceAll('ORIGIN_CARRIER',privateOriginCarrier.replaceAll("'","''")).replaceAll('ORIGIN_DOCUMENT_PREFIX',privateOriginDocumentPrefix.replaceAll("'","''")).replaceAll('ORIGIN_PARTY_LABEL',privateOriginPartyLabel.replaceAll("'","''")).replaceAll('ORIGIN_MONETARY_BEFORE',privateOriginMonetaryBefore.replaceAll('\\.','\\\\.').replace('\\p{Sc}','['+unicodeClass(/\p{Sc}/u)+']').replaceAll("'","''")).replaceAll('ORIGIN_DATE_BEFORE',privateOriginDateBefore.replaceAll("'","''")).replaceAll('ORIGIN_LITERAL_LABEL',privateOriginLiteralLabel.replaceAll("'","''")).replaceAll('ORIGIN_RELATION_START',privateOriginRelationStart.replaceAll("'","''")).replaceAll('ORIGIN_RELATION_END',privateOriginRelationEnd.replaceAll("'","''")).replaceAll('ORIGIN_NAME_EDGE',privateOriginNameEdge.replaceAll("'","''")).replaceAll('ORIGIN_PRONOUNS',privateOriginPronouns.map(word=>"'"+word+"'").join(',')).replaceAll('NUMBER_CONTENT_WORDS',numeralContentWords.join('|')).replaceAll('ORIGIN_CLAUSE_BOUNDARY',privateOriginClauseBoundary).replaceAll('DATE_SCAN_PATTERNS',dateScans.map(pattern=>"U&'"+pattern.replaceAll("'","''")+"'").join(',')).replaceAll('NUMBER_SCAN_PATTERN',numberScan.replaceAll("'","''")).replaceAll('UNITS',currencyUnitPattern).replaceAll('QUOTES',unicodeClass(/\p{Quotation_Mark}/u)).replaceAll('CURRENCY',unicodeClass(/\p{Sc}/u))
 .replaceAll('UPPERCASE_LETTERS',unicodeClass(/\p{Lu}/u)).replaceAll('GRAMMAR_ADVERBS',grammarAdverbs.map(w=>"'"+w+"'").join(',')).replaceAll('NUMBER_LIST_BOUND',String(PRIVATE_NUMBER_LIST_MAX_GROUPS)).replaceAll('JSON_PADDING',unicodeClass(privateJSONPadding)).replaceAll('LATIN',unicodeClass(/\p{Script=Latin}/u)).replaceAll('PARTY_FUNCTION_WORDS',partyFunctionWords.map(word=>"'"+word+"'").join(','))
 .replaceAll('BOUNDARY_WORD',unicodeClass(/[\p{L}\p{N}_]/u)).replaceAll('VALUE_ALNUM',unicodeClass(/[\p{L}\p{N}]/u)).replaceAll('LETTERS_NUMBERS_MARKS_PUNCT',unicodeClass(/[\p{L}\p{N}\p{M}\p{P}]/u)).replaceAll('LETTERS_NUMBERS_MARKS',unicodeClass(/[\p{L}\p{N}\p{M}]/u)).replaceAll('LETTERS_MARKS',unicodeClass(/[\p{L}\p{M}]/u)).replaceAll('LETTERS',unicodeClass(/\p{L}/u)).replace('TRANSLITERATION',JSON.stringify(partyTransliteration).replaceAll("'","''")).replace('LEXICAL',JSON.stringify(lexicalAliases).replaceAll("'","''"))
 .replaceAll('ORIGIN_RECORD_HEADER',privateOriginRecordHeader.replaceAll("'","''"))
