@@ -1,11 +1,13 @@
 import {PRIVATE_UNICODE_FOLD} from './private-value-unicode.mjs';
 import {createHash} from 'node:crypto';
+import {privateNumberRole as numericRole} from './private-number-role.mjs';
 import {privateLanguageSyntax,privateLanguageTags} from './private-language-syntax.mjs';
-import {magnitudeAliases,fractionModifiers,numeralContentWords,privateNumeralSpanPattern,numericQuantifiers,grammarDeterminers} from './private-value-language.mjs';
+import {magnitudeAliases,fractionModifiers,numeralContentWords,privateNumeralSpanPattern,numericQuantifiers,grammarDeterminers,mixedFractionPattern,numeralTokenPattern,privateOriginTupleStart,privatePersonalPrefixes,privatePersonalHonorifics,privatePersonalCases} from './private-value-language.mjs';
 import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,numericCurrencyBefore,numericCurrencyAfter,namedDatePatterns,privateDocumentKeyPattern,privateOriginHeader,privateOriginLexicalHint,privateOriginRecordHeader,privateOriginClauseBoundary,privateNameAbbreviations,originDateCommaPattern,lexicalAliases,partyTransliteration,partyReference,partyGrammarWords,grammarAuxiliaries,partyFunctionWords,numericSelectionWords,numericCollectiveWords,privateOriginEvent,privateOriginNoun,privateOriginCarrier,privateOriginDocumentPrefix,privateOriginPartyLabel,privateOriginMonetaryBefore,privateOriginDateBefore,privateOriginLiteralLabel,privateOriginRelationStart,privateOriginRelationEnd,privateOriginPronouns,privateOriginCopulas,privateOriginGenericPartyStart,privateOriginActorTail,privateOriginPersonalSubject,privateOriginNameEdge,privateJSONPadding,PRIVATE_NUMBER_LIST_MAX_GROUPS} from './private-value-language.mjs';
 // One code-point fold, shared verbatim with SQL, independent of DB/OS locale.
 export const normalizePrivateValue=value=>Array.from(String(value??''),ch=>PRIVATE_UNICODE_FOLD[ch]??ch).join('').replace(/ +/g,' ').trim();
 const clean=normalizePrivateValue;
+const personalPrefixes=privatePersonalPrefixes.map(clean),personalHonorifics=privatePersonalHonorifics.map(clean),personalCases=privatePersonalCases.map(clean);
 function lexicalText(input){const origins=[],chunks=[];for(const m of input.matchAll(/[\p{L}\p{M}]+|[^\p{L}\p{M}]+/gu)){const part=Object.hasOwn(lexicalAliases,m[0])?lexicalAliases[m[0]]:m[0];chunks.push(part);for(let i=0;i<part.length;i++)origins.push(Object.hasOwn(lexicalAliases,m[0])?{start:m.index,end:m.index+m[0].length,translated:true}:{start:m.index+i,end:m.index+i+1});}return {text:chunks.join(''),origins};}
 const stripCurrency=value=>value.replace(/\/[-−]$/u,'').replace(new RegExp(`^(?:\\p{Sc}|${currencyUnitPattern}) *| *(?:\\p{Sc}|${currencyUnitPattern})$`,'gu'),'').trim();
 export function normalizePrivateText(value){
@@ -39,24 +41,27 @@ function scalar(value){
   return value.replace(/[.,]+$/u,'').replace(/ *([.,']) */gu,'$1');
 }
 // Both valid grouping/decimal interpretations are compared only to retained keys.
-function numeric(input){
+function numeric(input,collection=false){
   let value=scalar(input),places=0;
   const suffix=/([kmb])$/.exec(value);if(suffix){places={k:3,m:6,b:9}[suffix[1]];value=value.slice(0,-1).trim();}
-  const values=new Set(),integer=groupedInteger(value);
+  const values=new Set();
+  if(value.includes('/')){const f=/^(?:([0-9]+) +)?([0-9]+) *\/ *([0-9]+)$/.exec(value);if(!f||BigInt(f[3])===0n)return values;const unit=10n**20n,n=(BigInt(f[1]||'0')*BigInt(f[3])+BigInt(f[2]))*unit/BigInt(f[3]),v=exact(String(n/unit),String(n%unit).padStart(20,'0'));return new Set([places?shift(v,places):v]);}
+  const integer=groupedInteger(value);
   if(integer!==null)values.add(exact(integer));
   const last=value.search(/[.,][0-9]+$/u);
-  if(last>=0){const whole=groupedInteger(value.slice(0,last));if(whole!==null)values.add(exact(whole,value.slice(last+1)));}
+  if(last>=0&&!(collection&&value[last]===',')){const whole=groupedInteger(value.slice(0,last));if(whole!==null)values.add(exact(whole,value.slice(last+1)));}
   return new Set([...values].map(n=>places?shift(n,places):n));
 }
 // Numeric ambiguity is a compact run, never all overlapping subwindows.
 // Retention keeps the whole-value interpretations and a compact graph;
 // screening checks its paths against actual supplied numeric candidates.
+const collectionNumeric=value=>numeric(value,true);
 function numericList(value,enumeration=false){
-  const prepared=scalar(value),direct=numeric(value);
+  const prepared=scalar(value),direct=enumeration?collectionNumeric(value):numeric(value);
   if(!/^[0-9][0-9.,' ]*(?:[kmb])?$/u.test(prepared))return direct;
   const parts=prepared.split(/, */u),result=new Set(direct);
   if(runGroups(prepared)<=PRIVATE_NUMBER_LIST_MAX_GROUPS&&direct.size&&!enumeration&&!/, +/u.test(value))return direct;
-  if(parts.length>1){for(let i=0;i<parts.length;i++){numericList(parts[i]).forEach(n=>result.add(n));if(i+1<parts.length)numeric(parts[i]+','+parts[i+1]).forEach(n=>result.add(n));}return result;}
+  if(parts.length>1){for(let i=0;i<parts.length;i++){numericList(parts[i]).forEach(n=>result.add(n));if(i+1<parts.length)(enumeration?collectionNumeric:numeric)(parts[i]+','+parts[i+1]).forEach(n=>result.add(n));}return result;}
   const groups=prepared.split(/ +/u);
   if(groups.length>PRIVATE_NUMBER_LIST_MAX_GROUPS){for(let i=0;i<groups.length;i++){numeric(groups[i]).forEach(n=>result.add(n));if(i+1<groups.length)numeric(groups[i]+' '+groups[i+1]).forEach(n=>result.add(n));}return result;}
   if(direct.size)return direct;
@@ -70,42 +75,29 @@ const runGroups=value=>value.split(/[, ]+/u).length;
 const numericRun=value=>{const prepared=scalar(value);return /^[0-9][0-9.,' ]*(?:[kmb])?$/u.test(prepared)&&(prepared.includes(',')||prepared.length>3989||runGroups(prepared)>PRIVATE_NUMBER_LIST_MAX_GROUPS)?prepared:null;};
 // A storage row is bounded; the input and its parse graph are not. Chunks carry
 // a full-run identity and cardinality, so reconstruction cannot bless a prefix.
-const boundedRun=run=>{
- if(run.length<=3989)return ['number-run:'+run];
+const boundedRun=(run,enumeration=false)=>{
+ const tag=enumeration?'number-list-run:':'number-run:';
+ if(run.length<=4000-tag.length)return [tag+run];
  const id=createHash('sha256').update(run).digest('hex'),parts=Math.ceil(run.length/3800);
- return Array.from({length:parts},(_,i)=>'number-run:['+[id,i,parts,run.slice(i*3800,(i+1)*3800)].map(x=>JSON.stringify(x)).join(', ')+']');
+ return Array.from({length:parts},(_,i)=>tag+'['+[id,i,parts,run.slice(i*3800,(i+1)*3800)].map(x=>JSON.stringify(x)).join(', ')+']');
 };
 export const privateNumberKeys=(value,enumeration=false)=>{
  const term=clean(value),run=numericRun(term);
  // Long runs keep their entire parse graph in one key. No atomic member or
  // grouping is lost: membership is resolved against the supplied restatement.
- if(run&&run.length>3989)return boundedRun(run);
- if(run&&runGroups(run)>PRIVATE_NUMBER_LIST_MAX_GROUPS)return [...numeric(term)].filter(n=>n.length<=3993).map(number=>'number:'+number).concat(boundedRun(run));
+ if(run&&run.length>3989)return boundedRun(run,enumeration);
+ if(run&&runGroups(run)>PRIVATE_NUMBER_LIST_MAX_GROUPS)return [...(enumeration?collectionNumeric(term):numeric(term))].filter(n=>n.length<=3993).map(number=>'number:'+number).concat(boundedRun(run,enumeration));
  const keys=[...numericList(term,enumeration)].map(number=>'number:'+number);
- if(run&&(enumeration||!numeric(term).size||/, +/u.test(term)||runGroups(run)>PRIVATE_NUMBER_LIST_MAX_GROUPS))keys.push(...boundedRun(run));
+ if(run&&(enumeration||!numeric(term).size||/, +/u.test(term)||runGroups(run)>PRIVATE_NUMBER_LIST_MAX_GROUPS))keys.push(...boundedRun(run,enumeration));
  return keys;
 };
-function numericRole(text,start,end){
- const prefix=text.slice(0,start).split(/[;.!?\n]/u).at(-1),suffix=text.slice(end).split(/[;.!?\n]/u)[0];
- const left=prefix.match(/[\p{L}\p{M}]+/gu)||[],right=suffix.match(/[\p{L}\p{M}]+/gu)||[];
- // Agreement is a property of the expression on either side of the copula.
- if(['is','was'].includes(right[0]))return 'scalar';
- if(['are','were'].includes(right[0]))return 'collection';
- if(left.some(w=>numericSelectionWords.includes(w)||numericQuantifiers.includes(w)||numericCollectiveWords.includes(w)))return 'collection';
- const predicate=left.findIndex(w=>['are','were','include','contain','equal'].includes(w));
- if(predicate>=0&&left.slice(0,predicate).some(w=>['these','those','they'].includes(w)))return 'collection';
- const syntax=privateLanguageSyntax(prefix),plural=syntax.some(token=>token.pos==='NNS'||token.pos==='NNPS');
- const finite=syntax.filter(token=>/^(?:VB|VBD|VBP|VBZ|MD)$/u.test(token.pos));
- const presentation=/[:=—–\[\(] *$/u.test(prefix),agreement=predicate>=0;
- return plural&&(!finite.length||presentation||agreement)?'collection':'scalar';
-}
 // A run is a sequence of digit groups and boundaries. Search the supplied key's
 // digits, then validate only its boundary-aligned spellings with the scalar
 // grammar. No O(n * window) alias materialization on invoice writes.
-function compileNumericRun(value){
+function compileNumericRun(value,enumeration=false){
  const text=scalar(value),parts=[...text.matchAll(/[^, ]+/gu)],starts=new Map(),ends=new Map();let digits='';
  for(let i=0;i<parts.length;i++){starts.set(digits.length,i);digits+=parts[i][0].replace(/[^0-9]/gu,'');ends.set(digits.length,i+1);}
- return {text,parts,digits,starts,ends,cache:new Map()};
+ return {text,parts,digits,starts,ends,enumeration,cache:new Map()};
 }
 function runHas(run,key){
  if(run.cache.has(key))return run.cache.get(key);
@@ -116,7 +108,7 @@ function runHas(run,key){
   while(index>=0&&!found){let left=index,right=index+digits.length;
    while(left>0&&run.digits[left-1]==='0')left--;
    while(right<run.digits.length&&run.digits[right]==='0')right++;
-   for(let a=left;a<=index&&!found;a++)if(run.starts.has(a))for(let b=index+digits.length;b<=right;b++)if(run.ends.has(b)&&numeric(run.text.slice(run.parts[run.starts.get(a)].index,run.parts[run.ends.get(b)-1].index+run.parts[run.ends.get(b)-1][0].length)).has(key)){found=true;break;}
+   for(let a=left;a<=index&&!found;a++)if(run.starts.has(a))for(let b=index+digits.length;b<=right;b++)if(run.ends.has(b)&&(run.enumeration?collectionNumeric:numeric)(run.text.slice(run.parts[run.starts.get(a)].index,run.parts[run.ends.get(b)-1].index+run.parts[run.ends.get(b)-1][0].length)).has(key)){found=true;break;}
    index=run.digits.indexOf(digits,index+1);
   }
  }
@@ -131,8 +123,10 @@ function dateValue(year,month,day){
 }
 function dates(original){
   const lexical=lexicalText(original),text=lexical.text;
+  const mixed=[...text.matchAll(new RegExp(mixedFractionPattern,'gu'))].filter(m=>numeric(m[0]).size);
   const values=[],spans=[],candidates=[];
   const add=(y,m,d,match)=>{
+   if(mixed.some(span=>span.index<=match.index&&span.index+span[0].length>=match.index+match[0].length))return;
    if(/^[0-9 ./-]+$/u.test(match[0])&&new RegExp('^ *(?:'+[...Object.keys(scales),...Object.keys(magnitudeAliases),'hundred'].join('|')+')(?![a-z])','u').test(text.slice(match.index+match[0].length)))return;
    candidates.push({value:dateValue(y,Number(m),Number(d)),start:lexical.origins[match.index]?.start??match.index,end:lexical.origins[match.index+match[0].length-1]?.end??match.index+match[0].length});
   };
@@ -160,7 +154,11 @@ function wordNumber(words){
   words=words.map(word=>magnitudeAliases[word]||word);
   if(words.length===1){const direct=numeric(words[0]);if(direct.size)return [...direct];}
   const factor=scales[words.at(-1)]||(words.at(-1)==='hundred'?100n:1n);
-  if(factor!==1n&&words.some(word=>word==='point'||fractions[word]||fractionModifiers[word]||/^[0-9]+[.,][0-9]+$/.test(word)))return wordNumber(words.slice(0,-1)).map(value=>shift(value,factor.toString().length-1));
+  if(factor!==1n&&words.some(word=>word==='point'||fractions[word]||fractionModifiers[word]||word.includes('/')||/^[0-9]+[.,][0-9]+$/.test(word)))return wordNumber(words.slice(0,-1)).map(value=>shift(value,factor.toString().length-1));
+  if(words.at(-1).includes('/')){
+    const tail=[...numeric(words.at(-1))],base=words.length===1?['0']:wordNumber(words.slice(0,-1));
+    return base.flatMap(a=>tail.map(b=>{const [ai,af='']=a.split('.'),[bi,bf='']=b.split('.'),places=Math.max(af.length,bf.length),unit=10n**BigInt(places),n=BigInt(ai)*unit+BigInt(af.padEnd(places,'0'))+BigInt(bi)*unit+BigInt(bf.padEnd(places,'0'));return exact(String(n/unit),String(n%unit).padStart(places,'0'));}));
+  }
   if(fractionModifiers[words[0]]){
     const modifier=fractionModifiers[words[0]],base=words.length>1?wordNumber(words.slice(1)):[String(modifier.base)];
     return base.flatMap(value=>{const [a,b='']=value.split('.'),places=Math.max(20,b.length),unit=10n**BigInt(places),n=BigInt(a)*unit+BigInt(b.padEnd(places,'0'))+BigInt(modifier.numerator)*unit/BigInt(modifier.denominator);return n<0n?[]:[exact(String(n/unit),String(n%unit).padStart(places,'0'))];});
@@ -221,7 +219,7 @@ function wordRuns(original,onSpan){
   const lexical=lexicalText(original),text=lexical.text;
   const values=new Set();let run=[];
   const flush=()=>{
-    if(!run.some(token=>numberWords.has(token.word)&&!['and','a'].includes(token.word)||lexical.origins[token.start]?.translated)){run=[];return;}
+    if(!run.some(token=>numberWords.has(token.word)&&!['and','a'].includes(token.word)||token.word.includes('/')||lexical.origins[token.start]?.translated)){run=[];return;}
     // Delimiters after a numeral do not belong to its value/span. In a typed
     // projection the following date may already be masked with spaces.
     while(run.length&&['and','a'].includes(run.at(-1).word))run.pop();
@@ -234,7 +232,7 @@ function wordRuns(original,onSpan){
     run=[];
   };
   for(const span of text.matchAll(new RegExp(privateNumeralSpanPattern,'gu'))){
-   for(const token of span[0].matchAll(/[0-9]+(?:[.,' ]+[0-9]+)*|[a-z]+|[, &-]+|[^\s]/g)){
+   for(const token of span[0].matchAll(new RegExp(numeralTokenPattern,'gu'))){
     const word=token[0],index=span.index+token.index;if(/^[, &-]+$/.test(word)){if(word.includes(',')||word.includes('&'))run.push({word:'and',start:index,end:index+word.length});continue;}
     if(numberWords.has(word)||numeric(word).size>0)run.push({word,start:index,end:index+word.length});else flush();
    }
@@ -244,9 +242,9 @@ function wordRuns(original,onSpan){
 }
 
 function numbers(text,onSpan,targets=new Set()){
-  const original=text,emit=(values,start,end)=>{
+  const original=text,emit=(values,start,end,enumeration=false)=>{
     const before=new RegExp(numericCurrencyBefore,'u').exec(original.slice(0,start)),after=new RegExp(numericCurrencyAfter,'u').exec(original.slice(end));
-    onSpan?.(values,before?.index??start,end+(after?.[0].length??0));
+    onSpan?.(values,before?.index??start,end+(after?.[0].length??0),enumeration);
   };
   text=separateUnits(text);const masked=text.split(''),keys=wordRuns(text,(values,start,end)=>{emit(values,start,end);for(let i=start;i<end;i++)masked[i]=' ';});text=masked.join('');
   for(const match of text.matchAll(/[0-9]+(?:[., \p{Quotation_Mark}ʼ]+[0-9]+)*(?:[kmb])?/gu)){
@@ -254,10 +252,10 @@ function numbers(text,onSpan,targets=new Set()){
     const enumeration=numericRole(text,match.index,match.index+match[0].length)==='collection',found=[...numericList(match[0],enumeration)];
     const run=numericRun(match[0]);
     if(run&&(enumeration||!numeric(match[0]).size||/, +/u.test(match[0])||runGroups(run)>PRIVATE_NUMBER_LIST_MAX_GROUPS)){
-      const graph=compileNumericRun(run);for(const key of targets)if(!found.includes(key)&&runHas(graph,key))found.push(key);
+      const graph=compileNumericRun(run,enumeration);for(const key of targets)if(!found.includes(key)&&runHas(graph,key))found.push(key);
     }
     found.forEach(value=>keys.add(value));
-    if(found.length)emit(found,match.index,match.index+match[0].length);
+    if(found.length)emit(found,match.index,match.index+match[0].length,enumeration);
   }
   return keys;
 }
@@ -338,14 +336,14 @@ function privateOriginFields(value,sourceNames){
  if(record){const a=record.index+record[0].length;recordEnd=a;const identity=/^[\p{L}\p{N}][\p{L}\p{N}._/-]*/u.exec(working.slice(a));if(identity){fields.push({value:identity[0],number:false,party:false});recordEnd=a+identity[0].length;}mask(record.index,recordEnd);}
  // A field's type precedes its interpretation: Total 31.10 is money, while
  // Due 31.10 is a date. Named/full dates remain date-bearing without a label.
- numbers(masked.join(''),(keys,a,b)=>{const label=new RegExp(privateOriginMonetaryBefore,'u').exec(working.slice(0,a));if(label){fields.push({value:working.slice(a,b),number:true,party:false});numberRanges.push([a,b]);mask(label.index,b);}});
+ numbers(masked.join(''),(keys,a,b,enumeration)=>{const label=new RegExp(privateOriginMonetaryBefore,'u').exec(working.slice(0,a));if(label||new RegExp(mixedFractionPattern,'u').test(working.slice(a,b))){fields.push({value:working.slice(a,b),number:true,party:false,keys,enumeration});numberRanges.push([a,b]);mask(label?.index??a,b);}});
  const parsed=dates(masked.join(''));
  for(const [i,[a,b]] of parsed.spans.entries()){
   const label=new RegExp(privateOriginDateBefore,'u').exec(working.slice(0,a));
   if(parsed.values[i].year===null&&/^[0-9][0-9 ./-]*$/u.test(working.slice(a,b))&&!label)continue;
   fields.push({value:working.slice(a,b),number:false,party:false});mask(label?.index??a,b);
  }
- numbers(masked.join(''),(keys,a,b)=>{fields.push({value:working.slice(a,b),number:true,party:false});numberRanges.push([a,b]);mask(a,b);});
+ numbers(masked.join(''),(keys,a,b,enumeration)=>{fields.push({value:working.slice(a,b),number:true,party:false,keys,enumeration});numberRanges.push([a,b]);mask(a,b);});
  const remaining=masked.join(''),stop=[...originBoundaries(remaining)].find(index=>remaining[index]!==';'),limit=stop===undefined?remaining.length:stop,partyText=remaining.slice(0,limit);
  const addParty=(value,strong=false)=>{value=nameValue(value);if(!value||!/[\p{L}]/u.test(value))return;const words=value.match(/[\p{L}\p{M}]+/gu)||[];
   const properSurface=words.length===1&&properNames.has(words[0]);
@@ -378,7 +376,7 @@ function privateOriginFields(value,sourceNames){
     const argumentsInFrame=numberRanges.filter(([a])=>a>=begin&&a<limit).sort((a,b)=>a[0]-b[0]);
     for(let i=1;i<argumentsInFrame.length;i++){
      const between=partyText.slice(argumentsInFrame[i-1][1],argumentsInFrame[i][0]);
-     if(/^[ ,]*(?:and|or|&)(?: +|$)/u.test(between))addParty(between.replace(/^[ ,]*(?:and|or|&)(?: +|$)/u,'').replace(new RegExp(privateOriginRelationStart,'u'),'').replace(new RegExp(privateOriginRelationEnd,'u'),''),true);
+     if(new RegExp(privateOriginTupleStart,'u').test(between))addParty(between.replace(new RegExp(privateOriginTupleStart,'u'),'').replace(new RegExp(privateOriginRelationStart,'u'),'').replace(new RegExp(privateOriginRelationEnd,'u'),''),true);
     }
    }
   }
@@ -393,7 +391,7 @@ function privateOriginSegmentKeys(value,sourceNames){
   const words=field.value.match(/[\p{L}\p{M}]+/gu)||[],inferred=field.party&&!field.strong;
   const keys=field.party&&(partyFunctionWords.includes(clean(field.value))||inferred)?[]:privateFieldKeys(field.value),numeric=keys.filter(key=>/^number(?:-run)?:/.test(key));
   const parties=field.party?privatePartyKeys(field.value).map(key=>inferred?key.replace(/^party(?:-ref)?:/u,'party-inferred:'):key):[];
-  return [...(field.number&&numeric.length?numeric:keys),...parties];
+  return [...(field.number?(privateNumberKeys(field.value,field.enumeration).length?privateNumberKeys(field.value,field.enumeration):(field.keys||[]).map(n=>'number:'+n)):keys),...parties];
  })])];
 }
 // One complete record plus every independent declaration frame. Frames are
@@ -431,16 +429,17 @@ export function privateFieldKeys(value){
 export function createPrivateValueMatcher(terms=[]){
   const retainedRuns=[],retainedNumbers=new Set(),retainedDates=[],literals=[],parties=new Set(),nativeParties=new Set(),latinParties=new Set(),referenceParties=new Set(),inferredParties=new Set();
   const expanded=terms.flatMap(raw=>String(raw??'').startsWith('evidence:')?privateEvidenceValues(String(raw).slice(9)):String(raw??'').startsWith('origin:')?privateOriginKeys(String(raw).slice(7)).filter(key=>!key.startsWith('origin:')):[raw]);
+  const attested=new Set(expanded.filter(t=>/^party(?:-native|-latin|-inferred|-ref)?:/.test(t)).map(t=>t.slice(t.indexOf(':')+1)));
   const chunks=new Map();
   const invalidGraph=()=>{throw Object.assign(new Error('Incomplete private numeric graph'),{code:'CHAT_MEMORY_UNAVAILABLE'});};
   const compile=term=>{
-    if(term.startsWith('number-run:')){
-     const body=term.slice(11);
+    if(/^number(?:-list)?-run:/.test(term)){
+     const collection=term.startsWith('number-list-run:'),body=term.slice(term.indexOf(':')+1);
      if(body.startsWith('[')){
       let part;try{part=JSON.parse(body);}catch{invalidGraph();}
       if(!Array.isArray(part)||part.length!==4||!/^[a-f0-9]{64}$/.test(part[0])||!Number.isSafeInteger(part[1])||!Number.isSafeInteger(part[2])||part[1]<0||part[2]<1||part[1]>=part[2]||typeof part[3]!=='string'||!/^[0-9.,' kmb]+$/.test(part[3]))invalidGraph();
-      const group=chunks.get(part[0])||{count:part[2],pieces:new Map()};if(group.count!==part[2]||group.pieces.has(part[1])&&group.pieces.get(part[1])!==part[3])invalidGraph();group.pieces.set(part[1],part[3]);chunks.set(part[0],group);
-     }else retainedRuns.push(compileNumericRun(body));return true;
+      const group=chunks.get((collection?'list:':'')+part[0])||{id:part[0],collection,count:part[2],pieces:new Map()};if(group.count!==part[2]||group.pieces.has(part[1])&&group.pieces.get(part[1])!==part[3])invalidGraph();group.pieces.set(part[1],part[3]);chunks.set((collection?'list:':'')+part[0],group);
+     }else retainedRuns.push(compileNumericRun(body,collection));return true;
     }
     if(/^number:[0-9]+(?:\.[0-9]+)?$/.test(term)){const [a,b]=term.slice(7).split('.');retainedNumbers.add(exact(a,b));return true;}
     const tagged=/^date:(\*|[0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(term);
@@ -450,16 +449,16 @@ export function createPrivateValueMatcher(terms=[]){
     if(term.startsWith('party-inferred:')){inferredParties.add(term.slice(15));return true;}
     if(term.startsWith('party-ref:')){referenceParties.add(term.slice(10));return true;}
     if(term.startsWith('party:')){parties.add(term.slice(6));return true;}
-    if(term.startsWith('identifier:')){literals.push(identifierPattern(term.slice(11)));return true;}return false;
+    if(term.startsWith('identifier:')){if(attested.has(term.slice(11)))return true;literals.push(identifierPattern(term.slice(11)));return true;}return false;
   };
   for(const raw of expanded){
-    const term=clean(raw);if(!term||compile(term))continue;
+    const term=clean(raw);if(!term||compile(term)||attested.has(term))continue;
     const keys=privateFieldKeys(term);if(keys.length>1){keys.slice(1).forEach(compile);continue;}
     literals.push(new RegExp(`(?<![\\p{L}\\p{N}_])${escape(term)}(?![\\p{L}\\p{N}_])`,'u'));
   }
   for(const [id,group] of chunks){
    if(group.pieces.size!==group.count)invalidGraph();const run=Array.from({length:group.count},(_,i)=>group.pieces.get(i)??invalidGraph()).join('');
-   if(createHash('sha256').update(run).digest('hex')!==id)invalidGraph();retainedRuns.push(compileNumericRun(run));
+   if(createHash('sha256').update(run).digest('hex')!==group.id)invalidGraph();retainedRuns.push(compileNumericRun(run,group.collection));
   }
   // Closed grammatical classes describe roles, not permitted sentences. A
   // formal component can be a subject, object, possessive or question target.
@@ -480,10 +479,18 @@ export function createPrivateValueMatcher(terms=[]){
     // lexical word boundary so it cannot become a substring blacklist.
     const words=[...new Intl.Segmenter(undefined,{granularity:'word'}).segment(content)];
     const graphemes=new Intl.Segmenter(undefined,{granularity:'grapheme'});
-    for(const key of new Set([...parties,...inferredParties,...nativeParties])){
-      if(key.toLowerCase()!==key.toUpperCase())continue;
-      const candidates=[...graphemes.segment(key)].length===1?words.filter(w=>w.isWordLike&&w.segment===key).map(w=>w.index):[...content.matchAll(new RegExp(escape(key),'gu'))].map(m=>m.index);
-      for(const index of candidates)if(!occurrences.some(m=>m.index===index&&m[0]===key))occurrences.push(Object.assign([key],{index}));
+    for(const key of new Set([...parties,...referenceParties,...inferredParties,...nativeParties])){
+      const uncased=key.toLowerCase()===key.toUpperCase(),multiple=[...graphemes.segment(key)].length>1;
+      for(const m of content.matchAll(new RegExp(escape(key),'gu'))){
+       const begin=m.index,finish=begin+key.length,word=words.find(w=>w.isWordLike&&w.index<=begin&&w.index+w.segment.length>begin);if(!word)continue;
+       const prefix=content.slice(word.index,begin),tail=content.slice(finish,word.index+word.segment.length),clitic=prefix&&personalPrefixes.includes(prefix)&&/\p{Script=Arabic}/u.test(key);
+       if(prefix&&!clitic)continue;
+       const honorific=personalHonorifics.find(part=>tail.startsWith(part)),suffix=honorific?tail.slice(honorific.length):tail;
+       const personalAffix=!!honorific&&(suffix===''||personalCases.includes(suffix));
+       const lexicalEnd=words.some(w=>w.index===finish||w.index+w.segment.length===finish);
+       if(!(personalAffix||uncased&&(multiple||lexicalEnd||clitic&&tail==='')))continue;
+       const old=occurrences.find(n=>n.index===begin&&n[0]===key);if(old)old.personalAffix=personalAffix;else occurrences.push(Object.assign([key],{index:begin,personalAffix}));
+      }
     }
     return occurrences.filter(m=>{
       const term=m[0],matched=/[\u0900-\u097f]/u.test(term)?nativeParties.has(term)||parties.has(partyKey(term)):parties.has(partyKey(term))||latinParties.has(partyKey(term));
@@ -494,7 +501,7 @@ export function createPrivateValueMatcher(terms=[]){
       const raw=String(original).slice(offset,end),nextRaw=String(original).slice(end).match(/[\p{L}\p{M}]+/u)?.[0];
       const det=beforeWords.findLastIndex(word=>determiners.has(word));
       const proper=upper(raw),apposition=proper&&det>=0&&beforeWords.length>det+1;
-      const nominalScope=det>=0&&beforeWords.slice(det+1).every(word=>!relations.has(word)&&!auxiliaries.has(word)&&!verbs.has(word)&&!word.endsWith('ed'));
+      const nominalScope=det>=0&&beforeWords.slice(det+1).every(word=>!relations.has(word)&&!auxiliaries.has(word)&&!verbs.has(word)&&(!/^VB/.test(privateLanguageTags(word)[0]||'')||privateLanguageTags(word).includes('JJ')));
       const possessive=/^[’'ʼ]s(?:[^\p{L}\p{N}]|$)/u.test(after);
       const continuation=afterWords[1],finiteTail=!continuation||determiners.has(continuation)||complements.has(continuation)||['me','you','him','her','us','them','it'].includes(continuation)||upper(String(original).slice(end).match(/[\p{L}\p{M}]+/gu)?.[1]);
       const regularS=/s$/u.test(next||'')&&!/(?:ss|us|is)$/u.test(next||'')&&!auxiliaries.has(continuation)&&(term!=='the'||['me','you','him','her','us','them','it'].includes(continuation));
@@ -505,23 +512,23 @@ export function createPrivateValueMatcher(terms=[]){
       const predicate=auxiliaries.has(next)||/^(?:VBD|VBZ)$/u.test(nextPOS||'')||(nextPOS==='VBN'||finitePast.has(next)||/ed$/u.test(next||''))&&finiteTail||finiteAlternative||regularS&&(nextPOS!=='NNS'||incompatibleFunction);
       const addressed=verbs.has(last),terminal=!next,prepositional=relations.has(last)&&last!=='by';
       const differentName=proper&&upper(nextRaw)&&!parties.has(partyKey(next))&&!auxiliaries.has(next)&&!complements.has(next);
-      const personal=possessive||predicate||apposition||addressed||prepositional&&proper||proper&&beforeWords.length>0&&!determiners.has(last)||terminal&&(addressed||prepositional||proper);
+      const personal=m.personalAffix||possessive||predicate||apposition||addressed||prepositional&&proper||proper&&beforeWords.length>0&&!determiners.has(last)||terminal&&(addressed||prepositional||proper);
       // An article/modal/instrumental noun has a grammatical role. It does
       // not acquire an entity role merely because a registered name overlaps.
       const pronominal=/^(?:any|some|no|every)(?:thing|one|body)$/u.test(next||'');
       const nominalNext=/^(?:NN|NNS|NNP|NNPS|JJ|JJR|JJS|CD|VBN)$/u.test(nextPOS||'')&&!pronominal;
       const articleRole=['a','an','the'].includes(term)&&nominalNext&&(!proper||!beforeWords.length);
-      const modalRole=auxiliaries.has(term)&&/^(?:PRP|DT|VB|VBP)$/u.test(nextPOS||'')&&!addressed&&!prepositional;
+      const modalRole=auxiliaries.has(term)&&/^(?:PRP|DT|VB|VBP)$/u.test(nextPOS||'')&&!addressed&&!prepositional&&!auxiliaries.has(last);
       const connectiveRole=partyGrammarWords.includes(term)&&!['a','an','the'].includes(term)&&!auxiliaries.has(term)&&!addressed&&!prepositional&&(!proper||!beforeWords.length);
-      const functionUse=!possessive&&!predicate&&!apposition&&!terminal&&(articleRole||modalRole||connectiveRole);
+      const functionUse=!m.personalAffix&&!possessive&&!predicate&&!apposition&&!terminal&&(articleRole||modalRole||connectiveRole);
       const nounUse=nominalScope&&!apposition||last==='by'&&!proper;
       const attributeRole=/^(?:JJ|JJR|JJS)$/u.test(currentPOS||'')&&!personal;
       const imperative=!beforeWords.length&&nextPOS==='DT'&&currentToken?.alternatives.includes('VB');
-      const verbRole=(/^(?:VB|VBG)$/u.test(currentPOS||'')||imperative)&&!personal;
+      const verbRole=(/^(?:VB|VBD|VBP|VBZ|VBG|VBN)$/u.test(currentPOS||'')||imperative)&&!personal;
       const compoundRole=currentToken?.known&&!proper&&/^(?:NN|NNS)$/u.test(currentPOS||'')&&/^(?:NN|NNS)$/u.test(nextPOS||'')&&!personal;
       const cased=term.toUpperCase()!==term.toLowerCase();
-      if(cased&&!possessive&&!apposition&&!addressed&&(functionUse||nounUse&&!proper||attributeRole||verbRole||compoundRole))return false;
-      const reference=(referenceKey||inferredKey)&&(content===term||!differentName&&!functionUse&&!nounUse&&personal);
+      if(cased&&!m.personalAffix&&!possessive&&!apposition&&!addressed&&(functionUse||nounUse&&!proper||attributeRole||verbRole||compoundRole))return false;
+      const reference=(referenceKey||inferredKey)&&(content===term||!differentName&&!functionUse&&!nounUse&&(!weakOnly||proper||personal));
       if((!matched&&!reference)||!partyComponent(term))return false;
       if(!ordinary)return true;
       // A linguistic exemption applies only to this occurrence's own clause.
@@ -586,6 +593,13 @@ export function ordinaryPart(message,isPrivate,privateSpans=()=>[]){
   const protectedRanges=privateSpans(text),clauses=[];let start=0;
   const retain=(start,end)=>{if(!protectedRanges.some(([a,b])=>start<b&&end>a))clauses.push(text.slice(start,end).trim());};
   for(const boundary of text.matchAll(/[;!?]+|\n+|\.(?=\s|$)|,\s+(?:also\s+)?|\s+(?:and also|also|and)\s+/giu)){
+    // A soft coordinator/appositive cannot detach a registered nominal
+    // constituent. A predicate outside the private span is evidence that the
+    // left side is a clause, rather than a name in a coordinated noun phrase.
+    if(!/^[;!?\n.]$/u.test(boundary[0][0])){
+      const named=protectedRanges.some(([a,b])=>a<boundary.index&&b>start&&/[\p{L}\p{M}]/u.test(text.slice(Math.max(a,start),Math.min(b,boundary.index))));
+      if(named&&!privateLanguageSyntax(text.slice(start,boundary.index)).some(token=>/^(?:VB|VBD|VBP|VBZ)$/u.test(token.pos)&&!protectedRanges.some(([a,b])=>start+token.start<b&&start+token.end>a)))continue;
+    }
     const left=clean(text.slice(0,boundary.index)).match(/([\p{L}\p{N}]+)[,\p{Quotation_Mark}]*$/u)?.[1];
     const right=clean(text.slice(boundary.index+boundary[0].length)).match(/^[,\p{Quotation_Mark}]*([\p{L}\p{N}]+)/u)?.[1];
     if(/[\n.]/.test(boundary[0])&&valuePart(left||'')&&valuePart(right||''))continue;

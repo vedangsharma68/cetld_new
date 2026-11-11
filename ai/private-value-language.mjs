@@ -18,10 +18,13 @@ export const fractions={half:2n,halves:2n,quarter:4n,quarters:4n,third:3n,fifth:
 export const magnitudeAliases={k:'thousand',m:'million',b:'billion'};
 export const fractionModifiers={quartermore:{numerator:1,denominator:4,base:1},halfmore:{numerator:1,denominator:2,base:1},quarterless:{numerator:-1,denominator:4,base:1}};
 export const numeralContentWords=[...Object.keys(small),...Object.keys(scales),...Object.keys(fractions),...Object.keys(magnitudeAliases),...Object.keys(fractionModifiers),'hundred','point'];
+export const fractionLiteralAtom='(?:[0-9]+ +)?[0-9]+ */ *[0-9]+(?![0-9]| *[/.-] *[0-9])(?:[kmb])?';
+export const mixedFractionPattern='(?<![\\p{L}\\p{N}_])[0-9]+ +[0-9]+ */ *[0-9]+(?:[kmb])?(?![\\p{L}\\p{N}_]| *[/.-] *[0-9])';
+export const numeralTokenPattern=fractionLiteralAtom+"|[0-9]+(?:[.,' ]+[0-9]+)*|[a-z]+|[, &-]+|[^ ]";
 const numeralAtom="[0-9]+(?:[., '\\p{Quotation_Mark}ʼ]+[0-9]+)*(?:[kmb])?";
 // Both retention scanning and source-role witnesses use this same grammar.
 export function numeralPattern(words=numeralContentWords,boundary=true){
- const content='(?:'+words.join('|')+'|'+numeralAtom+')';
+ const content='(?:'+fractionLiteralAtom+'|'+words.join('|')+'|'+numeralAtom+')';
  const body=content+'(?:[ ,&-]+(?:(?:and|a)[ ,&-]+)*'+content+')*';
  return boundary?'(?<![\\p{L}\\p{N}_])'+body+'(?![\\p{L}\\p{N}_])':body;
 }
@@ -94,7 +97,8 @@ export const privateOriginRelationEnd=' +(?:to|from|for|of|and) *$';
 export const privateOriginPronouns=['i','me','my','mine','myself','we','us','our','ours','ourselves','you','your','yours','yourself','yourselves','he','him','his','himself','she','her','hers','herself','it','its','itself','they','them','their','theirs','themselves'];
 export const privateOriginNameEdge='^[ ,:;>]+|[ ,:;>]+$';
 const linkedRecordHeader=privateOriginCarrier+'(?:(?!'+privateOriginClauseBoundary+').)*?'+originDocumentIntro+bareRecordMarker;
-export const privateOriginActorTail=' +(?:(?:'+grammarAuxiliaries.join('|')+') +)*(?:'+financialPredicate+'|invoiced|billed|charg(?:e|es|ed|ing)|receiv(?:e|es|ed|ing)|owed)$';
+export const privateOriginTupleStart='^ *(?:(?:[,;]+ *)(?:(?:and|or|&)(?: +|$))?|(?:and|or|&)(?: +|$))';
+export const privateOriginActorTail=' +(?:(?:'+grammarAuxiliaries.join('|')+') +)*(?:'+financialPredicate+'|invoiced|billed|charg(?:e|es|ed|ing)|receiv(?:e|es|ed|ing)|pay(?:s|ing)?|paid|owed)$';
 export const privateOriginPersonalSubject='^'+financialSubject+'$';
 // Necessary lexical terminals of the declaration grammar. This cheap superset
 // rejects ordinary/numeric fields before evaluating role and provenance rules.
@@ -114,7 +118,11 @@ const sourceNumeral=numeralPattern([...numeralContentWords,...nativeNumerals],fa
 const quantityAhead='(?='+originClauseAtom+'*(?<![a-z0-9_])(?:[0-9]+|'+[...Object.keys(small),...Object.keys(scales),...Object.keys(fractions),...Object.keys(fractionModifiers),...nativeNumerals].join('|')+')(?![a-z0-9_]))';
 const eventData=quantityAhead+'|(?= +(?!(?:'+grammarAuxiliaries.join('|')+'|i|me|we|us|you|he|him|she|her|it|they|them|customers?|clients?)(?![a-z0-9_]))[^ ,:;.!?]+(?: +[^ ,:;.!?]+)+)';
 const monetaryEvent=originClauseStart+'(?:'+nominalActor+' +)?(?:charg(?:e|es|ed|ing))(?![a-z0-9_])'+quantityAhead;
-const transferEvent=originClauseStart+'(?:'+nominalActor+' +)?receiv(?:e|es|ed|ing)(?![a-z0-9_])(?= +(?:(?:'+currencyUnitPattern+'|\\p{Sc}) *)?'+sourceNumeral+' *(?:(?:'+currencyUnitPattern+'|\\p{Sc}) +)?from +[^;.!?]+)';
+const transferVerb='(?:receiv(?:e|es|ed|ing)|pay(?:s|ing)?|paid)';
+const transferNameToken='(?:(?<![a-z0-9_])(?:'+privateNameAbbreviations.join('|')+'|[a-z])[.]|[^0-9 ,:;.!?])+';
+const transferParticipant=transferNameToken+'(?: +'+transferNameToken+'){0,5}';
+const transferMeasure='(?:(?:'+currencyUnitPattern+'|\\p{Sc}) *)?'+sourceNumeral;
+const transferEvent=originClauseStart+'(?:'+nominalActor+' +)?(?:(?:'+grammarAuxiliaries.join('|')+') +)*'+transferVerb+'(?![a-z0-9_])(?= +(?:'+transferMeasure+' *(?:(?:'+currencyUnitPattern+'|\\p{Sc}) +)?(?:from|to) +'+transferParticipant+'|'+transferParticipant+' *[:,]? +'+transferMeasure+'))';
 export const privateOriginEvent='(?:(?:'+eventHead+')(?:'+eventData+')|'+monetaryEvent+'|'+transferEvent+'|(?<![a-z0-9_])(?:invoiced|billed)(?![a-z0-9_]))';
 export const privateOriginHeader=`${bareRecordHeader}|${linkedRecordHeader}|(?<![a-z0-9_])(?:(?:here|below|following|attached) +(?:is|are) +(?:(?:the|an?|my|our|this) +)?(?:invoices?|bills?|receipts?)(?![a-z0-9_])(?= *[,;:]| +(?:from|to|for|of)(?![a-z0-9_])|[^;.!?]*[0-9])|(?:forwarded|quoted|copied|pasted)(?: +(?:invoice|bill|receipt|message|text))* *[:>](?=.*${financialQuoteHint})|${explicitRecordHeader}|${documentAttribution}|(?:invoice|bill|receipt|payment) *(?=[:,])|payment +(?:from|to|for) +)|${privateDataDeclaration}|${privateOriginEvent}`;
 // Exact branches of the same grammar, exposed for bounded SQL regex cursors.
@@ -148,6 +156,15 @@ export const partyFunctionWords=[...partyGrammarWords,'de','del','la','le','van'
 export const numericSelectionWords=['choose','select','pick','compare','between','among'];
 export const numericCollectiveWords=['pair','couple','list','sequence','set','array','tuple','collection','group','range'];
 export const numericQuantifiers=['both','either','neither','several','multiple'];
+// Closed quantity operators and lexical roles; these are not sentence frames.
+export const numericDistributionWords=['respectively','each','apiece'];
+export const numericCollectionPredicates=['are','were','include','contain','equal'];
+export const numericGrammarTags=Object.fromEntries(lexicalWords.filter(([,tags])=>/^(?:NN|NNS|NNP|NNPS|PRP|PRP\$|DT|VB|VBD|VBP|VBZ|MD|IN|TO)$/.test(tags[0])).map(([word,tags])=>[word,tags.join('|')]));
+// Personal morphology is attached to a registered spelling at a lexical edge.
+// Prefix clitics do not license arbitrary word-internal name substrings.
+export const privatePersonalPrefixes=['ب','ل','ك','و','ف','وب','ول','بال'];
+export const privatePersonalHonorifics=['님','씨','군','양','선생님','さん','さま','様','君','くん','ちゃん','殿'];
+export const privatePersonalCases=['에게','께','한테','은','는','이','가','을','를','의','과','와','도','만','에','에서','으로','로','から','まで','には','に','を','が','は','と','へ','の'];
 // Only transport padding is removed before JSON decoding. String values are
 // decoded first, then canonically screened; normalization must not change JSON.
 export const privateJSONPadding=/[\p{White_Space}\p{Cf}]/u;

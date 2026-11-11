@@ -1,12 +1,15 @@
+import {privateLanguageSyntax} from '../ai/private-language-syntax.mjs';
+import {grammarDeterminers} from '../ai/private-value-language.mjs';
 // Financial routing resolves the role of ambiguous words. Retained-value
 // containment runs separately, including when this resolver returns ordinary.
 export function financialChatIntent(message) {
   const original=String(message??'').normalize('NFKC'),text=original.toLowerCase();
   if(/\b(?:invoic\w*|receipts?|payments?|unpaid|overdue|owes?|owed|owing|receivables?|payables?|customers?|clients?|debtors?|creditors?|remind\w*)\b|[₹$€£]|\[cetld:/u.test(text))return true;
   for(const match of original.matchAll(/\bbills?\b/giu)){
-    const next=original.slice(match.index+match[0].length).match(/^\s+([\p{L}\p{M}]+)/u)?.[1];
-    const compoundName=/^\p{Lu}/u.test(match[0])&&/^\p{Lu}/u.test(next||'')&&!/^(?:is|was|are|were|has|had|will|can|the|a|an)$/iu.test(next);
-    if(!compoundName)return true;
+    const tokens=privateLanguageSyntax(original),token=tokens.find(t=>t.start===match.index),before=original.slice(0,match.index).match(/[\p{L}\p{M}]+/gu)||[],next=tokens.find(t=>t.start>=match.index+match[0].length);
+    const specified=grammarDeterminers.includes(before.at(-1)?.toLowerCase()),proper=/^\p{Lu}/u.test(match[0])&&token?.pos==='NNP';
+    const nominalArgument=before.length>0&&!specified,nominalSubject=/^(?:VBD|VBP|VBZ|MD)$/.test(next?.pos||''),compound=next?.pos==='NNP';
+    if(!(proper&&!specified&&(nominalArgument||nominalSubject||compound)))return true;
   }
   const entity=/\b(?:accounts?|money|cash|funds?|bank|ledger|business|amount|currency)\b/u.test(text);
   const relational=/\b(?:balance|total)\s+(?:of|between)\b/u.test(text);
