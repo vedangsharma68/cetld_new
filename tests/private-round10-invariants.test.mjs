@@ -13,17 +13,18 @@ test('typed source cardinality and rational operands have identical SQL and JS p
    const amount=(whole+1/denominator)*(magnitude==='million'?1000000:1000),match=createPrivateValueMatcher(keys);assert.equal(match('send '+amount+' today'),true,input);assert.equal(createPrivateValueMatcher(['number:'+(amount+1)])(`send ${whole} 1/${denominator} ${magnitude} today`),false,input);
   }
   for(const input of ['Invoice: amounts 1250,77','Invoice: quoted prices 1250,77','Invoice: amounts 1250,77 respectively']){
-   const keys=await check('collection-origin',input,'private_invoice_origin_aliases',privateOriginKeys(input));const match=createPrivateValueMatcher(keys);assert.equal(match('send 1250 today'),true,input);assert.equal(match('send 77 today'),true,input);assert.equal(match('send 1250.77 today'),false,input);
+   const keys=await check('collection-origin',input,'private_invoice_origin_aliases',privateOriginKeys(input));const match=createPrivateValueMatcher(keys);assert.equal(match('send 1250 today'),true,input);assert.equal(match('send 77 today'),true,input);assert.equal(match('send 1251.77 today'),false,input);
   }
   for(const count of [40,1100]){
    const value='1250,77,'+Array.from({length:count},(_,i)=>String(101+i)).join(','),keys=await check('collection-graph',value,'private_invoice_numeric_candidates',privateNumberKeys(value,true),[value,true]),match=createPrivateValueMatcher(keys);
-   for(const amount of [101,100+count])assert.equal(match('send '+amount+' today'),true);assert.equal(match('send 1250.77 today'),false);
+   for(const amount of [101,100+count])assert.equal(match('send '+amount+' today'),true);assert.equal(match('send 1251.77 today'),false);
    const origin='Invoice: amounts '+value;await check('collection-origin-graph',origin,'private_invoice_origin_aliases',privateOriginKeys(origin));
   }
   for(const separator of [', ','; ','\n',', and '])for(const verb of ['billed','paid','have paid']){
    const input='I '+verb+' Alder Finch 6847'+separator+'Brook Rowan 2749'+separator+'Cedar Marsh 3971',keys=await check('participant-sequence',input,'private_invoice_origin_aliases',privateOriginKeys(input)),match=createPrivateValueMatcher(keys);
    for(const [name,amount]of [['Alder',6847],['Brook',2749],['Cedar',3971]]){assert.equal(match('Ask '+name+' for advice'),true,input);assert.equal(match('send '+amount+' today'),true,input);}
   }
+  {const input='I paid Alder Brook Cedar Finch Harbor Marsh Rowan Willow 6847',keys=await check('complete-participant',input,'private_invoice_origin_aliases',privateOriginKeys(input));const match=createPrivateValueMatcher(keys);assert.equal(match('send 6847 today'),true);assert.equal(match('Ask Willow for advice'),true);}
   for(const input of ['I received 3 books from Alder Finch','I paid attention in class','I have paid attention today','I will invoice you later']){assert.equal(privateOriginStart(input),null,input);await check('ordinary-origin-control',input,'private_invoice_origin_aliases',[]);}
  }finally{await f.close();}
 });

@@ -66,7 +66,7 @@ end $$;
 revoke all on function app.private_invoice_number_scalar(text) from public,anon,authenticated,service_role;
 
 -- Grouping/decimal ambiguity and wrappers mirror numeric()/scalar() in JS.
-create function app.private_invoice_number_aliases(p_term text,p_collection boolean default false) returns setof text
+create function app.private_invoice_number_aliases(p_term text) returns setof text
 language plpgsql immutable set search_path='' as $$
 declare term text:=app.private_invoice_number_scalar(p_term);whole text;fraction text;groups text[];valid boolean;i integer;multiplier numeric:=1;ratio text[];n numeric;d numeric;
 begin
@@ -83,7 +83,7 @@ begin
   for i in 1..2 loop
     fraction:='';whole:=term;
     if i=2 then
-      if term !~ '[.,][0-9]+$' or p_collection and term ~ ',[0-9]+$' then continue; end if;
+      if term !~ '[.,][0-9]+$' then continue; end if;
       fraction:=substring(term from '[.,]([0-9]+)$');whole:=regexp_replace(term,'[.,][0-9]+$','');
     end if;
     groups:=regexp_split_to_array(whole,'[.,'' ]');valid:=cardinality(groups)=1;
@@ -96,40 +96,40 @@ begin
     if valid then return next 'number:'||trim_scale((array_to_string(groups,'')||case when fraction<>'' then '.'||fraction else '' end)::numeric*multiplier)::text;end if;
   end loop;
 end $$;
-revoke all on function app.private_invoice_number_aliases(text,boolean) from public,anon,authenticated,service_role;
+revoke all on function app.private_invoice_number_aliases(text) from public,anon,authenticated,service_role;
 
 -- Bounded rows retain a complete graph, identified and reconstructed as one run.
-create function app.private_invoice_numeric_run_keys(p_run text,p_collection boolean default false) returns setof text
+create function app.private_invoice_numeric_run_keys(p_run text) returns setof text
 language plpgsql immutable set search_path='' as $$
-declare id text;parts integer;i integer;tag text:=case when p_collection then 'number-list-run:' else 'number-run:' end;
+declare id text;parts integer;i integer;
 begin
- if length(p_run)<=4000-length(tag) then return next tag||p_run;return;end if;
+ if length(p_run)<=3989 then return next 'number-run:'||p_run;return;end if;
  id:=encode(sha256(convert_to(p_run,'UTF8')),'hex');parts:=ceil(length(p_run)/3800.0)::integer;
- for i in 0..parts-1 loop return next tag||jsonb_build_array(id,i,parts,substring(p_run from i*3800+1 for 3800))::text;end loop;
+ for i in 0..parts-1 loop return next 'number-run:'||jsonb_build_array(id,i,parts,substring(p_run from i*3800+1 for 3800))::text;end loop;
 end $$;
-revoke all on function app.private_invoice_numeric_run_keys(text,boolean) from public,anon,authenticated,service_role;
+revoke all on function app.private_invoice_numeric_run_keys(text) from public,anon,authenticated,service_role;
 
 -- Same bounded candidate graph as numericList(). Atomic values preserve their
--- complete parse; explicit enumeration preserves member and grouping paths, not decimal-comma edges.
+-- complete parse; enumeration only ADDS alternatives. No dropped whole values.
 create function app.private_invoice_numeric_candidates(p_term text,p_enumeration boolean) returns setof text
 language plpgsql immutable set search_path='' as $$
 declare prepared text:=app.private_invoice_number_scalar(p_term); keys text[];parts text[];groups text[];i integer;j integer;k integer;candidate text;
 begin
- if length(prepared)>3989 and prepared ~ '^[0-9][0-9.,'' ]*([kmb])?$' then return query select * from app.private_invoice_numeric_run_keys(prepared,p_enumeration);return;end if;
- keys:=array(select distinct x from app.private_invoice_number_aliases(p_term,p_enumeration) x where length(x)<=4000);
+ if length(prepared)>3989 and prepared ~ '^[0-9][0-9.,'' ]*([kmb])?$' then return query select * from app.private_invoice_numeric_run_keys(prepared);return;end if;
+ keys:=array(select distinct x from app.private_invoice_number_aliases(p_term) x where length(x)<=4000);
  return query select unnest(keys);
  if prepared !~ '^[0-9][0-9.,'' ]*([kmb])?$' then return;end if;
  parts:=regexp_split_to_array(prepared,', *');
- if length(prepared)>3989 or cardinality(regexp_split_to_array(prepared,'[, ]+'))>NUMBER_LIST_BOUND then return query select * from app.private_invoice_numeric_run_keys(prepared,p_enumeration);return;end if;
+ if length(prepared)>3989 or cardinality(regexp_split_to_array(prepared,'[, ]+'))>NUMBER_LIST_BOUND then return query select * from app.private_invoice_numeric_run_keys(prepared);return;end if;
  if cardinality(parts)<=NUMBER_LIST_BOUND and cardinality(keys)>0 and not coalesce(p_enumeration,false) and app.private_invoice_normalize(p_term) !~ ', +' then return;end if;
  if cardinality(parts)>1 then
   -- Keep the graph itself plus its atomic members. Expanding every bounded
   -- subwindow here made cold source writes proportional to n * window.
-  return query select * from app.private_invoice_numeric_run_keys(prepared,p_enumeration);
+  return query select * from app.private_invoice_numeric_run_keys(prepared);
   for i in 1..cardinality(parts) loop
    return query select * from app.private_invoice_numeric_candidates(parts[i],false);
    -- Adjacent decimal/grouping edges are linear; longer paths stay compact.
-   if i<cardinality(parts) then return query select * from app.private_invoice_number_aliases(parts[i]||','||parts[i+1],p_enumeration);end if;
+   if i<cardinality(parts) then return query select * from app.private_invoice_number_aliases(parts[i]||','||parts[i+1]);end if;
   end loop;return;
  end if;
  if cardinality(keys)>0 then return;end if;

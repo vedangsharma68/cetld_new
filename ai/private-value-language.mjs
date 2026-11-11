@@ -18,7 +18,7 @@ export const fractions={half:2n,halves:2n,quarter:4n,quarters:4n,third:3n,fifth:
 export const magnitudeAliases={k:'thousand',m:'million',b:'billion'};
 export const fractionModifiers={quartermore:{numerator:1,denominator:4,base:1},halfmore:{numerator:1,denominator:2,base:1},quarterless:{numerator:-1,denominator:4,base:1}};
 export const numeralContentWords=[...Object.keys(small),...Object.keys(scales),...Object.keys(fractions),...Object.keys(magnitudeAliases),...Object.keys(fractionModifiers),'hundred','point'];
-export const fractionLiteralAtom='(?:[0-9]+ +)?[0-9]+ */ *[0-9]+(?![0-9]| *[/.-] *[0-9])(?:[kmb])?';
+export const fractionLiteralAtom='(?<![0-9/])(?:[0-9]+ +)?[0-9]+ */ *[0-9]+(?![0-9]| *[/.-] *[0-9])(?:[kmb])?';
 export const mixedFractionPattern='(?<![\\p{L}\\p{N}_])[0-9]+ +[0-9]+ */ *[0-9]+(?:[kmb])?(?![\\p{L}\\p{N}_]| *[/.-] *[0-9])';
 export const numeralTokenPattern=fractionLiteralAtom+"|[0-9]+(?:[.,' ]+[0-9]+)*|[a-z]+|[, &-]+|[^ ]";
 const numeralAtom="[0-9]+(?:[., '\\p{Quotation_Mark}ʼ]+[0-9]+)*(?:[kmb])?";
@@ -120,7 +120,7 @@ const eventData=quantityAhead+'|(?= +(?!(?:'+grammarAuxiliaries.join('|')+'|i|me
 const monetaryEvent=originClauseStart+'(?:'+nominalActor+' +)?(?:charg(?:e|es|ed|ing))(?![a-z0-9_])'+quantityAhead;
 const transferVerb='(?:receiv(?:e|es|ed|ing)|pay(?:s|ing)?|paid)';
 const transferNameToken='(?:(?<![a-z0-9_])(?:'+privateNameAbbreviations.join('|')+'|[a-z])[.]|[^0-9 ,:;.!?])+';
-const transferParticipant=transferNameToken+'(?: +'+transferNameToken+'){0,5}';
+const transferParticipant=transferNameToken+'(?: +'+transferNameToken+')*';
 const transferMeasure='(?:(?:'+currencyUnitPattern+'|\\p{Sc}) *)?'+sourceNumeral;
 const transferEvent=originClauseStart+'(?:'+nominalActor+' +)?(?:(?:'+grammarAuxiliaries.join('|')+') +)*'+transferVerb+'(?![a-z0-9_])(?= +(?:'+transferMeasure+' *(?:(?:'+currencyUnitPattern+'|\\p{Sc}) +)?(?:from|to) +'+transferParticipant+'|'+transferParticipant+' *[:,]? +'+transferMeasure+'))';
 export const privateOriginEvent='(?:(?:'+eventHead+')(?:'+eventData+')|'+monetaryEvent+'|'+transferEvent+'|(?<![a-z0-9_])(?:invoiced|billed)(?![a-z0-9_]))';

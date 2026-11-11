@@ -41,7 +41,7 @@ function scalar(value){
   return value.replace(/[.,]+$/u,'').replace(/ *([.,']) */gu,'$1');
 }
 // Both valid grouping/decimal interpretations are compared only to retained keys.
-function numeric(input,collection=false){
+function numeric(input){
   let value=scalar(input),places=0;
   const suffix=/([kmb])$/.exec(value);if(suffix){places={k:3,m:6,b:9}[suffix[1]];value=value.slice(0,-1).trim();}
   const values=new Set();
@@ -49,19 +49,18 @@ function numeric(input,collection=false){
   const integer=groupedInteger(value);
   if(integer!==null)values.add(exact(integer));
   const last=value.search(/[.,][0-9]+$/u);
-  if(last>=0&&!(collection&&value[last]===',')){const whole=groupedInteger(value.slice(0,last));if(whole!==null)values.add(exact(whole,value.slice(last+1)));}
+  if(last>=0){const whole=groupedInteger(value.slice(0,last));if(whole!==null)values.add(exact(whole,value.slice(last+1)));}
   return new Set([...values].map(n=>places?shift(n,places):n));
 }
 // Numeric ambiguity is a compact run, never all overlapping subwindows.
 // Retention keeps the whole-value interpretations and a compact graph;
 // screening checks its paths against actual supplied numeric candidates.
-const collectionNumeric=value=>numeric(value,true);
 function numericList(value,enumeration=false){
-  const prepared=scalar(value),direct=enumeration?collectionNumeric(value):numeric(value);
+  const prepared=scalar(value),direct=numeric(value);
   if(!/^[0-9][0-9.,' ]*(?:[kmb])?$/u.test(prepared))return direct;
   const parts=prepared.split(/, */u),result=new Set(direct);
   if(runGroups(prepared)<=PRIVATE_NUMBER_LIST_MAX_GROUPS&&direct.size&&!enumeration&&!/, +/u.test(value))return direct;
-  if(parts.length>1){for(let i=0;i<parts.length;i++){numericList(parts[i]).forEach(n=>result.add(n));if(i+1<parts.length)(enumeration?collectionNumeric:numeric)(parts[i]+','+parts[i+1]).forEach(n=>result.add(n));}return result;}
+  if(parts.length>1){for(let i=0;i<parts.length;i++){numericList(parts[i]).forEach(n=>result.add(n));if(i+1<parts.length)numeric(parts[i]+','+parts[i+1]).forEach(n=>result.add(n));}return result;}
   const groups=prepared.split(/ +/u);
   if(groups.length>PRIVATE_NUMBER_LIST_MAX_GROUPS){for(let i=0;i<groups.length;i++){numeric(groups[i]).forEach(n=>result.add(n));if(i+1<groups.length)numeric(groups[i]+' '+groups[i+1]).forEach(n=>result.add(n));}return result;}
   if(direct.size)return direct;
@@ -75,29 +74,28 @@ const runGroups=value=>value.split(/[, ]+/u).length;
 const numericRun=value=>{const prepared=scalar(value);return /^[0-9][0-9.,' ]*(?:[kmb])?$/u.test(prepared)&&(prepared.includes(',')||prepared.length>3989||runGroups(prepared)>PRIVATE_NUMBER_LIST_MAX_GROUPS)?prepared:null;};
 // A storage row is bounded; the input and its parse graph are not. Chunks carry
 // a full-run identity and cardinality, so reconstruction cannot bless a prefix.
-const boundedRun=(run,enumeration=false)=>{
- const tag=enumeration?'number-list-run:':'number-run:';
- if(run.length<=4000-tag.length)return [tag+run];
+const boundedRun=run=>{
+ if(run.length<=3989)return ['number-run:'+run];
  const id=createHash('sha256').update(run).digest('hex'),parts=Math.ceil(run.length/3800);
- return Array.from({length:parts},(_,i)=>tag+'['+[id,i,parts,run.slice(i*3800,(i+1)*3800)].map(x=>JSON.stringify(x)).join(', ')+']');
+ return Array.from({length:parts},(_,i)=>'number-run:['+[id,i,parts,run.slice(i*3800,(i+1)*3800)].map(x=>JSON.stringify(x)).join(', ')+']');
 };
 export const privateNumberKeys=(value,enumeration=false)=>{
  const term=clean(value),run=numericRun(term);
  // Long runs keep their entire parse graph in one key. No atomic member or
  // grouping is lost: membership is resolved against the supplied restatement.
- if(run&&run.length>3989)return boundedRun(run,enumeration);
- if(run&&runGroups(run)>PRIVATE_NUMBER_LIST_MAX_GROUPS)return [...(enumeration?collectionNumeric(term):numeric(term))].filter(n=>n.length<=3993).map(number=>'number:'+number).concat(boundedRun(run,enumeration));
+ if(run&&run.length>3989)return boundedRun(run);
+ if(run&&runGroups(run)>PRIVATE_NUMBER_LIST_MAX_GROUPS)return [...numeric(term)].filter(n=>n.length<=3993).map(number=>'number:'+number).concat(boundedRun(run));
  const keys=[...numericList(term,enumeration)].map(number=>'number:'+number);
- if(run&&(enumeration||!numeric(term).size||/, +/u.test(term)||runGroups(run)>PRIVATE_NUMBER_LIST_MAX_GROUPS))keys.push(...boundedRun(run,enumeration));
+ if(run&&(enumeration||!numeric(term).size||/, +/u.test(term)||runGroups(run)>PRIVATE_NUMBER_LIST_MAX_GROUPS))keys.push(...boundedRun(run));
  return keys;
 };
 // A run is a sequence of digit groups and boundaries. Search the supplied key's
 // digits, then validate only its boundary-aligned spellings with the scalar
 // grammar. No O(n * window) alias materialization on invoice writes.
-function compileNumericRun(value,enumeration=false){
+function compileNumericRun(value){
  const text=scalar(value),parts=[...text.matchAll(/[^, ]+/gu)],starts=new Map(),ends=new Map();let digits='';
  for(let i=0;i<parts.length;i++){starts.set(digits.length,i);digits+=parts[i][0].replace(/[^0-9]/gu,'');ends.set(digits.length,i+1);}
- return {text,parts,digits,starts,ends,enumeration,cache:new Map()};
+ return {text,parts,digits,starts,ends,cache:new Map()};
 }
 function runHas(run,key){
  if(run.cache.has(key))return run.cache.get(key);
@@ -108,7 +106,7 @@ function runHas(run,key){
   while(index>=0&&!found){let left=index,right=index+digits.length;
    while(left>0&&run.digits[left-1]==='0')left--;
    while(right<run.digits.length&&run.digits[right]==='0')right++;
-   for(let a=left;a<=index&&!found;a++)if(run.starts.has(a))for(let b=index+digits.length;b<=right;b++)if(run.ends.has(b)&&(run.enumeration?collectionNumeric:numeric)(run.text.slice(run.parts[run.starts.get(a)].index,run.parts[run.ends.get(b)-1].index+run.parts[run.ends.get(b)-1][0].length)).has(key)){found=true;break;}
+   for(let a=left;a<=index&&!found;a++)if(run.starts.has(a))for(let b=index+digits.length;b<=right;b++)if(run.ends.has(b)&&numeric(run.text.slice(run.parts[run.starts.get(a)].index,run.parts[run.ends.get(b)-1].index+run.parts[run.ends.get(b)-1][0].length)).has(key)){found=true;break;}
    index=run.digits.indexOf(digits,index+1);
   }
  }
@@ -433,13 +431,13 @@ export function createPrivateValueMatcher(terms=[]){
   const chunks=new Map();
   const invalidGraph=()=>{throw Object.assign(new Error('Incomplete private numeric graph'),{code:'CHAT_MEMORY_UNAVAILABLE'});};
   const compile=term=>{
-    if(/^number(?:-list)?-run:/.test(term)){
-     const collection=term.startsWith('number-list-run:'),body=term.slice(term.indexOf(':')+1);
+    if(term.startsWith('number-run:')){
+     const body=term.slice(11);
      if(body.startsWith('[')){
       let part;try{part=JSON.parse(body);}catch{invalidGraph();}
       if(!Array.isArray(part)||part.length!==4||!/^[a-f0-9]{64}$/.test(part[0])||!Number.isSafeInteger(part[1])||!Number.isSafeInteger(part[2])||part[1]<0||part[2]<1||part[1]>=part[2]||typeof part[3]!=='string'||!/^[0-9.,' kmb]+$/.test(part[3]))invalidGraph();
-      const group=chunks.get((collection?'list:':'')+part[0])||{id:part[0],collection,count:part[2],pieces:new Map()};if(group.count!==part[2]||group.pieces.has(part[1])&&group.pieces.get(part[1])!==part[3])invalidGraph();group.pieces.set(part[1],part[3]);chunks.set((collection?'list:':'')+part[0],group);
-     }else retainedRuns.push(compileNumericRun(body,collection));return true;
+      const group=chunks.get(part[0])||{count:part[2],pieces:new Map()};if(group.count!==part[2]||group.pieces.has(part[1])&&group.pieces.get(part[1])!==part[3])invalidGraph();group.pieces.set(part[1],part[3]);chunks.set(part[0],group);
+     }else retainedRuns.push(compileNumericRun(body));return true;
     }
     if(/^number:[0-9]+(?:\.[0-9]+)?$/.test(term)){const [a,b]=term.slice(7).split('.');retainedNumbers.add(exact(a,b));return true;}
     const tagged=/^date:(\*|[0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(term);
@@ -449,7 +447,7 @@ export function createPrivateValueMatcher(terms=[]){
     if(term.startsWith('party-inferred:')){inferredParties.add(term.slice(15));return true;}
     if(term.startsWith('party-ref:')){referenceParties.add(term.slice(10));return true;}
     if(term.startsWith('party:')){parties.add(term.slice(6));return true;}
-    if(term.startsWith('identifier:')){if(attested.has(term.slice(11)))return true;literals.push(identifierPattern(term.slice(11)));return true;}return false;
+    if(term.startsWith('identifier:')){if(attested.has(term.slice(11))&&privateLanguageTags(term.slice(11)).length)return true;literals.push(identifierPattern(term.slice(11)));return true;}return false;
   };
   for(const raw of expanded){
     const term=clean(raw);if(!term||compile(term)||attested.has(term))continue;
@@ -458,7 +456,7 @@ export function createPrivateValueMatcher(terms=[]){
   }
   for(const [id,group] of chunks){
    if(group.pieces.size!==group.count)invalidGraph();const run=Array.from({length:group.count},(_,i)=>group.pieces.get(i)??invalidGraph()).join('');
-   if(createHash('sha256').update(run).digest('hex')!==group.id)invalidGraph();retainedRuns.push(compileNumericRun(run,group.collection));
+   if(createHash('sha256').update(run).digest('hex')!==id)invalidGraph();retainedRuns.push(compileNumericRun(run));
   }
   // Closed grammatical classes describe roles, not permitted sentences. A
   // formal component can be a subject, object, possessive or question target.

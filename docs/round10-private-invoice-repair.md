@@ -9,16 +9,16 @@ statement budget, memory budget or existing assertion was removed or relaxed.
 
 | Class | Findings | Defect and resulting change |
 | --- | --- | --- |
-| Supplied-fact capture | R10.1, R10.4, R10.5 | Collection cardinality was discarded when fields became retention keys; participant traversal depended on a conjunction; transfer events accepted one argument ordering. Shared quantity-role metadata now survives JS and generated SQL projection, including bounded graph rows. Participant/quantity tuples traverse comma, semicolon, newline and conjunction boundaries. Payment and receipt events accept participant-before-quantity and quantity-before-participant forms. |
+| Supplied-fact capture | R10.1, R10.4, R10.5 | Collection cardinality was discarded when fields became retention keys; participant traversal depended on a conjunction; transfer events accepted one argument ordering. Shared quantity-role metadata now survives JS and generated SQL projection, including bounded graph rows and all previously supported scalar/grouped interpretations. Participant/quantity tuples traverse comma, semicolon, newline and conjunction boundaries. Payment and receipt events accept participant-before-quantity and quantity-before-participant forms. |
 | Reference and quantity grammar | R10.2, R10.3, R10.6 | Positive context requirements rejected registered nominal references; single-grapheme names could not carry personal morphology; ASCII mixed numbers were split into date-like components. Registered identity, grammatical use and lexical boundaries are evaluated separately. Personal honorifics/case morphology use the same Unicode normalization as names. Rational operands compose with magnitude operators before date projection. Soft clause separators cannot detach a private nominal constituent as an ordinary clause. |
 | Ordinary lexical uses | R10.7, R10.8 | Uncased matching permitted word-internal substrings; redundant literal aliases bypassed identity grammar; noun/verb handling missed finite lexical uses. Native matching requires a lexical onset or a licensed personal clitic. Attested-party aliases share the identity classifier; contextual nominal and finite-verb roles preserve ordinary word uses. |
 | Financial routing | R10.9 | Capitalized first-name references to Bill were treated as financial nouns. The shared intent resolver now uses nominal role, proper-name status and financial specification for both first and compound names. Known-private containment remains independent of routing. |
 
 `ai/private-number-role.mjs` supplies quantity cardinality to screening and field
 projection. The SQL generator renders its closed operators and pinned lexical
-categories into the migration. Explicit collection graphs use a distinct typed
-key so reconstruction cannot restore decimal-comma interpretations discarded by
-the source role. Existing ambiguous numeric graphs retain their interpretations.
+categories into the migration. Collection roles add their members while preserving the existing scalar and
+grouped interpretations. Existing ambiguous numeric graphs retain their complete
+interpretations; stored scalar decimals remain atomic.
 Graph integrity, full-field capture, completion ordering and cache invalidation
 remain enforced. Migration `20261028030825` is unchanged.
 
@@ -48,3 +48,9 @@ Only one clean unset release gate is required for this round. Its commands, real
 exit status, exact commit/tree/file pins and complete output are recorded under
 `work/` and included in the local review handoff. The repair is committed locally;
 it is not pushed because the standing constraint prohibits deployment effects.
+
+The first clean gate exposed compatibility failures in the original one-argument
+SQL helper signature, connector spellings, scalar/grouped numeric ambiguity and
+slash-date tokenization. These were repaired in the shared primitives; all seven
+previously failing compatibility tests then passed unchanged. The failed gate
+remains in the evidence, and a new clean gate is required for the corrected head.
