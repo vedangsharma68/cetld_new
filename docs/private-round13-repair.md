@@ -33,3 +33,13 @@ The repair normalizes once per scoped input; uses a CASE-guarded necessary ident
 All pre-existing test bodies remain untouched. New author tests exercise four classes through actual handlers, five wrapper surfaces, replay, native stem matching and SQL/JS projection, with ordinary inverse controls. All databases are disposable and provider fetches are intercepted. The reviewer archive was referenced in another thread but was not supplied at an accessible path; its exact fresh files are not claimed as executed.
 
 Under the final budget instruction, final verification consists of one targeted class run and one clean unset release gate. The gate includes the preserved tracked batteries and existing native proofs. Earlier diagnostic runs and failures remain archived rather than being overwritten.
+
+## Finite occupancy and relational witnesses
+
+Numeric predicate analysis now distinguishes finite-verb occupancy from the broader verbal reading used by a collection operator. A clause-initial noun with a secondary verb tag cannot erase its nominal head. Explicit label boundaries keep the nominal spine, and required-prepositional valency still resolves placement imperatives before interpreting a destination as a collection.
+
+Selection/comparison relations form a separate closed grammatical class, including the traditional -st allomorphs of mutual relations. These witnesses do not require a verb POS. The same typed relations, predicate mode and nominal-spine rules generate SQL. No sentence-prefix exception or customer-name-specific rule is added.
+
+The customer handler uses the same nominal/destination interpretation only to avoid treating a numeric data form as an unresolved edit imperative. Parsed financial corrections, payment restrictions, scope checks and pending review handling retain their existing paths.
+
+The numeric follow-up target preserves the prior 73 checks and adds noun-label, relation, destination, scalar inverse, SQL-capture, both-audience and all-wrapper/replay coverage. The final target passed 521 tests with no skips before the clean gate was started. Earlier failing target logs are retained rather than overwritten.

@@ -161,7 +161,10 @@ export const partyFunctionWords=[...partyGrammarWords,'de','del','la','le','van'
 // Enumeration is a syntactic frame before the candidate, never a noun found
 // elsewhere in a message (e.g. a singular decimal on a shopping list).
 // Lexical classes for a syntactic list, independent of its punctuation or noun.
-const selectionRoots=['choose','select','pick','compare','between','among'];
+// Closed grammatical relation class, separate from verbal predicates.
+const mutualRelations=['among','amid'];
+export const numericSelectionRelations=['between','versus','vs',...mutualRelations.flatMap(w=>[w,w+'st'])];
+const selectionRoots=['choose','select','pick','compare'];
 export const numericSelectionWords=[...new Set([...collectionVerbs.split('\n'),...selectionRoots,...Object.keys(verbRoots).filter(w=>verbRoots[w].some(r=>selectionRoots.includes(r)))])];
 export const numericCollectiveWords=['pair','couple','list','sequence','set','array','tuple','collection','group','range'];
 export const numericQuantifiers=['both','either','neither','several','multiple'];

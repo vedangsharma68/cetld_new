@@ -1,3 +1,4 @@
+import {ordinaryNumericForm} from '../../ai/private-number-role.mjs';
 import {unresolvedChangeReference} from '../../invoice/chat-intent.mjs';
 import {ordinaryPart,privateOriginStart} from '../../ai/private-value-matcher.mjs';
 import {createPrivateChatMemory} from '../../ai/private-chat-memory.mjs';
@@ -465,7 +466,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
       }
       return reply;
     };
-    const editLike = INTENT_REQUEST.test(effective);
+    const editLike = INTENT_REQUEST.test(effective) && !ordinaryNumericForm(effective);
     if (correction?.changes?.status === 'paid' || /\b(?:mark|make|set|change)\b.{0,40}\b(?:paid|paod|piad|payed|pad|settled)\b/i.test(effective)) {
       return 'Only the business owner can record payments. Ask them to record this in cetld or their linked WhatsApp chat.';
     }
