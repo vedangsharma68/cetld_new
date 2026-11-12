@@ -1,9 +1,11 @@
-import {verbRoots,collectionVerbs,collectionNouns} from './private-reference-frames.mjs';
+import {verbRoots,collectionVerbs,collectionNouns,orderingNouns,relationalObjectVerbs} from './private-reference-frames.mjs';
 // Declarative grammar shared by the JS matcher and SQL generation.
 import lexicon from 'wink-lexicon/src/lexicon.js';
 import {collections} from './private-language-model.mjs';
 import {koParticles,koEndings,koPreEndings} from './private-name-morphology.mjs';
 export const numericCollectiveHeads=collectionNouns.split('\n');
+export const numericOrderingHeads=orderingNouns.split('\n');
+export const numericDestinationPredicates=relationalObjectVerbs.split('\n');
 const lexicalWords=Object.entries(lexicon).filter(([word])=>/^[a-z]+$/.test(word));
 export const grammarDeterminers=lexicalWords.filter(([,tags])=>tags.some(tag=>['DT','PRP$'].includes(tag))).map(([word])=>word);
 export const grammarAdverbs=lexicalWords.filter(([,tags])=>tags.some(tag=>['RB','RBR','RBS'].includes(tag))).map(([word])=>word);
