@@ -1,12 +1,16 @@
+import {personalObjectVerbs,personalNounHeads} from './private-reference-frames.mjs';
+const personalHeads=new Set(personalNounHeads.split('\n'));
+const personObjectPredicates=new Set(personalObjectVerbs.split('\n'));
 import {PRIVATE_UNICODE_FOLD} from './private-value-unicode.mjs';
 import {createHash} from 'node:crypto';
-import {privateNumberRole as numericRole} from './private-number-role.mjs';
+import {privateNumberRole as numericRole,privateCalendarExclusive} from './private-number-role.mjs';
 import {privateLanguageSyntax,privateLanguageTags} from './private-language-syntax.mjs';
-import {magnitudeAliases,fractionModifiers,numeralContentWords,privateNumeralSpanPattern,numericQuantifiers,grammarDeterminers,mixedFractionPattern,numeralTokenPattern,privateOriginTupleStart,privatePersonalPrefixes,privatePersonalHonorifics,privatePersonalCases,calendarRelations,privateQuantitySeparator,privatePersonalMorphologyPattern} from './private-value-language.mjs';
+import {magnitudeAliases,fractionModifiers,numeralContentWords,privateNumeralSpanPattern,numericQuantifiers,grammarDeterminers,mixedFractionPattern,numeralTokenPattern,privateOriginTupleStart,privatePersonalPrefixes,privatePersonalHonorifics,privatePersonalCases,calendarRelations,privateQuantitySeparator,privateCalendarWitnessPattern,privatePersonalMorphologyPattern,privateNativeStemForms,privateTamilDependentMorphologyPattern} from './private-value-language.mjs';
 import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,numericCurrencyBefore,numericCurrencyAfter,namedDatePatterns,privateDocumentKeyPattern,privateOriginHeader,privateOriginLexicalHint,privateOriginRecordHeader,privateOriginClauseBoundary,privateNameAbbreviations,originDateCommaPattern,lexicalAliases,partyTransliteration,partyReference,partyGrammarWords,grammarAuxiliaries,partyFunctionWords,numericSelectionWords,numericCollectiveWords,privateOriginEvent,privateOriginNoun,privateOriginCarrier,privateOriginDocumentPrefix,privateOriginPartyLabel,privateOriginMonetaryBefore,privateOriginDateBefore,privateOriginLiteralLabel,privateOriginRelationStart,privateOriginRelationEnd,privateOriginPronouns,privateOriginCopulas,privateOriginGenericPartyStart,privateOriginActorTail,privateOriginPersonalSubject,privateOriginNameEdge,privateJSONPadding,PRIVATE_NUMBER_LIST_MAX_GROUPS} from './private-value-language.mjs';
 // One code-point fold, shared verbatim with SQL, independent of DB/OS locale.
 export const normalizePrivateValue=value=>Array.from(String(value??''),ch=>PRIVATE_UNICODE_FOLD[ch]??ch).join('').replace(/ +/g,' ').trim();
 const clean=normalizePrivateValue;
+const dependentMorphology=new RegExp(privateTamilDependentMorphologyPattern(clean),'u');
 const personalMorphology=new RegExp(privatePersonalMorphologyPattern(clean),'u');
 const personalPrefixes=privatePersonalPrefixes.map(clean),personalHonorifics=privatePersonalHonorifics.map(clean),personalCases=privatePersonalCases.map(clean);
 function lexicalText(input){const origins=[],chunks=[];for(const m of input.matchAll(/[\p{L}\p{M}]+|[^\p{L}\p{M}]+/gu)){const part=Object.hasOwn(lexicalAliases,m[0])?lexicalAliases[m[0]]:m[0];chunks.push(part);for(let i=0;i<part.length;i++)origins.push(Object.hasOwn(lexicalAliases,m[0])?{start:m.index,end:m.index+m[0].length,translated:true}:{start:m.index+i,end:m.index+i+1});}return {text:chunks.join(''),origins};}
@@ -132,11 +136,11 @@ function dateValue(year,month,day){
 }
 function dates(original){
   const lexical=lexicalText(original),text=lexical.text;
+  if(!new RegExp(privateCalendarWitnessPattern,'u').test(text))return {values:[],spans:[],maskSpans:[]};
   const mixed=[...text.matchAll(new RegExp(mixedFractionPattern,'gu'))].filter(m=>numeric(m[0]).size);
   const values=[],spans=[],candidates=[];
   const add=(y,m,d,match)=>{
    const dateLabel=new RegExp(privateOriginDateBefore,'u').test(text.slice(0,match.index));
-   if(!dateLabel&&numericRole(text,match.index,match.index+match[0].length)==='collection')return;
    if(!dateLabel&&(new RegExp(privateOriginMonetaryBefore,'u').test(text.slice(0,match.index))||new RegExp(numericCurrencyBefore,'u').test(text.slice(0,match.index))||new RegExp(numericCurrencyAfter,'u').test(text.slice(match.index+match[0].length))))return;
    if(mixed.some(span=>span.index<=match.index&&span.index+span[0].length>=match.index+match[0].length))return;
    if(/^[0-9 ./-]+$/u.test(match[0])&&new RegExp('^ *(?:'+[...Object.keys(scales),...Object.keys(magnitudeAliases),'hundred'].join('|')+')(?![a-z])','u').test(text.slice(match.index+match[0].length)))return;
@@ -157,7 +161,7 @@ function dates(original){
   // Keep lexical spans even when invalid so invalid full dates cannot promote
   // an otherwise valid month/day suffix. Equal spans retain DD/MM ambiguity.
   for(const c of candidates)if(c.value&&!candidates.some(other=>other.start<=c.start&&other.end>=c.end&&(other.start<c.start||other.end>c.end))){values.push(c.value);spans.push([c.start,c.end]);}
-  const maskSpans=candidates.filter(c=>!candidates.some(o=>o.start<=c.start&&o.end>=c.end&&(o.start<c.start||o.end>c.end))).map(c=>[c.start,c.end]);return {values,spans,maskSpans};
+  const maskSpans=candidates.filter(c=>!candidates.some(o=>o.start<=c.start&&o.end>=c.end&&(o.start<c.start||o.end>c.end))).filter(c=>privateCalendarExclusive(original,c.start,c.end)).map(c=>[c.start,c.end]);return {values,spans,maskSpans};
 }
 const numberWords=new Set([...numeralContentWords,'and','a']);
 function wordNumber(words){
@@ -362,11 +366,11 @@ function privateOriginFields(value,sourceNames){
  // Due 31.10 is a date. Named/full dates remain date-bearing without a label.
  numbers(masked.join(''),(keys,a,b,enumeration)=>{const label=new RegExp(privateOriginMonetaryBefore,'u').exec(working.slice(0,a));if(label||new RegExp(mixedFractionPattern,'u').test(working.slice(a,b))){fields.push({value:working.slice(a,b),number:true,party:false,keys,enumeration});numberRanges.push([a,b]);mask(label?.index??a,b);}});
  const parsed=dates(masked.join(''));
- for(const [a,b] of parsed.maskSpans){if(!parsed.spans.some(([x,y])=>x===a&&y===b)&&working.slice(a,b).includes('/')){const label=new RegExp(privateOriginDateBefore,'u').exec(working.slice(0,a));fields.push({value:working.slice(a,b),number:false,party:false});mask(label?.index??a,b);}}
+ for(const [a,b] of parsed.maskSpans){if(!parsed.spans.some(([x,y])=>x===a&&y===b)&&working.slice(a,b).includes('/')){const label=new RegExp(privateOriginDateBefore,'u').exec(working.slice(0,a));fields.push({value:working.slice(a,b),number:false,party:false});if(label||parsed.maskSpans.some(([x,y])=>x===a&&y===b))mask(label?.index??a,b);}}
  for(const [i,[a,b]] of parsed.spans.entries()){
   const label=new RegExp(privateOriginDateBefore,'u').exec(working.slice(0,a));
-  if(parsed.values[i].year===null&&/^[0-9][0-9 ./-]*$/u.test(working.slice(a,b))&&!label)continue;
-  fields.push({value:working.slice(a,b),number:false,party:false});mask(label?.index??a,b);
+  if(parsed.values[i].year===null&&/^[0-9][0-9 ./-]*$/u.test(working.slice(a,b))&&!label&&privateCalendarExclusive(working,a,b))continue;
+  fields.push({value:working.slice(a,b),number:false,party:false});if(label||parsed.maskSpans.some(([x,y])=>x===a&&y===b))mask(label?.index??a,b);
  }
  numbers(masked.join(''),(keys,a,b,enumeration)=>{fields.push({value:working.slice(a,b),number:true,party:false,keys,enumeration});numberRanges.push([a,b]);mask(a,b);});
  const remaining=masked.join(''),stop=[...originBoundaries(remaining)].find(index=>remaining[index]!==';'),limit=stop===undefined?remaining.length:stop,partyText=remaining.slice(0,limit);
@@ -440,7 +444,7 @@ export function privateFieldKeys(value){
   if(Array.from(raw).length>4000){
    const direct=privateNumberKeys(raw);if(direct.length)return direct;
    const keys=new Set(),parsed=dates(raw),masked=raw.split('');
-   for(const [i,[a,b]] of parsed.spans.entries()){const {year,month,day}=parsed.values[i];keys.add('date:'+(year==null?'*':String(year).padStart(4,'0'))+'-'+String(month).padStart(2,'0')+'-'+String(day).padStart(2,'0'));for(let j=a;j<b;j++)masked[j]=' ';}
+   for(const [i,[a,b]] of parsed.spans.entries()){const {year,month,day}=parsed.values[i];keys.add('date:'+(year==null?'*':String(year).padStart(4,'0'))+'-'+String(month).padStart(2,'0')+'-'+String(day).padStart(2,'0'));}
    for(const [a,b] of parsed.maskSpans)for(let j=a;j<b;j++)masked[j]=' ';
    numbers(masked.join(''),(values,a,b,enumeration)=>{const direct=privateNumberKeys(raw.slice(a,b),enumeration);direct.forEach(k=>keys.add(k));if(!direct.length)values.forEach(n=>{if(n.length<=3993)keys.add('number:'+n);else boundedRun(n).forEach(k=>keys.add(k));});});
    return [...keys];
@@ -509,12 +513,12 @@ export function createPrivateValueMatcher(terms=[]){
     const graphemes=new Intl.Segmenter(undefined,{granularity:'grapheme'});
     for(const key of new Set([...parties,...referenceParties,...inferredParties,...nativeParties])){
       const uncased=key.toLowerCase()===key.toUpperCase(),multiple=[...graphemes.segment(key)].length>1;
-      for(const m of content.matchAll(new RegExp(escape(key),'gu'))){
-       const begin=m.index,finish=begin+key.length,word=words.find(w=>w.isWordLike&&w.index<=begin&&w.index+w.segment.length>begin);if(!word)continue;
+      for(const m of content.matchAll(new RegExp(privateNativeStemForms(key).map(escape).join('|'),'gu'))){
+       const begin=m.index,finish=begin+m[0].length,word=words.find(w=>w.isWordLike&&w.index<=begin&&w.index+w.segment.length>begin);if(!word)continue;
        const prefix=content.slice(word.index,begin),tail=content.slice(finish,word.index+word.segment.length),clitic=prefix&&personalPrefixes.includes(prefix)&&/\p{Script=Arabic}/u.test(key);
        if(prefix&&!clitic)continue;
        const honorific=personalHonorifics.find(part=>tail.startsWith(part)),suffix=honorific?tail.slice(honorific.length):tail;
-       const personalAffix=tail.length>0&&personalMorphology.test(tail);
+       const personalAffix=tail.length>0&&(m[0]===key?personalMorphology.test(tail):dependentMorphology.test(tail));
        const lexicalEnd=words.some(w=>w.index===finish||w.index+w.segment.length===finish);
        if(!(personalAffix||uncased&&(lexicalEnd||clitic&&tail==='')))continue;
        const old=occurrences.find(n=>n.index===begin&&n[0]===key);if(old)old.personalAffix=personalAffix;else occurrences.push(Object.assign([key],{index:begin,personalAffix}));
@@ -540,7 +544,12 @@ export function createPrivateValueMatcher(terms=[]){
       const predicate=auxiliaries.has(next)||/^(?:VBD|VBZ)$/u.test(nextPOS||'')||(nextPOS==='VBN'||finitePast.has(next)||/ed$/u.test(next||''))&&finiteTail||finiteAlternative||regularS&&(nextPOS!=='NNS'||incompatibleFunction);
       const addressed=verbs.has(last),terminal=!next,prepositional=relations.has(last)&&last!=='by';
       const differentName=proper&&upper(nextRaw)&&!parties.has(partyKey(next))&&!auxiliaries.has(next)&&!complements.has(next);
-      const personal=m.personalAffix||possessive||predicate||apposition||addressed||prepositional&&proper||proper&&beforeWords.length>0&&!determiners.has(last)||terminal&&(addressed||prepositional||proper);
+      const previousToken=syntax.filter(t=>t.end<=m.index).at(-1);
+      const personalHead=/^(?:NN|NNP)$/.test(previousToken?.pos||'')&&!/^(?:JJ|JJR|JJS)$/.test(previousToken?.alternatives[0]||'')&&personalHeads.has(previousToken?.word.toLowerCase());
+      const personalObject=!auxiliaries.has(previousToken?.word.toLowerCase())&&personObjectPredicates.has(previousToken?.word.toLowerCase())&&/^(?:VB|VBD|VBP|VBZ|VBN)$/.test(previousToken?.pos||'')&&!nominalScope;
+      const subjectToken=syntax.filter(t=>t.end<=(previousToken?.start??0)).at(-1);
+      const personalCopula=privateOriginCopulas.includes(previousToken?.word.toLowerCase())&&(subjectToken?.pos==='PRP'&&!['it'].includes(subjectToken.word.toLowerCase())||subjectToken?.pos==='NNP'||personalHeads.has(subjectToken?.word.toLowerCase()));
+      const personal=personalCopula||personalHead||personalObject||m.personalAffix||possessive||predicate||apposition||addressed||prepositional&&proper||proper&&beforeWords.length>0&&!determiners.has(last)||terminal&&(addressed||prepositional||proper);
       // An article/modal/instrumental noun has a grammatical role. It does
       // not acquire an entity role merely because a registered name overlaps.
       const pronominal=/^(?:any|some|no|every)(?:thing|one|body)$/u.test(next||'');
@@ -552,16 +561,17 @@ export function createPrivateValueMatcher(terms=[]){
       const connectiveRole=partyGrammarWords.includes(term)&&!['a','an','the'].includes(term)&&!auxiliaries.has(term)&&!addressed&&!prepositional&&(!proper||!beforeWords.length);
       const functionUse=!m.personalAffix&&!possessive&&!predicate&&!apposition&&!terminal&&(articleRole||modalRole||connectiveRole);
       const incompleteArticle=['a','an','the'].includes(term)&&!completeNoun;
-      const nounUse=nominalScope&&!apposition&&!incompleteArticle||last==='by'&&!proper;
+      const nounUse=!personalObject&&!personalHead&&nominalScope&&!apposition&&!incompleteArticle||last==='by'&&!proper;
       const attributeRole=/^(?:JJ|JJR|JJS)$/u.test(currentPOS||'')&&!personal;
       const imperative=!beforeWords.length&&nextPOS==='DT'&&currentToken?.alternatives.includes('VB');
       const verbRole=(/^(?:VB|VBD|VBP|VBZ|VBG|VBN)$/u.test(currentPOS||'')||imperative)&&!personal;
       const compoundRole=currentToken?.known&&!proper&&/^(?:NN|NNS)$/u.test(currentPOS||'')&&/^(?:NN|NNS)$/u.test(nextPOS||'')&&!personal;
       const cased=term.toUpperCase()!==term.toLowerCase();
-      const previousToken=syntax.filter(t=>t.end<=m.index).at(-1);
+
       const monthRole=new RegExp('^'+monthPattern+'$','u').test(term)&&calendarRelations.includes(last)&&!predicate;
       const lexicalImperative=!possessive&&!predicate&&!nextToken?.alternatives.includes('VBZ')&&currentToken?.alternatives.includes('VB')&&(completeNoun||/^(?:IN|TO)$/u.test(nextPOS||''))&&(!proper||!beforeWords.length)&&(!beforeWords.length||previousToken?.alternatives.some(t=>['UH','RB','MD','PRP','TO'].includes(t)));
-      const bareNominal=!proper&&currentPOS==='NN'&&!possessive&&!addressed&&!predicate&&(/^(?:VB|VBD|VBP|VBZ)$/u.test(previousToken?.pos||'')||previousToken?.pos==='JJ');
+
+      const bareNominal=!personal&&!proper&&currentPOS==='NN'&&!possessive&&!addressed&&!predicate&&(/^(?:VB|VBD|VBP|VBZ)$/u.test(previousToken?.pos||'')||previousToken?.pos==='JJ');
       if(cased&&(monthRole||lexicalImperative||bareNominal))return false;
       if(cased&&!m.personalAffix&&!possessive&&!apposition&&!addressed&&(functionUse||nounUse&&!proper||attributeRole||verbRole||compoundRole))return false;
       const reference=(referenceKey||inferredKey)&&(content===term||!differentName&&!functionUse&&!nounUse&&(!weakOnly||proper||personal));
@@ -612,7 +622,7 @@ export function createPrivateValueMatcher(terms=[]){
       const [start,end]=found.spans[i];
       if(retainedDates.some(saved=>saved.month===current.month&&saved.day===current.day&&(saved.year==null||current.year==null||saved.year===current.year))
         ||(!content.slice(start,end).includes('/')&&[...numeric(content.slice(start,end))].some(n=>hasNumber(n))))add(start,end);
-      for(let j=start;j<end;j++)masked[j]=' ';
+      if(found.maskSpans.some(([a,b])=>a===start&&b===end))for(let j=start;j<end;j++)masked[j]=' ';
     }
     for(const [a,b] of found.maskSpans)for(let j=a;j<b;j++)masked[j]=' ';
     numbers(masked.join(''),(keys,start,end)=>{if(keys.some(key=>hasNumber(key)))add(start,end);},retainedNumbers);

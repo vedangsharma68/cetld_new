@@ -1,8 +1,9 @@
+import {verbRoots,collectionVerbs,collectionNouns} from './private-reference-frames.mjs';
 // Declarative grammar shared by the JS matcher and SQL generation.
 import lexicon from 'wink-lexicon/src/lexicon.js';
 import {collections} from './private-language-model.mjs';
-import {koParticles} from './private-name-morphology.mjs';
-export const numericCollectiveHeads=collections.split('\n');
+import {koParticles,koEndings,koPreEndings} from './private-name-morphology.mjs';
+export const numericCollectiveHeads=collectionNouns.split('\n');
 const lexicalWords=Object.entries(lexicon).filter(([word])=>/^[a-z]+$/.test(word));
 export const grammarDeterminers=lexicalWords.filter(([,tags])=>tags.some(tag=>['DT','PRP$'].includes(tag))).map(([word])=>word);
 export const grammarAdverbs=lexicalWords.filter(([,tags])=>tags.some(tag=>['RB','RBR','RBS'].includes(tag))).map(([word])=>word);
@@ -158,28 +159,43 @@ export const partyFunctionWords=[...partyGrammarWords,'de','del','la','le','van'
 // Enumeration is a syntactic frame before the candidate, never a noun found
 // elsewhere in a message (e.g. a singular decimal on a shopping list).
 // Lexical classes for a syntactic list, independent of its punctuation or noun.
-export const numericSelectionWords=['choose','select','pick','compare','between','among'];
+const selectionRoots=['choose','select','pick','compare','between','among'];
+export const numericSelectionWords=[...new Set([...collectionVerbs.split('\n'),...selectionRoots,...Object.keys(verbRoots).filter(w=>verbRoots[w].some(r=>selectionRoots.includes(r)))])];
 export const numericCollectiveWords=['pair','couple','list','sequence','set','array','tuple','collection','group','range'];
 export const numericQuantifiers=['both','either','neither','several','multiple'];
 // Closed quantity operators and lexical roles; these are not sentence frames.
 export const numericDistributionWords=['respectively','each','apiece'];
 export const numericCollectionPredicates=['are','were','include','contain','equal'];
-export const numericGrammarTags=Object.fromEntries(lexicalWords.filter(([,tags])=>/^(?:NN|NNS|NNP|NNPS|PRP|PRP\$|DT|VB|VBD|VBP|VBZ|MD|IN|TO|CD|RB|RBR|RBS|UH|EX|JJ|JJR|JJS)$/.test(tags[0])).map(([word,tags])=>[word,tags.join('|')]));
+export const numericGrammarTags=Object.fromEntries(lexicalWords.filter(([,tags])=>/^(?:NN|NNS|NNP|NNPS|PRP|PRP\$|DT|VB|VBD|VBP|VBZ|VBG|VBN|MD|IN|TO|CD|RB|RBR|RBS|UH|EX|JJ|JJR|JJS)$/.test(tags[0])).map(([word,tags])=>[word,tags.join('|')]));
 // Personal morphology is attached to a registered spelling at a lexical edge.
 // Prefix clitics do not license arbitrary word-internal name substrings.
 export const privatePersonalPrefixes=['ب','ل','ك','و','ف','وب','ول','بال'];
-export const privatePersonalHonorifics=['님','씨','군','양','선생님','さん','さま','様','君','くん','ちゃん','殿'];
+export const privatePersonalHonorifics=['जी','साहब','साहिब','देवी','बाई','님','씨','군','양','선생님','さん','さま','様','君','くん','ちゃん','殿'];
 // Closed case, postposition and auxiliary-particle inventories. The parser
 // consumes a complete sequence, including stacked case/topic/focus particles.
-export const privatePersonalCases=[...koParticles,'께서','에게서','한테서','으로서','으로써','로서','로써','에게','께','한테','은','는','이','가','을','를','의','과','와','랑','이랑','하고','에','에서','으로','로','부터','까지','보다','처럼','같이','만큼','밖에','조차','마저','이라도','라도','이나','나','도','만','요','아','야','여','이여','から','まで','より','には','に','を','が','は','と','へ','の','も','で','だけ','まで','さえ','でも','こそ','ほど','ばかり','など','って'];
+export const privatePersonalCases=['ने','को','से','का','के','की','में','पर','तक',...koParticles,'께서','에게서','한테서','으로서','으로써','로서','로써','에게','께','한테','은','는','이','가','을','를','의','과','와','랑','이랑','하고','에','에서','으로','로','부터','까지','보다','처럼','같이','만큼','밖에','조차','마저','이라도','라도','이나','나','도','만','요','아','야','여','이여','から','まで','より','には','に','を','が','は','と','へ','の','も','で','だけ','まで','さえ','でも','こそ','ほど','ばかり','など','って'];
 // Nominal number and focus/topic slots compose with one complete case
 // suffix. Repeating arbitrary suffixes would accept ordinary words as names.
-export const privatePersonalNumber=['들','네','たち','ら','方'];
+export const privatePersonalNumber=['यों','ओं','ों','கள்','ர்கள்','들','네','たち','ら','方'];
 export const privatePersonalFocus=['은','는','도','만','조차','마저','까지','부터','라도','야','야말로','나마','뿐','も','は','さえ','だけ','まで','こそ','でも','すら','しか','のみ','など'];
-export function privatePersonalMorphologyPattern(normalize=x=>x){const group=a=>[...new Set(a.map(normalize))].join('|');return '^(?:'+group(privatePersonalHonorifics)+')*(?:'+group(privatePersonalNumber)+')*(?:'+group(privatePersonalCases)+')?(?:'+group(privatePersonalFocus)+')*$';}
+// Full Korean copular ending inventory composes with honorific/number/case slots.
+// Tamil eight-case paradigm: vowel-initial endings admit regular y/v glides,
+// represented by their joined dependent-vowel allomorphs rather than name aliases.
+export const tamilCaseEndings=['ஐ','க்கு','உக்கு','ஆல்','ஓடு','உடன்','இன்','உடைய','இல்','இடம்','இடத்தில்','இலிருந்து','இடமிருந்து','இற்கு','அது','ஏ'];
+export const tamilJoinedCases=tamilCaseEndings.flatMap(s=>{const dependent={'அ':'','ஆ':'ா','இ':'ி','ஈ':'ீ','உ':'ு','ஊ':'ூ','எ':'ெ','ஏ':'ே','ஐ':'ை','ஒ':'ொ','ஓ':'ோ','ஔ':'ௌ'};return Object.hasOwn(dependent,s[0])?['வ','ய'].map(g=>g+dependent[s[0]]+s.slice(1)):[];});
+export const tamilDependentCases=tamilCaseEndings.flatMap(s=>{const d={'அ':'','ஆ':'ா','இ':'ி','ஈ':'ீ','உ':'ு','ஊ':'ூ','எ':'ெ','ஏ':'ே','ஐ':'ை','ஒ':'ொ','ஓ':'ோ','ஔ':'ௌ'};return Object.hasOwn(d,s[0])?[d[s[0]]+s.slice(1)]:[];});
+export function privateTamilDependentMorphologyPattern(normalize=x=>x){return '^(?:'+[...new Set(tamilDependentCases.map(normalize))].join('|')+')(?:'+normalize('உம்')+'|'+normalize('தான்')+'|'+normalize('கூட')+')*$';}
+export const tamilObliqueStemRules=[['்',''],['ம்','த்த'],['டு','ட்ட'],['று','ற்ற']];
+export function privateNativeStemForms(key){return !/\p{Script=Tamil}/u.test(key)?[key]:[...new Set([key,...tamilObliqueStemRules.filter(([end])=>key.endsWith(end)).map(([end,form])=>key.slice(0,-end.length)+form)])];}
+export function privatePersonalMorphologyPattern(normalize=x=>x){const group=a=>[...new Set(a.map(normalize))].join('|'),nominal='(?:'+group(privatePersonalHonorifics)+')*(?:'+group(privatePersonalNumber)+')*',focus='(?:'+group(privatePersonalFocus)+')*';return '^(?:'+nominal+'(?:'+group(privatePersonalCases)+')?'+focus+'|'+nominal+normalize('이')+'(?:'+group(koPreEndings)+')*(?:'+group(koEndings)+')'+focus+'|(?:'+group([...tamilCaseEndings,...tamilJoinedCases])+')(?:'+group(['உம்','தான்','கூட'])+')*)$';}
+
+
 export const numericPredicativeRelations=['as','into'];
 export const calendarRelations=['in','during','until','before','after','from','through','between'];
 // Only transport padding is removed before JSON decoding. String values are
 // decoded first, then canonically screened; normalization must not change JSON.
 export const privateJSONPadding=/[\p{White_Space}\p{Cf}]/u;
 export const PRIVATE_NUMBER_LIST_MAX_GROUPS=32; // Switch to a compact graph, never reject a longer run.
+
+// Necessary lexical witness: ASCII boundaries are deliberately a superset of Unicode word boundaries.
+export const privateCalendarWitnessPattern='(?<![a-z0-9_])[0-9]{1,4} *[./-] *[0-9]{1,2}(?: *[./-] *[0-9]{1,4})?(?![a-z0-9_])|'+monthPattern;

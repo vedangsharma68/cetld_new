@@ -1,0 +1,21 @@
+{
+  "source": "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/wordnet.zip",
+  "archiveSha256": "cbda5ea6eef7f36a97a43d4a75f85e07fccbb4f23657d27b4ccbc93e2646ab59",
+  "version": "Princeton WordNet 3.0",
+  "extraction": "All single-word verb frame inventories, ranked first-sense person-object frames, and complete verb exceptions; no example filtering",
+  "files": {
+    "data/private-language/wordnet-verb-frames.json": "b300da803ceebaaea51d1180a456d458f21242812d36eb697d321987c758a1a0",
+    "data/private-language/wordnet-verb-exceptions.txt": "dbbcf9a601b2d77e934e413b91d90e88ec7f933a8b77cfc00602a923b891b42c",
+    "data/private-language/wordnet-person-heads.txt": "e899ae95987f36b650a5f3e3b348b0c2bac6b8ca3da400b2a40ee4ec487882e9",
+    "data/private-language/wordnet-collection-verbs.txt": "c488c9080c2908f9ac29b1415132d3c47a69ac58568029503f0803f9ae8e1691",
+    "docs/private-wordnet-LICENSE.txt": "7731175a77952e259390b496fab905e57118b8d19ad3a8383c67eee724ff443f"
+  },
+  "collectionOntologyAnchors": {
+    "order.cognition.00658052": "00658052",
+    "order.cognition.00735571": "00735571",
+    "arrange": "01463963",
+    "choose": "00674607",
+    "compare": "00652900",
+    "group": "00656576"
+  }
+}
