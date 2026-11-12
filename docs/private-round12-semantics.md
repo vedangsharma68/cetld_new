@@ -28,7 +28,7 @@ A partial workspace index restricts identity lookups to retained party roles, an
 
 ## Calendar and rational types (R11.8)
 
-Calendar lexical spans, including invalid calendar-shaped inputs, are reserved before numeric projection. They cannot become ratios during matching, source projection, long-field projection or scoped capture. Explicit mixed operands, magnitude and currency witnesses select the quantity grammar. Tests distinguish dates, slash collections, ordinary fractions and nearby unrelated values.
+Calendar lexical spans, including invalid calendar-shaped inputs, are reserved before numeric projection. An explicit calendar field label takes precedence over an enclosing collection frame in both SQL and JavaScript. They cannot become ratios during matching, source projection, long-field projection or scoped capture. Explicit mixed operands, magnitude and currency witnesses select the quantity grammar. Tests distinguish dates, slash collections, ordinary fractions and nearby unrelated values.
 
 ## Verification and preservation
 

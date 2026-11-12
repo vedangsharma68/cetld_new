@@ -466,7 +466,7 @@ begin
       for token in select regexp_matches(scan,'('||pattern||')','g') loop
         a:=strpos(substring(scan from cursor_at),token[1])+cursor_at-1;b:=a+length(token[1]);cursor_at:=b;
         if token[1] ~ '^[0-9 ./-]+$' and substring(scan from b) ~ '^ *(?:thousand|lakh|lac|million|crore|billion|trillion|quadrillion|quintillion|k|m|b|hundred)(?![a-z])' then continue;end if;
-        if app.private_invoice_number_role(scan,a,b) then continue;end if;
+        if left(scan,a-1) !~ '(?<![a-z0-9_])(?:due(?: +date)?|invoice +date|date)(?![a-z0-9_]) *(?:(?:is|was|to)(?![a-z0-9_]) *)?[:=]? *$' and app.private_invoice_number_role(scan,a,b) then continue;end if;
         return query select k from app.private_invoice_term_aliases(token[1]) k where k like 'date:%';
         if found or strpos(token[1],'/')>0 then scan:=overlay(scan placing repeat(' ',b-a) from a for b-a);end if;
       end loop;
@@ -723,7 +723,7 @@ begin
   cursor_at:=1;
   for candidate in select regexp_matches(prepared,'('||pattern||')','g') loop
    a:=strpos(substring(prepared from cursor_at),candidate[1])+cursor_at-1;b:=a+length(candidate[1]);cursor_at:=b;
-   if app.private_invoice_number_role(working,a,b) then continue;end if;
+   if left(working,a-1) !~ '(?<![a-z0-9_])(?:due(?: +date)?|invoice +date|date)(?![a-z0-9_]) *(?:(?:is|was|to)(?![a-z0-9_]) *)?[:=]? *$' and app.private_invoice_number_role(working,a,b) then continue;end if;
    keys:=array(select k from app.private_invoice_term_aliases(candidate[1]) k where k like 'date:%');if cardinality(keys)=0 then
     if strpos(candidate[1],'/')>0 then return next candidate[1];prepared:=overlay(prepared placing repeat(' ',b-a) from a for b-a);end if;continue;end if;
    label_at:=regexp_instr(left(working,a-1),'(?<![a-z0-9_])(?:due(?: +date)?|invoice +date|date)(?![a-z0-9_]) *(?:(?:is|was|to)(?![a-z0-9_]) *)?[:=]? *$');
@@ -948,7 +948,7 @@ revoke all on function app.private_invoice_scoped_fact_aliases(uuid,text) from p
 
 -- Semantic revision covers shared JS/Unicode/SQL and field-role capture rules.
 create function app.private_invoice_canonical_revision() returns text
-language sql immutable set search_path='' as $$select 'f2206a21fe6bca289811b3e5307d78ace298249fe00a12487f2784b35ee7f5ee'::text$$;
+language sql immutable set search_path='' as $$select '6c865d1e92ccc3e6101105d822f774c317eba6d16c51412b60d1ed8a786619c2'::text$$;
 revoke all on function app.private_invoice_canonical_revision() from public,anon,authenticated,service_role;
 
 -- The completion key also includes privileged maintenance generations. Read
