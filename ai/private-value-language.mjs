@@ -1,5 +1,8 @@
 // Declarative grammar shared by the JS matcher and SQL generation.
 import lexicon from 'wink-lexicon/src/lexicon.js';
+import {collections} from './private-language-model.mjs';
+import {koParticles} from './private-name-morphology.mjs';
+export const numericCollectiveHeads=collections.split('\n');
 const lexicalWords=Object.entries(lexicon).filter(([word])=>/^[a-z]+$/.test(word));
 export const grammarDeterminers=lexicalWords.filter(([,tags])=>tags.some(tag=>['DT','PRP$'].includes(tag))).map(([word])=>word);
 export const grammarAdverbs=lexicalWords.filter(([,tags])=>tags.some(tag=>['RB','RBR','RBS'].includes(tag))).map(([word])=>word);
@@ -97,7 +100,9 @@ export const privateOriginRelationEnd=' +(?:to|from|for|of|and) *$';
 export const privateOriginPronouns=['i','me','my','mine','myself','we','us','our','ours','ourselves','you','your','yours','yourself','yourselves','he','him','his','himself','she','her','hers','herself','it','its','itself','they','them','their','theirs','themselves'];
 export const privateOriginNameEdge='^[ ,:;>]+|[ ,:;>]+$';
 const linkedRecordHeader=privateOriginCarrier+'(?:(?!'+privateOriginClauseBoundary+').)*?'+originDocumentIntro+bareRecordMarker;
-export const privateOriginTupleStart='^ *(?:(?:[,;]+ *)(?:(?:and|or|&)(?: +|$))?|(?:and|or|&)(?: +|$))';
+export const privateCoordinators=lexicalWords.filter(([,tags])=>tags.includes('CC')).map(([w])=>w);
+export const privateQuantitySeparator='(?:[^\\p{L}\\p{M}\\p{N}.,\' ʼ]+|(?<![a-z0-9_])(?:'+privateCoordinators.join('|')+')(?![a-z0-9_]))';
+export const privateOriginTupleStart='^ *(?:(?:[\\p{P}\\p{S}]+ *)|(?:(?:'+privateCoordinators.join('|')+')(?![a-z0-9_]) +))*';
 export const privateOriginActorTail=' +(?:(?:'+grammarAuxiliaries.join('|')+') +)*(?:'+financialPredicate+'|invoiced|billed|charg(?:e|es|ed|ing)|receiv(?:e|es|ed|ing)|pay(?:s|ing)?|paid|owed)$';
 export const privateOriginPersonalSubject='^'+financialSubject+'$';
 // Necessary lexical terminals of the declaration grammar. This cheap superset
@@ -159,12 +164,21 @@ export const numericQuantifiers=['both','either','neither','several','multiple']
 // Closed quantity operators and lexical roles; these are not sentence frames.
 export const numericDistributionWords=['respectively','each','apiece'];
 export const numericCollectionPredicates=['are','were','include','contain','equal'];
-export const numericGrammarTags=Object.fromEntries(lexicalWords.filter(([,tags])=>/^(?:NN|NNS|NNP|NNPS|PRP|PRP\$|DT|VB|VBD|VBP|VBZ|MD|IN|TO)$/.test(tags[0])).map(([word,tags])=>[word,tags.join('|')]));
+export const numericGrammarTags=Object.fromEntries(lexicalWords.filter(([,tags])=>/^(?:NN|NNS|NNP|NNPS|PRP|PRP\$|DT|VB|VBD|VBP|VBZ|MD|IN|TO|CD|RB|RBR|RBS|UH|EX|JJ|JJR|JJS)$/.test(tags[0])).map(([word,tags])=>[word,tags.join('|')]));
 // Personal morphology is attached to a registered spelling at a lexical edge.
 // Prefix clitics do not license arbitrary word-internal name substrings.
 export const privatePersonalPrefixes=['ب','ل','ك','و','ف','وب','ول','بال'];
 export const privatePersonalHonorifics=['님','씨','군','양','선생님','さん','さま','様','君','くん','ちゃん','殿'];
-export const privatePersonalCases=['에게','께','한테','은','는','이','가','을','를','의','과','와','도','만','에','에서','으로','로','から','まで','には','に','を','が','は','と','へ','の'];
+// Closed case, postposition and auxiliary-particle inventories. The parser
+// consumes a complete sequence, including stacked case/topic/focus particles.
+export const privatePersonalCases=[...koParticles,'께서','에게서','한테서','으로서','으로써','로서','로써','에게','께','한테','은','는','이','가','을','를','의','과','와','랑','이랑','하고','에','에서','으로','로','부터','까지','보다','처럼','같이','만큼','밖에','조차','마저','이라도','라도','이나','나','도','만','요','아','야','여','이여','から','まで','より','には','に','を','が','は','と','へ','の','も','で','だけ','まで','さえ','でも','こそ','ほど','ばかり','など','って'];
+// Nominal number and focus/topic slots compose with one complete case
+// suffix. Repeating arbitrary suffixes would accept ordinary words as names.
+export const privatePersonalNumber=['들','네','たち','ら','方'];
+export const privatePersonalFocus=['은','는','도','만','조차','마저','까지','부터','라도','야','야말로','나마','뿐','も','は','さえ','だけ','まで','こそ','でも','すら','しか','のみ','など'];
+export function privatePersonalMorphologyPattern(normalize=x=>x){const group=a=>[...new Set(a.map(normalize))].join('|');return '^(?:'+group(privatePersonalHonorifics)+')*(?:'+group(privatePersonalNumber)+')*(?:'+group(privatePersonalCases)+')?(?:'+group(privatePersonalFocus)+')*$';}
+export const numericPredicativeRelations=['as','into'];
+export const calendarRelations=['in','during','until','before','after','from','through','between'];
 // Only transport padding is removed before JSON decoding. String values are
 // decoded first, then canonically screened; normalization must not change JSON.
 export const privateJSONPadding=/[\p{White_Space}\p{Cf}]/u;

@@ -1,3 +1,4 @@
+import {unresolvedChangeReference} from '../../invoice/chat-intent.mjs';
 import {ordinaryPart,privateOriginStart} from '../../ai/private-value-matcher.mjs';
 import {createPrivateChatMemory} from '../../ai/private-chat-memory.mjs';
 import {createPrivateChatProvider, localReviewTurn, privateChatSpans, privateChatTopic, PRIVATE_CHAT_REPLY, CHAT_UNAVAILABLE_REPLY} from '../../ai/private-chat.mjs';
@@ -291,7 +292,7 @@ export function createWhatsAppBoundMessageHandler({env = process.env, fetchImpl 
         try{await privateMemory.retainOrigin(message);}catch{return CHAT_UNAVAILABLE_REPLY;}
       }
     }
-    if(audience!=='owner'&&(media||mediaError||/\b(?:change|chnge|set|edit|modify|fix|update|mark)\b/i.test(message||'')&&(privateChatTopic(message)||/\b(?:amount|its|it|this|that)\b/i.test(message||''))&&!(ordinaryPart(message,privateChatTopic,privateChatSpans).mixed&&ordinaryPart(message,privateChatTopic,privateChatSpans).text))){
+    if(audience!=='owner'&&(media||mediaError||/\b(?:change|chnge|set|edit|modify|fix|update|mark)\b/i.test(message||'')&&(privateChatTopic(message)||(/\bamount\b/i.test(message||'')||unresolvedChangeReference(message)))&&!(ordinaryPart(message,privateChatTopic,privateChatSpans).mixed&&ordinaryPart(message,privateChatTopic,privateChatSpans).text))){
       return media||mediaError ? 'Payment receipts cannot be recorded from customer photos here. Ask the business owner to verify and record the payment. Nothing was changed.' : 'Only the business owner can create or change invoices. Contact the business for help.';
     }
     if(audience==='customer'&&!media&&!mediaError&&!contactCard&&/^\s*(?:menu|help|options)[.!?\s]*$/i.test(message||'')){

@@ -21,7 +21,7 @@ export function createPrivateChatMemory({supabase,scope}) {
   const containsPrivate=text=>matchPrivate(text);
   const containsOrdinary=text=>matchPrivate.ordinary?matchPrivate.ordinary(text):matchPrivate(text);
   const retainOrigin=async message=>{
-    if(privateOriginStart(message)===null)return false;
+    if(privateOriginStart(message)===null&&!matchPrivate.entities?.(message))return false;
     const retained=data(await supabase.rpc('whatsapp_retain_private_chat_origin',{p_workspace_id:workspaceId,p_text:message}));
     if(retained!==true)throw Object.assign(new Error('Private origin retention unavailable'),{code:'CHAT_MEMORY_UNAVAILABLE'});
     return true;
@@ -35,7 +35,7 @@ export function createPrivateChatMemory({supabase,scope}) {
         throw Object.assign(new Error('Chat privacy backfill is not complete'),{code:'CHAT_MEMORY_UNAVAILABLE'});
       // Retain private-origin atomic fields before loading history/keys. A
       // canceled review or process restart cannot turn its fragments ordinary.
-      await retainOrigin(message);
+      const capturedCurrent=await retainOrigin(message);
       const [historyResult,termsResult]=await Promise.all([query().order('id',{ascending:false}).limit(20),
         supabase.from('whatsapp_private_invoice_terms').select('term').eq('workspace_id',workspaceId).order('term_hash').range(0,499)]);
       const loadTerms=async first=>{
@@ -48,6 +48,9 @@ export function createPrivateChatMemory({supabase,scope}) {
         matchPrivate=createPrivateValueMatcher(privateTerms);
       };
       await loadTerms(termsResult);
+      // A scoped identity binds supplied facts even when the prose uses a new
+      // verb. Capture before routing and before admitting any later fragments.
+      if(!capturedCurrent&&await retainOrigin(message))await loadTerms();
       const eligible=row=>row.provenance===PROVENANCE&&['user','assistant'].includes(row.role)
         &&typeof row.content==='string'&&row.content.length<=4000&&!privateChatTopic(row.content)&&!containsOrdinary(row.content);
       const allRows=data(historyResult)||[];let historyPage=allRows,ordinary;
