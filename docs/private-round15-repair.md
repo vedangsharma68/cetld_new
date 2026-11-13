@@ -23,6 +23,8 @@ schemas. A denied payload makes zero HTTP requests; a failed snapshot fails
 closed. Protocol constants and the exact immutable system policy have distinct
 trusted provenance; a changed policy or dynamic system message is scanned.
 
+Canonical Merkle fingerprints preserve decoded/reordered composite field values as well as their typed leaf candidates. Decoding cannot discard the identity of a retained whole JSON field.
+
 The same index owns history eligibility, current selection, response admission,
 tool admission, ordinary-memory writes and replay. Response and memory admission
 refresh their snapshots too. Tests introduce new retained values after history
