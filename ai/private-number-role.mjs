@@ -1,3 +1,6 @@
+import {scalarObjectVerbs} from './private-reference-frames.mjs';
+import {privateWordIndex} from './private-runtime-lexicon.mjs';
+const scalarObjectPredicates=privateWordIndex(scalarObjectVerbs);
 import {numericSelectionWords,numericSelectionRelations,numericCollectiveWords,numericQuantifiers,numericDistributionWords,numericCollectionPredicates,numericGrammarTags,numericPredicativeRelations,numericCollectiveHeads,numericOrderingHeads,numericDestinationPredicates,grammarAuxiliaries,privateNumeralSpanPattern,privateOriginMonetaryBefore,privateOriginDateBefore} from './private-value-language.mjs';
 // Cardinality is evidence about an operand, not a property of a lexical verb.
 // SQL renders the same valency, nominal attachment and predicate precedence.
@@ -60,3 +63,23 @@ export function privateNumberRole(text,start,end){
 
 // An ambiguous collection keeps calendar and member interpretations.
 export function privateCalendarExclusive(text,start,end){return !(/^[0-9]+ *[./-] *[0-9]+$/u.test(text.slice(start,end).trim())&&!new RegExp(privateOriginDateBefore,'u').test(text.slice(0,start))&&privateNumberRole(text,start,end)==='collection');}
+
+// Negative certificates only: a positive collection frame is unnecessary.
+// The final value boundary retains all interpretations of an unproven operand.
+export function canonicalNumberRole(text,start,end){
+ const known=privateNumberRole(text,start,end);
+ const {prefix,left,phrase,right,destination}=numberSyntax(text,start,end);
+ if(new RegExp(privateOriginMonetaryBefore,'u').test(prefix))return 'scalar';
+ if(phrase.some(w=>/^(?:NNS|NNPS)(?:\||$)/.test(tags(w)))&&phrase.some(w=>/^(?:CD)(?:\||$)/.test(tags(w))||/^[0-9]+$/.test(w)||numericQuantifiers.includes(w)))return 'collection';
+ if(known!=='unknown')return known;
+ if(destination)return 'scalar';
+ const movedGoal=left.some(w=>/^(?:IN|TO)(?:\||$)/.test(tags(w)))&&left.some((w,i)=>numericDestinationPredicates.includes(w)&&predicate(left,i))&&!left.some(w=>numericOrderingHeads.includes(w));
+ if(movedGoal)return 'scalar';
+ const noun=phrase.some(w=>/^(?:NN|NNP)(?:\||$)/.test(tags(w))),plural=phrase.some(w=>/^(?:NNS|NNPS|CD)(?:\||$)/.test(tags(w))||/^[0-9]+$/.test(w));
+ if(!plural&&left.some(w=>/^(?:NN|NNP)(?:\||$)/.test(tags(w))&&new RegExp(privateOriginMonetaryBefore,'u').test(w)))return 'scalar';
+ // Quantitative dative valency can establish a single scalar; phrasal/intransitive
+ // predicates cannot erase cardinality inherited by a result/complement.
+ const finite=left.findLastIndex((w,i)=>predicate(left,i,true));
+ if(finite>=0&&scalarObjectPredicates(left[finite])&&!left.slice(finite+1).some(w=>/^(?:IN|TO|RP)(?:\||$)/.test(tags(w))))return 'scalar';
+ return 'collection';
+}

@@ -1,3 +1,4 @@
+import {PRIVATE_PAYLOAD_BLOCKED} from './private-payload-boundary.mjs';
 import {privateDocumentKeyPattern} from './private-value-language.mjs';
 import {ordinaryPart,normalizePrivateValue,normalizePrivateText,privateOriginStart,decodePrivateJSON} from './private-value-matcher.mjs';
 import {OFFLINE_CONFIRMATION_REPLY,OFFLINE_CANCEL_REPLY} from './offline-invoice-review.mjs';
@@ -97,13 +98,16 @@ export function createPrivateChatProvider({providerFactory, options, message, lo
       const requestedNames=new Set((request.tools||[]).map(tool=>tool?.function?.name));
       const tools=definitions.filter(tool=>requestedNames.has(tool?.function?.name)&&!memory?.containsPrivate(tool));
       provider ||= providerFactory({...options, ...privateChatModelSettings(options),
+        privatePayloadGate:payload=>memory?.assertFinalPayload?.(payload),
         geminiApiKey:undefined,openRouterApiKey:undefined,zenApiKey:undefined});
-      const result = await provider.generate({
+      const assembled={
         messages:[{role:'system',content:PRIVATE_CHAT_SYSTEM_MESSAGE},
           ...history,{role:'user',content:selection.text},...currentTools],
         ...(tools.length?{tools,toolChoice:'auto'}:{}),
         maxTokens:800,temperature:0.2,signal:request.signal,deadlineAt:request.deadlineAt,
-      });
+      };
+      let result;try{memory?.assertPayload?.(assembled);result=await provider.generate(assembled);}catch(error){if(error.code===PRIVATE_PAYLOAD_BLOCKED)return {content:PRIVATE_CHAT_REPLY,toolCalls:[],model:null};throw error;}
+      await memory?.refresh?.();
       let content=privateChatTopic(result?.content)||memory?.containsPrivate?.(result?.content)?PRIVATE_CHAT_REPLY:result?.content;
       const toolCalls=(result.toolCalls||[]).filter(call=>tools.some(tool=>tool.function.name===call.function?.name)
         &&!memory?.containsPrivate(call)&&validArguments(call.function?.arguments)&&!localToolData(call.function.arguments));

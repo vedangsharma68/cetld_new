@@ -210,13 +210,18 @@ export const privateCalendarWitnessPattern='(?<![a-z0-9_])[0-9]{1,4} *[./-] *[0-
 // Contracted Korean copula: the zero allomorph follows a vowel-final nominal
 // surface, including a vowel-final honorific. The full 이 form remains valid.
 export function privateContractedCopulaPattern(normalize=x=>x){const group=a=>[...new Set(a.map(normalize))].join('|'),nominal='(?:'+group(privatePersonalHonorifics)+')*(?:'+group(privatePersonalNumber)+')*';return '^('+nominal+')(?:'+group(koPreEndings)+')*(?:'+group(koEndings)+')(?:'+group(privatePersonalFocus)+')*$';}
-export const tamilFocusOperators=['உம்','தான்','கூட'];
+export const tamilFocusOperators=['உம்','தான்','கூட','மட்டும்','எல்லாம்','ஏ','ஓ','ஆ'];
+export const tamilEmphaticMarks=['ே','ோ','ா'];
 export function privateTamilFocusPredecessors(value){
  const out=[];for(const op of tamilFocusOperators){if(value.endsWith(op))out.push(value.slice(0,-op.length));if(op!=='உம்'){const linked=op[0]+'்'+op;if(value.endsWith(linked)){const base=value.slice(0,-linked.length);if(base.endsWith('ு'))out.push(base);}}}
  if(value.endsWith('ம்')){const base=value.slice(0,-'ம்'.length);if(base.endsWith('ு'))out.push(base);}
  if(value.endsWith('ும்'))out.push(value.slice(0,-'ும்'.length)+'்');
  for(const [glide,vowels]of [['யும்','ிீெேைஇஈஎஏஐ'],['வும்','ாூொோௌஆஊஒஓஔ']])if(value.endsWith(glide)){const base=value.slice(0,-glide.length);if(vowels.includes(base.at(-1)||'\0'))out.push(base);}
- return out.filter(x=>x.length<value.length);
+ for(const mark of tamilEmphaticMarks){
+  if(value.endsWith(mark)){const stem=value.slice(0,-mark.length);if(/[க-ஹ]$/u.test(stem))out.push(stem+'்',stem+'ு');}
+  for(const glide of ['ய','வ'])if(value.endsWith(glide+mark)){const stem=value.slice(0,-(glide+mark).length);if(/[ாிீுூெேைொோௌ]$/u.test(stem))out.push(stem);}
+ }
+ return out.filter(x=>x.length<=value.length);
 }
 let contractedCopula;
 const tamilBaseSets=[new Set([...tamilCaseEndings,...tamilJoinedCases].map(x=>x.normalize('NFC'))),new Set(tamilDependentCases.map(x=>x.normalize('NFC')))];

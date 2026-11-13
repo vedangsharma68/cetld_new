@@ -365,6 +365,7 @@ export class AIProvider {
   #zenApiKey;
   #cfAccountId;
   #cfApiToken;
+  #privatePayloadGate;
   constructor({
     primaryModel = DEFAULT_MODEL,
     fallbackModel = DEFAULT_FALLBACK_MODEL,
@@ -382,6 +383,7 @@ export class AIProvider {
     sleepImpl = delay => new Promise(resolve => setTimeout(resolve, delay)),
     logger = console,
     healthStore = null,
+    privatePayloadGate = null,
   } = {}) {
     assertServerRuntime();
     if (!['chat', 'extraction'].includes(requestPurpose)) throw invalidArgument();
@@ -395,6 +397,7 @@ export class AIProvider {
     this.#cfAccountId = typeof cfAccountId === 'string' ? cfAccountId : '';
     this.#cfApiToken = typeof cfApiToken === 'string' ? cfApiToken : '';
     this.fetchImpl = fetchImpl;
+    this.#privatePayloadGate=privatePayloadGate;
     this.timeoutMs = Math.max(1, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
     this.maxAttempts = requestPurpose === 'extraction' ? 1 : Math.min(2, Math.max(1, Number(maxAttempts) || 2));
     this.retryDelayMs = Math.min(500, Math.max(0, Number(retryDelayMs) || 0));
@@ -435,6 +438,7 @@ export class AIProvider {
         return attempt.result;
       }
       catch (error) {
+        if(error?.code==='PRIVATE_PAYLOAD_BLOCKED'||error?.code==='CHAT_MEMORY_UNAVAILABLE')throw error;
         // A candidate without credentials is not an available provider leg.
         // Do not let it erase an actual quota failure from the usable legs.
         if(error instanceof AIError&&error.code==='API_KEY_MISSING'){
@@ -733,6 +737,7 @@ export class AIProvider {
   }
 
   async #fetch(url, init, consumeResponse = response => response, {signal, deadlineAt} = {}) {
+    if(this.#privatePayloadGate)await this.#privatePayloadGate(JSON.parse(init.body));
     if (typeof this.fetchImpl !== 'function') throw new AIError('NETWORK_ERROR', 503);
     assertActive(signal, deadlineAt);
     const controller = new AbortController();
