@@ -92,3 +92,5 @@ Fresh source pins are checked against exact-head codeload bytes before closeout.
 No production migration, backfill, deployment, live provider request or merge is
 performed. The referenced independent reviewer archive was unavailable here;
 author-created executable probes are labelled accordingly.
+
+The complete clean gate exposed a mixed-rational ownership regression: the new shared-calendar graph split `whole numerator/denominator` into adjacent calendar components, even though the ordinary date scanner already excluded intrinsic rational operands. Both graph tokenizers now consume mixed rationals atomically before calendar coordination. The added projection proof checks atomic quantity fields, declared sentence origins, complete SQL/JS aliases, final matching, and the preserved ordinary two-part-date negative control. The failed full run is retained with its actual exit and is superseded only after completing verification of the corrected commit.

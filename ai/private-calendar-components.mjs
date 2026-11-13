@@ -1,12 +1,15 @@
+import {mixedFractionPattern} from './private-value-language.mjs';
 export const privateCalendarComponentTokenPattern='[0-9]{4} *[-/.] *[0-9]{1,2} *[-/.] *[0-9]{1,2}|[0-9]{1,2} *[/.] *[0-9]{1,2}(?: *[/.] *(?:[0-9]{4}|[0-9]{2}))?|[\\p{L}\\p{M}]+|[0-9]+(?:st|nd|rd|th)?|[’\'ʼ][0-9]+';
 // Calendar components form coordinated constraints, not sentence frames.
 // Month/year anchors bind every connected endpoint, including ellipsis.
 export function sharedCalendarComponents(text,monthPattern){
- const lexeme=new RegExp(privateCalendarComponentTokenPattern,'gu');
+ const lexeme=new RegExp('(?:'+mixedFractionPattern+'|'+privateCalendarComponentTokenPattern+')','gu');
  const words=[...text.matchAll(lexeme)].flatMap(w=>{if(/^[0-9].*[/.]/.test(w[0])&&w[0].match(/[0-9]+/g).length===2&&(new RegExp(monthPattern+'[ .-]*$','u').test(text.slice(0,w.index))||new RegExp('^[ .-]*'+monthPattern,'u').test(text.slice(w.index+w[0].length))))return [...w[0].matchAll(/[0-9]+/g)].map(x=>Object.assign([x[0]],{index:w.index+x.index}));return [w];}),groups=[];let group=[];
  const monthRE=new RegExp('^'+monthPattern+'$','u'),month=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
  const flush=()=>{if(group.length)groups.push(group);group=[];};
  for(const w of words){const value=w[0];
+  // A mixed rational owns its digits before calendar coordination.
+  if(new RegExp('^(?:'+mixedFractionPattern+')$','u').test(value)){flush();continue;}
   if(/^[0-9].*[/.\-]/u.test(value)){const rawParts=value.match(/[0-9]+/g),parts=rawParts.map(Number),iso=/^[0-9]{4}/.test(value),m=iso?parts[1]:parts[1],day=iso?parts[2]:parts[0],year=iso?parts[0]:(parts[2]??null);group.push({value:String(day),n:day,month:0,numericMonth:m,ownYear:year!==null&&!iso&&rawParts[2].length===2?year+(year<=69?2000:1900):year,start:w.index,end:w.index+value.length},{value:String(m),month:m,n:null,start:w.index,end:w.index+value.length});if(year!==null)group.push({value:String(!iso&&rawParts[2].length===2?year+(year<=69?2000:1900):year),month:0,n:!iso&&rawParts[2].length===2?year+(year<=69?2000:1900):year,start:w.index,end:w.index+value.length});continue;}
   const m=monthRE.test(value)?month.indexOf(value.slice(0,3))+1:0,n=/^[’'ʼ]?[0-9]+(?:st|nd|rd|th)?$/.test(value)?parseInt(value.replace(/^[’'ʼ]/,''),10):null;
   if(m||n!==null){group.push({value,start:w.index,end:w.index+value.length,month:m,n});}

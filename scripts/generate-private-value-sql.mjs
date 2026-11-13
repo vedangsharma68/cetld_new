@@ -334,8 +334,9 @@ language plpgsql immutable set search_path='' as $$
 declare groups jsonb[]:=array[]::jsonb[];active jsonb:='[]';g jsonb;items jsonb[];years jsonb[];days jsonb[];anchors jsonb;candidate jsonb;d jsonb;anchor jsonb;y jsonb;token text[];raw text;parts text[];cursor_at integer:=1;a integer;b integer;i integer;j integer;mm integer;nn integer;yy integer;own_year integer;day_num integer;day_keys text[];dt date;lo integer;hi integer;gap text;found boolean;complete boolean;prior_day jsonb;prior_key text;current_key text;alt_key text;prior_alt text;alt_date date;
 begin
  if p_text !~ 'MONTH_PATTERN' and p_text !~ '[0-9] *[/.]' then return;end if;
- for token in select regexp_matches(p_text,U&'(CALENDAR_COMPONENT_TOKEN)','g') loop
+ for token in select regexp_matches(p_text,U&'(MIXED_FRACTION_PATTERN|CALENDAR_COMPONENT_TOKEN)','g') loop
   raw:=token[1];a:=strpos(substring(p_text from cursor_at),raw)+cursor_at-1;b:=a+length(raw);cursor_at:=b;
+  if raw ~ '^(MIXED_FRACTION_PATTERN)$' then if jsonb_array_length(active)>0 then groups:=array_append(groups,active);active:='[]';end if;continue;end if;
   if raw ~ '^[0-9].*[./-]' then
    if cardinality(regexp_split_to_array(raw,' *[./-] *'))=2 and (left(p_text,a-1) ~ '(?:MONTH_PATTERN)[ .-]*$' or substring(p_text from b) ~ '^[ .-]*(?:MONTH_PATTERN)') then
     parts:=regexp_split_to_array(raw,' *[./-] *');active:=active||jsonb_build_array(jsonb_build_object('value',parts[1],'n',parts[1]::integer,'month',0,'start',a,'end',a+length(parts[1])),jsonb_build_object('value',parts[2],'n',parts[2]::integer,'month',0,'start',b-length(parts[2]),'end',b));continue;
