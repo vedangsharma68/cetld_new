@@ -604,6 +604,7 @@ language plpgsql immutable set search_path='' as $$
 declare known boolean:=app.private_invoice_number_role(p_text,p_start,p_end);lhs text;rhs text;l text[];r text[];finite integer:=0;lo integer:=1;hi integer;i integer;tag text;nominal text:='';ordering boolean:=false;destination boolean:=false;
 begin
  lhs:=regexp_replace(left(p_text,p_start-1),E'^.*[;.!?\n]','','s');rhs:=regexp_replace(substring(p_text from p_end),E'[;.!?\n].*$','','s');
+ if btrim(lhs)='' and btrim(rhs)='' and substring(p_text from p_start for p_end-p_start) ~ '^[0-9]{1,3}(,[0-9]{3})+$' then return false;end if;
  l:=array(select m[1] from regexp_matches(lhs,U&'[LETTERS_MARKS]+|[0-9]+','g')m);r:=array(select m[1] from regexp_matches(rhs,U&'[LETTERS_MARKS]+|[0-9]+','g')m);
  for i in 1..cardinality(l) loop if app.private_invoice_number_predicate(l,i,true) or i=1 and app.private_invoice_grammar_tag(r[1]) ~ '^(IN|TO)([|]|$)' and l[i]=any(array[DESTINATION_PREDICATES]) and app.private_invoice_number_predicate(l,i) then finite:=i;end if;end loop;
  if finite>0 and lhs !~ '[:=—] *[([ ]*$' and not l[finite]=any(array[NUMERIC_PREDICATES]) then lo:=finite+1;end if;hi:=cardinality(l);

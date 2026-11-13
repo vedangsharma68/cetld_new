@@ -69,6 +69,8 @@ export function privateCalendarExclusive(text,start,end){return !(/^[0-9]+ *[./-
 export function canonicalNumberRole(text,start,end){
  const known=privateNumberRole(text,start,end);
  const {prefix,left,phrase,right,destination}=numberSyntax(text,start,end);
+ // A bare, well-formed grouped numeral is an atomic field, not a list frame.
+ if(!prefix.trim()&&!text.slice(end).split(/[;.!?\n]/u)[0].trim()&&/^[0-9]{1,3}(?:,[0-9]{3})+$/.test(text.slice(start,end)))return 'scalar';
  if(new RegExp(privateOriginMonetaryBefore,'u').test(prefix))return 'scalar';
  if(phrase.some(w=>/^(?:NNS|NNPS)(?:\||$)/.test(tags(w)))&&phrase.some(w=>/^(?:CD)(?:\||$)/.test(tags(w))||/^[0-9]+$/.test(w)||numericQuantifiers.includes(w)))return 'collection';
  if(known!=='unknown')return known;

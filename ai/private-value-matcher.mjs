@@ -595,7 +595,7 @@ export function createPrivateValueMatcher(terms=[],{canonical=false}={}){
       const connectiveRole=partyGrammarWords.includes(term)&&!['a','an','the'].includes(term)&&!auxiliaries.has(term)&&!addressed&&!prepositional&&(!proper||!beforeWords.length);
       const functionUse=!m.personalAffix&&!possessive&&!predicate&&!apposition&&!terminal&&(articleRole||modalRole||connectiveRole);
       const incompleteArticle=['a','an','the'].includes(term)&&!completeNoun;
-      const nounUse=!personalObject&&!personalHead&&nominalScope&&!apposition&&!incompleteArticle||last==='by'&&!proper&&(!canonical||referenceKey&&currentPOS==='NN');
+      const nounUse=!personalObject&&!personalHead&&nominalScope&&!apposition&&!incompleteArticle||last==='by'&&!proper&&(!canonical||referenceKey&&currentToken?.alternatives.includes('NN'));
       const attributeRole=/^(?:JJ|JJR|JJS)$/u.test(currentPOS||'')&&!personal;
       const imperative=!beforeWords.length&&nextPOS==='DT'&&currentToken?.alternatives.includes('VB');
       const verbRole=(/^(?:VB|VBD|VBP|VBZ|VBG|VBN)$/u.test(currentPOS||'')||imperative)&&!personal;
