@@ -3,7 +3,7 @@
 import contextRules from 'wink-pos-tagger/src/rules-engine.js';
 import createTokenizer from 'wink-tokenizer';
 import helpers from 'wink-helpers';
-import lexicon from 'wink-lexicon/src/lexicon.js';
+import {privateLexicalTags} from './private-runtime-lexicon.mjs';
 import suffixPOS from 'wink-lexicon/src/unknown-words.js';
 import tagPOS from 'wink-lexicon/src/tags.js';
 import punctuationPOS from 'wink-lexicon/src/punctuations.js';
@@ -19,17 +19,17 @@ function dictionary(text){
 }
 const knownWord=dictionary(words),zeroWord=dictionary(zeroWords),namedWord=dictionary(names),exceptionWord=dictionary(exceptions),tokenize=createTokenizer().tokenize;
 const morphology=[[/s$/,''],[/es$/,''],[/ies$/,'y'],[/ing$/,''],[/ing$/,'e'],[/ed$/,''],[/d$/,''],[/er$/,''],[/r$/,''],[/est$/,''],[/st$/,''],[/xes$/,'x'],[/zes$/,'s'],[/ves$/,'f'],[/ches$/,'ch'],[/shes$/,'sh'],[/men$/,'man']];
-export const privateLanguageTags=word=>Object.hasOwn(lexicon,word.toLowerCase())?lexicon[word.toLowerCase()]:[];
+export const privateLanguageTags=word=>privateLexicalTags(word.toLowerCase());
 function unigram(token){
  if(token.entityType&&token.pos)return [token.pos];
  if(token.tag==='punctuation'){token.pos=punctuationPOS[token.value]||token.value;return [token.pos];}
  if(token.tag==='symbol'&&token.value!=='&'){token.pos='NN';return ['NN'];}
  token.pos=tagPOS[token.tag];if(token.pos!==undefined)return [token.pos];
- const word=token.normal;let poses=Object.hasOwn(lexicon,word)?lexicon[word]:undefined;
+ const word=token.normal;let poses=privateLexicalTags(word);if(!poses.length)poses=undefined;
  if(!poses){let pos;
   if(knownWord(word)&&!zeroWord(word)||exceptionWord(word)||morphology.some(([pattern,replacement])=>pattern.test(word)&&knownWord(word.replace(pattern,replacement)))){
    if(namedWord(word)&&/^[A-Z][a-z]+/.test(token.value))pos='NNP';
-   else{pos=suffixPOS[word.slice(-4)]||suffixPOS[word.slice(-3)]||suffixPOS[word.slice(-2)]||suffixPOS[word.slice(-1)];if(!pos&&word.startsWith('un')&&Object.hasOwn(lexicon,word.slice(2)))pos='JJ';}
+   else{pos=suffixPOS[word.slice(-4)]||suffixPOS[word.slice(-3)]||suffixPOS[word.slice(-2)]||suffixPOS[word.slice(-1)];if(!pos&&word.startsWith('un')&&privateLexicalTags(word.slice(2)).length>0)pos='JJ';}
   }else pos='NNP';
   poses=pos===undefined?['NN','VBP','VB']:pos==='NNS'?['NNS','VBZ']:pos==='VBN'?['VBD','VBN']:[pos];
  }
@@ -42,6 +42,6 @@ export function privateLanguageSyntax(text){
  let cursor=0;return tokens.flatMap(token=>{
   if(years.has(token.normal))token.pos='CD';else if(/^[A-Z]/.test(token.value)&&/^[JN]/.test(token.pos))token.pos='NNP';
   const index=text.indexOf(token.value,cursor);if(index<0)return [];cursor=index+token.value.length;
-  const word=token.value.toLowerCase(),known=Object.hasOwn(lexicon,word);return [{word:token.value,pos:token.pos,alternatives:known?lexicon[word]:[token.pos],known,start:index,end:cursor}];
+  const word=token.value.toLowerCase(),known=privateLexicalTags(word).length>0;return [{word:token.value,pos:token.pos,alternatives:known?privateLexicalTags(word):[token.pos],known,start:index,end:cursor}];
  });
 }

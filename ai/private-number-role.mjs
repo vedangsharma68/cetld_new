@@ -59,4 +59,4 @@ export function privateNumberRole(text,start,end){
 }
 
 // An ambiguous collection keeps calendar and member interpretations.
-export function privateCalendarExclusive(text,start,end){return !(/^[0-9 ./-]+$/u.test(text.slice(start,end))&&!new RegExp(privateOriginDateBefore,'u').test(text.slice(0,start))&&privateNumberRole(text,start,end)==='collection');}
+export function privateCalendarExclusive(text,start,end){return !(/^[0-9]+ *[./-] *[0-9]+$/u.test(text.slice(start,end).trim())&&!new RegExp(privateOriginDateBefore,'u').test(text.slice(0,start))&&privateNumberRole(text,start,end)==='collection');}

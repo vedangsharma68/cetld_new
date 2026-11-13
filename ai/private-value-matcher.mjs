@@ -1,17 +1,20 @@
-import {personalObjectVerbs,personalNounHeads} from './private-reference-frames.mjs';
-const personalHeads=new Set(personalNounHeads.split('\n'));
-const personObjectPredicates=new Set(personalObjectVerbs.split('\n'));
+import {personalObjectVerbs,personalNounHeads,recipientVerbs,countNouns} from './private-reference-frames.mjs';
+import {privateWordIndex} from './private-runtime-lexicon.mjs';
+const personalHeads={has:privateWordIndex(personalNounHeads)};
+const personObjectPredicates={has:privateWordIndex(personalObjectVerbs)};
+const recipientPredicates=privateWordIndex(recipientVerbs),countNoun=privateWordIndex(countNouns);
 import {PRIVATE_UNICODE_FOLD} from './private-value-unicode.mjs';
 import {createHash} from 'node:crypto';
 import {privateNumberRole as numericRole,privateCalendarExclusive} from './private-number-role.mjs';
 import {privateLanguageSyntax,privateLanguageTags} from './private-language-syntax.mjs';
-import {magnitudeAliases,fractionModifiers,numeralContentWords,privateNumeralSpanPattern,numericQuantifiers,grammarDeterminers,mixedFractionPattern,numeralTokenPattern,privateOriginTupleStart,privatePersonalPrefixes,privatePersonalHonorifics,privatePersonalCases,calendarRelations,privateQuantitySeparator,privateCalendarWitnessPattern,privatePersonalMorphologyPattern,privateNativeStemForms,privateTamilDependentMorphologyPattern} from './private-value-language.mjs';
+import {magnitudeAliases,fractionModifiers,numeralContentWords,privateNumeralSpanPattern,numericQuantifiers,grammarDeterminers,mixedFractionPattern,numeralTokenPattern,privateOriginTupleStart,privatePersonalPrefixes,privatePersonalHonorifics,privatePersonalCases,calendarRelations,privateQuantitySeparator,privateCalendarWitnessPattern,privatePersonalMorphologyPattern,privateNativeStemForms,privateTamilDependentMorphologyPattern,privateNativeAttachment,privateDateScanPatterns} from './private-value-language.mjs';
 import {PRIVATE_DATE_YEAR_PIVOT,months,monthPattern,ordinals,units,small,scales,fractions,evidenceLabel,evidenceNumericLabel,evidenceDateLabel,currencyUnitPattern,numericCurrencyBefore,numericCurrencyAfter,namedDatePatterns,privateDocumentKeyPattern,privateOriginHeader,privateOriginLexicalHint,privateOriginRecordHeader,privateOriginClauseBoundary,privateNameAbbreviations,originDateCommaPattern,lexicalAliases,partyTransliteration,partyReference,partyGrammarWords,grammarAuxiliaries,partyFunctionWords,numericSelectionWords,numericCollectiveWords,privateOriginEvent,privateOriginNoun,privateOriginCarrier,privateOriginDocumentPrefix,privateOriginPartyLabel,privateOriginMonetaryBefore,privateOriginDateBefore,privateOriginLiteralLabel,privateOriginRelationStart,privateOriginRelationEnd,privateOriginPronouns,privateOriginCopulas,privateOriginGenericPartyStart,privateOriginActorTail,privateOriginPersonalSubject,privateOriginNameEdge,privateJSONPadding,PRIVATE_NUMBER_LIST_MAX_GROUPS} from './private-value-language.mjs';
 // One code-point fold, shared verbatim with SQL, independent of DB/OS locale.
 export const normalizePrivateValue=value=>Array.from(String(value??''),ch=>PRIVATE_UNICODE_FOLD[ch]??ch).join('').replace(/ +/g,' ').trim();
 const clean=normalizePrivateValue;
-const dependentMorphology=new RegExp(privateTamilDependentMorphologyPattern(clean),'u');
-const personalMorphology=new RegExp(privatePersonalMorphologyPattern(clean),'u');
+let dependentMorphology,personalMorphology;
+const affixMatch=(tail,dependent=false)=>{if(!tail)return false;return dependent?(dependentMorphology??=new RegExp(privateTamilDependentMorphologyPattern(clean),'u')).test(tail):(personalMorphology??=new RegExp(privatePersonalMorphologyPattern(clean),'u')).test(tail);};
+let wordSegmenter,graphemeSegmenter;
 const personalPrefixes=privatePersonalPrefixes.map(clean),personalHonorifics=privatePersonalHonorifics.map(clean),personalCases=privatePersonalCases.map(clean);
 function lexicalText(input){const origins=[],chunks=[];for(const m of input.matchAll(/[\p{L}\p{M}]+|[^\p{L}\p{M}]+/gu)){const part=Object.hasOwn(lexicalAliases,m[0])?lexicalAliases[m[0]]:m[0];chunks.push(part);for(let i=0;i<part.length;i++)origins.push(Object.hasOwn(lexicalAliases,m[0])?{start:m.index,end:m.index+m[0].length,translated:true}:{start:m.index+i,end:m.index+i+1});}return {text:chunks.join(''),origins};}
 const stripCurrency=value=>value.replace(/\/[-−]$/u,'').replace(new RegExp(`^(?:\\p{Sc}|${currencyUnitPattern}) *| *(?:\\p{Sc}|${currencyUnitPattern})$`,'gu'),'').trim();
@@ -146,22 +149,37 @@ function dates(original){
    if(/^[0-9 ./-]+$/u.test(match[0])&&new RegExp('^ *(?:'+[...Object.keys(scales),...Object.keys(magnitudeAliases),'hundred'].join('|')+')(?![a-z])','u').test(text.slice(match.index+match[0].length)))return;
    candidates.push({value:dateValue(y,Number(m),Number(d)),start:lexical.origins[match.index]?.start??match.index,end:lexical.origins[match.index+match[0].length-1]?.end??match.index+match[0].length});
   };
-  for(const match of text.matchAll(/(?<![\p{L}\p{N}_])([0-9]{1,4}) *[./-] *([0-9]{1,2})(?: *[./-] *([0-9]{2}|[0-9]{4}|[0-9]{1}))?(?![\p{L}\p{N}_]| *[./-] *[0-9])/gu)){
-    if(match[1].length===4&&match[3]!=null)add(Number(match[1]),match[2],match[3],match);
-    else if(match[1].length<=2&&(match[3]==null||[2,4].includes(match[3].length))){
-      const y=yearValue(match[3]);add(y,match[2],match[1],match);add(y,match[1],match[2],match);
+  const tokens=[...text.matchAll(/[\p{L}\p{M}]+|[0-9]+/gu)],patterns=privateDateScanPatterns.map(p=>new RegExp('^'+p+'(?![\\p{L}\\p{N}_])','u'));
+  for(let i=0;i<tokens.length;i++){
+   const a=tokens[i].index;if(/[\p{L}\p{N}_]$/u.test(text.slice(Math.max(0,a-2),a)))continue;
+   // Every supported date consumes at most six lexical tokens. One context
+   // token keeps the scan linear without inventing a text-length ceiling.
+   const last=tokens[Math.min(i+6,tokens.length-1)],chunk=text.slice(a,last.index+last[0].length);
+   for(let kind=0;kind<patterns.length;kind++){
+    const match=patterns[kind].exec(chunk);if(!match)continue;match.index=a;
+    if(/^[\p{L}\p{N}_]/u.test(text.slice(a+match[0].length,a+match[0].length+2)))continue;
+    if(kind===0){
+     if(match[1].length===4&&match[2].length<=2&&match[3]!=null&&match[3].length<=2)add(Number(match[1]),match[2],match[3],match);
+     else if(match[1].length<=2&&match[2].length<=2&&(match[3]==null||[2,4].includes(match[3].length))){const y=yearValue(match[3]);add(y,match[2],match[1],match);add(y,match[1],match[2],match);}
+     else add(NaN,NaN,NaN,match);
+    }else{
+     const day=match[kind===1?1:2],month=match[kind===1?2:1];add(match[3]?.length>4?NaN:yearValue(match[3]),months.indexOf(month.slice(0,3))+1,dayValue(day),match);
     }
+   }
   }
-  const boundary='(?![\\p{L}\\p{N}_]|[ ,./\\-\'’ʼ]*[0-9])';
-  for(const [index,pattern] of namedDatePatterns.entries())for(const match of text.matchAll(new RegExp(`(?<![\\p{L}\\p{N}_])${pattern}${boundary}`,'gu'))){
-    const day=match[index===0?1:2],month=match[index===0?2:1];
-    add(yearValue(match[3]),months.indexOf(month.slice(0,3))+1,dayValue(day),match);
+  // Invalid maximal lexemes suppress their own suffixes. Accepted dates then
+  // exclude crossing interpretations made from parts of adjacent endpoints.
+  candidates.sort((a,b)=>a.start-b.start||b.end-a.end);
+  let coverStart=-1,coverEnd=-1,acceptedStart=-1,acceptedEnd=-1;
+  for(const c of candidates){
+   const sameAccepted=c.start===acceptedStart&&c.end===acceptedEnd;
+   if(c.start<acceptedEnd&&!sameAccepted)continue;
+   if(c.end<=coverEnd&&(c.start>coverStart||c.end<coverEnd))continue;
+   if(c.end>coverEnd){coverStart=c.start;coverEnd=c.end;}
+   if(c.value){values.push(c.value);spans.push([c.start,c.end]);acceptedStart=c.start;acceptedEnd=c.end;}
   }
-  // A suffix inside a complete date cannot become a second yearless date.
-  // Keep lexical spans even when invalid so invalid full dates cannot promote
-  // an otherwise valid month/day suffix. Equal spans retain DD/MM ambiguity.
-  for(const c of candidates)if(c.value&&!candidates.some(other=>other.start<=c.start&&other.end>=c.end&&(other.start<c.start||other.end>c.end))){values.push(c.value);spans.push([c.start,c.end]);}
-  const maskSpans=candidates.filter(c=>!candidates.some(o=>o.start<=c.start&&o.end>=c.end&&(o.start<c.start||o.end>c.end))).filter(c=>privateCalendarExclusive(original,c.start,c.end)).map(c=>[c.start,c.end]);return {values,spans,maskSpans};
+  const maskSpans=spans.filter(([a,b])=>privateCalendarExclusive(original,a,b));
+return {values,spans,maskSpans};
 }
 const numberWords=new Set([...numeralContentWords,'and','a']);
 function wordNumber(words){
@@ -508,21 +526,23 @@ export function createPrivateValueMatcher(terms=[]){
     // Registered spellings are matched independently of script. Multi-grapheme
     // uncased names can carry attached morphology; a single grapheme needs a
     // lexical word boundary so it cannot become a substring blacklist.
+    if(/[^\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}]/u.test(content)){
     const lexical=content.normalize('NFC'),lexicalMap=normalizePrivateText(lexical).origins;let cursor=0;
-    const words=[...new Intl.Segmenter(undefined,{granularity:'word'}).segment(lexical)].map(w=>{const a=cursor;while(cursor<lexicalMap.length&&lexicalMap[cursor].start<w.index+w.segment.length)cursor++;return {index:a,segment:content.slice(a,cursor),isWordLike:w.isWordLike};});
-    const graphemes=new Intl.Segmenter(undefined,{granularity:'grapheme'});
+    const words=[...(wordSegmenter??=new Intl.Segmenter(undefined,{granularity:'word'})).segment(lexical)].map(w=>{const a=cursor;while(cursor<lexicalMap.length&&lexicalMap[cursor].start<w.index+w.segment.length)cursor++;return {index:a,segment:content.slice(a,cursor),isWordLike:w.isWordLike};});
+    const graphemes=graphemeSegmenter??=new Intl.Segmenter(undefined,{granularity:'grapheme'});
     for(const key of new Set([...parties,...referenceParties,...inferredParties,...nativeParties])){
       const uncased=key.toLowerCase()===key.toUpperCase(),multiple=[...graphemes.segment(key)].length>1;
       for(const m of content.matchAll(new RegExp(privateNativeStemForms(key).map(escape).join('|'),'gu'))){
        const begin=m.index,finish=begin+m[0].length,word=words.find(w=>w.isWordLike&&w.index<=begin&&w.index+w.segment.length>begin);if(!word)continue;
-       const prefix=content.slice(word.index,begin),tail=content.slice(finish,word.index+word.segment.length),clitic=prefix&&personalPrefixes.includes(prefix)&&/\p{Script=Arabic}/u.test(key);
+       const prefix=content.slice(word.index,begin),tail=content.slice(finish).match(/^[\p{L}\p{M}]+/u)?.[0]||'',clitic=prefix&&personalPrefixes.includes(prefix)&&/\p{Script=Arabic}/u.test(key);
        if(prefix&&!clitic)continue;
        const honorific=personalHonorifics.find(part=>tail.startsWith(part)),suffix=honorific?tail.slice(honorific.length):tail;
-       const personalAffix=tail.length>0&&(m[0]===key?personalMorphology.test(tail):dependentMorphology.test(tail));
+       const personalAffix=tail.length>0&&(affixMatch(tail,m[0]!==key)||privateNativeAttachment(key,tail,m[0]!==key,clean));
        const lexicalEnd=words.some(w=>w.index===finish||w.index+w.segment.length===finish);
        if(!(personalAffix||uncased&&(lexicalEnd||clitic&&tail==='')))continue;
        const old=occurrences.find(n=>n.index===begin&&n[0]===key);if(old)old.personalAffix=personalAffix;else occurrences.push(Object.assign([key],{index:begin,personalAffix}));
       }
+    }
     }
     return occurrences.filter(m=>{
       const term=m[0],matched=/[\u0900-\u097f]/u.test(term)?nativeParties.has(term)||parties.has(partyKey(term)):parties.has(partyKey(term))||latinParties.has(partyKey(term));
@@ -546,7 +566,12 @@ export function createPrivateValueMatcher(terms=[]){
       const differentName=proper&&upper(nextRaw)&&!parties.has(partyKey(next))&&!auxiliaries.has(next)&&!complements.has(next);
       const previousToken=syntax.filter(t=>t.end<=m.index).at(-1);
       const personalHead=/^(?:NN|NNP)$/.test(previousToken?.pos||'')&&!/^(?:JJ|JJR|JJS)$/.test(previousToken?.alternatives[0]||'')&&personalHeads.has(previousToken?.word.toLowerCase());
-      const personalObject=!auxiliaries.has(previousToken?.word.toLowerCase())&&personObjectPredicates.has(previousToken?.word.toLowerCase())&&/^(?:VB|VBD|VBP|VBZ|VBN)$/.test(previousToken?.pos||'')&&!nominalScope;
+      let governorIndex=syntax.findLastIndex(t=>t.end<=m.index);
+      while(governorIndex>=0&&(/^(?:JJ|JJR|JJS|RB|RBR|RBS)$/.test(syntax[governorIndex].pos)||/^(?:JJ|JJR|JJS)$/.test(syntax[governorIndex].alternatives[0]||'')))governorIndex--;
+      const governor=syntax[governorIndex],argumentVerb=governor&&!auxiliaries.has(governor.word.toLowerCase())&&/^(?:VB|VBD|VBP|VBZ|VBN)$/.test(governor.pos);
+      const recipient=argumentVerb&&recipientPredicates(governor.word.toLowerCase())&&/^(?:DT|PRP\$|NNP|NNS)$/.test(nextPOS||'');
+      const bareCount=argumentVerb&&currentPOS==='NN'&&countNoun(term);
+      const personalObject=!nominalScope&&argumentVerb&&(personObjectPredicates.has(governor.word.toLowerCase())||recipient||bareCount);
       const subjectToken=syntax.filter(t=>t.end<=(previousToken?.start??0)).at(-1);
       const personalCopula=privateOriginCopulas.includes(previousToken?.word.toLowerCase())&&(subjectToken?.pos==='PRP'&&!['it'].includes(subjectToken.word.toLowerCase())||subjectToken?.pos==='NNP'||personalHeads.has(subjectToken?.word.toLowerCase()));
       const personal=personalCopula||personalHead||personalObject||m.personalAffix||possessive||predicate||apposition||addressed||prepositional&&proper||proper&&beforeWords.length>0&&!determiners.has(last)||terminal&&(addressed||prepositional||proper);

@@ -4,8 +4,10 @@
   "version": "Princeton WordNet 3.0",
   "extraction": "All single-word verb frame inventories, ranked first-sense person-object frames, and complete verb exceptions; no example filtering",
   "files": {
+    "data/private-language/wordnet-representation-verbs.txt": "491df154491bae2589d0ec5c78e4f5ef269233fad34f0972e419fb8ee1b0e394",
+    "data/private-language/wordnet-mass-nouns.txt": "714971728e60dbfe5f397a2b31401513f0664ad7cd5fab1adba4c69bfed1d7b2",
     "data/private-language/wordnet-ordering-nouns.txt": "8df4c1fdcf2e6521766993f670bbd2ecb1d73f75d1abeeb27803aaf7d8caaeb8",
-    "data/private-language/wordnet-verb-frames.json": "2481e8449a92516cd822ec25966bb4db6539ce2a2e94d139a24329b61ba46a9e",
+    "data/private-language/wordnet-verb-frames.json": "dba29c22a05c362428306f654f0b5bb17a24f842e43467b98aaf133bf8e88100",
     "data/private-language/wordnet-verb-exceptions.txt": "dbbcf9a601b2d77e934e413b91d90e88ec7f933a8b77cfc00602a923b891b42c",
     "data/private-language/wordnet-person-heads.txt": "e899ae95987f36b650a5f3e3b348b0c2bac6b8ca3da400b2a40ee4ec487882e9",
     "data/private-language/wordnet-collection-verbs.txt": "c488c9080c2908f9ac29b1415132d3c47a69ac58568029503f0803f9ae8e1691",
@@ -19,5 +21,17 @@
     "compare": "00652900",
     "group": "00656576"
   },
-  "orderingNounOntologyAnchor": "08456993"
+  "orderingNounOntologyAnchor": "08456993",
+  "representationOntologyAnchors": {
+    "reading": "00928015",
+    "visible": "02137132",
+    "signal": "00921300",
+    "inclusion": "02632940",
+    "equivalence": "02664769"
+  },
+  "bareMassNounClasses": [
+    12,
+    26,
+    27
+  ]
 }

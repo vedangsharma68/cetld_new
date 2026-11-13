@@ -1,7 +1,7 @@
 """Extract the complete pinned WordNet verb inventories, without example filtering."""
 import pathlib,json,hashlib,zipfile,sys
 root=pathlib.Path(__file__).resolve().parent.parent;meta=json.loads((root/'data/private-language/wordnet-verb-source.json').read_text());archive=pathlib.Path(sys.argv[1]);assert hashlib.sha256(archive.read_bytes()).hexdigest()==meta['archiveSha256'];z=zipfile.ZipFile(archive)
-records={};out={};children={};anchors={}
+records={};out={};children={};anchors={};allframes={}
 for line in z.read('wordnet/data.verb').decode().splitlines():
  if not line or line.startswith(' '):continue
  t=line.split('|')[0].split();count=int(t[3],16);words=[t[4+2*i] for i in range(count)];p=4+2*count;np=int(t[p]);p+=1
@@ -18,6 +18,7 @@ for line in z.read('wordnet/data.verb').decode().splitlines():
  for w,fs in frames.items():
   w=w.lower()
   if not w.isalpha():continue
+  allframes.setdefault(w,set()).update(fs)
   v=out.setdefault(w,[False,[],False]);v[0]|=any(f in [9,10,17,18] for f in fs)
   if any(f in [8,11] for f in fs) and int(t[1]) not in v[1]:v[1].append(int(t[1]))
 for line in z.read('wordnet/index.verb').decode().splitlines():
@@ -28,6 +29,13 @@ for line in z.read('wordnet/index.verb').decode().splitlines():
  if w in ['choose','compare','group','arrange']:anchors[w]=first
  out[w][2]=any(f in [9,10,17,18] for f in records[first][w])
  out[w].append(records[first][w])
+for w in out:out[w].append(sorted(allframes[w]))
+representationAnchors={'reading':'00928015','visible':'02137132','signal':'00921300','inclusion':'02632940','equivalence':'02664769'}
+representationSeen=set(representationAnchors.values());pending=list(representationSeen)
+while pending:
+ for child in children.get(pending.pop(),set()):
+  if child not in representationSeen:representationSeen.add(child);pending.append(child)
+representation=sorted({w for synset in representationSeen for w in records[synset] if w.isalpha()})
 nounChildren={};nounRecords={}
 for line in z.read('wordnet/data.noun').decode().splitlines():
  if not line or line.startswith(' '):continue
@@ -42,18 +50,22 @@ while pending:
   if child not in orderingSeen:orderingSeen.add(child);pending.append(child)
 ordering=sorted({w for synset in orderingSeen for w in nounRecords[synset] if w.isalpha()})
 nounKinds={line.split()[0]:int(line.split()[1]) for line in z.read('wordnet/data.noun').decode().splitlines() if line and not line.startswith(' ')}
-heads=[]
+heads=[];mass=[]
 for line in z.read('wordnet/index.noun').decode().splitlines():
  if not line or line.startswith(' '):continue
  t=line.split()
- if t[0].isalpha() and nounKinds[t[6+int(t[3])]]==18:heads.append(t[0])
+ if t[0].isalpha():
+  kind=nounKinds[t[6+int(t[3])]]
+  if kind==18:heads.append(t[0])
+  if kind in [12,26,27]:mass.append(t[0])
 seen=set(anchors.values());pending=list(seen)
 while pending:
  for child in children.get(pending.pop(),set()):
   if child not in seen:seen.add(child);pending.append(child)
 collection=sorted({w for synset in seen for w in records[synset] if w.isalpha()})
-base=root/'data/private-language';(base/'wordnet-ordering-nouns.txt').write_text('\n'.join(ordering)+'\n');meta['orderingNounOntologyAnchor']='08456993'
+base=root/'data/private-language';(base/'wordnet-representation-verbs.txt').write_text('\n'.join(representation)+'\n');(base/'wordnet-mass-nouns.txt').write_text('\n'.join(sorted(mass))+'\n');meta['representationOntologyAnchors']=representationAnchors;meta['bareMassNounClasses']=[12,26,27]
+(base/'wordnet-ordering-nouns.txt').write_text('\n'.join(ordering)+'\n');meta['orderingNounOntologyAnchor']='08456993'
 (base/'wordnet-collection-verbs.txt').write_text('\n'.join(collection)+'\n');meta['collectionOntologyAnchors']=anchors
 (base/'wordnet-person-heads.txt').write_text('\n'.join(sorted(heads))+'\n');(base/'wordnet-verb-frames.json').write_text(json.dumps(out,separators=(',',':'))+'\n');(base/'wordnet-verb-exceptions.txt').write_bytes(z.read('wordnet/verb.exc'));(root/'docs/private-wordnet-LICENSE.txt').write_bytes(z.read('wordnet/LICENSE'))
 meta['extraction']='All single-word verb frame inventories, ranked first-sense person-object frames, and complete verb exceptions; no example filtering'
-meta['files']={str(f.relative_to(root)):hashlib.sha256(f.read_bytes()).hexdigest() for f in [base/'wordnet-ordering-nouns.txt',base/'wordnet-verb-frames.json',base/'wordnet-verb-exceptions.txt',base/'wordnet-person-heads.txt',base/'wordnet-collection-verbs.txt',root/'docs/private-wordnet-LICENSE.txt']};(base/'wordnet-verb-source.json').write_text(json.dumps(meta,indent=2)+'\n')
+meta['files']={str(f.relative_to(root)):hashlib.sha256(f.read_bytes()).hexdigest() for f in [base/'wordnet-representation-verbs.txt',base/'wordnet-mass-nouns.txt',base/'wordnet-ordering-nouns.txt',base/'wordnet-verb-frames.json',base/'wordnet-verb-exceptions.txt',base/'wordnet-person-heads.txt',base/'wordnet-collection-verbs.txt',root/'docs/private-wordnet-LICENSE.txt']};(base/'wordnet-verb-source.json').write_text(json.dumps(meta,indent=2)+'\n')

@@ -1,15 +1,14 @@
-import {verbRoots,collectionVerbs,collectionNouns,orderingNouns,relationalObjectVerbs} from './private-reference-frames.mjs';
+import {selectionVerbs,renderingVerbs,collectionNouns,orderingNouns,relationalObjectVerbs} from './private-reference-frames.mjs';
 // Declarative grammar shared by the JS matcher and SQL generation.
-import lexicon from 'wink-lexicon/src/lexicon.js';
+import {determiners,adverbs,closedGrammar,coordinators} from './private-runtime-lexicon-data.mjs';
+import {privateNumericGrammarTags} from './private-runtime-lexicon.mjs';
 import {collections} from './private-language-model.mjs';
 import {koParticles,koEndings,koPreEndings} from './private-name-morphology.mjs';
 export const numericCollectiveHeads=collectionNouns.split('\n');
 export const numericOrderingHeads=orderingNouns.split('\n');
 export const numericDestinationPredicates=relationalObjectVerbs.split('\n');
-const lexicalWords=Object.entries(lexicon).filter(([word])=>/^[a-z]+$/.test(word));
-export const grammarDeterminers=lexicalWords.filter(([,tags])=>tags.some(tag=>['DT','PRP$'].includes(tag))).map(([word])=>word);
-export const grammarAdverbs=lexicalWords.filter(([,tags])=>tags.some(tag=>['RB','RBR','RBS'].includes(tag))).map(([word])=>word);
-const closedGrammar=lexicalWords.filter(([,tags])=>tags.some(tag=>['DT','PRP','PRP$','MD','IN','CC','TO'].includes(tag))).map(([word])=>word);
+export const grammarDeterminers=determiners;
+export const grammarAdverbs=adverbs;
 export const PRIVATE_DATE_YEAR_PIVOT=69; // 00..69 => 2000..2069; 70..99 => 1970..1999.
 export const months=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
 export const monthPattern='(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
@@ -47,11 +46,15 @@ export const numericCurrencyBefore=`(?:\\p{Sc}|(?<![a-z0-9_])${currencyUnitPatte
 export const numericCurrencyAfter=`^ *(?:\\p{Sc}|${currencyUnitPattern}(?![a-z0-9_]))`;
 export const namedDayPattern=`(?:[0-9]{1,2}(?:st|nd|rd|th)?|${ordinals.map(day=>day.replaceAll(' ','[ -]+')).join('|')})`;
 export const dateSeparator='[ ./-]*';
-export const namedYearTail=`(?:[ ,./-]*['’ʼ]? *([0-9]{4}|[0-9]{2}|[0-9]{1,3}))?`;
+export const namedYearTail=`(?:[ ,./-]*['’ʼ]? *([0-9]+)|(?![ ,./-]*['’ʼ]? *[0-9]))`;
 export const namedDatePatterns=[
  `(?:the +)?(${namedDayPattern})${dateSeparator}(?:of +)?(${monthPattern})${namedYearTail}`,
  `(${monthPattern})${dateSeparator}(?:the +)?(${namedDayPattern})${namedYearTail}`,
 ];
+// Lexemes have fixed grammatical arity. A following range/list separator
+// belongs to the next token, rather than invalidating this complete date.
+export const privateDateNumericPattern='([0-9]+) *[./-] *([0-9]+)(?: *[./-] *([0-9]+)|(?! *[./-] *[0-9]))';
+export const privateDateScanPatterns=[privateDateNumericPattern,...namedDatePatterns];
 export const privateDocumentKeyPattern='invoice|payment|receipt|customer|client|total|subtotal|tax|amount|currency|notes?|balance|printedevidence|ownerprovidedfacts';
 // One data-bearing declaration grammar owns routing, durable origin capture,
 // history screening and write guards. Domain questions alone are not origins.
@@ -103,7 +106,7 @@ export const privateOriginRelationEnd=' +(?:to|from|for|of|and) *$';
 export const privateOriginPronouns=['i','me','my','mine','myself','we','us','our','ours','ourselves','you','your','yours','yourself','yourselves','he','him','his','himself','she','her','hers','herself','it','its','itself','they','them','their','theirs','themselves'];
 export const privateOriginNameEdge='^[ ,:;>]+|[ ,:;>]+$';
 const linkedRecordHeader=privateOriginCarrier+'(?:(?!'+privateOriginClauseBoundary+').)*?'+originDocumentIntro+bareRecordMarker;
-export const privateCoordinators=lexicalWords.filter(([,tags])=>tags.includes('CC')).map(([w])=>w);
+export const privateCoordinators=coordinators;
 export const privateQuantitySeparator='(?:[^\\p{L}\\p{M}\\p{N}.,\' ʼ]+|(?<![a-z0-9_])(?:'+privateCoordinators.join('|')+')(?![a-z0-9_]))';
 export const privateOriginTupleStart='^ *(?:(?:[\\p{P}\\p{S}]+ *)|(?:(?:'+privateCoordinators.join('|')+')(?![a-z0-9_]) +))*';
 export const privateOriginActorTail=' +(?:(?:'+grammarAuxiliaries.join('|')+') +)*(?:'+financialPredicate+'|invoiced|billed|charg(?:e|es|ed|ing)|receiv(?:e|es|ed|ing)|pay(?:s|ing)?|paid|owed)$';
@@ -164,14 +167,13 @@ export const partyFunctionWords=[...partyGrammarWords,'de','del','la','le','van'
 // Closed grammatical relation class, separate from verbal predicates.
 const mutualRelations=['among','amid'];
 export const numericSelectionRelations=['between','versus','vs',...mutualRelations.flatMap(w=>[w,w+'st'])];
-const selectionRoots=['choose','select','pick','compare'];
-export const numericSelectionWords=[...new Set([...collectionVerbs.split('\n'),...selectionRoots,...Object.keys(verbRoots).filter(w=>verbRoots[w].some(r=>selectionRoots.includes(r)))])];
+export const numericSelectionWords=selectionVerbs.split('\n');
 export const numericCollectiveWords=['pair','couple','list','sequence','set','array','tuple','collection','group','range'];
 export const numericQuantifiers=['both','either','neither','several','multiple'];
 // Closed quantity operators and lexical roles; these are not sentence frames.
 export const numericDistributionWords=['respectively','each','apiece'];
-export const numericCollectionPredicates=['are','were','include','contain','equal'];
-export const numericGrammarTags=Object.fromEntries(lexicalWords.filter(([,tags])=>/^(?:NN|NNS|NNP|NNPS|PRP|PRP\$|DT|VB|VBD|VBP|VBZ|VBG|VBN|MD|IN|TO|CD|RB|RBR|RBS|UH|EX|JJ|JJR|JJS)$/.test(tags[0])).map(([word,tags])=>[word,tags.join('|')]));
+export const numericCollectionPredicates=renderingVerbs.split('\n');
+export const numericGrammarTags=privateNumericGrammarTags;
 // Personal morphology is attached to a registered spelling at a lexical edge.
 // Prefix clitics do not license arbitrary word-internal name substrings.
 export const privatePersonalPrefixes=['ب','ل','ك','و','ف','وب','ول','بال'];
@@ -204,3 +206,28 @@ export const PRIVATE_NUMBER_LIST_MAX_GROUPS=32; // Switch to a compact graph, ne
 
 // Necessary lexical witness: ASCII boundaries are deliberately a superset of Unicode word boundaries.
 export const privateCalendarWitnessPattern='(?<![a-z0-9_])[0-9]{1,4} *[./-] *[0-9]{1,2}(?: *[./-] *[0-9]{1,4})?(?![a-z0-9_])|'+monthPattern;
+
+// Contracted Korean copula: the zero allomorph follows a vowel-final nominal
+// surface, including a vowel-final honorific. The full 이 form remains valid.
+export function privateContractedCopulaPattern(normalize=x=>x){const group=a=>[...new Set(a.map(normalize))].join('|'),nominal='(?:'+group(privatePersonalHonorifics)+')*(?:'+group(privatePersonalNumber)+')*';return '^('+nominal+')(?:'+group(koPreEndings)+')*(?:'+group(koEndings)+')(?:'+group(privatePersonalFocus)+')*$';}
+export const tamilFocusOperators=['உம்','தான்','கூட'];
+export function privateTamilFocusPredecessors(value){
+ const out=[];for(const op of tamilFocusOperators){if(value.endsWith(op))out.push(value.slice(0,-op.length));if(op!=='உம்'){const linked=op[0]+'்'+op;if(value.endsWith(linked)){const base=value.slice(0,-linked.length);if(base.endsWith('ு'))out.push(base);}}}
+ if(value.endsWith('ம்')){const base=value.slice(0,-'ம்'.length);if(base.endsWith('ு'))out.push(base);}
+ if(value.endsWith('ும்'))out.push(value.slice(0,-'ும்'.length)+'்');
+ for(const [glide,vowels]of [['யும்','ிீெேைஇஈஎஏஐ'],['வும்','ாூொோௌஆஊஒஓஔ']])if(value.endsWith(glide)){const base=value.slice(0,-glide.length);if(vowels.includes(base.at(-1)||'\0'))out.push(base);}
+ return out.filter(x=>x.length<value.length);
+}
+let contractedCopula;
+const tamilBaseSets=[new Set([...tamilCaseEndings,...tamilJoinedCases].map(x=>x.normalize('NFC'))),new Set(tamilDependentCases.map(x=>x.normalize('NFC')))];
+export function privateNativeAttachment(name,tail,dependent=false,normalize=x=>x){
+ if(!tail)return false;
+ if(/[\u1100-\u11ff\uac00-\ud7af]/u.test(name)){
+  contractedCopula??=new RegExp(privateContractedCopulaPattern(normalize),'u');const match=contractedCopula.exec(tail);
+  if(match){const end=Array.from((name+match[1]).normalize('NFD')).at(-1)?.codePointAt(0);if(end>=0x1161&&end<=0x1175)return true;}
+ }
+ if(!/\p{Script=Tamil}/u.test(name))return false;
+ const pending=[tail.normalize('NFC')],seen=new Set(),base=tamilBaseSets[dependent?1:0];
+ while(pending.length){const value=pending.pop();if(seen.has(value))continue;seen.add(value);if(base.has(value))return true;pending.push(...privateTamilFocusPredecessors(value));}
+ return false;
+}
