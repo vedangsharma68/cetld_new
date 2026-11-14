@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {writeFile} from 'node:fs/promises';
+import {mkdir,writeFile} from 'node:fs/promises';
 import {fixture} from './fixtures/private-invoice.mjs';
 import {privateOriginKeys,privateOriginStart,privateNumberKeys,privatePartyKeys,createPrivateValueMatcher} from '../ai/private-value-matcher.mjs';
 
-const evidence=[];test.after(()=>writeFile('work/r10-invariant-evidence.json',JSON.stringify(evidence,null,2)));
+const evidence=[];test.after(async()=>{await mkdir('work',{recursive:true});await writeFile('work/r10-invariant-evidence.json',JSON.stringify(evidence,null,2));});
 test('typed source cardinality and rational operands have identical SQL and JS projections',async()=>{
  const f=await fixture({recording:true});try{
   const check=async(kind,input,fn,keys,args=[input])=>{const sql=(await f.db.query('select distinct k from app.'+fn+'('+args.map((_,i)=>'$'+(i+1)).join(',')+') k order by k',args)).rows.map(x=>x.k),js=[...new Set(keys)].sort();assert.deepEqual(sql,js,input);evidence.push({kind,input,keys:sql});return sql;};
