@@ -9,7 +9,7 @@ import {applyNoFooterMigration} from './fixtures/no-footer-reminders.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
 import {CoreAutomationStore} from '../automation/core-store.mjs';
 import {createAutomationRuntime} from '../automation/runtime.mjs';
-import {createApprovedReminderProvider} from '../automation/whatsapp/approved-reminders.mjs';
+import {createApprovedReminderProvider} from './fixtures/dispatch-sql-double.mjs';
 
 const phone='+919818685252';
 const freshReads='20261024094013_fresh_external_reminder_reads.sql';

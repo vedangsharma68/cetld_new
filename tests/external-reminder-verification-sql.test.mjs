@@ -13,7 +13,7 @@ import {CoreAutomationStore} from '../automation/core-store.mjs';
 import {createAccountingIntegration} from '../automation/accounting/integration.mjs';
 import {createAccountingProviders} from '../automation/accounting/providers.mjs';
 import {externalReminderRead} from '../automation/external-reminder-verification.mjs';
-import {createApprovedReminderProvider} from '../automation/whatsapp/approved-reminders.mjs';
+import {createApprovedReminderProvider} from './fixtures/dispatch-sql-double.mjs';
 import {selectInvoiceReminderTemplate} from '../automation/whatsapp/reminder-templates.mjs';
 import {buildInvoiceReminderParameters,buildDefaultInvoiceReminderDraft} from '../automation/whatsapp/reminder-parameters.mjs';
 import {reminderFingerprint} from '../automation/whatsapp/reminder-fingerprint.mjs';

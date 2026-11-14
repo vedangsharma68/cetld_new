@@ -7,7 +7,7 @@ import https from 'node:https';
 import {randomUUID,createHmac} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
+import {createWhatsAppOutbound} from './fixtures/dispatch-sql-double.mjs';
 import {createInboundRuntime,SupabaseInboundInbox} from '../automation/whatsapp/cloud-inbound.mjs';
 import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 import {createConversationStore} from '../automation/whatsapp/conversation-store.mjs';

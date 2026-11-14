@@ -36,7 +36,7 @@ export function createCanonicalPrivateValueIndex(terms){
   }return scan(value);
  };
  const assert=value=>{if(contains(value))throw Object.assign(new Error('Private payload withheld'),{code:PRIVATE_PAYLOAD_BLOCKED});};
- return {contains,ordinary:value=>contains(value,0,true),entities:value=>match.entities(value),spans:(...args)=>match.spans(...args),assert,
+ return {assertValues:value=>{if(contains(value,0,true,new WeakMap(),false))throw blocked();},contains,ordinary:value=>contains(value,0,true),entities:value=>match.entities(value),spans:(...args)=>match.spans(...args),assert,
   assertPayload(payload,{trustedSystem}={}){
    const assert=value=>{if(contains(value,0,true))throw Object.assign(new Error('Private payload withheld'),{code:PRIVATE_PAYLOAD_BLOCKED});};
    // Protocol constants (model ID, token budget, role names) are not disclosures.

@@ -4,11 +4,11 @@ import {reminderDeliveryForm} from '../automation/whatsapp/reminder-approval.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {readFile} from 'node:fs/promises';
+import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {CoreAutomationStore} from '../automation/core-store.mjs';
 import {createAutomationRuntime} from '../automation/runtime.mjs';
-import {createFirstPartyReminderProvider} from '../automation/whatsapp/cloud-reminders.mjs';
+import {createFirstPartyReminderProvider} from './fixtures/dispatch-sql-double.mjs';
 import {localReminderStatusPayable} from '../automation/external-reminder-verification.mjs';
 
 const phone=QA_POLICY_PHONE;
@@ -207,3 +207,23 @@ for(const [mode,status] of [['accepted','accepted'],['failed','failed'],['server
       assert.equal(JSON.stringify(receipt).includes(env.WHATSAPP_ACCESS_TOKEN),false);
     }finally{await f.close()}
   });
+
+const r16Evidence=[];test.after(async()=>{await mkdir('work',{recursive:true});await writeFile('work/r16-reminder-post-evidence.json',JSON.stringify(r16Evidence,null,2));});
+test('R16 actual reminder POST screens the final serialized parameters before/after reconstruction and preserves own reminders',async t=>{
+ for(const reconstructed of [false,true])for(const value of ['The two results come out as 1250,77','I checked in on mark yesterday','October 30-31, 2026',null])await t.test(String(reconstructed)+'/'+(value||'own values unredacted'),async()=>{
+  const f=await setup();try{
+   const initialProvider=f.provider();
+   const other=(await f.db.query("insert into customers(workspace_id,name) values($1,'Mark Harper') returning id",[f.scope.workspaceId])).rows[0];
+   await f.db.query("insert into invoices(workspace_id,customer_id,invoice_number,total_amount,currency,status,issue_date,due_date) values($1,$2,'FOREIGN-R16',1250,'USD','draft','2026-01-01','2026-10-31')",[f.scope.workspaceId,other.id]);
+   const input=await f.prepare();const provider=reconstructed?f.provider():initialProvider;
+   const stringify=JSON.stringify;let mutations=0;
+   JSON.stringify=function(object,...args){if(value&&object?.messaging_product==='whatsapp'&&object.type==='template'&&object.to===phone.slice(1)){const copy=JSON.parse(stringify(object));copy.template.components[0].parameters[0].text=value;mutations++;return stringify(copy,...args);}return stringify(object,...args);};
+   let result;try{result=await provider.sendReminder(input);}finally{JSON.stringify=stringify;}
+   r16Evidence.push({reconstructed,value,result,mutations,graph:f.graph});
+   if(value){assert.equal(mutations,1);assert.equal(result.status,'blocked');assert.equal(f.graph.length,0);}else{assert.equal(result.status,'accepted');assert.equal(f.graph.length,1);assert.ok(f.graph[0].template.components[0].parameters.some(p=>p.text==='125.00'));assert.equal(f.graph[0].template.components[0].parameters[0].text,'Fixture studio');}
+  }finally{await f.close();}
+ });
+});
+test('R16 snapshot preparation precedes the final atomic reminder authorization',async t=>{
+ for(const change of ['stop','invoice'])await t.test(change,async()=>{const f=await setup();try{const input=await f.prepare(),events=[];const original=f.supabase.rpc.bind(f.supabase);const supabase=new Proxy(f.supabase,{get(target,key){if(key==='rpc')return async(name,args)=>{events.push(name);const r=await original(name,args);if(name==='whatsapp_dispatch_privacy_snapshot'){if(change==='stop')await f.db.query("insert into whatsapp_suppressions(workspace_id,phone,reason) values($1,$2,'stop')",[f.scope.workspaceId,phone]);else await f.db.query('update invoices set total_amount=total_amount+1 where id=$1',[f.scope.invoiceId]);}return r;};const v=target[key];return typeof v==='function'?v.bind(target):v;}});const result=await f.provider({supabase}).sendReminder(input);assert.equal(result.status,'blocked');assert.equal(f.graph.length,0);assert.ok(events.indexOf('whatsapp_dispatch_privacy_snapshot')<events.indexOf('cetld_core_authorize_first_party_reminder'));}finally{await f.close();}});
+});

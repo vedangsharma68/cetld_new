@@ -13,7 +13,7 @@ import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 import {SupabaseInboundInbox,parseMetaMessages,createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
 import {quotedConsentDateReply,QUOTED_TARGET_CLARIFICATION} from '../automation/whatsapp/owner-quoted-consent.mjs';
 import {normalizeOwnerReceiptRef} from '../automation/whatsapp/owner-receipt-ref.mjs';
-import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
+import {createWhatsAppOutbound} from './fixtures/dispatch-sql-double.mjs';
 import {getSendEligibility,resolveActiveBindings,revokeConsentForPhone} from '../automation/whatsapp/consent.mjs';
 
 // Isolated SDK/PostgreSQL fixtures only. No live inbound, consent, or Graph call.

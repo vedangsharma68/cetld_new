@@ -3,7 +3,7 @@ import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/re
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createWhatsAppInvoiceTestHandler} from '../automation/whatsapp/test-send.mjs';
-import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
+import {createWhatsAppOutbound} from './fixtures/dispatch-sql-double.mjs';
 
 const workspaceId = '11111111-1111-4111-8111-111111111111';
 const invoiceId = '22222222-2222-4222-8222-222222222222';

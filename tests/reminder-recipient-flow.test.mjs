@@ -14,7 +14,7 @@ import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistan
 import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
 import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 import {createWhatsAppProvider} from '../automation/whatsapp/factory.mjs';
-import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
+import {createWhatsAppOutbound} from './fixtures/dispatch-sql-double.mjs';
 
 const phone=QA_POLICY_PHONE,owner=randomUUID(),foreignOwner=randomUUID();
 const env={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_SERVICE_ROLE_KEY:'isolated-fixture-service-key',

@@ -2,7 +2,8 @@
 import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createWhatsAppOutbound, neutralText} from '../automation/whatsapp/cloud-outbound.mjs';
+import {neutralText} from '../automation/whatsapp/cloud-outbound.mjs';
+import {createWhatsAppOutbound} from './fixtures/dispatch-sql-double.mjs';
 import {createWhatsAppAssistantChannel, createCustomerScopedStore} from '../ai/whatsapp-channel.mjs';
 import {IDENTITY_ANSWER, SCOPE_ANSWER} from '../ai/assistant.mjs';
 import {createOwnerNextButtons} from '../automation/whatsapp/owner-next-actions.mjs';

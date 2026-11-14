@@ -9,13 +9,13 @@ import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {CoreAutomationStore} from '../automation/core-store.mjs';
 import {createAutomationRuntime} from '../automation/runtime.mjs';
-import {createApprovedReminderProvider} from '../automation/whatsapp/approved-reminders.mjs';
+import {createApprovedReminderProvider} from './fixtures/dispatch-sql-double.mjs';
 import {REMINDER_TEMPLATES,selectReminderTemplate,selectInvoiceReminderTemplate,buildReminderTemplate} from '../automation/whatsapp/reminder-templates.mjs';
 import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 import {parseMetaMessages,createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
 import {reminderFingerprint} from '../automation/whatsapp/reminder-fingerprint.mjs';
 import {createReminderCronHandler} from '../automation/reminder-cron.mjs';
-import {approvedReminderProof} from '../automation/whatsapp/reminder-proof.mjs';
+import {approvedReminderProof} from './fixtures/dispatch-sql-double.mjs';
 
 const phone=QA_POLICY_PHONE,waba='1734116767674237';
 const env={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_SERVICE_ROLE_KEY:'fixture-key',

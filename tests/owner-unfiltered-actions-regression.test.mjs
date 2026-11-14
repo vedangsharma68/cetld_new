@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {planOwnerNextActions} from '../automation/whatsapp/owner-next-actions.mjs';
-import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
+import {createWhatsAppOutbound} from './fixtures/dispatch-sql-double.mjs';
 import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as baseScope,DEFAULT_NOW,JOHN_CUSTOMER_ID} from './fixtures/owner-chat-battery.mjs';
 const scope=Object.freeze({...baseScope,phone:QA_POLICY_PHONE});
 import {CF_PRIMARY_MODEL} from '../ai/provider.mjs';

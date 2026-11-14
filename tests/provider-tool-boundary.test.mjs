@@ -7,7 +7,7 @@ import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 import {normalizeProviderToolCalls,internalToolEnvelope} from '../ai/tool-calls.mjs';
 import {createOwnerEngineHarness,standaloneOwnerGreeting} from './fixtures/owner-engine-unit.mjs';
 import {ownerReplySafetyIssue,runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
-import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
+import {createWhatsAppOutbound} from './fixtures/dispatch-sql-double.mjs';
 import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as baseScope,DEFAULT_NOW,JOHN_CUSTOMER_ID} from './fixtures/owner-chat-battery.mjs';
 const scope=Object.freeze({...baseScope,phone:QA_POLICY_PHONE});
 const tools=[{type:'function',function:{name:'workspaceData',parameters:{type:'object'}}}];

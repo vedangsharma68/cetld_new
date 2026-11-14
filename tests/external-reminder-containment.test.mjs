@@ -5,8 +5,8 @@ import {randomUUID} from 'node:crypto';
 import {externalReminderRead,reminderPaymentRpc,hasExternalReminderLedger} from '../automation/external-reminder-verification.mjs';
 import {createAccountingIntegration} from '../automation/accounting/integration.mjs';
 import {createLocalReminderPaymentChecker} from '../automation/local-reminder-payment.mjs';
-import {createApprovedReminderProvider} from '../automation/whatsapp/approved-reminders.mjs';
-import {createFirstPartyReminderProvider} from '../automation/whatsapp/cloud-reminders.mjs';
+import {createApprovedReminderProvider} from './fixtures/dispatch-sql-double.mjs';
+import {createFirstPartyReminderProvider} from './fixtures/dispatch-sql-double.mjs';
 
 const ownerId=randomUUID(),workspaceId=randomUUID(),invoiceId=randomUUID(),customerId=randomUUID(),claimId=randomUUID();
 const invoice=extra=>({id:invoiceId,workspace_id:workspaceId,status:'sent',currency:'USD',total_amount:125,amount_paid:0,

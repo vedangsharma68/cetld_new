@@ -6,7 +6,7 @@ import {normalizeFollowUpPreferences, reminderBody} from '../automation/preferen
 import {resolveOwnerBinding} from '../automation/whatsapp/owner-binding.mjs';
 import {createOwnerScopedStore} from '../ai/whatsapp-channel.mjs';
 import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
-import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
+import {createWhatsAppOutbound} from './fixtures/dispatch-sql-double.mjs';
 import {createConversationStore,parseMetaStatuses,conversationCallbackToken} from '../automation/whatsapp/conversation-store.mjs';
 import {whatsappInbox,mergeWhatsAppMessages} from '../conversations-ui.mjs';
 import {PGlite} from '@electric-sql/pglite';

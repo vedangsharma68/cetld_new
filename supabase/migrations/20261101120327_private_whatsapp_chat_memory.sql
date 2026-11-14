@@ -1154,7 +1154,7 @@ revoke all on function app.private_invoice_scoped_fact_aliases(uuid,text) from p
 
 -- Semantic revision covers shared JS/Unicode/SQL and field-role capture rules.
 create function app.private_invoice_canonical_revision() returns text
-language sql immutable set search_path='' as $$select '097cad162c09cbc93424ffaae93868b28892e01cd06ddcd7abfb4e24c6007bb8'::text$$;
+language sql immutable set search_path='' as $$select '020674375d78f1228badaaa216be322acd813c7ea6b48a7bb0afaf39321ed982'::text$$;
 revoke all on function app.private_invoice_canonical_revision() from public,anon,authenticated,service_role;
 
 -- The completion key also includes privileged maintenance generations. Read

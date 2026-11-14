@@ -6,7 +6,7 @@ import {execFileSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 import path from 'node:path';
 
-// Each command must finish successfully before Vercel may publish this build.
+// CI requires every release command; Vercel independently builds the frontend.
 // Child tests receive no production service credentials or messaging flags.
 export async function runReleaseGate({run=runCommand}={}) {
   await run('test:owner-chat');
@@ -81,6 +81,7 @@ export async function writeReleaseManifest({outputPath='owner-chat-build.json'}=
   paths.push(...(await readdir('tests')).filter(file=>file.startsWith('reviewer-round7-')).sort().map(file=>'tests/'+file),'tests/fixtures/reviewer-round7-pins.json','tests/fixtures/reviewer-round7-fixture-corrections.mjs','tests/fixtures/private-migration-61fea77.sql');
   paths.push('tests/private-round7-production.test.mjs','tests/reviewer-round6-independent-regressions.test.mjs','tests/reviewer-round6-date-variants.test.mjs','tests/reviewer-round6-boundary-regressions.test.mjs','tests/reviewer-round6-long-list.test.mjs','tests/reviewer-round6-native-cache-audit.mjs','tests/reviewer-round6-native-cache.test.mjs','tests/reviewer-round6-integrity.test.mjs','tests/fixtures/reviewer-round6-pins.json');
   paths.push('ai/private-runtime-lexicon.mjs','ai/private-runtime-lexicon-data.mjs','scripts/generate-private-runtime-lexicon.mjs','data/private-language/wordnet-mass-nouns.txt','data/private-language/wordnet-representation-verbs.txt','tests/private-round14-model.test.mjs','tests/private-round14-classes.test.mjs','tests/private-round14-batch.test.mjs');
+  paths.push('automation/whatsapp/private-dispatch.mjs','supabase/migrations/20261114000100_customer_dispatch_privacy.sql','scripts/release-shard.mjs','tests/private-round16-dispatch.test.mjs','tests/private-round16-build.test.mjs','tests/fixtures/dispatch-sql-double.mjs');
   paths.push('ai/private-payload-boundary.mjs','ai/private-calendar-components.mjs','tests/private-round15-classes.test.mjs','tests/private-round15-wrappers.test.mjs','tests/private-round15-dispatch.test.mjs','tests/private-round15-index.test.mjs','tests/private-round15-projection.test.mjs','tests/private-round15-customer.test.mjs');
   const files={};for(const path of paths)files[path]=createHash('sha256').update(await readFile(path)).digest('hex');
   let commit=process.env.VERCEL_GIT_COMMIT_SHA||process.env.GITHUB_SHA;
@@ -93,7 +94,17 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1]
   process.env.CETLD_SQL_FIXTURE_CACHE_DIR=fixtureCacheDir;
   try{
     await unlink('owner-chat-build.json').catch(error=>{if(error.code!=='ENOENT')throw error;});
-    await runReleaseGate();await writeReleaseManifest();
+    const option=process.argv.find(arg=>arg.startsWith('--shards='));
+    const count=option?Number(option.slice(9)):null;
+    if(option&&(!Number.isInteger(count)||count<1||count>16))throw Error('Invalid release shard count');
+    await runReleaseGate({run:async(script,overrides)=>{
+      if(script!=='test'||!count)return runCommand(script,overrides);
+      for(let shard=0;shard<count;shard++){
+        console.log('RELEASE_SHARD_START',shard,count);
+        await new Promise((resolve,reject)=>{const child=spawn(process.execPath,['scripts/release-shard.mjs',String(shard),String(count)],{stdio:'inherit',env:releaseTestEnvironment()});child.once('error',reject);child.once('exit',code=>code===0?resolve():reject(Error('Release test shard failed: '+shard)));});
+        console.log('RELEASE_SHARD_EXIT',shard,0);
+      }
+    }});await writeReleaseManifest();
     console.log('Owner chat release gate passed.');
   }catch(error){console.error(error.message);process.exitCode=1;}
   finally{

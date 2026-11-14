@@ -7,7 +7,7 @@ import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {applyNoFooterMigration} from './fixtures/no-footer-reminders.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
-import {createApprovedReminderProvider} from '../automation/whatsapp/approved-reminders.mjs';
+import {createApprovedReminderProvider} from './fixtures/dispatch-sql-double.mjs';
 import {REMINDER_TEMPLATES} from '../automation/whatsapp/reminder-templates.mjs';
 import {reminderFingerprint} from '../automation/whatsapp/reminder-fingerprint.mjs';
 import {approveReviewedReminder} from './fixtures/reviewed-reminder.mjs';

@@ -8,7 +8,7 @@ import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {CoreAutomationStore} from '../automation/core-store.mjs';
 import {FollowUpEngine} from '../automation/engine.mjs';
-import {createFirstPartyReminderProvider} from '../automation/whatsapp/cloud-reminders.mjs';
+import {createFirstPartyReminderProvider} from './fixtures/dispatch-sql-double.mjs';
 import {createDurableReminderProvider,createFirstPartyReminderReceiptStore} from '../automation/whatsapp/reminder-receipts.mjs';
 import {createLocalReminderPaymentChecker} from '../automation/local-reminder-payment.mjs';
 import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
