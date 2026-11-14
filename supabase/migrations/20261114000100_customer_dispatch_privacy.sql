@@ -27,7 +27,7 @@ begin
  union all select jsonb_build_object('business_name',s.business_name) from public.workspace_settings s where s.workspace_id=p_workspace_id
  union all select jsonb_build_object('remaining',greatest(0,i.total_amount-coalesce(i.amount_paid,0))) from public.invoices i where i.workspace_id=p_workspace_id and i.customer_id=recipient
  union all select to_jsonb(f) from public.invoice_files f join public.invoices i on i.id=f.invoice_id and i.workspace_id=f.workspace_id where i.workspace_id=p_workspace_id and i.customer_id=recipient
- union all select (to_jsonb(i)-'metadata'-'notes')||jsonb_build_object('printed_invoice_number',i.metadata->'printed_invoice_number','source_invoice_number',i.metadata->'source_invoice_number') from public.invoices i where i.workspace_id=p_workspace_id and i.customer_id=recipient
+ union all select (to_jsonb(i)-'metadata'-'notes')||jsonb_build_object('invoice_direction',i.metadata->'invoice_direction','printed_invoice_number',i.metadata->'printed_invoice_number','source_invoice_number',i.metadata->'source_invoice_number') from public.invoices i where i.workspace_id=p_workspace_id and i.customer_id=recipient
  ), leaves as (select v#>>'{}' value from documents,jsonb_path_query(doc,'strict $.** ? (@.type() == "string" || @.type() == "number")')v), keys as (
  select k from leaves cross join lateral app.private_invoice_term_aliases(app.private_invoice_normalize(value)) k
  union select k from public.customers c cross join lateral app.private_invoice_party_aliases(app.private_invoice_normalize(c.name)) k where c.workspace_id=p_workspace_id and c.id=recipient
