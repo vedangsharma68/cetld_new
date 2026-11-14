@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createOwnerActionButtons, verifyOwnerActionButton} from '../automation/whatsapp/owner-action-buttons.mjs';
 
 const env = { WHATSAPP_APP_SECRET: 'app-secret', CRON_SECRET: 'cron-secret' };
-const scope = { workspaceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', phone: '+919871367051' };
+const scope = { workspaceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', phone: '+12025550101' };
 const clock = () => new Date('2026-10-03T12:00:00.000Z');
 const action = {
   id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', version: 4,

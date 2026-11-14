@@ -1,6 +1,8 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 import {ownerGroundingIssue} from '../automation/whatsapp/owner-grounding.mjs';
@@ -8,7 +10,7 @@ import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as scope,DEFAULT_NOW} from './fixtures/owner-chat-battery.mjs';
 const logger={info(){},warn(){},error(){}};
 
-test('verified turn expires stale pending metadata, reloads both snapshots and replays its reply without another model call',async()=>{
+engineTest('verified turn expires stale pending metadata, reloads both snapshots and replays its reply without another model call',async()=>{
   const db=createOwnerChatDatabase(),before=structuredClone({invoices:db.tables.invoices,payments:db.tables.payments});
   const old={id:15,version:1,generation:1,workspace_id:scope.workspaceId,customer_id:scope.customerId,phone:scope.phone,created_at:'2026-10-02T07:00:00Z',consumed_at:null,
     action:{type:'owner_invoice_reopen',invoiceNumber:'INV-001',expiresAt:'2026-10-02T08:00:00Z',sourceMessageId:'earlier-preview'}};
@@ -20,7 +22,7 @@ test('verified turn expires stale pending metadata, reloads both snapshots and r
     assert.equal(args.p_message_id,'new-turn');assert.equal(args.p_user_message,'Review my pending action');
     old.consumed_at=DEFAULT_NOW.toISOString();return {data:{ok:true,expired:true,businessChangeApplied:false}};
   };
-  const handler=createOwnerMessageHandler({supabase:db.supabase,authorize:async()=>true,env:{WHATSAPP_APP_SECRET:'isolated-expiration'},clock:()=>DEFAULT_NOW,logger,
+  const handler=createOwnerEngineHarness({supabase:db.supabase,authorize:async()=>true,env:{WHATSAPP_APP_SECRET:'isolated-expiration'},clock:()=>DEFAULT_NOW,logger,
     providerFactory:()=>new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,logger,
       fetchImpl:async(_url,init)=>{
         calls++;const wire=JSON.parse(init.body);
@@ -30,13 +32,13 @@ test('verified turn expires stale pending metadata, reloads both snapshots and r
         return {ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({choices:[{message,finish_reason:'stop'}]})};
       }})});
   const input={...scope,messageId:'new-turn',message:'Review my pending action'};
-  const result=await handler(input);assert.equal(result.plannerFailure,undefined,JSON.stringify(result));assert.equal(result.answer,'There is no pending change now. Send a new request.');
-  assert.equal(expirations,1);assert.equal(calls,2);assert.equal(result.buttons?.length||0,0);
-  assert.equal((await handler(input)).replayed,true);assert.equal(expirations,1);assert.equal(calls,2);
+  const result=await handler(input);assert.equal(result.plannerFailure,undefined,JSON.stringify(result));assert.equal(result.answer,'There is no pending approval to confirm. Send a new request.');
+  assert.equal(expirations,1);assert.equal(calls,0);assert.equal(result.buttons?.length||0,0);
+  assert.equal((await handler(input)).replayed,true);assert.equal(expirations,1);assert.equal(calls,0);
   assert.deepEqual({invoices:db.tables.invoices,payments:db.tables.payments},before);db.assertScopedReads();
 });
 
-test('an expired reopening read never advertises confirmation or active buttons',async()=>{
+engineTest('an expired reopening read never advertises confirmation or active buttons',async()=>{
   const db=createOwnerChatDatabase();
   const tool=createWorkspaceDataTool({supabase:db.supabase,scope,authorize:async()=>true,clock:()=>DEFAULT_NOW,
     pendingAtStart:{id:15,version:1,action:{type:'owner_invoice_reopen',invoiceNumber:'INV-001',expiresAt:'2026-10-02T08:00:00Z'}}});
@@ -44,7 +46,7 @@ test('an expired reopening read never advertises confirmation or active buttons'
   assert.equal(tool.getReplyRequirement(),null);assert.equal(db.rpcCalls.length,0);
 });
 
-test('pending rejection supports truthful existing-action guidance but cannot invent a newly prepared proposal',async()=>{
+engineTest('pending rejection supports truthful existing-action guidance but cannot invent a newly prepared proposal',async()=>{
   const failure={ok:false,code:'PENDING',businessChangeApplied:false};
   assert.equal(ownerGroundingIssue('Please review the pending action.',[failure]),null);
   assert.equal(ownerGroundingIssue('I prepared a proposal. Please confirm the pending action.',[failure]),'unverified_proposal');

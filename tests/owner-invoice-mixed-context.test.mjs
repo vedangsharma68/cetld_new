@@ -1,3 +1,4 @@
+import {cloudflarePartsResponse,cloudflareToolResults} from './fixtures/cloudflare-wire.mjs';
 // All contacts are synthetic fixtures using reserved 555-01xx phone numbers.
 // Provider credential placeholders only reach the local stub; no network sends.
 import test from 'node:test';
@@ -18,7 +19,7 @@ const history=[
  {role:'assistant',content:'An earlier due date was 2019-02-26. Awaiting confirmation for the old invoice only.'},
 ];
 
-test('mixed proposal history and adversarial serialized Gemini plans remain scoped, current, honest and interruptible',async t=>{
+test('mixed proposal history and adversarial serialized Cloudflare plans remain scoped, current, honest and interruptible',async t=>{
  const fixture=await createOfflineSqlNetwork(),{db,supabase}=fixture,ownerId=randomUUID(),foreignOwner=randomUUID(),phone='+12025550101';
  let sequence=0;
  try{
@@ -68,12 +69,12 @@ test('mixed proposal history and adversarial serialized Gemini plans remain scop
     botPreferences:{confirmationMode:'direct'},pending,pendingAtStart,ownerHistory:turnHistory,logger,ownerStore:{async query(){throw Error('Legacy command path must not run');}}});
    const tools={...baseTools,async execute(...args){evidence=await baseTools.execute(...args);return evidence;}};
    let calls=0,wire;
-   const provider=new AIProvider({primaryModel:'gemini-3.5-flash-lite',fallbackModel:null,geminiApiKey:'isolated-fixture',maxAttempts:1,logger,
+   const provider=new AIProvider({primaryModel:'@cf/meta/llama-3.3-70b-instruct-fp8-fast',cfAccountId:'isolated',cfApiToken:'isolated',fallbackModel:null,geminiApiKey:'isolated-fixture',maxAttempts:1,logger,
     fetchImpl:async(_url,init)=>{
      calls++;wire=JSON.parse(init.body);
-     if(calls===1){if(abort)controller.abort('Fixture cancellation before dispatch');return Response.json({candidates:[{content:{parts:[{functionCall:{name:'workspaceData',args}}]},finishReason:'STOP'}]});}
-     evidence=wire.contents.flatMap(row=>row.parts).flatMap(part=>{try{return [part.functionResponse?.response||JSON.parse(part.text)];}catch{return [];}}).filter(row=>row.operation||row.code).at(-1);
-     return Response.json({candidates:[{content:{parts:[{text:answer}]},finishReason:'STOP'}]});
+     if(calls===1){if(abort)controller.abort('Fixture cancellation before dispatch');return cloudflarePartsResponse([{functionCall:{name:'workspaceData',args}}]);}
+     evidence=cloudflareToolResults(wire).filter(row=>row.operation||row.code).at(-1);
+     return cloudflarePartsResponse([{text:answer}]);
     }});
    const result=await runOwnerAgent({provider,message,tools,history:turnHistory,clock,timezone:'Asia/Kolkata',signal:controller.signal});
    return {result,evidence,tools,calls,wire};

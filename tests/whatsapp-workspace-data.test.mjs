@@ -141,7 +141,7 @@ const scope = Object.freeze({
   workspaceId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   ownerId:'11111111-1111-4111-8111-111111111111',
   customerId:'22222222-2222-4222-8222-222222222222',
-  phone:'+919871367051',
+  phone:'+12025550101',
 });
 
 test('filter diagnostics redact values and unknown keys, bound structure and retain repair eligibility',async()=>{
@@ -804,7 +804,7 @@ test('workspaceData SQL migration scopes proposals, applies a confirmed customer
     const owner='11111111-1111-4111-8111-111111111111';
     const ownerContact='22222222-2222-4222-8222-222222222222';
     const foreignCustomer='33333333-3333-4333-8333-333333333333';
-    const phone='+919871367051';
+    const phone='+12025550101';
     await db.query('insert into auth.users(id) values($1)',[owner]);
     await db.query('insert into public.workspaces(id) values($1),($2)',[scope.workspaceId,otherWorkspace]);
     await db.query('insert into public.owner_test_bindings values($1,$2,$3,$4,$5)',

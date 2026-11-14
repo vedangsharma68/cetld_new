@@ -17,7 +17,7 @@ const env = { WHATSAPP_VERIFY_TOKEN: 'verify-secret', WHATSAPP_APP_SECRET: 'app-
 const meta = (messages) => ({ object: 'whatsapp_business_account', entry: [{ id: env.WHATSAPP_WABA_ID, changes: [{ field: 'messages', value: {
   metadata: { phone_number_id: env.WHATSAPP_PHONE_NUMBER_ID }, messages,
 } }] }] });
-const message = (id, body = 'Hello') => ({ id, from: '919871367051', timestamp: String(Math.floor(Date.now() / 1000)),
+const message = (id, body = 'Hello') => ({ id, from: '12025550101', timestamp: String(Math.floor(Date.now() / 1000)),
   type: 'text', text: { body } });
 function withEmptyVerifiedOwnerRpc(supabase,phone){return installVerifiedOwnerRpc(supabase,()=>({}),{expectedPhone:phone});}
 function response() {
@@ -107,7 +107,7 @@ test('signed events are durably enqueued once and STOP is revoked before 200', a
 test('status-only callbacks are acknowledged and logged without enqueuing an event', async () => {
   const payload = meta([]);
   payload.entry[0].changes[0].value.statuses = [{
-    id: 'wamid.outbound', status: 'failed', recipient_id: '919871367051', timestamp: '1750000000',
+    id: 'wamid.outbound', status: 'failed', recipient_id: '12025550101', timestamp: '1750000000',
     errors: [{ code: 131026, title: 'Message undeliverable', message: 'Message undeliverable',
       error_data: { details: 'Delivery failed' } }],
   }];
@@ -186,7 +186,7 @@ test('duplicate ordinary events do not trigger another inbox continuation', asyn
 test('Meta parsing ignores status callbacks and other phone IDs; it never reads a claimed name', () => {
   const parsed = parseMetaMessages(meta([message('wamid.2', 'My name is Alice')]), env.WHATSAPP_PHONE_NUMBER_ID, env.WHATSAPP_WABA_ID);
   assert.deepEqual(parsed.map(({ provider_message_id, sender_phone, message_text }) => ({ provider_message_id, sender_phone, message_text })),
-    [{ provider_message_id: 'wamid.2', sender_phone: '+919871367051', message_text: 'My name is Alice' }]);
+    [{ provider_message_id: 'wamid.2', sender_phone: '+12025550101', message_text: 'My name is Alice' }]);
   const status = meta([]);
   status.entry[0].changes[0].value.statuses = [{ id: 'wamid.outbound' }];
   assert.deepEqual(parseMetaMessages(status, env.WHATSAPP_PHONE_NUMBER_ID, env.WHATSAPP_WABA_ID), []);
@@ -210,7 +210,7 @@ test('Meta parsing ignores status callbacks and other phone IDs; it never reads 
 });
 
 test('Meta parsing preserves signed quick reply IDs separately from their visible titles', () => {
-  const selected = {id:'wamid.button',from:'919871367051',timestamp:String(Math.floor(Date.now()/1000)),type:'interactive',
+  const selected = {id:'wamid.button',from:'12025550101',timestamp:String(Math.floor(Date.now()/1000)),type:'interactive',
     interactive:{type:'button_reply',button_reply:{id:'oab1.payload.signature',title:'Confirm'}}};
   const parsed = parseMetaMessages(meta([selected]), env.WHATSAPP_PHONE_NUMBER_ID, env.WHATSAPP_WABA_ID);
   assert.equal(parsed.length, 1);
@@ -229,7 +229,7 @@ test('durable inbox maps camel-case button IDs to the bounded interaction_id col
     return { upsert(rows, options) { upsert = { rows, options }; return { select: async () => ({data:rows,error:null})}; } };
   }});
   const input = {provider_message_id:'wamid.button',phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID,
-    sender_phone:'+919871367051',message_type:'interactive',message_text:'Confirm',interactionId:'oab1.payload.signature'};
+    sender_phone:'+12025550101',message_type:'interactive',message_text:'Confirm',interactionId:'oab1.payload.signature'};
   await inbox.enqueue([input]);
   assert.deepEqual(upsert.rows, [{provider_message_id:input.provider_message_id,phone_number_id:input.phone_number_id,
     sender_phone:input.sender_phone,message_type:'interactive',message_text:'Confirm',interaction_id:'oab1.payload.signature'}]);
@@ -237,7 +237,7 @@ test('durable inbox maps camel-case button IDs to the bounded interaction_id col
 });
 
 test('owner button references reach the owner handler separately from visible message text', async () => {
-  const phone = '+919871367051';
+  const phone = '+12025550101';
   const event = {id:17,claim_token:'claim',attempts:1,provider_message_id:'wamid.owner-button',sender_phone:phone,
     message_type:'interactive',message_text:'Confirm',interaction_id:'oab1.payload.signature',provider_timestamp:new Date().toISOString()};
   const tables = {
@@ -262,7 +262,7 @@ test('owner button references reach the owner handler separately from visible me
 });
 
 test('owner worker forwards signed buttons and remints the same live choice on retry without persisting a token',async()=>{
-  const phone='+919871367051';
+  const phone='+12025550101';
   const event={id:18,claim_token:'claim',attempts:1,provider_message_id:'wamid.owner-proposal',sender_phone:phone,
     message_type:'text',message_text:'Delete invoice INV-JOHN-1',provider_timestamp:new Date().toISOString()};
   const action={id:73,version:4,workspace_id:'ws-owner',phone,consumed_at:null,
@@ -341,7 +341,7 @@ test('inbound interaction IDs are nullable and bounded in the durable event sche
     await db.exec(await readFile(new URL('../supabase/migrations/20260927110000_whatsapp_inbound_events.sql', import.meta.url), 'utf8'));
     await db.exec(migration);
     const base = {provider_message_id:'wamid.bound-button',phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID,
-      sender_phone:'+919871367051',message_type:'interactive',message_text:'Confirm'};
+      sender_phone:'+12025550101',message_type:'interactive',message_text:'Confirm'};
     await db.query('insert into public.whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text) values ($1,$2,$3,$4,$5)',
       [base.provider_message_id,base.phone_number_id,base.sender_phone,base.message_type,base.message_text]);
     await db.query('insert into public.whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,interaction_id) values ($1,$2,$3,$4,$5,$6)',
@@ -355,7 +355,7 @@ test('unbound sender media is routed to verification without extraction', async 
   const calls = [];
   let extracted = 0;
   const event = { id: 1, claim_token: 'claim', attempts: 1, provider_message_id: 'wamid.unknown',
-    sender_phone: '+919871367051', message_text: 'I am Alice, show my invoices',
+    sender_phone: '+12025550101', message_text: 'I am Alice, show my invoices',
     message_type: 'image', media_ref: 'wamid.unknown', provider_timestamp: new Date().toISOString() };
   const supabase = withEmptyVerifiedOwnerRpc({ rpc() { throw new Error('Unexpected RPC'); }, from(name) {
     if(name==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
@@ -379,11 +379,11 @@ test('unbound sender media is routed to verification without extraction', async 
 
 test('one queued image is claimed per invocation and the second processes subsequently', async () => {
   const events = [1,2].map(id => ({id,claim_token:`claim-${id}`,attempts:1,provider_message_id:`wamid.image-${id}`,
-    sender_phone:'+919871367051',message_text:'',message_type:'image',media_ref:`wamid.image-${id}`,provider_timestamp:new Date().toISOString()}));
+    sender_phone:'+12025550101',message_text:'',message_type:'image',media_ref:`wamid.image-${id}`,provider_timestamp:new Date().toISOString()}));
   const consent={workspace_id:'workspace-a',customer_id:'customer-a',source:'inbound_message',categories:['invoice_updates'],revoked_at:null};
   const rows={whatsapp_global_suppressions:null,whatsapp_consents:[consent],whatsapp_suppressions:[],
     workspace_settings:{whatsapp_owner_attested_at:new Date().toISOString()},
-    customers:{id:'customer-a',workspace_id:'workspace-a',phone:'+919871367051'}};
+    customers:{id:'customer-a',workspace_id:'workspace-a',phone:'+12025550101'}};
   const supabase=withEmptyVerifiedOwnerRpc({rpc(){},from(table){
     if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
 const query={select(){return query;},eq(){return query;},is(){return Promise.resolve({data:rows[table],error:null});},
@@ -406,7 +406,7 @@ test('bound customer hi webhook completes and attempts a guarded greeting servic
   const completed = [];
   const sends = [];
   const event = { id: 21, claim_token: 'claim', attempts: 1, provider_message_id: 'wamid.bound-hi',
-    sender_phone: '+919871367051', message_text: 'hi', provider_timestamp: new Date().toISOString() };
+    sender_phone: '+12025550101', message_text: 'hi', provider_timestamp: new Date().toISOString() };
   const consent = {workspace_id: 'workspace-a', customer_id: 'customer-a', source: 'inbound_message',
     categories: ['invoice_updates'], revoked_at: null};
   const rows = {
@@ -414,7 +414,7 @@ test('bound customer hi webhook completes and attempts a guarded greeting servic
     whatsapp_consents: [consent],
     whatsapp_suppressions: [],
     workspace_settings: {whatsapp_owner_attested_at: new Date().toISOString(), business_name: 'Acme Studio'},
-    customers: {id: 'customer-a', workspace_id: 'workspace-a', phone: '+919871367051'},
+    customers: {id: 'customer-a', workspace_id: 'workspace-a', phone: '+12025550101'},
   };
   const supabase = withEmptyVerifiedOwnerRpc({rpc() {}, from(table) {
     if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
@@ -458,7 +458,7 @@ test('bound customer hi webhook completes and attempts a guarded greeting servic
 
 test('typing indicator is skipped for STOP and a thrown indicator cannot fail a bound event', async () => {
   const stop = {id: 30, claim_token: 'stop-claim', attempts: 1, provider_message_id: 'wamid.stop-skip',
-    sender_phone: '+919871367051', message_text: 'STOP', stop_processed_at: new Date().toISOString(),
+    sender_phone: '+12025550101', message_text: 'STOP', stop_processed_at: new Date().toISOString(),
     stop_confirmation_due: false};
   let typing = 0;
   const stopInbox = {async claim() { return [stop]; }, async complete() {}};
@@ -474,7 +474,7 @@ test('typing indicator is skipped for STOP and a thrown indicator cannot fail a 
     categories: ['invoice_updates'], revoked_at: null};
   const rows = {whatsapp_global_suppressions: null, whatsapp_consents: [consent], whatsapp_suppressions: [],
     workspace_settings: {whatsapp_owner_attested_at: new Date().toISOString(), business_name: 'Acme Studio'},
-    customers: {id: 'customer-a', workspace_id: 'workspace-a', phone: '+919871367051'}};
+    customers: {id: 'customer-a', workspace_id: 'workspace-a', phone: '+12025550101'}};
   const supabase = withEmptyVerifiedOwnerRpc({rpc() {}, from(table) {
     if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
  const query = {select() { return query; }, eq() { return query; },
@@ -491,13 +491,13 @@ test('typing indicator is skipped for STOP and a thrown indicator cannot fail a 
 
 test('planner fallback is sent and completed as done with bounded diagnostics and no queue retry', async () => {
   const event = {id: 23, claim_token: 'claim', attempts: 1, provider_message_id: 'wamid.planner-failure',
-    sender_phone: '+919871367051', message_text: 'What do I owe?', provider_timestamp: new Date().toISOString()};
+    sender_phone: '+12025550101', message_text: 'What do I owe?', provider_timestamp: new Date().toISOString()};
   const consent = {workspace_id: 'workspace-a', customer_id: 'customer-a', source: 'inbound_message',
     categories: ['invoice_updates'], revoked_at: null};
   const rows = {
     whatsapp_global_suppressions: null, whatsapp_consents: [consent], whatsapp_suppressions: [],
     workspace_settings: {whatsapp_owner_attested_at: new Date().toISOString(), business_name: 'Acme Studio'},
-    customers: {id: 'customer-a', workspace_id: 'workspace-a', phone: '+919871367051'},
+    customers: {id: 'customer-a', workspace_id: 'workspace-a', phone: '+12025550101'},
   };
   const supabase = withEmptyVerifiedOwnerRpc({rpc() {}, from(table) {
     if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
@@ -559,7 +559,7 @@ test('deferred inbox events use bounded backoff while keeping attempts eligible 
 test('inbound processing failure log and durable event include the truncated error message', async () => {
   const logs = [];
   const event = {id: 22, claim_token: 'claim', attempts: 1, provider_message_id: 'wamid.failure',
-    sender_phone: '+919871367051', message_text: 'hello'};
+    sender_phone: '+12025550101', message_text: 'hello'};
   let completion;
   const inbox = {async claim() { return [event]; }, async complete(...args) { completion = args; }};
   const supabase = {rpc() {}, from() { throw new Error('database lookup failed: ' + 'x'.repeat(250)); }};
@@ -576,9 +576,9 @@ test('inbound processing failure log and durable event include the truncated err
 
 test('processing stops before the deadline and leaves the next event pending', async () => {
   const pending = [
-    {id: 2, attempts: 1, provider_message_id: 'wamid.new', sender_phone: '+919871367051',
+    {id: 2, attempts: 1, provider_message_id: 'wamid.new', sender_phone: '+12025550101',
       message_text: 'STOP', stop_processed_at: new Date().toISOString(), stop_confirmation_due: false},
-    {id: 1, attempts: 1, provider_message_id: 'wamid.old', sender_phone: '+919871367051',
+    {id: 1, attempts: 1, provider_message_id: 'wamid.old', sender_phone: '+12025550101',
       message_text: 'STOP', stop_processed_at: new Date().toISOString(), stop_confirmation_due: false},
   ];
   const completed = [], deferred = [];
@@ -596,7 +596,7 @@ test('processing stops before the deadline and leaves the next event pending', a
 });
 
 test('a final-attempt event receives exactly one fallback and is never retried', async () => {
-  const event = {id: 5, attempts: 5, provider_message_id: 'wamid.final', sender_phone: '+919871367051',
+  const event = {id: 5, attempts: 5, provider_message_id: 'wamid.final', sender_phone: '+12025550101',
     message_text: 'slow question', received_at: new Date().toISOString()};
   const sends = [];
   const completions = [];
@@ -623,7 +623,7 @@ test('verified owner failures preserve the real business identity for model-gene
     {attempts:1,recoveryReply:true},{attempts:5,recoveryReply:true},
     {attempts:1,recoveryReply:false},{attempts:5,recoveryReply:false},
   ]) {
-  const event={id:6,attempts,provider_message_id:`wamid.owner-failure-${attempts}-${recoveryReply}`,sender_phone:'+919871367051',
+  const event={id:6,attempts,provider_message_id:`wamid.owner-failure-${attempts}-${recoveryReply}`,sender_phone:'+12025550101',
     message_text:'change invoice INV-3 amount',message_type:'text',received_at:new Date().toISOString()};
   const rows={
     whatsapp_owner_verifications:[{workspace_id:'ws-owner',requested_by:'owner-1',verified_at:'2026-10-01T00:00:00Z',created_at:'2026-10-01T00:00:00Z',phone:event.sender_phone}],
@@ -663,7 +663,7 @@ test('verified owner failures preserve the real business identity for model-gene
 });
 
 test('a failed owner-binding lookup keeps the event pending without sending a hardcoded verification reply',async()=>{
-  const event={id:7,attempts:5,provider_message_id:'wamid.owner-binding-outage',sender_phone:'+919871367051',
+  const event={id:7,attempts:5,provider_message_id:'wamid.owner-binding-outage',sender_phone:'+12025550101',
     message_text:'Which model are you using?',message_type:'text',received_at:new Date().toISOString()};
   const calls=[];
   const runtime=createInboundRuntime({supabase:{rpc(){throw Object.assign(new Error('temporary owner database outage'),{code:'08006'});},from(){throw Object.assign(new Error('temporary owner database outage'),{code:'08006'});}},
@@ -675,7 +675,7 @@ test('a failed owner-binding lookup keeps the event pending without sending a ha
 });
 
 test('a transient failure before the final attempt remains retryable', async () => {
-  const event = {id: 4, attempts: 4, provider_message_id: 'wamid.transient', sender_phone: '+919871367051',
+  const event = {id: 4, attempts: 4, provider_message_id: 'wamid.transient', sender_phone: '+12025550101',
     message_text: 'question'};
   const completions = [];
   let claimed = false;
@@ -689,7 +689,7 @@ test('a transient failure before the final attempt remains retryable', async () 
 });
 
 test('unknown STOP gets a global suppression claim before acknowledgement', async () => {
-  const event = {id: 12, sender_phone: '+919871367051', message_text: 'STOP',
+  const event = {id: 12, sender_phone: '+12025550101', message_text: 'STOP',
     provider_message_id: 'wamid.unknown-stop'};
   let marked;
   const supabase = {
@@ -713,7 +713,7 @@ test('unknown STOP gets a global suppression claim before acknowledgement', asyn
 });
 
 test('a retried STOP recovers its workspace confirmation after revocation committed', async () => {
-  const event = { id: 13, sender_phone: '+919871367051', message_text: 'STOP',
+  const event = { id: 13, sender_phone: '+12025550101', message_text: 'STOP',
     provider_message_id: 'wamid.retry-after-revoke' };
   const calls = [];
   const supabase = {
@@ -745,7 +745,7 @@ test('a retried STOP recovers its workspace confirmation after revocation commit
 
 test('STOP installs phone-wide suppression before discovering workspace consents', async () => {
   const calls = [];
-  const event = { id: 14, sender_phone: '+919871367051', message_text: 'STOP', provider_message_id: 'wamid.race' };
+  const event = { id: 14, sender_phone: '+12025550101', message_text: 'STOP', provider_message_id: 'wamid.race' };
   const supabase = {
     from(table) {
     if(table==='whatsapp_owner_verifications')return {select(){return this},eq(){return this},not(){return this},order(){return this},limit(){return Promise.resolve({data:[]})}};
@@ -781,13 +781,13 @@ test('Postgres inbox claims are atomic and verification replies are one-time', a
     const sql = await readFile(new URL('../supabase/migrations/20260927110000_whatsapp_inbound_events.sql', import.meta.url), 'utf8');
     await db.exec(sql);
     await db.query(`insert into public.whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text)
-      values ('wamid.sql','123456789','+919871367051','text','Hello')`);
+      values ('wamid.sql','123456789','+12025550101','text','Hello')`);
     await db.exec('set role service_role');
     const claimed = (await db.query('select * from public.whatsapp_claim_inbound_events(10)')).rows;
     assert.equal(claimed.length, 1);
     assert.equal((await db.query('select * from public.whatsapp_claim_inbound_events(10)')).rows.length, 0);
-    assert.equal((await db.query(`select public.whatsapp_claim_inbound_reply('wamid.sql','+919871367051','verification',null) as allowed`)).rows[0].allowed, true);
-    assert.equal((await db.query(`select public.whatsapp_claim_inbound_reply('wamid.sql','+919871367051','verification',null) as allowed`)).rows[0].allowed, false);
+    assert.equal((await db.query(`select public.whatsapp_claim_inbound_reply('wamid.sql','+12025550101','verification',null) as allowed`)).rows[0].allowed, true);
+    assert.equal((await db.query(`select public.whatsapp_claim_inbound_reply('wamid.sql','+12025550101','verification',null) as allowed`)).rows[0].allowed, false);
     await db.query(`update public.whatsapp_inbound_events set status='failed',error_code='INBOUND_DEAD_LETTER',claimed_at=null,claim_token=null,received_at=now()-interval '2 hours',next_attempt_at=now()-interval '1 hour' where provider_message_id='wamid.sql'`);
     assert.equal((await db.query('select * from public.whatsapp_claim_inbound_events(10)')).rows.length, 0, 'terminal dead letters must not be claimed even after backoff expires');
     await db.exec('reset role; set role anon');
@@ -806,8 +806,8 @@ test('Postgres inbox claims newest events first', async () => {
       await db.exec(await readFile(new URL(`../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
     }
     await db.query(`insert into public.whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text)
-      values ('wamid.old','123456789','+919871367051','text','Old'),
-             ('wamid.new','123456789','+919871367051','text','New')`);
+      values ('wamid.old','123456789','+12025550101','text','Old'),
+             ('wamid.new','123456789','+12025550101','text','New')`);
     await db.exec('set role service_role');
     const claimed = (await db.query('select * from public.whatsapp_claim_inbound_events(1)')).rows;
     assert.equal(claimed[0].provider_message_id, 'wamid.new');
@@ -857,7 +857,7 @@ test('Meta contact card retains display name and phone through durable inbox tex
 });
 
 test('owner worker forwards a durable contact card',async()=>{
-  const phone = '+919871367051';
+  const phone = '+12025550101';
   const event = {id:17,claim_token:'claim',attempts:1,provider_message_id:'wamid.owner-button',sender_phone:phone,
     message_type:'contacts',message_text:JSON.stringify({name:'Buyer',phone:'+14155550244'}),provider_timestamp:new Date().toISOString()};
   const tables = {

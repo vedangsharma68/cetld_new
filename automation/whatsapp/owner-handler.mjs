@@ -1,4 +1,9 @@
-import {offlineProvenance} from '../../ai/offline-provenance.mjs';
+import {parseTextInvoice} from './text-invoice.mjs';
+import {ordinaryPart} from '../../ai/private-value-matcher.mjs';
+import {invoiceReadQuestion, retainedInvoiceRowsAnswer} from './private-invoice-read.mjs';
+import {createPrivateChatMemory} from '../../ai/private-chat-memory.mjs';
+import {ownerInvoiceReadAnalysis} from './owner-invoice-read-analysis.mjs';
+import {createPrivateChatProvider, localReviewTurn, privateChatSpans, privateChatModelSettings, privateChatTopic, CHAT_UNAVAILABLE_REPLY} from '../../ai/private-chat.mjs';
 import {offlineReviewClarification, correctOfflineReview, offlineCorrectionInputIssue, OFFLINE_CANCEL_REPLY, OFFLINE_CONFIRMATION_REPLY} from '../../ai/offline-invoice-review.mjs';
 import {ownerWriteConfirmation} from './owner-write-confirmation.mjs';
 import {receivableBalanceLabel} from '../../invoice/receivables.mjs';
@@ -12,7 +17,7 @@ import {normalizeOwnerBotPreferences,normalizeOwnerServiceReplyText} from './bot
 import {ownerCalendar} from './workspace-records.mjs';
 import {isOwnerNextButton,runOwnerNextAction,planOwnerNextActions,planOwnerMenuActions,createOwnerNextButtons,pendingBlocksOwnerNextActions,ownerMenuInvoiceEdit,loadOwnerMenuEditTarget,NEXT_ACTION_STALE_REPLY} from './owner-next-actions.mjs';
 import {createOwnerActionButtons,verifyOwnerActionButton} from './owner-action-buttons.mjs';
-import {AIProvider, CF_PRIMARY_MODEL, GEMINI_FALLBACK_MODEL, sanitizeModelSettings} from '../../ai/provider.mjs';
+import {AIProvider, CF_PRIMARY_MODEL, sanitizeModelSettings} from '../../ai/provider.mjs';
 import {createInvoiceLifecycleService} from '../../ai/invoice-lifecycle.mjs';
 import {createOwnerScopedStore} from '../../ai/whatsapp-channel.mjs';
 import {authorizeOwnerPhone,isVerifiedOwnerBinding} from './owner-binding.mjs';
@@ -98,6 +103,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     // Keep the provider text byte-for-byte equivalent to the persisted turn.
     // Lifecycle RPCs validate exact provider message ID and stored content.
     const message=String(scope.message||'');
+    const privateMemory=createPrivateChatMemory({supabase,scope:{...scope,audience:'owner'}});
+    await privateMemory.retainOrigin(message);
     let timezone='Asia/Kolkata';
     onProgress('context');
     let pending,pendingStoreAvailable=true;
@@ -184,9 +191,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         let history=await timedContextRead(logger,'conversation_history',()=>historyReader({supabase,workspaceId,ownerId,phone,customerId:null,audience:'owner'}));
         // The inbound worker records this received message before invoking us.
         // Do not repeat the current turn when durable history already ends in it.
-        const offlineHistory=history.offlineProvenance===true;
         if(history.at(-1)?.role==='user'&&history.at(-1)?.content===message)history=history.slice(0,-1);
-        return {history,offlineHistory,available:true};
+        return {history,available:true};
       }catch(error){
         logger?.error?.('WhatsApp owner conversation history read failed',{code:String(error?.code||'HISTORY_UNAVAILABLE').slice(0,60)});
         return {history:[],available:false};
@@ -216,6 +222,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     ]);
     assertActiveTurn();
     const {settings,available:settingsAvailable}=settingsState;
+    const signedReply=answer=>{const signature=normalizeOwnerServiceReplyText(botPreferences.serviceReplySignature);return signature&&!answer.endsWith(signature)?answer+'\n\n'+signature:answer;};
     const {pendingAtStart,pendingInitialState,available:pendingStateAvailable}=pendingState;
     pendingStoreAvailable=pendingStateAvailable;
     if(!scope.interactionId&&!media&&!mediaError&&!scope.contactCard&&!scope.checkpoint&&standaloneOwnerMenu(message)){
@@ -268,13 +275,8 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     if(historyReader===readSharedOwnerHistory&&!historyAvailable)return {answer:'Your business conversation is temporarily unavailable. Try again shortly. No action was taken.'};
     const {lifecycle,lifecyclePending,available:lifecycleAvailable}=lifecycleState;
     ownerStore=ownerStoreState;
-    // Default turns use provenance carried by the existing scoped history read;
-    // they do not acquire a dependency on the offline-only RPC.
-    const offlineHistory = historyState.offlineHistory || (env.EXTRACTION_ROUTE==='offline'
-      && await offlineProvenance({supabase,workspaceId,ownerId,mark:Boolean(media || mediaError)}));
-    if (offlineHistory && (env.EXTRACTION_ROUTE !== 'offline' || !media && !mediaError && pendingAtStart?.action?.extractionRoute !== 'offline'))
-      return {offlineReview:true,answer:'This conversation contains local invoice information. Start a new local invoice review to continue; conversation summaries are unavailable.'};
-    const offlineTurn=env.EXTRACTION_ROUTE==='offline' && (media || mediaError || pendingAtStart?.action?.extractionRoute==='offline' || /\b(?:change|chnge|chng|make|set|edit|modify|fix|update)\b/i.test(message));
+    // Media and retained local reviews stay local regardless of deployment flag.
+    const offlineTurn=Boolean(env.EXTRACTION_ROUTE==='offline'&&(media || mediaError) || localReviewTurn(pendingAtStart?.action,message,scope.interactionId));
     const menuEditValues=!offlineTurn&&!scope.interactionId&&!media&&!mediaError&&!scope.checkpoint?ownerMenuInvoiceEdit(message):null;
     let menuEditTarget=null;
     if(menuEditValues){
@@ -286,12 +288,13 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     }
     const hasSavedPrimary=typeof settings.primary_model==='string'&&settings.primary_model.trim().length>0;
     const configurationSource=!settingsAvailable?'defaults_after_settings_error':hasSavedPrimary?'workspace':'defaults';
-    const config=configurationSource==='workspace'
+    const rawConfig=configurationSource==='workspace'
       ?sanitizeModelSettings({primaryModel:settings.primary_model,fallbackModel:settings.fallback_model})
-      :sanitizeModelSettings({primaryModel:CF_PRIMARY_MODEL,fallbackModel:GEMINI_FALLBACK_MODEL});
-    const provider=offlineTurn||isOwnerNextButton(scope.interactionId)?null:providerFactory({...config,geminiApiKey:env.GEMINI_API_KEY,openRouterApiKey:env.OPENROUTER_API_KEY,
-      zenApiKey:env.OPENCODE_ZEN_API_KEY,cfAccountId:env.CLOUDFLARE_ACCOUNT_ID,cfApiToken:env.CLOUDFLARE_API_TOKEN,
-      fetchImpl,timeoutMs:15000,maxAttempts:2,healthStore});
+      :sanitizeModelSettings({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null});
+    const config=privateChatModelSettings(rawConfig);
+    const provider=createPrivateChatProvider({providerFactory,message,localOnly:Boolean(media||mediaError),memory:privateMemory,options:{...config,
+      cfAccountId:env.CLOUDFLARE_ACCOUNT_ID,cfApiToken:env.CLOUDFLARE_API_TOKEN,
+      fetchImpl,timeoutMs:15000,maxAttempts:2,healthStore}});
     // Store adapters invoke authorize() without arguments. Always authorize the
     // verified turn, never an absent or adapter-supplied replacement scope.
     const reauthorize=async()=>authorizeTurn(scope);
@@ -300,18 +303,26 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
     onProgress('tools');
     try{tools=toolsFactory({supabase,botPreferences,timezone,ownerConversation:scope.ownerConversation,interactiveAvailable:Boolean(env.WHATSAPP_APP_SECRET||env.CRON_SECRET),scope:{...scope,workspaceId,ownerId,phone},ownerStore,pending,pendingAtStart,pendingInitialState,
       lifecyclePending,invoiceStoreFactory:invoiceStore,settingsStore:createOwnerSettingsStore(supabase),config,signal,deadlineAt,ownerHistory:history,
-      sourceMediaReader:input=>readOwnerSourceMedia({supabase,...input}),
+      sourceMediaReader:input=>readOwnerSourceMedia({supabase,...input}),retainPrivateResult:privateMemory.retainOrigin,
       configurationAvailable:settingsAvailable,configurationSource,historyAvailable,ownerStoreAvailable,lifecycleAvailable,
       invoiceEditContext:menuEditTarget?.stale?null:menuEditTarget?{...menuEditTarget,values:menuEditValues}:null,
       planRequest:createOwnerWorkspacePlanner({provider,message,history,timezone,clock,signal,deadlineAt}),
-      pendingStoreAvailable,message,messageId,media,mediaError,authorize:reauthorize,lifecycle,providerFactory,env,fetchImpl,clock,logger});}
+      pendingStoreAvailable,message,messageId,media,mediaError,authorize:reauthorize,lifecycle,providerFactory:()=>provider,env,fetchImpl,clock,logger});}
     catch(error){
       toolSetupIssue='OWNER_TOOLS_UNAVAILABLE';
       logger?.error?.('WhatsApp owner tool setup failed',{workspaceId,code:toolSetupIssue});
       tools={definitions:[{type:'function',function:{name:'workspaceData',description:'Read the safe availability state of this owner turn.',parameters:{type:'object',properties:{},additionalProperties:false}}}],
         async execute(){return {ok:false,code:'UNAVAILABLE',message:'I can’t access your records right now. Try again shortly.'};},setServedModel(){},getMedia(){return null;}};
     }
+    provider.setTools(tools.definitions);
     onToolsReady(tools);
+    // A complete local command is one instruction; its field commas are not
+    // independent ordinary clauses. Preserve the guarded model-free parser.
+    if(agentFactory===runOwnerAgent&&!scope.interactionId&&!media&&!mediaError&&!scope.contactCard
+      &&!parseTextInvoice(message,{clock,timezone})&&ordinaryPart(message,privateChatTopic,privateChatSpans).mixed&&ordinaryPart(message,privateChatTopic,privateChatSpans).text){
+      const reply=await provider.generate({signal,deadlineAt}).catch(()=>({content:CHAT_UNAVAILABLE_REPLY}));
+      return await reauthorize()?{answer:signedReply(reply.content)}:'';
+    }
     if (offlineTurn) {
       const reviewAction = pendingAtStart?.action;
       const inputIssue=reviewAction?.extractionRoute==='offline' && offlineCorrectionInputIssue(message,{parseCorrection:parseInvoiceCorrection,clock});
@@ -360,7 +371,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
       }
       return result;
     }
-    let initialToolResults=[];
+    let initialToolResults=[],verifiedDecisionReply=null;
     const recovered=await tools.lookupCompleted?.();
     if(recovered?.ok&&recovered.completed)initialToolResults=[{name:'workspaceData',args:{operation:'verifiedReceipt'},result:recovered}];
     if(!recovered?.completed&&!scope.interactionId&&!media&&!mediaError&&!scope.checkpoint
@@ -391,10 +402,16 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         result.message||'I couldn’t verify the change. Check the invoice before trying again.'};
       initialToolResults=[{name:'workspaceData',args:{operation:'update',table:'invoices'},result}];
     }
-    const totalChange=requestedOwnerInvoiceTotalChange(message);
+    let totalChange=requestedOwnerInvoiceTotalChange(message);
+    const amountReply=/^\s*(?:correct|fix|change|set|update)\s+(?:this\s+)?(?:invoice\s+)?total\s+to\s+([A-Z]{3}\s+\d+(?:\.\d{1,2})?)[.!]?\s*$/i.exec(message);
+    if(!totalChange&&amountReply&&!scope.interactionId&&!media&&!mediaError){
+      const target=await loadOwnerMenuEditTarget({supabase,scope,authorize:authorizeTurn,clock,allowedActions:['edit_amount']});
+      if(!target||target.stale)return {answer:'Select the invoice Amount option again before changing its total. No change was made.'};
+      totalChange=requestedOwnerInvoiceTotalChange(`Change invoice ${target.invoiceNumber} total to ${amountReply[1]}`);
+    }
     if(totalChange&&!menuEditTarget&&!scope.interactionId&&!media&&!mediaError&&tools.supportsBoundedInvoiceTotalCorrection===true){
       const recoveredReply=recovered?.completed?totalCorrectionReply(message,recovered):null;
-      if(recoveredReply)return {answer:recoveredReply};
+      if(recoveredReply)return {answer:signedReply(recoveredReply)};
       if(recovered?.ok===false&&recovered.code!=='NO_RECEIPT'){
         if(!await authorizeTurn(scope))return '';
         return {answer:'I could not verify the prior invoice correction state. Check the invoice before trying again.'};
@@ -417,7 +434,7 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
           {signal,invoiceCorrectionReadGuard:{id:records[0].id,updatedAt:records[0].updated_at}});
         if(!await authorizeTurn(scope))return '';
         const answer=totalCorrectionReply(message,result);
-        if(answer)return {answer};
+        if(answer)return {answer:signedReply(answer)};
         return {answer:result?.code==='STALE'?'The invoice changed while I checked it. Send the correction again after checking its current details. No change was made.':
           result?.message||'I could not verify the invoice correction. Check the invoice before trying again.'};
       }
@@ -449,6 +466,13 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         if(!choice.valid||typeof tools.decideButton!=='function')return {answer:'That choice has expired or changed. Send the change you want to make and I will check the current details.'};
         const result=await tools.decideButton({interactionId:scope.interactionId,decision:choice.decision,pending:pendingAtStart});
         initialToolResults=[{name:'workspaceData',args:{operation:choice.decision},result}];
+        if(result?.ok===true&&result.completed===true){
+          verifiedDecisionReply=ownerWriteConfirmation(result)
+            ||(choice.decision==='cancel'&&['cancelled','canceled'].includes(result.action)?'Cancelled the pending change.':null)
+            ||(result.action==='invoice.deleted'&&pendingAtStart?.action?.type==='owner_invoice_delete_proposal'
+              ?`Deleted invoice ${pendingAtStart.action.invoiceNumber}.`:null)
+            ||'The approved action completed. Check cetld for its details.';
+        }
       }
     }
     let phoneCorrectionReply=null,phoneReceiptRef=null;
@@ -516,7 +540,14 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
         else initialToolResults.push({name:'workspaceData',args:{operation:'update',table:'workspace_settings',values:{business_name:name}},result});
       }else if(!businessProfile?.business_name)businessNameReply=`Would you like me to save ${name} as your business name? Say "save my business name as ${name}".`;
     }
-    const reminderRequest=ownerReminderRequest(message);
+    let reminderRequest=ownerReminderRequest(message);
+    if(!reminderRequest&&/^\s*(?:please\s+)?send\s+(?:him|her|them)\s+(?:a\s+)?reminder(?:\s+to pay|\s+now)?[.!?\s]*$/i.test(message)){
+      const aliases=text=>[...String(text||'').matchAll(/\bINV-[A-Z0-9-]+\b|\binvoice\s+([A-Z][A-Z0-9/-]*\d[A-Z0-9/-]*)\b/gi)].map(match=>match[1]||match[0]);
+      const recent=history.toReversed().find(turn=>aliases(turn.content).length);
+      const numbers=[...new Set(aliases(recent?.content))];
+      if(numbers.length!==1)return {answer:'Which invoice should I prepare the reminder for? Nothing was sent.'};
+      reminderRequest={operation:'sendReminderNow',table:'invoices',filters:[{column:'invoice_number',operator:'eq',value:numbers[0]}]};
+    }
     let reminderResult=null;
     if(!recovered?.completed&&!scope.interactionId&&!media&&!mediaError&&reminderRequest){
       reminderResult=await tools.execute('workspaceData',reminderRequest,{signal});
@@ -533,8 +564,22 @@ export function createOwnerMessageHandler({supabase,env=process.env,fetchImpl=fe
       if(!tools.getConsentReply?.())return {answer:result?.message||'I could not reach the consent record. Try recording consent again shortly.'};
     }
     onProgress('agent');
-    const response=tools.getConsentReply?.()?{answer:tools.getConsentReply()}:businessNameReply?{answer:businessNameReply}:phoneCorrectionReply?{answer:phoneCorrectionReply}:profileReply?{answer:profileReply}:tools.getReminderReply?.()?{answer:tools.getReminderReply()}:reminderResult?.ok===false
-      ?{answer:reminderResult.message||'The reminder request could not be prepared. Nothing was sent.'}:await agentFactory({provider,config,store:ownerStore,tools,history,message,signal,deadlineAt,clock,timezone,logger,traceId:messageId,botPreferences,businessProfile,initialToolResults,
+    let invoiceReadReply=null;
+    if(!scope.interactionId&&!media&&!mediaError&&/^(?:what(?:'s| is| needs)|show|review|which).{0,60}\b(?:approval|pending|proposal|waiting)\b/i.test(message)){
+      const state=await tools.execute('workspaceData',{operation:'pending'},{signal});
+      if(!await authorizeTurn(scope))return '';
+      invoiceReadReply=state?.pending===true
+        ?`Pending ${String(state.type||'change').includes('delete')?'deletion':'change'}${state.invoiceNumber?` for invoice ${state.invoiceNumber}`:''}. Please tap the button to confirm or cancel.`
+        :state?.ok===false?'I could not verify the pending approval. Review it in cetld.':'There is no pending approval to confirm.';
+    }
+    if(!invoiceReadReply&&agentFactory===runOwnerAgent&&!initialToolResults.length&&!scope.interactionId&&!media&&!mediaError&&invoiceReadQuestion(message)&&!ownerInvoiceReadAnalysis(message)){
+      const read=await tools.execute('workspaceData',{operation:'read',table:'invoices',
+        columns:['invoice_number','customer_name','currency','total_amount','amount_paid','status','invoice_direction'],limit:50,offset:0},{signal});
+      if(!await authorizeTurn(scope))return '';
+      invoiceReadReply=await retainedInvoiceRowsAnswer(message,read,{history,retain:privateMemory.retainOrigin});
+    }
+    const response=verifiedDecisionReply?{answer:verifiedDecisionReply,deterministicWriteReply:true}:invoiceReadReply?{answer:invoiceReadReply}:tools.getConsentReply?.()?{answer:tools.getConsentReply()}:businessNameReply?{answer:businessNameReply}:phoneCorrectionReply?{answer:phoneCorrectionReply}:profileReply?{answer:profileReply}:tools.getReminderReply?.()?{answer:tools.getReminderReply()}:reminderResult?.ok===false
+      ?{answer:reminderResult.message||'The reminder request could not be prepared. Nothing was sent.'}:(!pendingAtStart||!ownerIsConfirmation(message))&&!initialToolResults.length&&!privateChatTopic(message)&&agentFactory===runOwnerAgent&&!/\b(?:model|usin|configuration|business|supplier|contact|phone|record)\b/i.test(message)?await provider.generate({signal,deadlineAt}).then(r=>({answer:r.content})).catch(()=>({answer:CHAT_UNAVAILABLE_REPLY})):await agentFactory({provider,config,store:ownerStore,tools,history,message,signal,deadlineAt,clock,timezone,logger,traceId:messageId,botPreferences,businessProfile,initialToolResults,
       checkpoint:scope.checkpoint||null,onCheckpoint:scope.onCheckpoint,allowDeferred:scope.allowDeferred===true,budgetMs:scope.budgetMs,
       attachmentDescriptor:media?{available:true,mimeType:String(media.mimeType||media.mime_type||'application/octet-stream').slice(0,80)}
         :mediaError?{available:false,errorCode:'ATTACHMENT_UNAVAILABLE'}:{available:false},
@@ -702,10 +747,8 @@ export function createOwnerWorkspacePlanner({provider,message,history=[],timezon
     const needsTarget=validationFeedback?.validationCode==='TARGET_REQUIRED';
     const valuesSchema=Object.keys(catalog?.tables||{}).length===1&&catalog?.tables?.invoices?.correctionValuesSchema
       ?{type:'object',properties:catalog.tables.invoices.correctionValuesSchema.properties}:{type:'object'};
-    // Workspace/custom-field plans contain dynamic keys. Gemini JSON mode avoids
-    // its constrained-schema rejection; normalization and write guards still
-    // validate the decoded plan before any dispatch. Extraction keeps its schema.
-    const result=await provider.generateStructured({name:'workspace_operation',geminiJsonMode:true,
+    // Normalization and guarded tools validate every decoded operation locally.
+    const result=await provider.generateStructured({name:'workspace_operation',
       schema:{type:'object',properties:{operations:{type:'array',minItems:2,maxItems:10,items:{type:'object',properties:{operation:{type:'string',enum:['create','update']},table:{type:'string'},filters:{type:'array',items:{type:'object',properties:{column:{type:'string'},operator:{type:'string'},value:{}},required:['column','operator','value'],additionalProperties:false}},values:{type:'object'}},required:['operation','table','values'],additionalProperties:false}},operation:{type:'string'},table:{type:'string'},columns:{type:'array',items:{type:'string'}},
         filters:{type:'array',...(needsTarget?{minItems:1}:{}),items:{type:'object',properties:{column:{type:'string'},operator:{type:'string'},value:{}},required:['column','operator','value'],additionalProperties:false}},
         values:valuesSchema,limit:{type:'integer'},offset:{type:'integer'},order:{type:'object'}},required:needsTarget?['operation','table','filters','values']:[],additionalProperties:false},

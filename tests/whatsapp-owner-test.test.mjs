@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {PGlite} from '@electric-sql/pglite';
-import {createWhatsAppInvoiceTestHandler} from '../automation/whatsapp/test-send.mjs';
+import {createWhatsAppInvoiceTestHandler} from './fixtures/dispatch-sql-double.mjs';
 import {OWNER_TEST_SCOPE as scope,ownerTestKey,claimOwnerTest,ownerTestTemplateCheck} from '../automation/whatsapp/owner-test.mjs';
 import {REMINDER_TEMPLATES,APPROVED_REMINDER_FOOTER,matchesApprovedReminderTemplate} from '../automation/whatsapp/reminder-templates.mjs';
 import {APIError} from '../ai/http.mjs';

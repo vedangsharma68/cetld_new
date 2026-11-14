@@ -1,0 +1,13 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {fixture} from './fixtures/private-invoice.mjs';
+test('multi-row ledger capture keeps per-field roles, source amounts, complete aliases and transactional failure',async()=>{
+ const f=await fixture();try{
+ const c=(await f.db.query("insert into customers(workspace_id,name) values($1,'Batch Juniper') returning id",[f.scope.workspaceId])).rows[0];
+ const rows=(await f.db.query("insert into invoices(workspace_id,customer_id,invoice_number,total_amount,currency,status,notes) select $1,$2,'R14-BATCH-'||n,6100+n,'INR','draft','Invoice: the two quantities read 1250,77' from generate_series(1,3)n returning id,total_amount,amount_paid,notes",[f.scope.workspaceId,c.id])).rows;assert.equal(rows.length,3);assert.deepEqual(rows.map(r=>Number(r.total_amount)),[6101,6102,6103]);assert.ok(rows.every(r=>Number(r.amount_paid)===0));
+ const keys=(await f.db.query('select term from whatsapp_private_invoice_terms where workspace_id=$1',[f.scope.workspaceId])).rows.map(r=>r.term);for(const k of ['number:1250','number:77','number:6101','number:6102','number:6103','party:juniper'])assert.ok(keys.includes(k),k);for(const k of ['draft','identifier:draft'])assert.ok(!keys.includes(k),k);
+ const before=(await f.db.query('select count(*)::int n from invoices where workspace_id=$1',[f.scope.workspaceId])).rows[0].n;
+ await f.db.exec("create function app.r14_batch_fail() returns trigger language plpgsql as $$begin if new.term='number:96147' then raise exception 'R14_BATCH_CAPTURE_FAILURE';end if;return new;end $$;create trigger r14_batch_fail before insert on whatsapp_private_invoice_terms for each row execute function app.r14_batch_fail()");
+ await assert.rejects(f.db.query("insert into invoices(workspace_id,customer_id,invoice_number,total_amount,currency,status) select $1,$2,'R14-FAIL-'||n,96146+n,'INR','draft' from generate_series(1,2)n",[f.scope.workspaceId,c.id]),/R14_BATCH_CAPTURE_FAILURE/);
+ assert.equal((await f.db.query('select count(*)::int n from invoices where workspace_id=$1',[f.scope.workspaceId])).rows[0].n,before);assert.equal((await f.db.query("select count(*)::int n from app.private_invoice_canonical_inputs where workspace_id=$1 and input_hash=sha256(convert_to('96147','UTF8'))",[f.scope.workspaceId])).rows[0].n,0);
+ for(const role of ['anon','authenticated','service_role'])for(const signature of ['app.private_invoice_capture_inserted_ledger()','app.private_invoice_capture_field(uuid,text,text,bytea)'])assert.equal((await f.db.query('select has_function_privilege($1,$2,\'execute\') ok',[role,signature])).rows[0].ok,false);
+ }finally{await f.close();}
+});

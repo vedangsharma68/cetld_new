@@ -1,9 +1,11 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerSafetyTools as createOwnerAgentTools} from '../automation/whatsapp/owner-agent.mjs';
 
-const scope={workspaceId:'w1',ownerId:'o1',customerId:'owner-placeholder',phone:'+919871367051'};
+const scope={workspaceId:'w1',ownerId:'o1',customerId:'owner-placeholder',phone:'+12025550101'};
 function setup({failWrite=null,changeBetween=false,pauseCount=0,plans={},answers={}}={}){
  let action=null,row={business_name:'CETLD test',follow_up_preferences:{tone:'professional',maxReminders:3},updated_at:'t1'},writes=[],rpcCalls=0,authorized=true,pid=0;
  let modelCalls=0;
@@ -42,7 +44,7 @@ function setup({failWrite=null,changeBetween=false,pauseCount=0,plans={},answers
   storePendingAction:async({action:a})=>{action=a;pid++;return {id:pid,version:1,action:a}},
   loadPendingAction:async()=>action?{id:pid,version:1,action}:null,
   consumePendingAction:async()=>{if(!action)return null;action=null;return {id:pid}}};
- const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase,authorize:async()=>authorized,pendingActionStoreFactory:()=>pending,
+ const handler=createOwnerEngineHarness({toolsFactory:createOwnerAgentTools,supabase,authorize:async()=>authorized,pendingActionStoreFactory:()=>pending,
   invoiceStoreFactory:()=>({findInvoices:async()=>[]}),historyReader:async()=>[],providerFactory:options=>({async generate({messages,tools}){
    modelCalls++;assert.ok(tools.length>0);
    const current=messages.filter(item=>item.role==='user').at(-1)?.content||'';
@@ -54,7 +56,7 @@ function setup({failWrite=null,changeBetween=false,pauseCount=0,plans={},answers
  const h=async input=>{const result=await handler(input);return result?.answer??result;};
  return {h,get row(){return row},get writes(){return writes},get rpcCalls(){return rpcCalls},get action(){return action},get modelCalls(){return modelCalls},bump(){row={...row,updated_at:'t9'}},revoke(){authorized=false}};
 }
-test('settings change is a proposal, applies only after yes, and keeps other preferences',async()=>{
+engineTest('settings change is a proposal, applies only after yes, and keeps other preferences',async()=>{
  const first='change my workspace name to Vedang T',yes='yes';const t=setup({plans:{
   [first]:{tool:'proposeWorkspaceSettingsChange',args:{businessName:'Vedang T'}},[yes]:{tool:'confirmPendingOwnerChange'}},answers:{
   [first]:'I can change CETLD test to Vedang T. Reply yes to apply, or cancel.',[yes]:'Done. The workspace name is now Vedang T.'}});
@@ -65,7 +67,7 @@ test('settings change is a proposal, applies only after yes, and keeps other pre
  assert.match(done,/^Done\./);assert.equal(t.row.business_name,'Vedang T');assert.equal(t.row.follow_up_preferences.maxReminders,3);
  assert.equal(t.rpcCalls,1);
 });
-test('preferences merge, cancel leaves settings alone, replay does nothing',async()=>{
+engineTest('preferences merge, cancel leaves settings alone, replay does nothing',async()=>{
  const tone='set tone to firm',cancel='cancel',yes='yes';const t=setup({plans:{
   [tone]:{tool:'proposeWorkspaceSettingsChange',args:{patch:{tone:'firm'}}},
   [cancel]:{tool:'cancelPendingOwnerChange'},[yes]:{tool:'confirmPendingOwnerChange'}},answers:{
@@ -78,7 +80,7 @@ test('preferences merge, cancel leaves settings alone, replay does nothing',asyn
  assert.equal(t.row.follow_up_preferences.tone,'firm');assert.equal(t.row.follow_up_preferences.maxReminders,3);
  assert.equal(t.writes.length,0);assert.equal(t.rpcCalls,1);
 });
-test('dashboard change between ask and yes blocks the write, and a database error is reported plainly',async()=>{
+engineTest('dashboard change between ask and yes blocks the write, and a database error is reported plainly',async()=>{
  const tone='set tone to firm',yes='yes';const plans={[tone]:{tool:'proposeWorkspaceSettingsChange',args:{patch:{tone:'firm'}}},[yes]:{tool:'confirmPendingOwnerChange'}};
  const answers={[tone]:'I can set the reminder tone to firm. Reply yes to apply, or cancel.',[yes]:'The setting changed since you asked, so I left it unchanged.'};
  const stale=setup({plans,answers});
@@ -89,7 +91,7 @@ test('dashboard change between ask and yes blocks the write, and a database erro
  await failing.h({...scope,message:tone,messageId:'m1'});
  assert.match(await failing.h({...scope,message:yes,messageId:'m2'}),/could not save that setting/i);
 });
-test('a revoked owner binding cannot confirm a pending settings change',async()=>{
+engineTest('a revoked owner binding cannot confirm a pending settings change',async()=>{
  const t=setup({plans:{'set tone to firm':{tool:'proposeWorkspaceSettingsChange',args:{patch:{tone:'firm'}}}},
   answers:{'set tone to firm':'I can set the reminder tone to firm. Reply yes to apply, or cancel.'}});
  await t.h({...scope,message:'set tone to firm',messageId:'m1'});t.revoke();
@@ -97,7 +99,7 @@ test('a revoked owner binding cannot confirm a pending settings change',async()=
  assert.equal(t.writes.length,0);
 });
 
-for(const count of [0,1,4])test(`rename warning survives model omission before and after confirmation, N=${count}`,async()=>{
+for(const count of [0,1,4])engineTest(`rename warning survives model omission before and after confirmation, N=${count}`,async()=>{
  const first='change my business name to New Studio',yes='yes';
  const t=setup({pauseCount:count,plans:{[first]:{tool:'proposeWorkspaceSettingsChange',args:{businessName:'New Studio'}},
   [yes]:{tool:'confirmPendingOwnerChange'}},answers:{[first]:'I can change CETLD test to New Studio. Reply yes to apply, or cancel.',[yes]:'Done. The business name is now New Studio.'}});
@@ -110,7 +112,7 @@ for(const count of [0,1,4])test(`rename warning survives model omission before a
   else assert.doesNotMatch(answer,/paused|re-approve|Conversations/);
  }
 });
-test('unchanged business name never warns, even with approved reminders',async()=>{
+engineTest('unchanged business name never warns, even with approved reminders',async()=>{
  const first='set my business name to CETLD test',yes='yes';
  const t=setup({pauseCount:9,plans:{[first]:{tool:'proposeWorkspaceSettingsChange',args:{businessName:'CETLD test'}},[yes]:{tool:'confirmPendingOwnerChange'}},
   answers:{[first]:'Business name: CETLD test. Reply yes to apply, or cancel.',[yes]:'Done. The business name is CETLD test.'}});

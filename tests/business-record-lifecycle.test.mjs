@@ -6,7 +6,7 @@ import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-
 import {businessRecordsView} from '../custom-fields.mjs';
 
 test('real SDK and SQL recoverable delete/restore agree with scoped assistant reads and dashboard',async()=>{
-  const f=await createOfflineSqlNetwork(),{db,supabase}=f,owner=randomUUID(),phone='+919871367051';
+  const f=await createOfflineSqlNetwork(),{db,supabase}=f,owner=randomUUID(),phone='+12025550101';
   try{
     await db.query('insert into auth.users(id) values($1)',[owner]);
     await db.exec(`set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${owner}';set role authenticated`);

@@ -8,7 +8,7 @@ import {extractInvoice, validateInvoiceExtractionWireResponse} from '../ai/extra
 import {validateAssistantInvoice} from '../ai/invoice-ops.mjs';
 import {DEFAULT_EXTRACTION_MODEL} from '../ai/provider.mjs';
 
-const phone = '+919871367051';
+const phone = '+12025550101';
 const media = {bytes: Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0]), mimeType: 'image/png', fileName: 'invoice.png'};
 
 function invoiceWire(patch = {}) {
@@ -30,20 +30,10 @@ async function fixture(wire, {providerError} = {}) {
   const binding = (await f.db.query('select * from public.whatsapp_resolve_verified_owner($1)', [phone])).rows[0];
   const scope = {workspaceId,customerId:binding.customer_id,phone};
   let extractionCalls = 0;
-  const handler = createWhatsAppBoundMessageHandler({supabase:f.supabase, authorizeScope:async () => true,
+  const handler = createWhatsAppBoundMessageHandler({audience:'owner',supabase:f.supabase, authorizeScope:async () => true,
     clock:() => new Date('2026-10-07T00:00:00Z'), logger:{error(){},warn(){}},
-    providerFactory:options => ({async generateStructured(request) {
-      extractionCalls++;
-      assert.equal(options.requestPurpose, 'extraction');
-      assert.equal(options.primaryModel, DEFAULT_EXTRACTION_MODEL);
-      assert.equal(request.name, 'invoice_extraction');
-      assert.equal(request.messages[0].content[1].type, 'image_url');
-      if (providerError) throw providerError;
-      return {data:request.validate({...structuredClone(wire),imageContent:'single_invoice'}), model:'gemini-3.5-flash-lite', usedFallback:false};
-    }}),
-    // Run the actual extraction wire adaptation and validation without OCR or
-    // any external provider request. Real pending, invoice and file stores run.
-    extract:input => extractInvoice({...input,imageExtractor:async () => null}),
+    providerFactory:()=>{throw Error('local extraction must not construct a provider');},
+    extractOffline:async()=>{extractionCalls++;if(providerError)throw providerError;return validateInvoiceExtractionWireResponse(structuredClone(wire));},
     channelFactory:() => ({async ask() { throw Error('Incomplete review must not reach the planner'); }}),
   });
   const pending = createWhatsAppPendingActionStore({supabase:f.supabase});
@@ -111,7 +101,7 @@ test('uncertain real extraction money is retained without promoting a proposal o
 
 test('printed shipping and inconsistent sample0852 items cannot bypass strict invoice math', async () => {
   const wire = invoiceWire({invoiceNumber:'SAMPLE-0852', customerName:'Jane Doe', subtotal:100,tax:10,total:115,
-    outstandingAmount:115,currency:null,currencyConfidence:0,addressHint:'United Kingdom',addressHintConfidence:.99,
+    outstandingAmount:115,currency:'USD',currencyConfidence:.99,addressHint:'United Kingdom',addressHintConfidence:.99,
     notes:'Printed shipping: 5',notesConfidence:.99,
     lineItems:[0,7,14,21].map((unitPrice,index) => ({description:`Printed item ${index+1}`,quantity:1,
       unitPrice,amount:[15,18,21,24][index],confidence:.99}))});
@@ -133,7 +123,7 @@ test('printed shipping and inconsistent sample0852 items cannot bypass strict in
   } finally { await f.close(); }
 });
 
-test('missing optional extraction facts and currency alone retain inferred currency for owner review', async () => {
+test('missing currency remains unknown and requires explicit owner review', async () => {
   const wire = invoiceWire({currency:null,currencyConfidence:0,lineItems:[],lineItemsConfidence:0,
     outstandingAmount:null,outstandingAmountConfidence:0});
   const extracted = validateInvoiceExtractionWireResponse(wire);
@@ -142,15 +132,15 @@ test('missing optional extraction facts and currency alone retain inferred curre
   const f = await fixture(wire);
   try {
     const answer = await f.turn('inferred-currency-source');
-    assert.match(answer, /^Invoice PRINTED-118 for Fixture customer: INR 118/);
-    assert.match(answer,/Reply yes/);
+    assert.match(answer,/Confirm the explicit currency code/);
+    assert.match(answer,/Nothing was saved/);
     const review=(await f.pending.loadInvoiceReview(f.scope)).action;
-    assert.equal(review.stage,'proposal');
+    assert.equal(review.stage,'incomplete');
     assert.equal(review.invoice.total,118);
-    assert.equal(review.invoice.currency,'INR');
+    assert.equal(review.invoice.currency,null);
     assert.equal(review.invoice.subtotal,100);
     assert.equal(review.invoice.tax,18);
-    assert.ok(review.assumptions.some(value=>/assumed workspace default INR/.test(value)));
+    assert.ok(review.missingFields.includes('currency'));
     await f.assertNoInvoiceWrites();
     assert.deepEqual(f.errors, []);
   } finally { await f.close(); }

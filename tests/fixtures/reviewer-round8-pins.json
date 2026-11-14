@@ -1,0 +1,46 @@
+[
+  {
+    "source": "tests/reviewer-round8-boundary-regressions.source.mjs",
+    "executable": "tests/reviewer-round8-boundary-regressions.test.mjs",
+    "sha256": "269aebfa545ea78cfbdfce011df38e9367e74a7a0d0b30735e00d6d370032a9d"
+  },
+  {
+    "source": "tests/reviewer-round8-derived-values.source.mjs",
+    "executable": "tests/reviewer-round8-derived-values.test.mjs",
+    "sha256": "0a5df1b5f1e17d1b5af6adb73e0e0fb4b858bf6301f3e4aceaaaf381d4d716ba"
+  },
+  {
+    "source": "tests/reviewer-round8-independent-regressions.source.mjs",
+    "executable": "tests/reviewer-round8-independent-regressions.test.mjs",
+    "sha256": "30721459883057dd691e6dd661f7ed653374e5badb7d054a4b36c536fc751429"
+  },
+  {
+    "source": "tests/reviewer-round8-long-source.source.mjs",
+    "executable": "tests/reviewer-round8-long-source.test.mjs",
+    "sha256": "86679b32ffc494796ccdcffbd24929fa1aaac6517fe6c362e04c7f36e22dba93"
+  },
+  {
+    "source": "tests/reviewer-round8-mixed-controls.source.mjs",
+    "executable": "tests/reviewer-round8-mixed-controls.test.mjs",
+    "sha256": "11cd3aded6d7b128bef237834ad0a94b7dd37c78609c213e3328066e095e1453"
+  },
+  {
+    "source": "tests/reviewer-round8-origin-sinks.source.mjs",
+    "executable": "tests/reviewer-round8-origin-sinks.test.mjs",
+    "sha256": "198bb62d9c388ccdb89dc4d72188bf4f6c2cb42128a52fecb248f7d1d9726a62"
+  },
+  {
+    "source": "tests/reviewer-round8-parity-boundary.source.mjs",
+    "executable": "tests/reviewer-round8-parity-boundary.test.mjs",
+    "sha256": "f12a0561e02a48b6b5fa3057c1ecc6e0f7ae0e189abf248d325148c32ebf3235"
+  },
+  {
+    "source": "tests/reviewer-round8-topic-routing.source.mjs",
+    "executable": "tests/reviewer-round8-topic-routing.test.mjs",
+    "sha256": "fd30b314d8ffc307b0cce95b34e933053d9100f115c36d37b4179506b1cc056b"
+  },
+  {
+    "source": "tests/reviewer-round8-harness.source.mjs",
+    "sha256": "af40aeaadd25fb9ff486b0ed4cb25d72510af9b5f8e6e70493e040ce57991706"
+  }
+]

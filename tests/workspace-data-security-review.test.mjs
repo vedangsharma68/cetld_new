@@ -9,7 +9,7 @@ const scope=Object.freeze({
   workspaceId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   ownerId:'11111111-1111-4111-8111-111111111111',
   customerId:'22222222-2222-4222-8222-222222222222',
-  phone:'+919871367051',
+  phone:'+12025550101',
 });
 
 function database({tables={}}={}) {

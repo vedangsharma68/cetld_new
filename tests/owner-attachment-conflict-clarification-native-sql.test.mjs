@@ -1,3 +1,7 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
+import {cloudflarePartsResponse,cloudflareToolResults} from './fixtures/cloudflare-wire.mjs';
+import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -5,12 +9,12 @@ import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createOwnerSafetyTools} from '../automation/whatsapp/owner-agent.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 
 const exactOwnerClarification='My business issued this invoice. The currency is USD. The PAID stamp is incorrect: no payment has been received, and the full USD 93.50 is still due. Save it as an unpaid draft with no customer messages or reminders.';
 
-test('exact owner clarification continues the retained review without asking for its extracted customer',()=>{
+engineTest('exact owner clarification continues the retained review without asking for its extracted customer',()=>{
  const action={type:'invoice_review_draft',stage:'incomplete',missingFields:['currency','direction'],validationIssues:['PAYMENT_STATUS_CONFLICT'],
   invoice:{clientName:'Test Business',total:93.50,outstanding:93.50,alreadyPaid:false,currency:null,direction:'uncertain'},
   paymentEvidence:{status:'paid',text:'PAID stamp; Amount due $93.50'}};
@@ -23,7 +27,7 @@ test('exact owner clarification continues the retained review without asking for
   assert.equal(tools(contradiction).getAttachmentReviewContinuation(),null,'affirmative receipt evidence must prevent an unpaid resolution');
 });
 
-for(const installedLineEndings of ['LF','CRLF'])test(`native Gemini owner clarifies the false PAID stamp from ${installedLineEndings} installed SQL before a later save`,async()=>{
+for(const installedLineEndings of ['LF','CRLF'])engineTest(`native Cloudflare owner clarifies the false PAID stamp from ${installedLineEndings} installed SQL before a later save`,async()=>{
  const f=await createOfflineSqlNetwork({excludeMigrations:['20261008193550_invoice_review_inferred_currency_unpaid_correction.sql','20261009015001_owner_payment_factual_instruction.sql','20261009031935_invoice_review_nonzero_inferred_currency_correction.sql','20261009040005_invoice_review_general_inferred_currency_correction.sql']}),{db,supabase}=f,ownerId=randomUUID(),phone='+15555550125';
  try{
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -36,16 +40,15 @@ for(const installedLineEndings of ['LF','CRLF'])test(`native Gemini owner clarif
   const facts={invoiceNumber:'INV3337',customerName:'Test Business',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:85,tax:8.50,total:93.50,outstandingAmount:93.50,currency:null,direction:'uncertain',clientPhone:null,clientPhoneRaw:null,clientEmail:null,notes:'Payment due within 30 days.',currencySource:null,addressHint:null,paymentTerms:null,paymentStatus:'paid',paymentStatusEvidence:'PAID stamp; Amount due $93.50'};
   const wire={...Object.fromEntries(Object.entries(facts).flatMap(([key,value])=>[[key,value],[key+'Confidence',value==null?0:.99]])),lineItems:[{description:'Service',quantity:1,unitPrice:85,amount:85,confidence:.99}],lineItemsConfidence:.99};
   const bytes=Buffer.from([255,216,255,0,0,0]),results=[],contracts=[];let currentTurn=0,providerCalls=0,extractions=0,confirming=false;
-  const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},toolsFactory:options=>{
+  const handler=createOwnerEngineHarness({supabase,localExtraction:async input=>{extractions++;return localExtraction(wire);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},toolsFactory:options=>{
    const tools=createOwnerWorkspaceTools(options);
    return {...tools,async execute(name,args,context){const result=await tools.execute(name,args,context);results.push(result);return result;}};
   },fetchImpl:async(url,init)=>{
    providerCalls++;const body=JSON.parse(init.body);
-   if(new URL(url).hostname==='api.cloudflare.com')return Response.json({error:{message:'isolated primary unavailable'}},{status:503});
-   assert.equal(new URL(url).hostname,'generativelanguage.googleapis.com');
-   const native=parts=>Response.json({candidates:[{content:{role:'model',parts},finishReason:'STOP'}]});
+   assert.equal(new URL(url).hostname,'api.cloudflare.com');
+   const native=cloudflarePartsResponse;
    if(body.generationConfig?.responseMimeType==='application/json'){extractions++;return native([{text:JSON.stringify({...wire,imageContent:'single_invoice'})}]);}
-   const tool=body.contents.flatMap(item=>item.parts||[]).findLast(part=>part.functionResponse)?.functionResponse;
+   const resultFromWire=cloudflareToolResults(body).at(-1);const tool=resultFromWire?{response:resultFromWire}:null;
    // An invented create call must be replaced by the server-selected attachment
    // operation on both ingestion and clarification turns.
    if(!tool){contracts.push(body.tools);return native([{functionCall:{name:'workspaceData',args:confirming?{operation:'confirm'}:{operation:'create',table:'invoices',values:{invoice_number:'INVENTED',customer_name:'Invented customer',total_amount:1,currency:'USD',status:'unpaid'}}},thoughtSignature:'fixture-native-signature'}]);}

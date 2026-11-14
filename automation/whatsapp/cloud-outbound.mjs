@@ -1,3 +1,4 @@
+import {dispatchWhatsApp,prepareWhatsAppDispatch} from './private-dispatch.mjs';
 import {authorizeOwnerPhone} from './owner-binding.mjs';
 import {createConversationStore,conversationCallbackToken} from './conversation-store.mjs';
 import {getSendEligibility} from './consent.mjs';
@@ -169,7 +170,7 @@ export function createWhatsAppOutbound({
     return block(logger,reason,{workspaceId,to,kind});
   }
 
-  async function postMessage({workspaceId,to,kind,payload,key}) {
+  async function postMessage({workspaceId,to,kind,payload,key,admission,audience}) {
     const finish=async result=>{
       if(workspaceId&&conversationStore){
         for(let attempt=0;attempt<3;attempt++){
@@ -186,13 +187,14 @@ export function createWhatsAppOutbound({
     const version = env.WHATSAPP_GRAPH_API_VERSION;
     let response;
     try {
-      response = await fetchImpl(`https://graph.facebook.com/${version}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+      response = await dispatchWhatsApp({supabase,workspaceId,fetchImpl,admission,audience,url:`https://graph.facebook.com/${version}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,init:{
         method: 'POST',
         headers: {Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json'},
         body: JSON.stringify({messaging_product: 'whatsapp', recipient_type: 'individual', to: to.slice(1), ...payload}),
         signal: AbortSignal.timeout(15000),
-      });
+      }});
     } catch (error) {
+      if(error?.code==='PRIVATE_PAYLOAD_BLOCKED')return finish({status:'blocked',reason:'private_payload'});
       logger?.error?.({event: 'whatsapp_outbound_unknown', workspaceId, recipient: maskedPhone(to), kind, message: error?.message});
       return finish({status: 'unknown', reason: 'network_error'});
     }
@@ -215,13 +217,13 @@ export function createWhatsAppOutbound({
       if (!env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) throw new Error('WhatsApp credentials missing');
       if (!/^\d{5,30}$/.test(String(env.WHATSAPP_PHONE_NUMBER_ID))) throw new Error('Invalid WhatsApp phone number ID');
       if (!/^v\d+\.\d+$/.test(String(env.WHATSAPP_GRAPH_API_VERSION || ''))) throw new Error('WhatsApp Graph API version missing');
-      const response = await fetchImpl(`https://graph.facebook.com/${env.WHATSAPP_GRAPH_API_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+      const response = await dispatchWhatsApp({fetchImpl,url:`https://graph.facebook.com/${env.WHATSAPP_GRAPH_API_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,init:{
         method: 'POST',
         headers: {Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json'},
         body: JSON.stringify({messaging_product: 'whatsapp', status: 'read', message_id: inboundId,
           typing_indicator: {type: 'text'}}),
         signal: AbortSignal.timeout(15000),
-      });
+      }});
       if (!response.ok) throw Object.assign(new Error('WhatsApp Graph API rejected typing indicator'), {httpStatus: response.status});
       return {status: 'accepted'};
     } catch (error) {
@@ -269,6 +271,7 @@ export function createWhatsAppOutbound({
     const payload=await prepareMessage({workspaceId,to,customerId,invoiceId,key,kind:'invoice_update',payload:{
       type:'template',template:buildReminderTemplate(selectReminderTemplate({tone:'professional'}),[name,number,nonempty(finalEligibility.customer.name,'customerName',256)]).template,
     }});
+    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to});
     const claim = await claimInvoiceUpdate({workspaceId, invoiceId, customerId, phone: to, idempotencyKey: eventKey, expectedUpdatedAt: revision});
     if (claim?.claimed !== true) return block(logger, claim?.reason || 'duplicate_invoice_update', {workspaceId, to, kind: 'invoice_update'});
     if(!await verifiedBusinessName(supabase,workspaceId,name))
@@ -280,7 +283,7 @@ export function createWhatsAppOutbound({
     // This is an explicitly neutral, fixed test template. The approved Meta
     // template must say "Hi, this is {{1}}" and provide an invoice update with
     // {{2}}. No caller-controlled reminder content is accepted.
-    return postMessage({workspaceId,to,key,kind:'invoice_update',payload});
+    return postMessage({workspaceId,to,key,admission,kind:'invoice_update',payload});
   }
 
   async function sendServiceReply({workspaceId = null, to, body, buttons, ownerActionFallback, lastInboundAt, kind = 'normal', messageId, businessName, audience='customer', ownerLinkResult, phase='answer'} = {}) {
@@ -353,6 +356,7 @@ export function createWhatsAppOutbound({
     const payload=await prepareMessage({workspaceId,to,kind,audience,customerId,key,payload:replyPayload,ownerActionFallback:fallbackRef});
     if(audience==='owner'&&ownerButtonClaimIssue(payload.text?.body||payload.interactive?.body?.text,{buttonsAvailable:Boolean(payload.interactive?.action?.buttons?.length)}))throw new TypeError('stored owner reply advertises missing buttons');
     if(audience!=='owner'&&!payload.text.body.endsWith(`\n\n- ${owner}`))return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed'});
+    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to});
     const authorization = await authorizeInboundReply({workspaceId, phone: to, kind, messageId: inboundId,...(audience==='owner'?{audience,phase}: {})});
     if (authorization?.allowed !== true) return denyPrepared({workspaceId,to,kind,key,reason:authorization?.reason||'inbound_reply_denied'});
     if(workspaceId&&!await verifiedBusinessName(supabase,workspaceId,owner))
@@ -371,7 +375,7 @@ export function createWhatsAppOutbound({
       const finalAuthority=await serviceAuthority(authorityInput);
       if(!finalAuthority.allowed)return denyPrepared({workspaceId,to,kind,key,reason:finalAuthority.reason,claimed:true});
     }
-    return postMessage({workspaceId,to,kind,key,payload});
+    return postMessage({workspaceId,to,kind,key,payload,admission,audience});
   }
 
   async function sendServiceMedia({workspaceId, to, media, caption, lastInboundAt, messageId, businessName,audience='customer'} = {}) {
@@ -400,12 +404,13 @@ export function createWhatsAppOutbound({
       : {type:'document',document:{id:'',filename:media.file_name||media.fileName||'invoice.pdf',caption:brandedCaption}}});
     if(audience!=='owner'&&!(payload.image?.caption||payload.document?.caption).endsWith(`\n\n- ${businessName}`))
       return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed'});
+    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to,media});
     const form = new FormData();
     form.set('messaging_product', 'whatsapp');
     form.set('type', media.mime_type || media.mimeType || 'application/octet-stream');
     form.set('file', new Blob([bytes], {type: media.mime_type || media.mimeType}), media.file_name || media.fileName || 'invoice');
-    const upload = await fetchImpl(`https://graph.facebook.com/${env.WHATSAPP_GRAPH_API_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/media`, {
-      method: 'POST', headers: {Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`}, body: form, signal: AbortSignal.timeout(15000)});
+    const upload = await dispatchWhatsApp({supabase,workspaceId,fetchImpl,admission,url:`https://graph.facebook.com/${env.WHATSAPP_GRAPH_API_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/media`,init:{
+      method: 'POST', headers: {Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`}, body: form, signal: AbortSignal.timeout(15000)}});
     if (!upload.ok) {
       await conversationStore?.abandonReply?.({workspaceId,key});
       return {status: 'failed', reason: 'media_upload_rejected', httpStatus: upload.status};
@@ -415,6 +420,7 @@ export function createWhatsAppOutbound({
       await conversationStore?.abandonReply?.({workspaceId,key});
       return {status:'failed',reason:'missing_media_id'};
     }
+    admission.bindMediaId(uploaded.id);
     const authorization=await authorizeInboundReply({workspaceId,phone:to,kind,messageId,...(audience==='owner'?{audience}:{})});
     if(authorization?.allowed!==true)return denyPrepared({workspaceId,to,kind,key,reason:authorization?.reason||'inbound_reply_denied'});
     const finalEligibility=env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'?await serviceAuthority(authorityInput)
@@ -424,7 +430,7 @@ export function createWhatsAppOutbound({
       return denyPrepared({workspaceId,to,kind,key,reason:finalEligibility.allowed?'customer_binding_changed':finalEligibility.reason||'owner_binding_changed',claimed:true});
     if(!await verifiedBusinessName(supabase,workspaceId,businessName))return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed',claimed:true});
     if(image)payload.image.id=uploaded.id;else payload.document.id=uploaded.id;
-    return postMessage({workspaceId,to,kind,key,payload});
+    return postMessage({workspaceId,to,kind,key,payload,admission,audience});
   }
 
   async function sendOwnerTestTemplate({review}={}) {
@@ -438,6 +444,7 @@ export function createWhatsAppOutbound({
     if(JSON.stringify(current)!==JSON.stringify(review))return block(logger,'owner_test_review_changed',{workspaceId,to,kind});
     const payload=await prepareMessage({workspaceId,to,key,kind,audience:'owner',invoiceId,
       customerId:current.customerId,payload:{type:'template',template:current.template}});
+    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to});
     if(!await claimOwnerTest({supabase,workspaceId,key}))return await readOwnerTestReceipt({supabase,workspaceId,ownerId,invoiceId})
       ||block(logger,'duplicate_owner_test',{workspaceId,to,kind});
     try {
@@ -446,7 +453,7 @@ export function createWhatsAppOutbound({
     }catch{
       return denyPrepared({workspaceId,to,key,kind,reason:'owner_test_authorization_changed',claimed:true});
     }
-    return postMessage({workspaceId,to,key,kind,payload});
+    return postMessage({workspaceId,to,key,kind,payload,admission,audience:'owner'});
   }
 
   // Intentionally no scheduler or arbitrary reminder send method.

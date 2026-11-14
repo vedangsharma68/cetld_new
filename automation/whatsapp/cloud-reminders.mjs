@@ -1,3 +1,4 @@
+import {dispatchWhatsApp,prepareWhatsAppDispatch} from './private-dispatch.mjs';
 import {isTestInvoice} from '../test-invoice.mjs';
 import {TEST_TEMPLATE_BLOCK_REASON} from './test-reminder-policy.mjs';
 import {reminderPaymentRpc,localReminderStatusPayable,hasExternalReminderLedger} from '../external-reminder-verification.mjs';
@@ -42,7 +43,7 @@ export function createFirstPartyReminderProvider({env=process.env,supabase,store
     if(!env.WHATSAPP_ACCESS_TOKEN||!/^\d{5,30}$/.test(env.WHATSAPP_PHONE_NUMBER_ID||'')||!/^\d{5,30}$/.test(env.WHATSAPP_WABA_ID||'')||!/^v\d+\.\d+$/.test(env.WHATSAPP_GRAPH_API_VERSION||''))return blocked('missing_configuration');
     if(template.wabaId!==env.WHATSAPP_WABA_ID||template.phoneNumberId!==env.WHATSAPP_PHONE_NUMBER_ID)return blocked('template_account_mismatch');
     if(!store?.getInvoice||!store?.getWorkspacePreferences||!supabase?.rpc)return blocked('missing_store');
-    let snapshot,payload,hash,callbackToken;
+    let snapshot,payload,hash,callbackToken,admission;
     try {
       const scope={ownerId,workspaceId,invoiceId:input.invoiceId};
       const invoice=await store.getInvoice(scope);
@@ -80,6 +81,7 @@ export function createFirstPartyReminderProvider({env=process.env,supabase,store
       // Required future RPC: lock owner/workspace, claim, invoice, preferences,
       // customer, consent and suppression; validate this entire snapshot; reserve
       // one dispatch durably. Missing/failed gate never falls back to old SQL.
+      admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:input.to});
       const gate=await reminderPaymentRpc({supabase,name:'cetld_core_authorize_first_party_reminder',invoice,ownerId,workspaceId,accounting,env,fetchImpl,args:{
         p_owner_id:ownerId,p_workspace_id:workspaceId,p_claim_id:claimId,p_snapshot:snapshot,p_snapshot_hash:hash}});
       if(gate?.error)return blocked('atomic_gate_unavailable');
@@ -91,12 +93,12 @@ export function createFirstPartyReminderProvider({env=process.env,supabase,store
     }catch{return blocked('eligibility_unavailable');}
     // No asynchronous operation between final gate completion and HTTP dispatch.
     try {
-      const response=await fetchImpl(`https://graph.facebook.com/${env.WHATSAPP_GRAPH_API_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,{
-        method:'POST',headers:{Authorization:`Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      const response=await dispatchWhatsApp({supabase,workspaceId,fetchImpl,admission,url:`https://graph.facebook.com/${env.WHATSAPP_GRAPH_API_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,init:{
+        method:'POST',headers:{Authorization:`Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,'Content-Type':'application/json'},body:JSON.stringify(payload)}});
       if(!response.ok)return {status:response.status>=500||response.status===408?'unknown':'failed'};
       const result=await response.json();
       const id=result?.messages?.[0]?.id;
       return typeof id==='string'&&id.trim()&&id.length<=256?{status:'accepted',providerMessageId:id,callbackToken}:{status:'unknown'};
-    }catch{return {status:'unknown'};}
+    }catch(error){return error?.code==='PRIVATE_PAYLOAD_BLOCKED'?{status:'blocked',reason:'private_payload'}:{status:'unknown'};}
   }};
 }

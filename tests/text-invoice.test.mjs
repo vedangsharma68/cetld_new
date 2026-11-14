@@ -6,7 +6,7 @@ import {ownerGroundingIssue} from '../automation/whatsapp/owner-grounding.mjs';
 import {runOwnerAgent} from '../automation/whatsapp/owner-agent.mjs';
 
 const clock=()=>new Date('2026-10-18T12:18:00Z');
-const scope={workspaceId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',ownerId:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',phone:'+919871367051'};
+const scope={workspaceId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',ownerId:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',phone:'+12025550101'};
 const examples=[
   ['new invoice QA-REPRO-001, QA Repro Customer, Rs 1,500, due 25 Oct','QA Repro Customer',1500,'2026-10-25','QA-REPRO-001'],
   ['new invoice QA-REPRO-002 for QA Repro Customer, Rs 1,500, due 25 Oct','QA Repro Customer',1500,'2026-10-25','QA-REPRO-002'],

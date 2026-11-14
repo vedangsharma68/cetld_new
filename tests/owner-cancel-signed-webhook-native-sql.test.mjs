@@ -1,3 +1,5 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,createHmac} from 'node:crypto';
@@ -5,7 +7,7 @@ import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
 import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
 import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 import {createConversationStore} from '../automation/whatsapp/conversation-store.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 
 const phone='+12025550281',waba='1234567890123456';
 const env={NODE_ENV:'test',SUPABASE_URL:'https://fixture.supabase.test',SUPABASE_SERVICE_ROLE_KEY:'fixture-key',
@@ -39,7 +41,7 @@ async function fixture(){
  const client=(await f.db.query("insert into customers(workspace_id,name) values($1,'QA fixture') returning id",[workspaceId])).rows[0].id;
  const invoiceId=(await f.db.query("insert into invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,status,metadata) values($1,$2,'INV-SYNTHETIC-281',current_date,current_date+30,'USD',100,'draft','{\"invoice_direction\":\"receivable\",\"followup_state\":\"paused\"}') returning id",[workspaceId,client])).rows[0].id;
  await f.db.query("insert into invoice_files(workspace_id,invoice_id,storage_path,file_name,mime_type,size_bytes) values($1,$2,$3,'fixture.jpg','image/jpeg',123)",[workspaceId,invoiceId,workspaceId+'/fixture.jpg']);
- const handler=createOwnerMessageHandler({supabase:f.supabase,env,fetchImpl:f.fetchImpl,logger});
+ const handler=createOwnerEngineHarness({supabase:f.supabase,env,fetchImpl:f.fetchImpl,logger});
  // The production outbound QA allowlist contains real contacts. Use a synthetic
  // transport sink here, retaining real SQL owner-reply authorization/readback.
  const conversation=createConversationStore(f.supabase),outbound={async sendTypingIndicator(){},async sendServiceReply(input){
@@ -73,7 +75,7 @@ async function fixture(){
  }catch(error){await f.close();throw error;}
 }
 
-test('signed owner cancel cancels one native payment proposal before any recipient opt-out, including old revoked owner history',async()=>{
+engineTest('signed owner cancel cancels one native payment proposal before any recipient opt-out, including old revoked owner history',async()=>{
  const f=await fixture();try{
   const before=await f.snapshot();assert.equal(await f.post('owner-proposal','Record a USD 40 partial payment on invoice INV-SYNTHETIC-281. Leave USD 60 outstanding.'),200);
   assert.equal((await f.runtime.processPending()).completed,1,JSON.stringify({errors:f.errors,events:(await f.db.query('select * from whatsapp_inbound_events')).rows,graph:f.graph}));
@@ -99,7 +101,7 @@ test('signed owner cancel cancels one native payment proposal before any recipie
  }finally{await f.close();}
 });
 
-for(const text of ['STOP','cancel'])test(`signed recipient ${text} keeps synchronous global/scoped suppression and replay dedup`,async()=>{
+for(const text of ['STOP','cancel'])engineTest(`signed recipient ${text} keeps synchronous global/scoped suppression and replay dedup`,async()=>{
  const f=await fixture();try{
   // A historical verified proof alone must not exempt an unbound recipient.
   await f.db.query('update customers set metadata=metadata-\'whatsapp_owner\' where workspace_id=$1 and phone=$2',[f.workspaceId,phone]);
@@ -112,7 +114,7 @@ for(const text of ['STOP','cancel'])test(`signed recipient ${text} keeps synchro
  }finally{await f.close();}
 });
 
-test('signed owner lookup outage is retryable before suppression; retry still cancels native proposal',async()=>{
+engineTest('signed owner lookup outage is retryable before suppression; retry still cancels native proposal',async()=>{
  const f=await fixture();try{
   assert.equal(await f.post('outage-propose','Record a USD 40 partial payment on invoice INV-SYNTHETIC-281. Leave USD 60 outstanding.'),200);await f.runtime.processPending();
   const before=await f.snapshot();let unavailable=true;
@@ -123,7 +125,7 @@ test('signed owner lookup outage is retryable before suppression; retry still ca
  }finally{await f.close();}
 });
 
-test('signed reminder STOP button still suppresses even a currently bound owner phone',async()=>{
+engineTest('signed reminder STOP button still suppresses even a currently bound owner phone',async()=>{
  const f=await fixture();try{
   assert.equal(await f.post('reminder-stop','STOP',{type:'button',context:'wamid.synthetic.reminder'}),200);
   const after=await f.snapshot();assert.equal(after.global.length,1);assert.ok(after.consents.every(c=>c.revoked_at));assert.equal(after.payments,0);
@@ -131,7 +133,7 @@ test('signed reminder STOP button still suppresses even a currently bound owner 
  }finally{await f.close();}
 });
 
-test('signed owner cancel without a pending action asks what to cancel without a planner or consent writes',async()=>{
+engineTest('signed owner cancel without a pending action asks what to cancel without a planner or consent writes',async()=>{
  const f=await fixture();try{
   const before=await f.snapshot();
   f.intercept(url=>{if(url.hostname==='api.cloudflare.com')throw Error('Clarification must not need a planner');});
@@ -143,7 +145,7 @@ test('signed owner cancel without a pending action asks what to cancel without a
  }finally{await f.close();}
 });
 
-for(const text of ['STOP','unsubscribe','stop messaging me'])test(`signed explicit owner ${text} suppresses before HTTP 200 despite owner lookup outage`,async()=>{
+for(const text of ['STOP','unsubscribe','stop messaging me'])engineTest(`signed explicit owner ${text} suppresses before HTTP 200 despite owner lookup outage`,async()=>{
  const f=await fixture();try{
   // Clear opt-outs must not depend on the owner lookup or a planner. Preserve
   // a pending financial proposal: stopping messages cannot cancel or confirm it.
@@ -173,7 +175,7 @@ for(const text of ['STOP','unsubscribe','stop messaging me'])test(`signed explic
  }finally{await f.close();}
 });
 
-test('signed owner cancel cancels only the pending invoice edit without a planner, including stale yes',async()=>{
+engineTest('signed owner cancel cancels only the pending invoice edit without a planner, including stale yes',async()=>{
  const f=await fixture();try{
   const before=await f.snapshot(),invoice=before.invoice;
   const customer=(await f.db.query("select id from customers where workspace_id=$1 and phone=$2 and metadata->>'whatsapp_owner'='true'",[f.workspaceId,phone])).rows[0];

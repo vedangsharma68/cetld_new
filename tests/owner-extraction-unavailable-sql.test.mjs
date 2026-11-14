@@ -1,13 +1,14 @@
+import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 import {ownerGroundingIssue} from '../automation/whatsapp/owner-grounding.mjs';
 import {DEFAULT_EXTRACTION_MODEL,GEMINI_FALLBACK_MODEL,ZEN_PRIMARY_MODEL} from '../ai/provider.mjs';
 
-const phone = '+919871367051';
+const phone = '+12025550101';
 const incorrect = "I couldn't log the invoice because I couldn't find it.";
 
 async function fixture(t, {persistentIncorrectReply = false} = {}) {
@@ -25,57 +26,15 @@ async function fixture(t, {persistentIncorrectReply = false} = {}) {
   await f.db.query("insert into whatsapp_inbound_media(provider_message_id,media_id,mime_type,bytes,size_bytes) values($1,'fixture-media','image/jpeg',$2,$3)", [sourceId,bytes,bytes.length]);
   const providerRequests = [], results = [], logs = [];
   let finalReplies = 0;
-  // Advance only Date, so the real 28-second extraction deadline is exercised
-  // without sleeping or changing provider limits, attempts, keys, or routing.
-  t.mock.timers.enable({apis:['Date'],now:Date.now()});
-  const fetchImpl = async (url, options) => {
-    const parsed = new URL(url), wire = JSON.parse(options.body);
-    if (parsed.hostname === 'api.cloudflare.com') {
-      providerRequests.push({provider:'cloudflare',model:wire.model});
-      const tool = wire.messages.findLast(item => item.role === 'tool');
-      let message;
-      if (!tool) {
-        assert.equal(wire.tool_choice, 'required');
-        assert.deepEqual(wire.tools.map(item => item.function.name), ['workspaceData']);
-        message = {content:'',tool_calls:[{id:'save-source',type:'function',function:{name:'workspaceData',arguments:'{"operation":"saveAttachment"}'}}]};
-      } else {
-        const result = JSON.parse(tool.content);
-        results.push(result);
-        finalReplies++;
-        message = {content:finalReplies === 1 || persistentIncorrectReply ? incorrect : result.message};
-      }
-      return Response.json({choices:[{message,finish_reason:message.tool_calls ? 'tool_calls' : 'stop'}]});
-    }
-    if (parsed.hostname === 'generativelanguage.googleapis.com') {
-      const model = decodeURIComponent(parsed.pathname.match(/\/models\/([^:]+):/)[1]);
-      assert.ok(wire.contents[0].parts.some(part => part.inlineData?.mimeType === 'image/jpeg'));
-      providerRequests.push({provider:'google',model});
-      if (model === DEFAULT_EXTRACTION_MODEL) {
-        t.mock.timers.tick(12_000);
-        throw new DOMException('isolated transport timeout', 'AbortError');
-      }
-      assert.equal(model, GEMINI_FALLBACK_MODEL);
-      t.mock.timers.tick(2550);
-      return Response.json({error:{code:503,message:'isolated provider unavailable'}}, {status:503});
-    }
-    if (parsed.hostname === 'opencode.ai') {
-      assert.equal(wire.model, ZEN_PRIMARY_MODEL);
-      providerRequests.push({provider:'opencode-zen',model:wire.model});
-      // Exhaust the remaining extraction deadline: the fourth configured leg
-      // is never requested, and each observed model has exactly one attempt.
-      t.mock.timers.tick(13_450);
-      throw new DOMException('isolated transport timeout', 'AbortError');
-    }
-    throw Error('Fixture refused unexpected HTTP host');
-  };
-  // Default owner handler, AIProvider native transports, workspace tools,
-  // extractInvoice, pending RPCs, reply receipts, and SQL all run unchanged.
-  const handler = createOwnerMessageHandler({supabase:f.supabase,fetchImpl,
-    env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',OPENCODE_ZEN_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
+  let localReads=0;
+  const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test'},
+    localExtraction:async()=>{localReads++;throw Object.assign(new Error('private local timeout detail'),{code:'TIMEOUT',status:504});},
+    providerFactory:()=>{providerRequests.push('provider');throw Error('local failure cannot invoke a provider');},
+    toolsFactory:options=>{const tools=createOwnerWorkspaceTools(options);return {...tools,async execute(...args){const result=await tools.execute(...args);results.push(result);return result;}};},
     logger:{info(label,data){logs.push({label,data});},warn(){},error(label,data){logs.push({label,data});}}});
   const turn = () => handler({...scope,message:'log this invoice',messageId:sourceId,
     media:{bytes,mimeType:'image/jpeg',fileName:'source.jpg'}});
-  return {...f,scope,sourceId,bytes,turn,providerRequests,results,logs,
+  return {...f,scope,sourceId,bytes,turn,providerRequests,results,logs,get localReads(){return localReads;},
     async assertNoFinancialWrites() {
       for (const table of ['invoices','invoice_files','payments','invoice_correction_audits','whatsapp_direct_write_receipts','whatsapp_owner_action_receipts']) {
         assert.equal((await f.db.query(`select count(*)::int n from ${table}`)).rows[0].n, 0, table);
@@ -85,7 +44,7 @@ async function fixture(t, {persistentIncorrectReply = false} = {}) {
     }};
 }
 
-for (const persistentIncorrectReply of [false,true]) test(`native extraction timeout is truthful and durable without repeated provider calls (repeated bad final=${persistentIncorrectReply})`, async t => {
+for (const persistentIncorrectReply of [false,true]) test(`local extraction timeout is truthful and durable without any provider calls (repeated bad final=${persistentIncorrectReply})`, async t => {
   const f = await fixture(t, {persistentIncorrectReply});
   try {
     const reply = await f.turn();
@@ -95,10 +54,8 @@ for (const persistentIncorrectReply of [false,true]) test(`native extraction tim
     // The outer handler exposes the grounded answer rather than internal
     // fallback metadata. Two native final drafts prove a repair was attempted;
     // a repeatedly incorrect model still yields the canonical existing fallback.
-    assert.equal(f.results.length, 2);
-    assert.ok(reply.agentDiagnostics.safetyRejects.some(code => ['attachment_review_status','attachment_review_details'].includes(code)));
-    assert.deepEqual(f.providerRequests.filter(item => item.provider !== 'cloudflare').map(item => item.model),
-      [DEFAULT_EXTRACTION_MODEL,GEMINI_FALLBACK_MODEL,ZEN_PRIMARY_MODEL]);
+    assert.equal(f.results.length, 1);assert.equal(f.localReads,1);
+    assert.deepEqual(f.providerRequests,[],'timeout and fallback paths cannot invoke a model');
     const result = f.results[0];
     assert.equal(result.code, 'UNAVAILABLE');
     assert.equal(result.outcome, 'not_saved');
@@ -127,7 +84,7 @@ for (const persistentIncorrectReply of [false,true]) test(`native extraction tim
     assert.equal(failure.status, 504);
     assert.equal(Object.hasOwn(failure, 'message'), false);
     await f.assertNoFinancialWrites();
-  } finally { t.mock.timers.reset(); await f.close(); }
+  } finally { await f.close(); }
 });
 
 test('contextual invoice absence requires a checked NOT_FOUND result while missing field wording stays valid', () => {

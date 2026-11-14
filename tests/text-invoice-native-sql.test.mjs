@@ -1,14 +1,16 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createDirectOwnerWriteAdapter} from '../automation/whatsapp/direct-owner-write.mjs';
 import {ownerCalendar} from '../automation/whatsapp/workspace-records.mjs';
 import {CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 
-test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, without outbound delivery',async()=>{
-  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+919871367051';
+engineTest('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, without outbound delivery',async()=>{
+  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+12025550101';
   const clock=()=>new Date('2026-10-18T12:18:00Z');
   try{
     await db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -20,7 +22,7 @@ test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, wit
     const customerId=(await db.query('select * from whatsapp_resolve_verified_owner($1)',[phone])).rows[0].customer_id;
     await db.query("update workspace_settings set owner_bot_preferences=owner_bot_preferences||'{\"confirmationMode\":\"direct\"}' where workspace_id=$1",[workspaceId]);
     let providerCalls=0;
-    const handler=createOwnerMessageHandler({supabase,clock,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
+    const handler=createOwnerEngineHarness({supabase,clock,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
       providerFactory:()=>({async generate({messages}){
         providerCalls++;
         if(messages.some(item=>item.role==='tool'))return {model:CF_PRIMARY_MODEL,content:'Created invoice.'};
@@ -97,7 +99,7 @@ test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, wit
     assert.equal(providerCalls,0,'complete owner text must not depend on garbage planner fields or a final model reply');
     await db.query("update workspace_settings set owner_bot_preferences=owner_bot_preferences||'{\"confirmationMode\":\"buttons\"}' where workspace_id=$1",[workspaceId]);
     let confirmationModelCalls=0;
-    const confirming=createOwnerMessageHandler({supabase,clock:()=>new Date(),env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
+    const confirming=createOwnerEngineHarness({supabase,clock:()=>new Date(),env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
       providerFactory:()=>({async generate({messages}){
         confirmationModelCalls++;
         const tool=messages.findLast(item=>item.role==='tool');
@@ -128,7 +130,7 @@ test('owner text -> workspace tool -> Supabase SDK -> SQL -> verified reply, wit
   }finally{await db.close();}
 });
 
-test('unnumbered owner invoice retries reuse only an exact scoped instruction and verified receipt',async()=>{
+engineTest('unnumbered owner invoice retries reuse only an exact scoped instruction and verified receipt',async()=>{
   const f=await createOfflineSqlNetwork(),{db,supabase}=f;
   let today='2026-10-18';
   try{
@@ -153,7 +155,7 @@ test('unnumbered owner invoice retries reuse only an exact scoped instruction an
         throw Error('Simulated lost response after the committed write');
       return result;
     };
-    const handler=createOwnerMessageHandler({supabase:lossy,clock:()=>new Date(today+'T12:18:00Z'),env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
+    const handler=createOwnerEngineHarness({supabase:lossy,clock:()=>new Date(today+'T12:18:00Z'),env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
       providerFactory:()=>({async generate(){throw Error('Complete owner invoice instructions do not need a planner');}})});
     const turn=async(scope,messageId,message)=>{
       await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'offline',$2,'text',$3,'processing')",[messageId,scope.phone,message]);
@@ -235,7 +237,7 @@ test('unnumbered owner invoice retries reuse only an exact scoped instruction an
   }finally{await db.close();}
 });
 
-test('production rupee utterances commit exact facts, preserve explicit numbers, deduplicate retries, and clarify a missing date with zero writes',async()=>{
+engineTest('production rupee utterances commit exact facts, preserve explicit numbers, deduplicate retries, and clarify a missing date with zero writes',async()=>{
   const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+919871367059';
   // Keep the instruction and expectation on the same instant even if this
   // integration test itself straddles midnight in the business timezone.
@@ -254,7 +256,7 @@ test('production rupee utterances commit exact facts, preserve explicit numbers,
     const novemberDue=`${issueDate.slice(0,4)}-11-20`;
     const dueDate=novemberDue<issueDate?`${Number(issueDate.slice(0,4))+1}-11-20`:novemberDue;
     let providerCalls=0;
-    const handler=createOwnerMessageHandler({supabase,clock,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
+    const handler=createOwnerEngineHarness({supabase,clock,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
       providerFactory:()=>({generate(){providerCalls++;assert.fail('Natural complete or missing-date text must not call the model');}})});
     const turn=async(messageId,message)=>{
       await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'offline',$2,'text',$3,'processing')",[messageId,phone,message]);
@@ -286,7 +288,7 @@ test('production rupee utterances commit exact facts, preserve explicit numbers,
     assert.equal((await db.query('select count(*)::int n from invoices')).rows[0].n,2);
     const pending=(await db.query('select action from whatsapp_pending_actions where consumed_at is null')).rows[0].action;
     assert.equal(pending.type,'owner_invoice_create');assert.equal(pending.invoice.invoiceNumber,'QA-CONFIRM-TEXT-009');
-    const confirming=createOwnerMessageHandler({supabase,clock,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
+    const confirming=createOwnerEngineHarness({supabase,clock,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
       providerFactory:()=>({async generate({messages}){
         const result=messages.findLast(item=>item.role==='tool');
         if(!result)return {toolCalls:[{id:'confirm-production',type:'function',function:{name:'workspaceData',arguments:'{"operation":"confirm"}'}}]};
@@ -302,7 +304,7 @@ test('production rupee utterances commit exact facts, preserve explicit numbers,
   }finally{await db.close();}
 });
 
-test('SQL invoice issue dates follow the saved business timezone on both sides of IST midnight',async()=>{
+engineTest('SQL invoice issue dates follow the saved business timezone on both sides of IST midnight',async()=>{
   const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+919871367060';
   let instant;
   const clock=()=>new Date(instant);
@@ -314,7 +316,7 @@ test('SQL invoice issue dates follow the saved business timezone on both sides o
     await db.exec("reset role;set request.jwt.claim.role='service_role';set request.jwt.claim.sub=''");
     assert.equal((await db.query('select whatsapp_verify_owner_code($1,$2) value',[phone,verification.code])).rows[0].value.ok,true);
     const customerId=(await db.query('select * from whatsapp_resolve_verified_owner($1)',[phone])).rows[0].customer_id;
-    const handler=createOwnerMessageHandler({supabase,clock,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
+    const handler=createOwnerEngineHarness({supabase,clock,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
       providerFactory:()=>({generate(){assert.fail('Complete invoice instructions must not call the model');}})});
     for(const [index,[now,timezone,expectedDay]] of [
       ['2026-10-23T18:29:59Z','Asia/Kolkata','2026-10-23'],

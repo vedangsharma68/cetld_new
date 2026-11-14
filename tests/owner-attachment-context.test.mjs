@@ -142,7 +142,7 @@ test('a clear attachment save is forced through the consolidated workspaceData s
   assert.deepEqual(calledArgs,{name:'workspaceData',args:{operation:'saveAttachment'}});
   assert.ok(saveResult?.ok,JSON.stringify(saveResult));
   assert.equal(saveResult.completed,true);
-  assert.equal(rounds,2);
+  assert.equal(rounds,1);
 });
 
 test('repeating known review fields is a verified no-op, while changing extracted fields remains guarded',async()=>{

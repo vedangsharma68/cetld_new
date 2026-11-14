@@ -211,7 +211,7 @@ test('owner reminder approval uses native pending confirmations and leaves deliv
    assert.match(retry.answer,/Approved and queued/);assert.deepEqual(await row(i.id),after);
    await noSends();
   });
-  await t.test('first pronoun reminder after text creation decodes model filters and preserves specific refusals and preview',async()=>{
+  await t.test('first pronoun reminder after text creation resolves locally and preserves specific refusals and preview',async()=>{
    const history=[];let mode='create',modelCalls=0,filters;
    const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test'},logger,historyReader:async()=>history,
     providerFactory:()=>({async generate({messages}){
@@ -228,11 +228,11 @@ test('owner reminder approval uses native pending confirmations and leaves deliv
     return result;
    };
    const created=await turn('new invoice QA-REPRO-001, QA Repro Customer, Rs 1,500, due tomorrow');
-   assert.match(created.answer,/Created invoice/);
+   assert.match(created.answer,/Created invoice/);assert.equal(modelCalls,0,'text creation and subsequent reminders stay local');
    const fresh=(await db.query("select * from invoices where workspace_id=$1 and metadata->>'source_invoice_number'='QA-REPRO-001'",[workspaceId])).rows[0];
    assert.ok(fresh);assert.equal(Number(fresh.total_amount),1500);assert.equal(fresh.status,'draft');
    filters=target(fresh.invoice_number);mode='reminder';
-   const remind=async()=>{modelCalls=0;const reply=await turn('send him a reminder to pay');assert.equal(reply.plannerFailure,undefined,JSON.stringify(reply));assert.equal(modelCalls,1);return reply;};
+   const remind=async()=>{modelCalls=0;const reply=await turn('send him a reminder to pay');assert.equal(reply.plannerFailure,undefined,JSON.stringify(reply));assert.equal(modelCalls,0);return reply;};
    assert.match((await remind()).answer,/usable WhatsApp number/);
    await db.query('update customers set phone=$2 where id=$1',[fresh.customer_id,'+12025550109']);
    assert.match((await remind()).answer,/agreed to WhatsApp reminders/);
@@ -243,7 +243,8 @@ test('owner reminder approval uses native pending confirmations and leaves deliv
    assert.match(preview.answer,/Reminder preview/);assert.match(preview.answer,/Reply yes/);
    assert.deepEqual(await row(fresh.id),before);await cancel();
    filters=[...target(fresh.invoice_number),{column:'customer_name',operator:'eq',value:'QA Repro Customer'}];
-   assert.match((await remind()).answer,/identify one invoice/);assert.deepEqual(await row(fresh.id),before);
+   const malformed=await execute('send a reminder for '+fresh.invoice_number,{operation:'sendReminderNow',table:'invoices',filters});
+   assert.match(malformed.result.message,/identify one invoice/);assert.deepEqual(await row(fresh.id),before);
    await noSends();
   });
   await t.test('RPC cannot be called by authenticated or anonymous roles',async()=>{

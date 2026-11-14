@@ -1,8 +1,12 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
+import {extractInvoiceOffline} from '../ai/extraction.mjs';
+import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 
 function textPdf(lines) {
  const escape=text=>text.replace(/[\\()]/g,'\\$&');
@@ -14,7 +18,7 @@ function textPdf(lines) {
  return Buffer.from(pdf);
 }
 
-for(const kind of ['paid-conflict-pdf','paid-image','paid-evidence-conflict-image','unsupported-unpaid-image','paid-zero-pdf','partial-pdf','paid-fallback-pdf','shipping-pdf'])test(`native attachment keeps ${kind} in review without invoice or payment writes`,async()=>{
+for(const kind of ['paid-conflict-pdf','paid-image','paid-evidence-conflict-image','unsupported-unpaid-image','paid-zero-pdf','partial-pdf','paid-fallback-pdf','shipping-pdf'])engineTest(`native attachment keeps ${kind} in review without invoice or payment writes`,async()=>{
  const f=await createOfflineSqlNetwork(),{db,supabase}=f,ownerId=randomUUID(),phone='+15555550126';
  try{
   await db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -32,7 +36,7 @@ for(const kind of ['paid-conflict-pdf','paid-image','paid-evidence-conflict-imag
   const facts={invoiceNumber:'EVIDENCE-118',customerName:'Fixture customer',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:18,total:118,outstandingAmount:118,currency:'USD',direction:'receivable',clientEmail:null,clientPhone:null,clientPhoneRaw:null,notes:null,paymentStatus:fallback?null:evidenceConflict||unsupported?'unpaid':'paid',paymentStatusEvidence:fallback||unsupported?null:'PAID watermark; Total Due USD 118'};
   const wire={...Object.fromEntries(Object.entries(facts).flatMap(([key,value])=>[[key,value],[key+'Confidence',value==null?0:.99]])),lineItems:[{description:'Service',quantity:1,unitPrice:100,amount:100,confidence:.99}],lineItemsConfidence:.99};
   let requests=0,extractions=0,followup=false;
-  const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},fetchImpl:async(url,init)=>{
+  const handler=createOwnerEngineHarness({supabase,localExtraction:async input=>{extractions++;return image?localExtraction(wire):extractInvoiceOffline(input);},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},logger:{info(){},warn(){},error(){}},fetchImpl:async(url,init)=>{
    requests++;const body=JSON.parse(init.body);
    if(new URL(url).hostname==='generativelanguage.googleapis.com'){extractions++;return Response.json({candidates:[{content:{parts:[{text:JSON.stringify({...wire,...(image?{imageContent:'single_invoice'}:{})})}]},finishReason:'STOP'}]});}
    assert.equal(new URL(url).hostname,'api.cloudflare.com');
@@ -44,10 +48,10 @@ for(const kind of ['paid-conflict-pdf','paid-image','paid-evidence-conflict-imag
   const reply=await handler(input);
   const review=(await db.query("select action from whatsapp_pending_actions where workspace_id=$1 and action->>'sourceMessageId'=$2",[workspaceId,messageId])).rows[0]?.action;
   assert.equal(review?.stage,'incomplete',JSON.stringify({review,reply}));
-  assert.equal(reply.plannerFailure,undefined,JSON.stringify(reply));assert.match(reply.answer,/Nothing was saved/);assert.doesNotMatch(reply.answer,/unavailable|processing failed/i);
-  if(shipping){assert.match(reply.answer,/breakdown/);assert.match(review.invoice.notes,/Shipping 5/);assert.equal(review.invoice.total,123);assert.equal(review.invoice.subtotal,100);assert.equal(review.invoice.lineItems.length,1);assert.ok(review.validationIssues.includes('INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX'));}
-  else{assert.match(reply.answer,/payment|paid/i);assert.match(reply.answer,/outstanding|balance/i);assert.equal(review.paymentEvidence.status,partial?'partial':evidenceConflict?'conflicting':unsupported?'unpaid':'paid');if(!unsupported)assert.match(review.paymentEvidence.text,/PAID/);assert.ok(review.validationIssues.includes(zero||partial?'PAYMENT_RECORD_REQUIRES_REVIEW':unsupported?'UNCERTAIN_PAYMENT_STATUS':'PAYMENT_STATUS_CONFLICT'));assert.equal(review.invoice.alreadyPaid,false);assert.equal(review.invoice.total,118);assert.equal(review.invoice.outstanding,zero?0:partial?50:118);}
-  const count=requests,replay=await handler(input);assert.equal(replay.replayed,true);assert.equal(replay.answer,reply.answer);assert.equal(requests,count);assert.equal(extractions,image||fallback?1:0);
+  assert.equal(reply.plannerFailure,undefined,JSON.stringify(reply));assert.match(reply.answer,/Nothing was saved/);assert.doesNotMatch(reply.answer,/reading is unavailable|processing failed/i);
+  if(shipping){assert.match(reply.answer,/breakdown|subtotal plus tax/);assert.match(review.invoice.notes,/Shipping 5/);assert.equal(review.invoice.total,123);assert.equal(review.invoice.subtotal,100);assert.equal(review.invoice.lineItems.length,1);assert.ok(review.validationIssues.includes('INVOICE_TOTAL_DOES_NOT_MATCH_SUBTOTAL_AND_TAX'));}
+  else{assert.match(reply.answer,/payment|paid/i);assert.match(reply.answer,/outstanding|balance/i);assert.equal(review.paymentEvidence.status,partial?'partial':evidenceConflict?'conflicting':unsupported?'unpaid':'paid');if(!unsupported)assert.match(review.paymentEvidence.text,/PAID/);assert.ok(review.validationIssues.includes(!image||zero||partial?'PAYMENT_RECORD_REQUIRES_REVIEW':unsupported?'UNCERTAIN_PAYMENT_STATUS':'PAYMENT_STATUS_CONFLICT'));assert.equal(review.invoice.alreadyPaid,false);assert.equal(review.invoice.total,118);assert.equal(review.invoice.outstanding,zero?0:partial?50:118);}
+  const count=requests,replay=await handler(input);assert.equal(replay.replayed,true);assert.equal(replay.answer,reply.answer);assert.equal(requests,count);assert.equal(extractions,1);
   followup=true;await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values('evidence-confirm','fixture',$1,'text','yes','processing')",[phone]);
   const confirmation=await handler({workspaceId,ownerId,customerId,phone,messageId:'evidence-confirm',message:'yes'});assert.doesNotMatch(confirmation.answer,/saved invoice|payment recorded/i);
   for(const table of ['invoices','invoice_files','payments','payment_reversals','whatsapp_owner_action_receipts','whatsapp_direct_write_receipts'])assert.equal((await db.query(`select count(*)::int n from ${table} where workspace_id=$1`,[workspaceId])).rows[0].n,0,table);

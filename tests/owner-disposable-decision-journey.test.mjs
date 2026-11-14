@@ -1,8 +1,11 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
+import {cloudflarePartsResponse,cloudflareToolResults} from './fixtures/cloudflare-wire.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {AIProvider} from '../ai/provider.mjs';
 
@@ -44,24 +47,24 @@ async function fixture(){
     async decideButton(args){const result=await tools.decideButton(args);decisions.push({args,result});return result;},
    };
   };
-  const response=parts=>Response.json({candidates:[{content:{parts},finishReason:'STOP'}]});
-  const providerFactory=options=>new AIProvider({...options,primaryModel:'gemini-3.5-flash-lite',fallbackModel:null});
+  const response=cloudflarePartsResponse;
+  const providerFactory=options=>new AIProvider({...options,primaryModel:'@cf/meta/llama-3.3-70b-instruct-fp8-fast',cfAccountId:'isolated',cfApiToken:'isolated',fallbackModel:null});
   const fetchImpl=async(url,init)=>{
-   assert.equal(new URL(url).hostname,'generativelanguage.googleapis.com','all model traffic stays inside the mocked provider');
+   assert.equal(new URL(url).hostname,'api.cloudflare.com','all model traffic stays inside the mocked provider');
    const body=JSON.parse(init.body);
    const functionCall={functionCall:{name:'workspaceData',args:{operation:'create',table:'payments',filters:[{column:'invoice_number',operator:'eq',value:'SIM-8192'}],values:{amount:70,currency:'USD'}}}};
    if(body.tools)return response([functionCall]);
-   const toolResults=body.contents.flatMap(row=>row.parts||[]).flatMap(part=>part.functionResponse?[part.functionResponse.response]:[]);
+   const toolResults=cloudflareToolResults(body);
    const latest=toolResults.at(-1);
    return response([{text:latest?.completed?'Payment decision completed.':latest?.proposal?'A USD 70 payment is proposed. Reply yes to confirm or cancel.':'No changes were made.'}]);
   };
-  const handler=createOwnerMessageHandler({supabase,env,toolsFactory,providerFactory,fetchImpl,logger:{info(){},warn(){},error(){}}});
+  const handler=createOwnerEngineHarness({supabase,env,toolsFactory,providerFactory,fetchImpl,logger:{info(){},warn(){},error(){}}});
   const pending=async()=> (await db.query("select * from whatsapp_pending_actions where workspace_id=$1 and action->>'type'='owner_invoice_payment' order by id desc limit 1",[workspaceId])).rows[0];
   return {...f,db,supabase,env,scope,invoiceId,persist,state,handler,pending,decisions};
  }catch(error){await f.close();throw error;}
 }
 
-test('a signed cancel retires a partial-payment proposal and a stale confirm or replay cannot record it',async()=>{
+engineTest('a signed cancel retires a partial-payment proposal and a stale confirm or replay cannot record it',async()=>{
  const f=await fixture();
  try{
   const before=await f.state();

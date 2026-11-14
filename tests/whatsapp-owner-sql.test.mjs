@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {PGlite} from '@electric-sql/pglite';
 import {readFile,readdir} from 'node:fs/promises';
 const owner='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',stranger='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-const phone='+919871367051';
+const phone='+12025550101';
 async function boot(beforeOwnerMigrations){
  const db=new PGlite();
  await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;

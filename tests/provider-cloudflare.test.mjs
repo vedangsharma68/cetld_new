@@ -26,11 +26,10 @@ test('Cloudflare omits empty tools and tool_choice fields',async()=>{
  assert.equal(Object.hasOwn(body,'tool_choice'),false);
 });
 
-test('a Cloudflare failure falls through to Gemini within the same call',async()=>{
- const p=make(async url=>String(url).includes('cloudflare')?{ok:false,status:429,headers:{get:()=>null},text:async()=>'{"errors":[{"message":"daily neuron cap"}]}'}:ok({candidates:[{content:{parts:[{text:'from gemini'}]},finishReason:'STOP'}]}));
- const r=await p.generate({messages:[{role:'user',content:'hi'}]});
- assert.equal(r.content,'from gemini');
- assert.equal(typeof cloudflareBreakerState().failures,'number');
+test('Cloudflare exhaustion stops safely without a Gemini request',async()=>{
+ const urls=[];const p=make(async url=>{urls.push(String(url));return failed(429,{errors:[{message:'daily neuron cap'}]});});
+ await assert.rejects(p.generate({messages:[{role:'user',content:'hi'}]}),e=>e.code==='RATE_LIMITED');
+ assert.equal(urls.length,2);assert.ok(urls.every(url=>new URL(url).hostname==='api.cloudflare.com'));assert.equal(typeof cloudflareBreakerState().failures,'number');
 });
 
 test('every requested Cloudflare model uses the Cloudflare chat completions transport',async()=>{
@@ -63,86 +62,37 @@ test('a selected non-default Cloudflare fallback runs immediately after the prim
  assert.equal(result.model,model);
 });
 
-test('Cloudflare 400 configuration errors fall back without retrying or opening the breaker',async()=>{
- const reset=make(async()=>ok({choices:[{finish_reason:'stop',message:{content:'reset'}}]}));
- await reset.generate({messages:[{role:'user',content:'reset breaker'}]});
- const cloudflareCalls=[];
- const p=new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:GEMINI_FALLBACK_MODEL,cfAccountId:'acc',cfApiToken:'tok',geminiApiKey:'g',maxAttempts:2,logger:{warn(){},info(){}},fetchImpl:async(url,init)=>{
-  if(String(url).includes('cloudflare')){
-   cloudflareCalls.push(JSON.parse(init.body).model);
-   return failed(400,{error:{message:'unsupported tool schema'}});
-  }
-  return gemini('Gemini recovered');
+test('Cloudflare 400 configuration errors stop after enabled legs without opening the breaker',async()=>{
+ await make(async()=>ok({choices:[{message:{content:'reset'}}]})).generate({messages:[{role:'user',content:'reset'}]});
+ const calls=[];const p=new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:GEMINI_FALLBACK_MODEL,cfAccountId:'acc',cfApiToken:'tok',geminiApiKey:'legacy',maxAttempts:2,logger:{warn(){},info(){}},fetchImpl:async(url,init)=>{
+  assert.equal(new URL(url).hostname,'api.cloudflare.com');calls.push(JSON.parse(init.body).model);return failed(400,{error:{message:'unsupported tool schema'}});
  }});
- const result=await p.generate({messages:[{role:'user',content:'use configured tools'}],tools:[{type:'function',function:{name:'find_overdue',parameters:{type:'object',properties:{}}}}],toolChoice:'required'});
- assert.deepEqual(cloudflareCalls,[CF_PRIMARY_MODEL,CF_BACKUP_MODEL]);
- assert.equal(result.model,GEMINI_FALLBACK_MODEL);
- assert.equal(result.usedFallback,true);
- assert.equal(cloudflareBreakerState().failures,0);
- assert.equal(cloudflareBreakerState().open,false);
+ await assert.rejects(p.generate({messages:[{role:'user',content:'use tools'}]}),e=>e.code==='PROVIDER_ERROR');
+ assert.deepEqual(calls,[CF_PRIMARY_MODEL,CF_BACKUP_MODEL]);assert.equal(cloudflareBreakerState().failures,0);assert.equal(cloudflareBreakerState().open,false);
 });
 
-test('a Cloudflare model tool rejection falls through to Gemini with the request intact',async()=>{
- const model='@cf/mistralai/mistral-small-3.1-24b-instruct';
- const calls=[];
+test('Cloudflare tool rejection keeps the request intact on enabled Cloudflare legs only',async()=>{
+ const model='@cf/mistralai/mistral-small-3.1-24b-instruct',calls=[];
  const tool={type:'function',function:{name:'find_overdue',parameters:{type:'object',properties:{customer:{type:'string'}}}}};
- const p=new AIProvider({primaryModel:model,fallbackModel:GEMINI_FALLBACK_MODEL,cfAccountId:'acc',cfApiToken:'tok',geminiApiKey:'g',maxAttempts:1,logger:{warn(){},info(){}},fetchImpl:async(url,init)=>{
-  if(String(url).includes('cloudflare')){
-   calls.push(JSON.parse(init.body).model);
-   return failed(400,{error:{message:'unsupported function tool schema'}});
-  }
-  const body=JSON.parse(init.body);calls.push(GEMINI_FALLBACK_MODEL);
-  assert.deepEqual(body.tools[0].functionDeclarations.map(item=>item.name),['find_overdue']);
-  return gemini('Gemini recovered');
+ const p=new AIProvider({primaryModel:model,fallbackModel:GEMINI_FALLBACK_MODEL,cfAccountId:'acc',cfApiToken:'tok',geminiApiKey:'legacy',maxAttempts:1,logger:{warn(){},info(){}},fetchImpl:async(url,init)=>{
+  assert.equal(new URL(url).hostname,'api.cloudflare.com');const body=JSON.parse(init.body);calls.push(body.model);assert.deepEqual(body.tools,[tool]);assert.equal(body.tool_choice,'required');return failed(400,{error:{message:'unsupported tool schema'}});
  }});
- const result=await p.generate({messages:[{role:'user',content:'find overdue invoices'}],tools:[tool],toolChoice:'required'});
- assert.deepEqual(calls,[model,GEMINI_FALLBACK_MODEL]);
- assert.equal(result.model,GEMINI_FALLBACK_MODEL);
- assert.equal(result.usedFallback,true);
+ await assert.rejects(p.generate({messages:[{role:'user',content:'find overdue'}],tools:[tool],toolChoice:'required'}),e=>e.code==='PROVIDER_ERROR');assert.deepEqual(calls,[model,CF_BACKUP_MODEL]);
 });
 
-test('the default Cloudflare safety chain is Llama, Scout, Gemini Flash, then Lite',async()=>{
- const reset=make(async()=>ok({choices:[{finish_reason:'stop',message:{content:'reset'}}]}));
- await reset.generate({messages:[{role:'user',content:'reset breaker'}]});
- const calls=[];
- const p=make(async(url,init)=>{
-  if(String(url).includes('cloudflare')){
-   const model=JSON.parse(init.body).model;calls.push(model);return failed(503);
-  }
-  const model=String(url).includes(DEFAULT_EXTRACTION_MODEL)?DEFAULT_EXTRACTION_MODEL:GEMINI_FALLBACK_MODEL;
-  calls.push(model);
-  return model===GEMINI_FALLBACK_MODEL?failed(503):gemini('from Gemini Lite');
- });
- const result=await p.generate({messages:[{role:'user',content:'hello'}]});
- assert.deepEqual(calls,[CF_PRIMARY_MODEL,CF_BACKUP_MODEL,GEMINI_FALLBACK_MODEL,DEFAULT_EXTRACTION_MODEL]);
- assert.equal(result.model,DEFAULT_EXTRACTION_MODEL);
+test('the Cloudflare safety chain contains only Llama and Scout',async()=>{
+ await make(async()=>ok({choices:[{message:{content:'reset'}}]})).generate({messages:[{role:'user',content:'reset'}]});
+ const calls=[];const p=make(async(url,init)=>{assert.equal(new URL(url).hostname,'api.cloudflare.com');calls.push(JSON.parse(init.body).model);return failed(503);});
+ await assert.rejects(p.generate({messages:[{role:'user',content:'hello'}]}),e=>e.code==='PROVIDER_UNAVAILABLE');assert.deepEqual(calls,[CF_PRIMARY_MODEL,CF_BACKUP_MODEL]);
 });
 
-
-test('an open Cloudflare circuit skips configured and primary Cloudflare legs',async()=>{
- const reset=make(async()=>ok({choices:[{finish_reason:'stop',message:{content:'reset'}}]}));
- await reset.generate({messages:[{role:'user',content:'reset breaker'}]});
- const firstCalls=[];
- const first=new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:'@cf/openai/gpt-oss-20b',cfAccountId:'acc',cfApiToken:'tok',geminiApiKey:'g',maxAttempts:1,logger:{warn(){},info(){}},fetchImpl:async(url,init)=>{
-  if(String(url).includes('cloudflare')){firstCalls.push(JSON.parse(init.body).model);return failed(503);}
-  firstCalls.push(GEMINI_FALLBACK_MODEL);return gemini('Gemini reached');
- }});
- await first.generate({messages:[{role:'user',content:'open breaker'}]});
- assert.deepEqual(firstCalls,[CF_PRIMARY_MODEL,'@cf/openai/gpt-oss-20b',CF_BACKUP_MODEL,GEMINI_FALLBACK_MODEL]);
- assert.equal(cloudflareBreakerState().open,true);
-
- let calls=0;
- const noFallback=new AIProvider({primaryModel:'@cf/mistralai/mistral-small-3.1-24b-instruct',fallbackModel:null,cfAccountId:'acc',cfApiToken:'tok',fetchImpl:async()=>{calls++;return ok({});},maxAttempts:1,logger:{warn(){},info(){}}});
- await assert.rejects(noFallback.generate({messages:[{role:'user',content:'skip open circuit'}]}),error=>error.code==='PROVIDER_UNAVAILABLE');
- assert.equal(calls,0);
-
- const secondCalls=[];
- const second=new AIProvider({primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:'@cf/openai/gpt-oss-20b',geminiApiKey:'g',cfAccountId:'acc',cfApiToken:'tok',maxAttempts:1,logger:{warn(){},info(){}},fetchImpl:async(url)=>{
-  const model=String(url).includes(DEFAULT_EXTRACTION_MODEL)?DEFAULT_EXTRACTION_MODEL:GEMINI_FALLBACK_MODEL;
-  secondCalls.push(model);
-  return model===DEFAULT_EXTRACTION_MODEL?failed(503):gemini('Cloudflare fallback was skipped');
- }});
- const result=await second.generate({messages:[{role:'user',content:'use open circuit'}]});
- assert.deepEqual(secondCalls,[DEFAULT_EXTRACTION_MODEL,GEMINI_FALLBACK_MODEL]);
- assert.equal(result.model,GEMINI_FALLBACK_MODEL);
+test('an open Cloudflare circuit skips all enabled legs without enabling a retired Google choice',async()=>{
+ await make(async()=>ok({choices:[{message:{content:'reset'}}]})).generate({messages:[{role:'user',content:'reset'}]});
+ const calls=[];const first=new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:'@cf/openai/gpt-oss-20b',cfAccountId:'acc',cfApiToken:'tok',maxAttempts:1,logger:{warn(){},info(){}},fetchImpl:async(url,init)=>{assert.equal(new URL(url).hostname,'api.cloudflare.com');calls.push(JSON.parse(init.body).model);return failed(503);}});
+ await assert.rejects(first.generate({messages:[{role:'user',content:'open breaker'}]}),e=>e.code==='PROVIDER_UNAVAILABLE');
+ assert.deepEqual(calls,[CF_PRIMARY_MODEL,'@cf/openai/gpt-oss-20b',CF_BACKUP_MODEL]);assert.equal(cloudflareBreakerState().open,true);
+ for(const primaryModel of ['@cf/mistralai/mistral-small-3.1-24b-instruct',DEFAULT_EXTRACTION_MODEL]){
+  let fetches=0;const p=new AIProvider({primaryModel,fallbackModel:'@cf/openai/gpt-oss-20b',cfAccountId:'acc',cfApiToken:'tok',geminiApiKey:'legacy',maxAttempts:1,logger:{warn(){},info(){}},fetchImpl:async()=>{fetches++;assert.fail('Open or retired model');}});
+  await assert.rejects(p.generate({messages:[{role:'user',content:'hello'}]}),e=>e.code==='PROVIDER_UNAVAILABLE');assert.equal(fetches,0);
+ }
 });

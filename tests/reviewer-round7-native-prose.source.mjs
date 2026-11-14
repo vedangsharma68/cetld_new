@@ -1,0 +1,11 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {writeFile} from 'node:fs/promises';import {fixture} from '../tests/fixtures/private-invoice.mjs';import {AIProvider} from '../ai/provider.mjs';import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistant-handler.mjs';
+const evidence=[];test.after(()=>writeFile('work/r7-native-prose.json',JSON.stringify(evidence,null,2)));
+test('the exact stored native name remains private in ordinary unspaced native prose',async t=>{
+ const wires=[],factory=options=>new AIProvider({...options,cfAccountId:'independent-r7-native-prose',cfApiToken:'independent-r7-native-prose',maxAttempts:1,logger:{info(){},warn(){}},fetchImpl:async(url,init)=>{assert.equal(new URL(url).hostname,'api.cloudflare.com');const body=JSON.parse(init.body);wires.push({url,body,serializedMessages:JSON.stringify(body.messages)});return Response.json({choices:[{message:{content:'An ordinary answer'}}]});}}),f=await fixture({providerFactory:factory});let n=0;
+ try{
+  const c=(await f.db.query("insert into customers(workspace_id,name) values($1,'李王') returning id",[f.scope.workspaceId])).rows[0];await f.db.query("insert into invoices(workspace_id,customer_id,invoice_number,total_amount,currency,status) values($1,$2,'R7-NATIVE-PROSE',43,'INR','draft')",[f.scope.workspaceId,c.id]);
+  for(const audience of ['owner','customer'])for(const [input,privateTurn]of [['Ask 李王 for advice',true],['请联系李王',true],['能给李王发个消息吗？',true],['请联系王李',false]])await t.test(audience+'/'+input,async()=>{
+   await f.db.query('delete from whatsapp_provider_memory where workspace_id=$1',[f.scope.workspaceId]);f.restart();const customer=createWhatsAppBoundMessageHandler({supabase:f.supabase,audience:'customer',authorizeScope:async()=>true,providerFactory:factory,logger:{error(){}}}),before=wires.length,result=audience==='owner'?await f.turn(input):await customer({...f.scope,message:input,messageId:'r7-native-prose-'+(++n)}),terms=(await f.db.query('select term from whatsapp_private_invoice_terms where workspace_id=$1 order by term',[f.scope.workspaceId])).rows.map(r=>r.term),row={kind:'native-prose',audience,stored:'李王',input,privateTurn,result,terms,wires:wires.slice(before)};evidence.push(row);assert.equal(row.wires.length,privateTurn?0:1,JSON.stringify(row));
+  });
+ }finally{await f.close();}
+});

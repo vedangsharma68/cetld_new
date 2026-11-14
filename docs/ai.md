@@ -7,78 +7,67 @@ the user's token, RLS, and an explicit workspace filter. No service-role key.
 
 ## Configuration
 
-Server environment: `GEMINI_API_KEY`, `OPENCODE_ZEN_API_KEY`,
-`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `SUPABASE_URL`,
-`SUPABASE_PUBLISHABLE_KEY`. Never prefix the AI key with a public/client variable
-prefix or put it in a database, URL, request from a browser, or source file.
-Rotate any key previously shared in chat before configuring hosting secrets.
+WhatsApp chat uses server-only `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`.
+The primary is `@cf/meta/llama-3.3-70b-instruct-fp8-fast`; the existing Cloudflare
+Scout model is the default backup. Saved Cloudflare choices remain usable.
+Legacy non-Cloudflare WhatsApp selections resolve to these existing free models
+without rewriting saved settings. No new provider or paid tier is required.
 
-## Fixed Gemini diagnostic
+Gemini generation, fallback, model verification and enabled extraction routes
+make no Google requests, even when an old `GEMINI_API_KEY` is configured. The
+legacy Settings diagnostic is disabled by withholding its credential; its
+response shape remains available. Saved legacy model IDs are preserved for
+compatibility, but Gemini cannot be selected for new settings or returned as an
+available model. Legacy standalone diagnostic/codec fixtures are unit tests,
+not enabled routes. Other existing dashboard model settings remain unchanged.
 
-Workspace owners and admins may explicitly run the Settings diagnostic. The
-server sends four sequential, fixed requests to `gemini-3.5-flash-lite`: tiny
-text, a bundled readable PNG, a small structured response, and the current
-exported invoice extraction schema with that PNG. It never uses workspace
-invoices, accepts no prompt/file/model/URL input, invokes no fallback provider,
-and performs no writes or outbound messaging. Reports contain only the model,
-stage/status, HTTP status, finite categories, recognized Google ErrorInfo
-metadata, and allowlisted field paths; provider messages and bodies are
-discarded.
+Cloudflare failures retain bounded retries and the existing circuit breaker.
+When its available models are exhausted, WhatsApp says chat is temporarily
+unavailable, asks the user to retry, and states that nothing was lost: invoice
+records and local reviews remain saved. Invoice reads, menus and review actions
+continue locally without relying on provider availability.
 
-The probe has a 45-second total budget, bounded response reads, cancellation,
-and a per-user server cooldown. A successful HTTP response with an invoice
-payload that fails local validation is reported separately as
-`contract_invalid`; it is not treated as an HTTP rejection.
+## WhatsApp invoice containment and conversational memory
 
-Unit tests use mocked provider contracts and the bundled fixture. They do not
-contact Google, so this change does **not** identify the production HTTP 400
-root cause. An authorized owner/admin must run the deployed probe and review
-its finite report before drawing that conclusion.
+Invoice photos/PDFs always use the local reader, with `EXTRACTION_ROUTE=offline`
+set or unset. The flag remains supported for the direct owner review route.
+Images use bundled Tesseract OCR; PDFs use local selectable text and parsers.
+Unreadable documents require a clearer upload or manual input, with no model
+fallback. Customer receipt photos/PDFs receive a deterministic explanation to
+ask the business owner to verify and record payment. They never start an owner
+review, mark the workspace, or create invoices/payments.
 
-Apply the AI settings migrations, including
-`supabase/migrations/20260928110000_zen_primary_gemini_fallback.sql`, to
-the target **non-production** database before integration testing. The forward
-migration normalizes legacy rows before enforcing the provider-specific model
-contract. This branch does not apply migrations remotely or deploy production.
+Provider chat receives the last **20 eligible ordinary messages**, scoped by
+workspace, phone, audience and owner/customer identity, from the server-owned
+`whatsapp_provider_memory` table. Only successfully completed ordinary chat
+pairs enter that store. Invoice intake, extracted fields, corrections, reviews,
+confirmations and deterministic invoice replies remain in the local audit and
+are excluded. Caller history, summaries, profiles, response schemas, media,
+checkpoints and unissued tool transcripts cannot supply provider context.
+Only registered static tools and results from tool calls issued in that turn
+can enter a non-invoice tool loop; private results stop that loop locally.
 
-Workspace answers use the saved primary and fallback models. Existing Cloudflare
-and Gemini active defaults remain unchanged. OpenCode Zen also supports the
-free aliases `mimo-v2.6-flash-free` and `muse-spark-1.3-contributor-free`.
-MiMo uses `/zen/v1/chat/completions`; Muse uses `/zen/v1/responses`.
-Zen credential-presence checks do not verify live model availability or
-generation. Retired saved LongCat selections may remain visible as unavailable;
-generation skips retired entries and fails closed if only retired choices remain.
-Both pickers also offer Cloudflare Llama 3.3, Llama 4 Scout, Mistral Small 3.1,
-GPT OSS 20B, Qwen3 30B A3B, GLM 4.7 Flash, and Gemini 3.5 Flash and Flash Lite.
-The browser labels for GPT OSS, Qwen3, and GLM map to their canonical Cloudflare
-IDs; those full IDs are stored, not the shorthand labels. Unknown IDs are
-rejected at the API and provider boundaries. The models endpoint and settings
-writes check Cloudflare and Gemini catalogs; legacy Zen checks require its
-server credential. These checks do not prove successful live generation.
-A retryable provider failure receives bounded
-retries before the configured fallback is tried. A 429 is surfaced as a safe
-temporary rate-limit error after those attempts; no key or provider response
-body is returned. Cloudflare failures continue through the existing Gemini
-recovery chain, and the Cloudflare circuit breaker remains active. Invoice
-extraction continues to use its dedicated Gemini configuration. The Zen model
-IDs can be overridden server-side with `ZEN_PRIMARY_MODEL` and
-`ZEN_FALLBACK_MODEL`. The example leaves the fallback override blank so it does
-not introduce a new default model.
+`whatsapp_private_invoice_terms` retains local field/evidence terms across
+review replacement, cancellation, history pruning and invoice/customer updates.
+Provider memory and current messages are screened for quotations of those terms,
+including previously ordinary messages that later become invoice-bearing. Both
+new tables have RLS and service-only access. Storage failure fails closed for
+that chat attempt without forwarding raw history. Historical audit rows have
+unknown provenance and are not copied into provider memory; ordinary memory
+starts accumulating after deployment. Existing history remains available locally.
 
-Provider references: [Cloudflare model catalog](https://developers.cloudflare.com/workers-ai/models/),
-[Cloudflare OpenAI compatibility](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/),
-and [Cloudflare model search API](https://developers.cloudflare.com/api/resources/ai/subresources/models/methods/list/).
-MiMo image understanding is described in [Xiaomi's usage guide](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/multimodal-understanding/image-understanding),
-with [Meta's model documentation](https://dev.meta.ai/docs/models) and
-[OpenCode Zen documentation](https://opencode.ai/docs/zen/). Vision support is
-based on documented model capabilities; gateway image requests have not been
-live-tested.
+The old permanent workspace provenance mark remains intact for existing data
+and other callers. WhatsApp no longer uses it as a global functionality wall.
+Invoice questions use verified database reads and deterministic receivables
+rendering, separating drafts, issued receivables and currencies. Incomplete or
+unsupported questions receive an honest local refusal, never a model-invented
+balance. Reminder dispatch, Zoho provenance and commercial-send gates are unchanged.
 
-`AIProvider.generate()` / `generateStructured()` are the shared server abstraction
-for extraction and assistant planning. Authentication errors advance to the
-next model without retrying the rejected leg.
-Financial answers are **deterministically rendered tool results**, not LLM prose.
-The model selects tools; it cannot supply authoritative financial values.
+Apply `supabase/migrations/20261101120327_private_whatsapp_chat_memory.sql` before
+deploying the application. It adds private memory/term tables, retention triggers
+and a local backfill; it does not unmark or rewrite pre-existing data. Rollback
+can revert application usage and detach the new triggers while retaining the
+new tables/data. Do not deploy the old unsafe provider path as a privacy rollback.
 
 ## Workspace model settings
 
@@ -110,8 +99,7 @@ during temporary provider outages; saving other settings does not replace them.
 WhatsApp owner chat reads the same `workspace_ai_settings.primary_model` and
 `fallback_model` columns. No separate `owner_provider` or `owner_model` columns
 are needed. With no settings row, owner chat keeps its current Cloudflare Llama
-3.3 primary and Gemini Flash fallback. An explicitly disabled fallback remains
-disabled as a user selection; provider safety recovery follows its existing policy.
+3.3 primary and Cloudflare Scout fallback. WhatsApp chooses only existing Cloudflare models; saved settings are not rewritten.
 
 The direct workspace settings path supports the free Zen aliases documented
 above. The existing WhatsApp proposal SQL path has a separate older model
@@ -130,12 +118,10 @@ the direct settings path.
   Maximum decoded size 3 MiB, below the serverless JSON payload limit. No URL
   inputs. This lets the upload UI prefill a draft before any invoice is saved.
 
-PDF, PNG, JPEG, WebP only, with MIME/signature validation. Images and PDFs are
-sent to Gemini as inline media; if Gemini fails retryably, the configured
-OpenCode Zen fallback chain receives the same bounded input. Scanned/poor-quality
-PDFs may require another image upload or manual entry; model support is not a
-guarantee of OCR accuracy. Provide the appropriate privacy disclosure before
-enabling uploads.
+PDF, PNG, JPEG, WebP only, with MIME/signature validation. This endpoint parses
+locally and constructs no model provider. PDFs without readable text and images
+that cannot be verified require another upload or manual entry. Source documents
+and extracted fields never enter an extraction-provider request.
 
 Response fields: `direction` (`receivable`, `payable`, or `uncertain`), `invoiceNumber`, `customerName`, `invoiceDate`, `dueDate`,
 `subtotal`, `tax`, `total`, `outstandingAmount`, `currency`, `clientPhone`,
@@ -149,9 +135,7 @@ Assistant invoice actions. Amounts with more than two decimal places are rejecte
 without rounding. Existing rows in unsupported currencies remain readable with
 their stored decimal value labeled as unsupported; repricing and payment
 recording are blocked, so create a corrected invoice in a supported currency.
-Confidence is model-reported, not calibrated probability. The extractor receives
-the workspace business name to classify whether the business issued the invoice
-or owes it. The UI displays uncertainty and warnings and requires an explicit
+Confidence describes local parser evidence, not a calibrated probability. WhatsApp requires the verified owner to state issuance; the local reader never infers it from a seller name. The UI displays uncertainty and warnings and requires an explicit
 direction choice. Only confirmed receivables can enter the collections ledger;
 payables and uncertain invoices remain unsaved. Zero totals, subtotal plus tax
 differences greater than one minor unit, and partial outstanding amounts are
@@ -207,3 +191,215 @@ explicitly reported by the current verification run.
 Before production: verify end-to-end against a staging Supabase deployment and
 configure platform rate limits/usage quotas. Per-request size/tool/time limits
 are enforced here; distributed usage billing/rate limiting is not implemented.
+
+
+## Private-value containment (PR #211, repair round 4)
+
+All production WhatsApp and web Assistant chat requests pass
+`createPrivateChatProvider`. Retained values are screened with the same matcher
+at current-message, positive-history, decoded tool argument/result, model-response
+and memory-write boundaries. Protocol JSON is decoded recursively before matching;
+malformed tool protocol fails closed. Caller transcripts, profiles, private schema
+values, summaries, checkpoints and error bodies are not forwarded. Tool transcripts
+must belong to the exact issued call. Local domain results stay local even when
+not yet represented by a retained literal.
+
+SQL and JS use identical generated Unicode 17 data: compatibility decomposition,
+locale-independent upper/lower caseless folding, Latin diacritic/Cf/variation-selector removal (essential Indic vowel marks are preserved),
+a shared White_Space fold (including U+0085 and NBSP), and native decimal digits.
+Arabic decimal/thousands punctuation normalizes with the numeric separators.
+`generate-private-value-unicode.mjs --check` and
+`generate-private-value-sql.mjs --check` verify committed artifacts; the language
+vocabulary, named-date patterns, quote-origin grammar and date pivot come from
+`private-value-language.mjs`. `privateFieldKeys` constructs field keys in JS;
+SQL generation uses this same declarative grammar, and tests compare exact key
+sets (including retained alias reload), not only boolean matches.
+
+Numbers use exact decimal strings/BigInt. Complete valid international/Indian
+comma/dot/space/apostrophe groups remain one value (`1 250` is not `1` and `250`).
+Invalid grouping chains are segmented as lists, with comma+space separating list
+items; `1250, 77` and `1250 77` cannot hide a retained `1250`. Malformed `1,2500`
+does not become `1250`. Both valid grouping/decimal interpretations are checked
+only against retained values. A dotted short date is also compared as one whole
+amount when that interpretation exists, without comparing date components. Currency words and symbols are affixes; signed and
+parenthesized scalar strings retain the magnitude conservatively. Decimal-comma,
+trailing-zero, k/m/b multipliers, cardinal number phrases with comma/&/and
+connectors, decimal phrases and common fractional/scaled phrases are normalized.
+Strict cardinal groups keep spoken-list members separate instead of adding
+an independent tens group. Mixed digit/word forms (`1 thousand 250`,
+`12 hundred and 50`) use the same group grammar. Currency word affixes include
+`Rs.` with or without spacing. Decorative quotation marks are normalized.
+Typed `number:` aliases prevent canonical decimals gaining another thousands
+interpretation on reload. Whole tokens distinguish 100/1000 and ann/planning.
+Alphabetic business names and alphanumeric identifiers compare independently
+of punctuation/spacing. Whole-word `and` and `&` share a connector key; token
+boundaries keep INV-12 and INV-123 different.
+
+Dates accept dots/slashes/hyphens, DD/MM and MM/DD ambiguity, year-first forms,
+short or full years, yearless numeric forms, English month names in either order,
+ordinal suffixes and English ordinal days first through thirty-first. The shared
+pivot is **00–69 → 2000–2069; 70–99 → 1970–1999**. Explicit years match only the
+same retained year; yearless input matches retained month/day. A truly yearless
+stored date cannot establish a year and remains conservative. Full-year fields
+emit typed year-aware aliases, never lossy month/day aliases. Named months
+accept adjoining digits and dots/slashes/hyphens (`31Oct`, `Oct31`,
+`31/Oct/26`, `31-Oct-2027`) and apostrophe years. Maximal lexical date spans
+prevent a suffix of a full date becoming a second yearless date.
+
+Complete local text-invoice instructions use the existing guarded parser before
+clause separation. Web memory adapters forward both retained-value and private-span
+checks, so punctuation inside a known name cannot create independent fragments.
+Private-origin invoice/bill/receipt quotations remain opaque through the end
+of their payload. Both authorized audience handlers retain their atomic fields
+before local early returns, and the provider memory read does the same before
+loading keys/history. SQL audit triggers retain original and replacement/deleted
+source text too. A later cancel, pruning or restart cannot relabel a field as
+ordinary chat. Generic forwarded number lists do not acquire document provenance.
+Mixed turns (including plain `and`) retain whole independently understandable ordinary clauses; there
+is no ordinary-intent allowlist. Referential/conjunctive fragments and action
+constraints remain local. Original-offset private spans prevent splitting any known field across delimiters.
+Unparsed create/correction statements stay opaque through the end of the turn;
+only an independent prefix can precede them. Delimiters inside amounts, dates,
+number phrases or protocol JSON cannot launder fragments into ordinary chat. Only the selected
+ordinary text and screened ordinary answer enter the 20-message positive memory.
+Legacy audit history remains local. The web memory scope is separate from the
+WhatsApp scope; its internal service-only store requires the existing server-side
+SUPABASE_SERVICE_ROLE_KEY after caller membership authorization. No ledger or
+Storage RLS is bypassed. Dashboard UI files are unchanged.
+
+Both audience menus are deterministic-local; customer receipts remain refusals
+before extraction, marking, review or provider access. Invoice questions use
+scoped database tools and deterministic replies. Cloudflare exhaustion never
+falls back to Gemini and produces an honest temporary-unavailability reply.
+
+The production fast battery uses the real handler directly (43 scenarios), and
+`owner-engine.mjs` can no longer replace its wrapped provider. The original 38
+planner/tool-state battery scenarios and 49 historical planner simulation suites
+remain enabled as explicitly named **engine subsystem** tests using local mocks.
+They are not counted as production privacy coverage. A paired actual-handler/
+production-fixture test must show zero calls for retained `Explain 1250` and the
+same sanitized mixed-turn payload. Native SQL tests separately cover retention,
+backfill, local review, menus, both audiences, memory, receipts and failures.
+
+The **unapplied** `20261101120327_private_whatsapp_chat_memory.sql` retains
+shared Unicode folding, canonical numeric/word/date/name/evidence aliases, linked
+customer retention and company-name backfill. All twelve canonicalization/classification helpers
+are immutable invokers with empty search_path and direct EXECUTE revoked from
+PUBLIC/anon/authenticated/service_role. Retention helpers and trigger functions
+are also restricted; the one runtime origin-retention RPC is service-role only.
+Original invoice/audit/mark data is not rewritten, rolled back or unmarked.
+
+### Bounded-lock installation and backfill
+
+Follow [the mandatory fenced cutover procedure](private-chat-rollout.md).
+Old deployed code ignores readiness; applying this migration does not stop it.
+An externally enforced `/api/` ingress fence, paused processing callers and a
+verified drain to zero must precede the schema/application transition. Keep it
+closed until truthful backfill completion and all serving code is new. If the
+operator cannot enforce/verify this maintenance boundary, do not cut over.
+
+The atomic DDL uses 1s lock_timeout and 5s statement_timeout, installs capture
+triggers and four incomplete cursor slots, and performs no source scan under
+DDL locks. The separate operator runner commits each batch, with 250ms lock and
+5s statement timeouts established before SELECT. Default/max row caps are 25/100;
+a soft 500ms yield is not a promised batch size or duration. Source watermarks
+and cursors are ordered by qualified native bigint/UUID IDs; never by projected
+text aliases. Every historical row through its watermark must be scanned.
+Source relations take AccessShareLock during batches. OLD/NEW capture preserves
+concurrent writes/deletes; alias and cursor writes roll back/resume together.
+Until all four cursors complete, new chat stores fail closed, including before
+any read. Deterministic menus/reads remain available. New private-term uniqueness
+contention is bounded by the runner timeouts; source data is never cleared.
+
+The four sources are invoices (including linked customer fields), pending invoice
+reviews (including printed evidence/owner corrections), owner audit quotations and
+customer audit quotations. No existing history is imported as ordinary memory.
+RLS is enabled on every new public table; completion metadata is read-only for
+service_role. No new provider, external service, schema rollback or unmark is used.
+Rollback requires the external fence and a drain first; old provider chat must
+not reopen. Additive objects and original source data remain intact.
+
+`tests/private-invoice-backfill.test.mjs` captures pg_locks inside actual batches,
+checks transaction boundaries, OLD/NEW capture, retry/rollback, RLS and ACLs.
+`scripts/test-private-invoice-backfill-locks.mjs` additionally reproduces native
+PostgreSQL concurrent-writer DDL timeout, source-lock compatibility, actual
+statement timeout, atomic rollback and resume. It refuses non-local or
+non-disposable database targets and is an additional operator test, not a skipped
+release test. PostgreSQL lock semantics: [table-level locks](https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-TABLES).
+
+Residuals: arithmetic-derived expressions, scientific notation, hostile encodings
+or homoglyphs beyond compatibility/combining-mark/Cf normalization, and resolving
+relative dates when no retained value is restated. These are not universal
+semantic DLP guarantees. Ordinary short dates, native decimal digits and the
+supported natural number grammar are covered, not residuals.
+
+
+### Round-5 language, identity and privilege discipline
+
+Currency affixes compose with cardinal/decimal/scaled phrases and `/−` printed
+amount suffixes at both retention and match time. Shared Hindi 0–99 cardinal
+atoms/scales and month names feed the existing English grammar; native digits
+and Unicode vulgar fractions use the same generated normalization data. Fraction
+keys use the same 20-place truncation rule in both engines for non-terminating
+rational expansions; finite monetary fractions stay exact. This does not infer
+translations into every language.
+
+Linked customer names/company names additionally retain typed party-component
+keys. Whole-field Unicode keys retain distinguishing Indic marks. Native party
+keys remain script-specific: किरण/करण, कमल/कोमल and राम/रम are distinct. Additional
+Latin transliterations are used across scripts; a native-to-native match never
+uses that lossy Latin key. Roman spellings can be ambiguous, so linked references
+fail closed. Raw review/customerName fields retain party provenance too.
+
+Name specificity matrix: unretained Sharma stays ordinary; linked Ask Anurag /
+ask Sharma / अनुराग / शर्मा references stay local; Sharmila/Anuradha stay ordinary;
+explicit linguistic discussion such as `Sharma is a common surname` stays
+ordinary. This exception is only for positively ordinary chat/history screening;
+tool values, responses and memory answers use strict component screening.
+Ambiguous narrative mentions of a linked component stay local. Generic raw terms
+and identifiers keep their existing whole-token matching behavior.
+
+SQL Unicode categories are generated from JS properties with regex metacharacters
+escaped for both SQL and regex decoding. Origin positions use actual regex match
+offsets, not first-substring search. Parity tests compare complete field/party/
+origin key sets, including symbols, repeated headers, Hindi and vulgar fractions.
+The SQL Unicode map is a cached PL/pgSQL constant: changed ledger writes retain
+OLD/NEW values without re-planning the giant map at every field; no-op updates
+avoid duplicate capture. Capture exceptions still roll back source writes.
+
+The fixture installs realistic Supabase table/sequence defaults for all three
+API roles. The migration explicitly revokes every role, including service_role,
+then grants only the intended access. No post-migration fixture ACL repair is
+allowed. The release glob includes a pinned, test-only embedded native PostgreSQL
+server proving effective ACLs, adversarial watermarks, locks/timeouts/rollback/
+resume and representative 59-row write latency. No external database is used.
+
+
+### Durable declaration provenance and portable native proofs
+
+A single generated declaration grammar now drives routing, SQL origin capture,
+JS screening and memory guards. Invoice/bill/receipt attribution does not require
+an introductory determiner: `Invoice is from ...`, nested forwarded declarations,
+field-only assignments and decoded private JSON all retain atomic fields and
+party components before returning locally. Printed evidence contributes its typed
+party value; field labels are not treated as personal names. SQL origin aliases and JS origin keys
+are tested as complete sets. Monetary fields keep their number type so decimal
+amounts do not manufacture unrelated wildcard dates.
+
+Durability closes at every write sink: terms inserts recursively retain source
+fields with conflict-safe inserts; owner/customer audit triggers retain OLD/NEW
+origins; direct provider-memory writes retain private fields and exclude the
+source row instead of tagging it ordinary. The JS memory writer retains both
+message and answer before screening. Reads defensively retain previously
+mislabelled source rows, reload terms and filter the entire candidate window.
+Ordinary conversation still uses twenty eligible messages across reconstruction.
+Only object/array-shaped strings enter the JSON decoder; UUIDs and scalar
+exponent-like field values cannot cause JSON numeric overflow during capture.
+
+The native fixture always initializes UTF8 with the available C locale, regardless
+of caller LANG/LC_ALL. It copies native binaries into a disposable directory. A
+root build spawns PostgreSQL under an existing nobody/daemon UID; a non-root build
+uses its own UID. No system user is created, no checkout permissions are changed,
+and no native proof is skipped. The test asserts UTF8 and a non-root server UID
+and retains the production-default ACL, watermark, timeout and write-latency
+assertions. The automatic Vercel check verifies the root build path.

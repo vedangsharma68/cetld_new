@@ -1,3 +1,4 @@
+import {dispatchWhatsApp,prepareWhatsAppDispatch} from './private-dispatch.mjs';
 import {assertTestReminderDelivery,TEST_TEMPLATE_BLOCK_REASON} from './test-reminder-policy.mjs';
 import {reminderPaymentRpc,localReminderStatusPayable,hasExternalReminderLedger} from '../external-reminder-verification.mjs';
 import {brandedReminder} from '../preferences.mjs';
@@ -82,7 +83,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
       if(!scope(input)||!UUID.test(input.customerId||''))return blocked('scope');
       const prefix=`reminder:${workspaceId}:`,claimId=String(input.idempotencyKey||'').slice(prefix.length);
       if(!String(input.idempotencyKey||'').startsWith(prefix)||!UUID.test(claimId))return blocked('claim');
-      let payload,callbackToken,serviceDeadline;
+      let payload,callbackToken,serviceDeadline,admission;
       try{
         const f=await facts(input);
         if(f.eligibility.customer.id!==input.customerId||f.body!==input.body&&f.deliveryForm!=='template_fallback')return blocked('reviewed_facts_changed');
@@ -96,6 +97,7 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
         payload={messaging_product:'whatsapp',recipient_type:'individual',to:input.to.slice(1),...(f.delivery.type==='freeform'?{type:'text',text:{preview_url:false,body:f.body}}:{type:'template',template:f.template})};
         serviceDeadline=f.delivery.type==='freeform'?Date.parse(f.windowDeadline):null;
         if(testGate&&!await testGate.claimAttempt())return blocked('scheduled_owner_test_already_attempted');
+        admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:input.to});
         const result=await reminderPaymentRpc({supabase,name:'cetld_core_authorize_first_party_reminder',invoice:f.invoice,ownerId,workspaceId,accounting,env,fetchImpl,args:{
           p_owner_id:ownerId,p_workspace_id:workspaceId,p_claim_id:claimId,p_snapshot:snapshot,p_snapshot_hash:hash}});
         if(result.error)return blocked('atomic_gate_unavailable');
@@ -132,12 +134,12 @@ export function createApprovedReminderProvider({env=process.env,supabase,store,o
       }
       if(testGate&&!testGate.isOpen())return blocked('scheduled_owner_test_window_closed');
       try{
-        const response=await fetchImpl(`https://graph.facebook.com/${env.WHATSAPP_GRAPH_API_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,{
+        const response=await dispatchWhatsApp({supabase,workspaceId,fetchImpl,admission,url:`https://graph.facebook.com/${env.WHATSAPP_GRAPH_API_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,init:{
           method:'POST',redirect:'error',headers:{Authorization:`Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,'Content-Type':'application/json'},
-          body:JSON.stringify(payload),signal:AbortSignal.timeout(10_000)});
+          body:JSON.stringify(payload),signal:AbortSignal.timeout(10_000)}});
         if(!response.ok)return {status:response.status>=500||response.status===408?'unknown':'failed'};
         const id=JSON.parse((await readBounded(response,64*1024)).toString('utf8'))?.messages?.[0]?.id;
         return typeof id==='string'&&id.trim()&&id.length<=256?{status:'accepted',providerMessageId:id,callbackToken}:{status:'unknown'};
-      }catch{return {status:'unknown'};}
+      }catch(error){return error?.code==='PRIVATE_PAYLOAD_BLOCKED'?{status:'blocked',reason:'private_payload'}:{status:'unknown'};}
     }};
 }

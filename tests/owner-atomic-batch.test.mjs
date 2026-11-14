@@ -11,7 +11,7 @@ import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs
 import {createOwnerChatDatabase,OWNER_CHAT_SCOPE as scope,DEFAULT_NOW,JOHN_INVOICE_ID} from './fixtures/owner-chat-battery.mjs';
 const logger={info(){},warn(){},error(){}};
 
-test('serialized Gemini batch marker/common table and finite target sets preserve custom field patches',async()=>{
+test('serialized Cloudflare batch marker/common table and finite target sets preserve custom field patches',async()=>{
   for(const format of ['marker','target-set']){
     const db=createOwnerChatDatabase();let captured=null,calls=0;
     const tool=createWorkspaceDataTool({supabase:db.supabase,scope,message:'Update both QA records together',confirmationMode:'direct',authorize:async()=>true,
@@ -20,9 +20,9 @@ test('serialized Gemini batch marker/common table and finite target sets preserv
     const values={custom_fields:{check_count:3,qa_status:'verified'}};
     const args=format==='marker'?{operation:'batch',table:'business_records',operations:names.map(value=>({operation:'update',filters:[{column:'name',operator:'eq',value}],values}))}
       :{operation:'update',table:'business_records',filters:[{column:'name',operator:'in',value:names}],values};
-    const provider=new AIProvider({primaryModel:'gemini-3.5-flash-lite',fallbackModel:null,geminiApiKey:'isolated',maxAttempts:1,logger,
-      fetchImpl:async(url,init)=>{assert.match(String(url),/generativelanguage/);assert(JSON.parse(init.body).tools);
-        return new Response(JSON.stringify({candidates:[{content:{parts:[{functionCall:{name:'workspaceData',args}}]},finishReason:'STOP'}]}),{status:200});}});
+    const provider=new AIProvider({primaryModel:CF_PRIMARY_MODEL,cfAccountId:'isolated',cfApiToken:'isolated',fallbackModel:null,geminiApiKey:'isolated',maxAttempts:1,logger,
+      fetchImpl:async(url,init)=>{assert.match(String(url),/api\.cloudflare/);assert(JSON.parse(init.body).tools);
+        return Response.json({choices:[{message:{content:'',tool_calls:[{id:'batch',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(args)}}]},finish_reason:'tool_calls'}]});}});
     const response=await provider.generate({messages:[{role:'user',content:'Update both QA records together'}],tools:[tool.definition],toolChoice:'required'});
     const call=response.toolCalls[0];
     const result=await tool.execute(JSON.parse(call.function.arguments));
@@ -54,7 +54,7 @@ test('finite target normalization rejects oversized duplicate and security targe
   assert.equal(dispatches,0);assert.equal(tool.getWriteAttempted(),false);
 });
 
-for(const providerName of ['Cloudflare','Gemini'])test(`${providerName} serialized full turn reads targets, commits verified children and recovers one aggregate receipt`,async()=>{
+for(const providerName of ['Cloudflare','Cloudflare Scout'])test(`${providerName} serialized full turn reads targets, commits verified children and recovers one aggregate receipt`,async()=>{
   const db=createOwnerChatDatabase();db.tables.whatsapp_direct_write_receipts=[];
   const invoices=db.tables.invoices.filter(row=>row.workspace_id===scope.workspaceId).slice(0,2);
   assert.equal(invoices.length,2);const original=invoices.map(row=>row.invoice_number);
@@ -75,7 +75,7 @@ for(const providerName of ['Cloudflare','Gemini'])test(`${providerName} serializ
   };
   const tools=createOwnerWorkspaceTools({supabase:db.supabase,scope,ownerStore:{async query(){throw Error('Legacy read must not run');}},message:'Renumber both invoices like John',messageId:'isolated-batch',authorize:async()=>true,
     clock:()=>DEFAULT_NOW,botPreferences:{confirmationMode:'direct'},pendingStoreAvailable:false});
-  const provider=new AIProvider({primaryModel:providerName==='Gemini'?'gemini-3.5-flash-lite':CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',geminiApiKey:'isolated',maxAttempts:1,logger,
+  const provider=new AIProvider({primaryModel:providerName==='Cloudflare Scout'?'@cf/meta/llama-4-scout-17b-16e-instruct':CF_PRIMARY_MODEL,fallbackModel:null,cfAccountId:'isolated',cfApiToken:'isolated',geminiApiKey:'isolated',maxAttempts:1,logger,
     fetchImpl:async(_url,init)=>{
       generations++;const wire=JSON.parse(init.body);evidence=providerName==='Gemini'?wire.contents.flatMap(row=>row.parts).flatMap(part=>{try{return [part.functionResponse?.response||JSON.parse(part.text)];}catch{return [];}}):wire.messages.filter(row=>row.role==='tool').map(row=>JSON.parse(row.content));let message;
       if(generations===1)message={content:'',tool_calls:[{id:'fresh',type:'function',function:{name:'workspaceData',arguments:JSON.stringify({operation:'read',table:'invoices'})}}]};

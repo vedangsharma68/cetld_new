@@ -1,3 +1,4 @@
+import {documentWithText} from './fixtures/invoice-document.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {authorizeAIWorkspace} from '../ai/store.mjs';
@@ -81,12 +82,12 @@ test('models endpoint separates Space Bunny primary, extraction, and ordered fal
   const res=response();await handler({method:'GET',query:{action:'models'}},res);
   assert.equal(res.code,200);
   const cloudflare=[CF_PRIMARY_MODEL,CF_BACKUP_MODEL,CF_MISTRAL_MODEL,CF_GPT_OSS_MODEL,CF_QWEN_MODEL,CF_GLM_MODEL];
-  assert.deepEqual(res.data.models,[DEFAULT_MODEL,ZEN_MIMO_MODEL,ZEN_MUSE_MODEL,...cloudflare,GEMINI_FALLBACK_MODEL,DEFAULT_EXTRACTION_MODEL]);
-  assert.deepEqual(res.data.fallbackModels,[ZEN_MIMO_MODEL,ZEN_MUSE_MODEL,...cloudflare,GEMINI_FALLBACK_MODEL,DEFAULT_EXTRACTION_MODEL]);
-  assert.deepEqual(res.data.extractionModels,[DEFAULT_EXTRACTION_MODEL]);
+  assert.deepEqual(res.data.models,[DEFAULT_MODEL,ZEN_MIMO_MODEL,ZEN_MUSE_MODEL,...cloudflare]);
+  assert.deepEqual(res.data.fallbackModels,[ZEN_MIMO_MODEL,ZEN_MUSE_MODEL,...cloudflare]);
+  assert.deepEqual(res.data.extractionModels,[]);
   assert.equal(res.data.openRouterFallback,false);
   assert.ok(verified.some(([id])=>id===DEFAULT_MODEL));
-  assert.ok(verified.every(([,geminiKey,zenKey,cfAccountId,cfApiToken])=>geminiKey==='gemini-secret'
+  assert.ok(verified.every(([,geminiKey,zenKey,cfAccountId,cfApiToken])=>geminiKey===undefined
     &&zenKey==='zen-secret'&&cfAccountId==='cf-account'&&cfApiToken==='cf-token'));
 });
 test('settings API validates models, permissions, and unknown fields before saving',async()=>{
@@ -169,25 +170,21 @@ test('local ledger reads and invoice writes bypass Zoho while explicit Zoho read
   assert.equal(providerCalls,0,'deterministic write proposals must bypass the planner');
 });
 
-test('pre-save PDF upload flows through centralized structured provider and validation',async()=>{
-  const raw=Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes'].map(k=>[k,{value:null,confidence:0}]));
-  raw.direction={value:'uncertain',confidence:0};
-  raw.lineItems={value:[],confidence:0};
-  raw.currency={value:'USD',confidence:0.9};raw.total={value:0.29,confidence:0.9};
-  const wire={lineItems:raw.lineItems.value,lineItemsConfidence:raw.lineItems.confidence};
-  for(const [name,field] of Object.entries(raw)) if(name!=='lineItems'){wire[name]=field.value;wire[`${name}Confidence`]=field.confidence}
-  let completions=0;
-  const fetchImpl=async(url,init)=>{
-    const payload=JSON.parse(init.body);completions++;
-    assert.match(String(url),/models\/gemini-3\.5-flash-lite:generateContent/);
-    assert.equal(payload.generationConfig.responseMimeType,'application/json');
-    assert.equal(payload.plugins,undefined);
-    assert.equal(payload.contents[0].parts[1].inlineData.mimeType,'application/pdf');
-    return json({candidates:[{content:{parts:[{text:JSON.stringify(wire)}]},finishReason:'STOP'}]});
-  };
-  const handler=createAIHandler({authorize:async()=>({getSettings:async()=>({primary_model:DEFAULT_MODEL,fallback_model:null})}),env:{GEMINI_API_KEY:'gemini-test-key',OPENROUTER_API_KEY:'router-test-key'},providerFactory:o=>new AIProvider({...o,geminiApiKey:'gemini-test-key',openRouterApiKey:'router-test-key',fetchImpl})});
-  const req={method:'POST',query:{action:'extract'},body:{workspaceId:A,file:{base64:Buffer.from('%PDF-1.7\n').toString('base64'),mimeType:'application/pdf',fileName:'invoice.pdf'}}};
+test('pre-save PDF upload extracts and validates locally without constructing any provider',async()=>{
+  let constructions=0;
+  const handler=createAIHandler({authorize:async()=>({getSettings:async()=>({primary_model:DEFAULT_MODEL,fallback_model:null})}),
+    env:{GEMINI_API_KEY:'legacy-key'},providerFactory:()=>{constructions++;assert.fail('Local extraction cannot construct a provider');}});
+  const bytes=documentWithText('INVOICE\nInvoice Number: INV-204\nInvoice Date: 2026-01-03\nFROM: Acme Studio\nBILL TO: Northwind\nQTY DESCRIPTION UNIT PRICE AMOUNT\n2 Design consultation 50.00 100.00\nSubtotal 100.00\nTax 18.00\nTotal 118.00\nAmount Due 118.00\nCurrency: USD');
+  const req={method:'POST',query:{action:'extract'},body:{workspaceId:A,file:{base64:bytes.toString('base64'),mimeType:'application/pdf',fileName:'invoice.pdf'}}};
   const res=response();await handler(req,res);
-  assert.equal(res.code,200);assert.equal(res.data.total.value,0.29);assert.equal(res.data.currency.value,'USD');assert.equal(res.data.reviewRequired,true);assert.equal(completions,1);
-  const bad=response();await handler({...req,body:{...req.body,fileId:F}},bad);assert.equal(bad.code,400);assert.equal(completions,1);
+  assert.equal(res.code,200);assert.equal(res.data.total.value,118);assert.equal(res.data.currency.value,'USD');assert.equal(res.data.reviewRequired,true);assert.equal(res.data.extractionRoute,'offline');assert.equal(constructions,0);
+  const bad=response();await handler({...req,body:{...req.body,fileId:F}},bad);assert.equal(bad.code,400);assert.equal(constructions,0);
+});
+
+test('enabled diagnostic makes zero Google requests even when a legacy credential is configured',async()=>{
+  let calls=0;
+  const handler=createAIHandler({env:{GEMINI_API_KEY:'legacy-but-prohibited'},authorize:async()=>({role:'owner',userId:A}),
+    fetchImpl:async()=>{calls++;assert.fail('disabled diagnostic cannot contact Google');}});
+  const res=response();await handler({method:'POST',query:{action:'diagnostic'},body:{workspaceId:A}},res);
+  assert.equal(res.code,200);assert.ok(res.data.stages.every(stage=>stage.status==='not_run'));assert.equal(calls,0);
 });

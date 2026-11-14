@@ -161,7 +161,7 @@ test('CAS rejects wrong scope and stale photo/currency workers without resurrect
   assert.equal(state.row.action.stage, 'extracting');
 });
 
-test('currency-missing caption intake reviews the assumed default without saving', async () => {
+test('currency-missing caption intake requests the explicit currency without saving', async () => {
   let row = null, planner = 0, saves = 0;
   const pending = {async beginInvoiceReview() { row = {id: 12, version: 1, generation: 1,
     action: {type: 'invoice_review_draft', stage: 'extracting'}}; return structuredClone(row); },
@@ -182,25 +182,25 @@ test('currency-missing caption intake reviews the assumed default without saving
   const fields = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
     .map(name => [name, {value: ({invoiceNumber:'INV-50',customerName:'Buyer',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:0,total:100,outstandingAmount:100,direction:'receivable'})[name] ?? null,
       confidence: name === 'currency' ? 0 : .99}]));
-  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase, providerFactory: () => ({}),
+  const handler = createWhatsAppBoundMessageHandler({audience:'owner',authorizeScope:async()=>true,supabase, providerFactory: () => ({}),
     pendingActionStoreFactory: () => pending, invoiceStoreFactory: () => ({}),
     saveInvoice: async ({invoice}) => { saves++; return {saved: true, invoice}; },
     channelFactory: () => ({async ask() { planner++; return {answer: 'planner'}; }}),
-    extract: async () => ({...fields, lineItems: {value: [], confidence: .99}})});
+    extractOffline: async () => ({...fields, lineItems: {value: [], confidence: .99}})});
   const reply = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/png'}});
-  assert.match(reply, /^Invoice INV-50 for Buyer: INR 100, due 2026-10-31/);
-  assert.match(reply, /reply yes/i);
-  assert.equal(row.action.stage, 'proposal');
+  assert.match(reply,/Confirm the explicit currency code/);
+  assert.match(reply,/Nothing was saved/);
+  assert.equal(row.action.stage,'incomplete');
   assert.equal(planner, 0); assert.equal(saves, 0);
 });
 
 test('default handler shows a review before explicit confirmation saves once', async () => {
   const db = combinedSupabase();
   const fields = Object.fromEntries(['invoiceNumber','customerName','invoiceDate','dueDate','subtotal','tax','total','outstandingAmount','currency','clientPhone','clientPhoneRaw','clientEmail','notes','direction']
-    .map(name => [name, {value: ({invoiceNumber:'INV-50',customerName:'Buyer',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:0,total:100,outstandingAmount:100,direction:'receivable'})[name] ?? null,
-      confidence: name === 'currency' ? 0 : .99}]));
-  const handler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase: db, providerFactory: () => ({}),
-    extract: async () => ({...fields, lineItems: {value: [], confidence: .99}})});
+    .map(name => [name, {value: ({invoiceNumber:'INV-50',customerName:'Buyer',invoiceDate:'2026-10-01',dueDate:'2026-10-31',subtotal:100,tax:0,total:100,outstandingAmount:100,currency:'INR',direction:'receivable'})[name] ?? null,
+      confidence:.99}]));
+  const handler = createWhatsAppBoundMessageHandler({audience:'owner',authorizeScope:async()=>true,supabase: db, providerFactory: () => ({}),
+    extractOffline: async () => ({...fields, lineItems: {value: [], confidence: .99}})});
   const logged = await handler({...scope, message: '', media: {bytes: Buffer.from([1]), mimeType: 'image/png'}});
   assert.match(logged, /^Invoice INV-50/);
   assert.match(logged, /reply yes/i);
@@ -216,8 +216,8 @@ test('default handler shows a review before explicit confirmation saves once', a
   const complete = structuredClone(fields);
   complete.invoiceNumber.value = 'INV-51';
   complete.currency = {value: 'USD', confidence: .99};
-  const completeHandler = createWhatsAppBoundMessageHandler({authorizeScope:async()=>true,supabase: completeDb, providerFactory: () => ({}),
-    extract: async () => ({...complete, lineItems: {value: [], confidence: .99}})});
+  const completeHandler = createWhatsAppBoundMessageHandler({audience:'owner',authorizeScope:async()=>true,supabase: completeDb, providerFactory: () => ({}),
+    extractOffline: async () => ({...complete, lineItems: {value: [], confidence: .99}})});
   assert.match(await completeHandler({...scope, message: '', media: {bytes: Buffer.from([2]), mimeType: 'image/png'}}), /^Invoice INV-51/);
   assert.equal(completeDb.invoices.length, 0);
   assert.equal(Object.hasOwn(completeDb.review.action.invoice, 'missingDueDate'), false);
@@ -379,20 +379,20 @@ function phoneInvoicePdf(phoneLine) {
 
 for (const printed of ['WhatsApp: +14155550244', '', 'Phone: 4155550244']) {
   test(`PDF intake retains the printed debtor phone for review: ${printed || 'absent'}`, async () => {
-    const {extractInvoice} = await import('../ai/extraction.mjs');
+    const {extractInvoiceOffline} = await import('../ai/extraction.mjs');
     const db = combinedSupabase(), writes = [];
     const store = createWhatsAppInvoiceStore({supabase: db, ...scope});
-    const handler = createWhatsAppBoundMessageHandler({authorizeScope: async () => true, supabase: db,
+    const handler = createWhatsAppBoundMessageHandler({audience:'owner',authorizeScope: async () => true, supabase: db,
       providerFactory: () => ({generateStructured() { throw Error('PDF must use printed text'); }}),
-      extract: extractInvoice, invoiceStoreFactory: () => ({...store,
+      extractOffline: extractInvoiceOffline, invoiceStoreFactory: () => ({...store,
         async saveDebtorPhone(input) { writes.push(input); return store.saveDebtorPhone(input); }}),
       channelFactory: () => ({ask() { throw Error('must not plan'); }})});
     const reply = await handler({...scope, message: '', messageId: 'pdf-phone',
       media: {bytes: phoneInvoicePdf(printed), mimeType: 'application/pdf', fileName: 'phone.pdf'}});
-    assert.match(reply, /^Invoice PHONE-50 for Buyer: USD 100, due 2026-10-31/);
-    assert.match(reply,/Reply yes/);
-    assert.equal(db.invoices.length, 0);
-    assert.equal(db.review.action.stage,'proposal');
+    assert.match(reply,/Local invoice review/);assert.match(reply,/PHONE-50/);
+    assert.match(reply,/Nothing was saved/);
+    assert.equal(db.invoices.length,0);
+    assert.equal(db.review.action.stage,'incomplete');
     assert.equal(db.review.action.invoice.clientName, 'Buyer');
     assert.equal(db.review.action.invoice.clientPhone,printed.includes('+')?'+14155550244':null);
     assert.equal(writes.length,0);

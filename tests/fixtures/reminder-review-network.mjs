@@ -1,6 +1,8 @@
+// Existing operational recipient policy; no copied personal contact literal.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../../automation/whatsapp/reminder-proof.mjs';
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {createOfflineSqlNetwork} from './offline-sql-network.mjs';
+import {createOfflineSqlNetwork,completeDispatchFixtureSchema} from './dispatch-ready-network.mjs';
 import {applyNoFooterMigration} from './no-footer-reminders.mjs';
 import {createAIHandler} from '../../ai/routes.mjs';
 import {CoreAutomationStore} from '../../automation/core-store.mjs';
@@ -8,7 +10,7 @@ import {createAutomationRuntime} from '../../automation/runtime.mjs';
 
 // Actual handlers, SDK and PostgreSQL; all credentials and recipients are isolated fixtures.
 export async function createReminderReviewNetwork(){
- const graph=[],phone='+919871367051';
+ const graph=[],phone=QA_POLICY_PHONE;
  const f=await createOfflineSqlNetwork({excludeMigrations:['20261023061702_shared_owner_assistant.sql'],externalFetch:async(url,options)=>{
   if(url.origin!=='https://graph.facebook.com')throw Error('Unexpected fixture network');graph.push(JSON.parse(options.body));return Response.json({messages:[{id:'wamid.browser.'+graph.length}]});
  }});const {db}=f;
@@ -16,6 +18,7 @@ export async function createReminderReviewNetwork(){
   for(const file of ['20261018060000_customer_reminder_tone.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060100_invoice_details_templates.sql'])await db.exec(await readFile(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
   await applyNoFooterMigration(db,{approve:true});
   for(const file of ['20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql','20261023061702_shared_owner_assistant.sql','20261023083356_per_message_reminder_review.sql','20261023164251_exact_reminder_approval_artifact.sql'])await db.exec(await readFile(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
+  await completeDispatchFixtureSchema(db);
   const ownerId=randomUUID();await db.query('insert into auth.users(id) values($1)',[ownerId]);
   const asUser=()=>db.exec(`reset role;set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${ownerId}'`);
   const service=()=>db.exec("reset role;set request.jwt.claim.role='service_role';set request.jwt.claim.sub=''");

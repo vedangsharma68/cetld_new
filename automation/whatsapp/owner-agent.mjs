@@ -1,4 +1,3 @@
-import {offlineProvenance} from '../../ai/offline-provenance.mjs';
 import {offlineReviewDraft, offlineReviewClarification, correctOfflineReview, offlineCorrectionInputIssue, resolveOfflineReview, OFFLINE_CONFIRMATION_REPLY, OFFLINE_CANCEL_REPLY} from '../../ai/offline-invoice-review.mjs';
 import {receivablesReadAnswer,receivableBalanceLabel} from '../../invoice/receivables.mjs';
 import {parseTextInvoice,textInvoiceFailure,textInvoiceClarification,isTextInvoiceValidationFailure} from './text-invoice.mjs';
@@ -468,7 +467,7 @@ function ownerOnlyDefinitions() {
 
 export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pendingAtStart, lifecyclePending, invoiceStoreFactory,
   pendingInitialState,settingsStore, config, message, messageId, media, mediaError, ownerHistory=[],signal, deadlineAt, authorize, lifecycle, providerFactory, env, fetchImpl,
-  extractAttachment=extractInvoice,extractOfflineAttachment=extractInvoiceOffline,attachmentIngestFactory=createWhatsAppBoundMessageHandler,sourceMediaReader,
+  extractAttachment=extractInvoiceOffline,extractOfflineAttachment=extractAttachment,localInvoiceReview=env?.EXTRACTION_ROUTE==='offline',attachmentIngestFactory=createWhatsAppBoundMessageHandler,sourceMediaReader,
   configurationAvailable=true,configurationSource='workspace',historyAvailable=true,ownerStoreAvailable=true,lifecycleAvailable=true,pendingStoreAvailable=true,
   clock = () => new Date(), timezone = 'Asia/Kolkata', logger = console} = {}) {
   const reads = createAssistantTools({store: ownerStore, clock, timezone});
@@ -520,9 +519,9 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
   };
   const expiry = () => new Date(clock().getTime() + 10 * 60_000).toISOString();
   const canConfirm = () => verifiedReviewDecision==='confirm'||ownerIsConfirmation(message)
-    ||env?.EXTRACTION_ROUTE==='offline'&&pendingAtStart?.action?.extractionRoute==='offline'&&OFFLINE_CONFIRMATION_REPLY.test(message);
+    ||pendingAtStart?.action?.extractionRoute==='offline'&&OFFLINE_CONFIRMATION_REPLY.test(message);
   const canCancel = () => verifiedReviewDecision==='cancel'||CANCEL.test(message)
-    ||env?.EXTRACTION_ROUTE==='offline'&&pendingAtStart?.action?.extractionRoute==='offline'&&OFFLINE_CANCEL_REPLY.test(message);
+    ||pendingAtStart?.action?.extractionRoute==='offline'&&OFFLINE_CANCEL_REPLY.test(message);
   const setDeletionReplyRequirement = action => {
     replyRequirement={confirmationText:action.requiresExactConfirmation?`DELETE ${action.invoiceNumber}`:'yes',requiresCancel:true,requiresReplyCue:true,
       requiredFacts:{invoiceNumber:action.invoiceNumber,customerName:action.customerName||'Unknown customer',totalAmount:action.totalAmount,
@@ -688,7 +687,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
     const currentAction=pendingAtStart?.action;
     if(!pendingStoreAvailable||!pending||typeof pending.loadInvoiceReview!=='function'
       ||typeof pending.transitionInvoiceReview!=='function')return {ok:false,code:'UNAVAILABLE',message:SAFE_ERRORS.UNAVAILABLE};
-    if (env?.EXTRACTION_ROUTE === 'offline' && currentAction?.extractionRoute === 'offline') {
+    if (currentAction?.extractionRoute === 'offline') {
       const inputIssue=offlineCorrectionInputIssue(message,{parseCorrection:parseInvoiceCorrection,clock});
       if(inputIssue)return {ok:false,code:'INVALID',message:inputIssue};
       const next = correctOfflineReview(currentAction, message, {parseCorrection:parseInvoiceCorrection,clock,messageId});
@@ -1348,14 +1347,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         try{
           const settings=await supabase.from('workspace_settings').select('*').eq('workspace_id',scope.workspaceId).maybeSingle();
           if(settings?.error)return unavailable('UNAVAILABLE');
-          if(env?.EXTRACTION_ROUTE==='offline')await offlineProvenance({supabase,workspaceId:scope.workspaceId,mark:true});
-          if(settings?.data?.offline_invoice_provenance===true && env?.EXTRACTION_ROUTE!=='offline')
-            return {ok:false,code:'UNAVAILABLE',message:'This business contains local invoice information. Continue with local invoice review.'};
-          const extractionProvider=env?.EXTRACTION_ROUTE==='offline'?null:providerFactory({primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL,
-            requestPurpose:'extraction',geminiApiKey:env?.GEMINI_API_KEY,openRouterApiKey:env?.OPENROUTER_API_KEY,
-            zenApiKey:env?.OPENCODE_ZEN_API_KEY,cfAccountId:env?.CLOUDFLARE_ACCOUNT_ID,cfApiToken:env?.CLOUDFLARE_API_TOKEN,
-            fetchImpl,timeoutMs:12_000,maxAttempts:1});
-          const extracted=await (env?.EXTRACTION_ROUTE==='offline'?extractOfflineAttachment:extractAttachment)({provider:extractionProvider,...media,businessName:settings?.data?.business_name||'',signal,deadlineAt,logger});
+          const extracted=await extractOfflineAttachment({...media,businessName:settings?.data?.business_name||'',signal,deadlineAt,logger});
           await active();
           const invoiceNumber=extracted?.invoiceNumber?.value,clientName=extracted?.customerName?.value,clientEmail=extracted?.clientEmail?.value;
           if(typeof invoiceNumber!=='string'||!invoiceNumber.trim()||invoiceNumber.length>100||invoiceNumber==='AUTO'
@@ -1379,13 +1371,6 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         const settings=await supabase.from('workspace_settings').select('*')
           .eq('workspace_id',scope.workspaceId).maybeSingle();
         if(settings?.error)throw Object.assign(new Error(),{code:'UNAVAILABLE'});
-        if(env?.EXTRACTION_ROUTE==='offline')await offlineProvenance({supabase,workspaceId:scope.workspaceId,mark:true});
-        if(settings?.data?.offline_invoice_provenance===true && env?.EXTRACTION_ROUTE!=='offline')
-          return {ok:false,code:'UNAVAILABLE',message:'This business contains local invoice information. Continue with local invoice review.'};
-        const extractionProvider=env?.EXTRACTION_ROUTE==='offline'?null:providerFactory({primaryModel:DEFAULT_EXTRACTION_MODEL,fallbackModel:DEFAULT_EXTRACTION_FALLBACK_MODEL,
-          requestPurpose:'extraction',geminiApiKey:env?.GEMINI_API_KEY,openRouterApiKey:env?.OPENROUTER_API_KEY,
-          zenApiKey:env?.OPENCODE_ZEN_API_KEY,cfAccountId:env?.CLOUDFLARE_ACCOUNT_ID,cfApiToken:env?.CLOUDFLARE_API_TOKEN,
-          fetchImpl,timeoutMs:12_000,maxAttempts:1});
         let token=null;
         if(typeof pending?.beginInvoiceReview==='function'&&typeof pending?.transitionInvoiceReview==='function'){
           if(pendingAtStart?.action&&pendingAtStart.action.type!=='invoice_review_draft'
@@ -1394,9 +1379,9 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
           if(token?.action?.stage==='saving')return {ok:false,code:'PENDING',message:'The previous invoice is still being saved. No new review was started.'};
         }
         let extracted;
-        try{extracted=await (env?.EXTRACTION_ROUTE==='offline'?extractOfflineAttachment:extractAttachment)({provider:extractionProvider,...media,businessName:settings?.data?.business_name||'',signal,deadlineAt,logger});}
+        try{extracted=await extractOfflineAttachment({...media,businessName:settings?.data?.business_name||'',signal,deadlineAt,logger});}
         catch(error){
-          const offline=env?.EXTRACTION_ROUTE==='offline';
+          const offline=localInvoiceReview;
           if(token?.id!=null&&(offline||Object.hasOwn(INVOICE_IMAGE_REPLIES,error?.code||'')))
             await pending.transitionInvoiceReview({...token,...scope,fromStage:'extracting',
               action:{...reviewDraft(null,messageId),...(offline?{extractionRoute:'offline'}:{}),stage:'canceled',
@@ -1408,7 +1393,7 @@ export function createOwnerSafetyTools({supabase, scope, ownerStore, pending, pe
         await active();
         let retainedReview=null;
         if(token?.id!=null&&token.action?.stage==='extracting'){
-          let draft=env?.EXTRACTION_ROUTE==='offline'?offlineReviewDraft(extracted,messageId,{ownerMessage:message}):reviewDraft(extracted,messageId);
+          let draft=localInvoiceReview||extracted?.extractionRoute==='offline'?offlineReviewDraft(extracted,messageId,{ownerMessage:message}):reviewDraft(extracted,messageId);
           if(!draft.missingFields.length&&!draft.validationIssues?.length){
             try{const {missingDueDate,...validated}=validateAssistantInvoice(draft.invoice);draft={...draft,invoice:validated,stage:'proposal'};}
             catch{ /* Preserve extracted facts for an explicit review; never save invalid totals. */ }
@@ -2078,12 +2063,12 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
     if(invoiceClarification)return resultFor(invoiceClarification,{invoiceCreationClarificationReply:true});
     // A captionless attachment supplies a new source, not a reference to an
     // earlier customer or pending write. Read it before consulting the planner.
-    let requireAttachmentAnalysis=!checkpoint&&!String(message||'').trim()
-      &&(attachmentDescriptor?.available===true||attachmentDescriptor?.errorCode==='ATTACHMENT_UNAVAILABLE')
-      &&attachmentTool?.function?.name==='workspaceData';
     let requireAttachmentLookup=!checkpoint&&!requireAttachmentIngest&&tools.supportsAttachmentDuplicateLookup===true
       &&(attachmentDescriptor?.available===true||attachmentDescriptor?.errorCode==='ATTACHMENT_UNAVAILABLE')
       &&ownerInvoiceReadIntent(message)?.attachmentLookup===true;
+    let requireAttachmentAnalysis=!checkpoint&&!requireAttachmentIngest&&!requireAttachmentLookup
+      &&(attachmentDescriptor?.available===true||attachmentDescriptor?.errorCode==='ATTACHMENT_UNAVAILABLE')
+      &&attachmentTool?.function?.name==='workspaceData';
     let reviewContinuation=!checkpoint&&!requireAttachmentIngest&&!requireAttachmentLookup&&attachmentTool?.function?.name==='workspaceData'?tools.getAttachmentReviewContinuation?.():null;
     let reviewDecision=!checkpoint&&!requireAttachmentIngest&&!requireAttachmentLookup&&attachmentTool?.function?.name==='workspaceData'
       ?tools.getAttachmentReviewDecision?.():null;
@@ -2132,6 +2117,8 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         return resultFor('Canceled the invoice review. Nothing was saved.',{deterministicWriteReply:true});
       const attachmentUnverified=evidence.findLast(result=>result.attachmentSaveUnverified===true);
       if(attachmentUnverified)return resultFor(attachmentUnverified.message,{deterministicWriteReply:true});
+      if(typeof requirement?.attachmentReview?.answer==='string')
+        return resultFor(requirement.attachmentReview.answer,{attachmentReviewReply:true});
       const continuedProposal=evidence.findLast(result=>result.action==='review_updated'&&result.stage==='proposal');
       if(continuedProposal)return resultFor(proposalSummary(continuedProposal.invoice,{buttonsAvailable:requirement?.buttonsAvailable,continued:true}),{attachmentReviewReply:true});
       const attachmentProposal=evidence.findLast(result=>result.outcome==='review_ready'&&result.review?.stage==='proposal');
@@ -2403,7 +2390,13 @@ export async function runOwnerAgent({provider,config,store,tools,history=[],mess
         &&output.readOnly===true&&output.operation==='read'&&output.table==='invoices'&&output.truncated!==true&&output.rows?.length===1
         &&(output.lookupInvoiceNumber===requestedPayment.invoiceNumber||output.rows[0].invoice_number===requestedPayment.invoiceNumber));
       let lastResult,round,calls;
-      if(requestedReadAnalysis&&tools.supportsInvoiceReadAnalysis===true&&definitionNames.has('workspaceData')
+      if(requiredAttachmentCall){
+        requireAttachmentIngest=false;
+        calls=[{id:'owner-local-attachment-save',type:'function',function:{name:attachmentTool.function.name,
+          arguments:JSON.stringify(attachmentTool.function.name==='workspaceData'?{operation:'saveAttachment'}:{})}}];
+        round={number:++diagnostics.rounds,toolNames:[attachmentTool.function.name],toolResults:[],outcome:'ok',safetyIssueCodes:[],logged:false};
+        activeRound=round;diagnostics.toolRounds++;
+      }else if(requestedReadAnalysis&&tools.supportsInvoiceReadAnalysis===true&&definitionNames.has('workspaceData')
         &&!boundedInvoiceReadSelected&&!writeMayHaveBeenAttempted()&&!requiredAttachmentCall&&!requireAttachmentLookup&&!requiredReview&&!reviewDecision&&!paymentDecision&&!reviewRefusal){
         boundedInvoiceReadSelected=true;
         calls=[{id:'owner-invoice-read-analysis',type:'function',function:{name:'workspaceData',arguments:JSON.stringify(invoiceReadAnalysisArgs(requestedReadAnalysis))}}];

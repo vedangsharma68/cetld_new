@@ -1,6 +1,21 @@
 # Local invoice review
 
-This is an opt-in WhatsApp owner intake route. Only the exact server environment value `EXTRACTION_ROUTE=offline` selects it. Unset, uppercase, whitespace-suffixed and other values retain the existing provider route, models and settings. This change does not set the variable, alter settings or enable the route in any deployment. The web extraction API retains its existing behavior.
+WhatsApp invoice intake is local and model-free with `EXTRACTION_ROUTE=offline`
+set or unset. The flag selects the direct owner intake/review path; unset media
+also uses the same local extractor through bounded server-selected tools. No
+enabled extraction route can call Gemini or another model. The web extraction
+API also uses the local reader. Existing reviews can be corrected and confirmed
+after the flag changes.
+
+Ordinary WhatsApp chat retains the last 20 eligible non-invoice messages over
+Cloudflare before and after uploads. Invoice-bearing turns and replies stay out
+of provider memory; durable local terms also prevent later quoted fields from
+entering a request. Permanent provenance marks no longer block chat, menus,
+invoice queries or reminders. Customer receipt uploads do not start an owner
+review or record a payment; they direct the sender to the business owner.
+
+Deploy the additive private-memory migration before this application. See
+[AI containment and migration details](ai.md#whatsapp-invoice-containment-and-conversational-memory).
 
 The local intake and its review turns do not construct an extraction/chat provider or invoke model intent classification. Images use the existing bundled Tesseract English OCR and conservative parser (confidence remains capped at 0.69). PDFs use the existing local PDF text reader and deterministic PDF parser; text that does not fit that parser uses the conservative offline text parser. A PDF with no readable text gets exactly: “This PDF has no readable text. Send a photo of the invoice instead.” It cannot fall back to a provider.
 

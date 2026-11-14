@@ -40,13 +40,16 @@ test('preview and local release gates run the fast battery, type check and compl
   const calls=[];await runReleaseGate({run:async name=>calls.push(name)});
   assert.deepEqual(calls,['test:owner-chat','typecheck','test','test:offline-route']);
 });
-test('Vercel and GitHub run the same mandatory release gate',async()=>{
+test('Vercel builds the frontend while GitHub gates the complete release independently',async()=>{
   const config=JSON.parse(await readFile(new URL('../vercel.json',import.meta.url),'utf8'));
   const workflow=await readFile(new URL('../.github/workflows/owner-chat.yml',import.meta.url),'utf8');
-  assert.equal(config.buildCommand,'npm run check:release');
+  assert.equal(config.buildCommand,'npm run build:frontend');
   assert.equal(config.outputDirectory,'.','the static app lives at the repository root after the verification build');
   assert.equal(config.installCommand,'npm ci --include=dev');
-  assert.match(workflow,/push:/);assert.match(workflow,/pull_request:/);assert.match(workflow,/npm run check:release/);
+  assert.match(workflow,/push:/);assert.match(workflow,/pull_request:/);
+  for(const command of ['npm run test:owner-chat','npm run typecheck','npm run test:offline-route','npm run build:frontend','node scripts/release-shard.mjs'])assert.ok(workflow.includes(command),command);
+  assert.match(workflow,/needs: tests/);
+  assert.deepEqual([...workflow.matchAll(/timeout-minutes: (\d+)/g)].map(m=>Number(m[1])),[30,30]);
 });
 
 test('release children isolate provider routing and explicitly activate the offline check',async()=>{

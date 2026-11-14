@@ -68,6 +68,28 @@ export function receivablesReadAnswer(result, options) {
   } catch { return null; }
 }
 
+// A verified read can create private facts that no source row contains. Keep
+// the typed numeric results before any transport discloses them. The callback
+// is bound to the already-authorized chat scope by its handler.
+export async function retainReceivablesResult(result, retain) {
+  if(result?.ok!==true||result.readOnly!==true||result.operation!=='read'||result.table!=='invoices'||typeof retain!=='function')return;
+  const values=new Set(),add=value=>{if(/^[0-9]+(?:\.[0-9]+)?$/.test(String(value)))values.add(String(value));};
+  const measures=(value,typed=false)=>{
+    if(Array.isArray(value)){for(const child of value)measures(child,typed);return;}
+    if(value&&typeof value==='object'){for(const [key,child] of Object.entries(value))measures(child,typed||/amount|balance|total|paid|count|sum/i.test(key));return;}
+    if(typed)add(value);
+  };
+  const summary=result.balanceSummary||(result.invoiceReadAnalysis?.complete===true&&result.invoiceReadAnalysis.balanceSummary)
+    ||(result.truncated===false&&!result.offset&&Array.isArray(result.rows)&&result.rows.every(row=>row.status&&row.currency&&row.total_amount!=null)?summarizeReceivables(result.rows):null);
+  measures(summary);measures(result.invoiceReadAnalysis);
+  for(const row of result.rows||[])if(row.total_amount!=null||row.amount_minor!==undefined){const [total,paid]=amounts(row);add(decimal(total>paid?total-paid:0n));}
+  let batch=[];
+  const document=entries=>JSON.stringify({invoice:{amount:entries}});
+  const flush=async()=>{if(batch.length){if(await retain(document(batch))!==true)throw new Error('PRIVATE_RESULT_RETENTION_UNAVAILABLE');batch=[];}};
+  for(const value of values){if(document([...batch,value]).length>4000)await flush();batch.push(value);}
+  await flush();
+}
+
 // Bounded global balance requests use the complete ledger on both transports.
 // Named customers/invoices, scenarios and write instructions stay on their own paths.
 export function isOutstandingBalanceQuestion(message) {

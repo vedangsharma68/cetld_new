@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistant-handler.mjs';
 
-const scope = {workspaceId: 'workspace-a', customerId: 'customer-a', phone: '+919871367051', message: 'What is my invoice status?'};
+const scope = {workspaceId: 'workspace-a', customerId: 'customer-a', phone: '+12025550101', message:'Can you help me plan my day?'};
 
 function fakeSupabase({customerId = 'customer-a', turns = [], memoryError = null} = {}) {
-  return {rpc() {}, from(table) {
+  return {async rpc(name,args) {if(name==='whatsapp_retain_private_chat_origin'){assert.equal(args.p_workspace_id,'workspace-a');assert.equal(typeof args.p_text,'string');return {data:true};}}, from(table) {
+    if(['whatsapp_provider_memory','whatsapp_private_invoice_terms','whatsapp_private_invoice_backfill'].includes(table)){const q={select(){return q},eq(){return q},order(){return q},limit:async()=>({data:table==='whatsapp_private_invoice_backfill'?Array.from({length:4},()=>({complete:true})):[]}),range:async()=>({data:[]}),insert:async()=>({data:[]})};return q;}
     if (table === 'whatsapp_conversation_turns') {
       if (memoryError) throw memoryError;
       const query = {select() { return query; }, eq() { return query; }, order() { return query; },
@@ -89,17 +90,17 @@ test('WhatsApp provider attempts are bounded to fit the function duration', asyn
     fetchImpl,
     providerFactory(options) {
       providerOptions = options;
-      return {};
+      return {generate:async()=>({content:'Hello there'})};
     },
-    channelFactory: () => ({async ask() { return {answer: 'Invoice INV-1 is sent.'}; }}),
+    channelFactory: ({provider}) => ({async ask() { await provider.generate();return {answer: 'Hello there'}; }}),
   });
 
   await handler(scope);
 
   assert.equal(providerOptions.timeoutMs, 8000);
   assert.equal(providerOptions.maxAttempts, 1);
-  assert.equal(providerOptions.geminiApiKey, 'gemini-key');
-  assert.equal(providerOptions.openRouterApiKey, 'openrouter-key');
+  assert.equal(providerOptions.geminiApiKey,undefined);
+  assert.equal(providerOptions.openRouterApiKey,undefined);
   assert.equal(providerOptions.fetchImpl, fetchImpl);
 });
 
@@ -192,7 +193,7 @@ test('ordinary customers cannot upload, edit, or confirm a legacy invoice draft'
   assert.match(await handler({...scope,message}),/Only the business owner/);
  }
  const upload=createWhatsAppBoundMessageHandler({supabase:{from(){throw Error('No extraction or queries for a customer upload')}}});
- assert.match(await upload({...scope,media:{bytes:Buffer.from('photo')}}),/Only the business owner/);
+ assert.match(await upload({...scope,media:{bytes:Buffer.from('photo')}}),/Ask the business owner/);
 });
 
 for (const number of ['+1 415 555-0244', '415 bananas', '+1 (415) 555-0244']) {

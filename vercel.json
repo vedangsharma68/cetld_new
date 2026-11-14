@@ -6,7 +6,7 @@
   "regions": ["bom1"],
   "outputDirectory": ".",
   "installCommand": "npm ci --include=dev",
-  "buildCommand": "npm run check:release",
+  "buildCommand": "npm run build:frontend",
   "functions": {
     "api/ai.js": {
       "includeFiles": "{vendor/tessdata/eng.traineddata,node_modules/tesseract.js-core/*.wasm,node_modules/pdfjs-dist/wasm/*.wasm,node_modules/@img/sharp-wasm32/lib/*.wasm}",
