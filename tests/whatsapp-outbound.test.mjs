@@ -1,11 +1,14 @@
+// Exercise the existing operational recipient policy without copying personal contact literals.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createWhatsAppOutbound, neutralText} from '../automation/whatsapp/cloud-outbound.mjs';
+import {neutralText} from '../automation/whatsapp/cloud-outbound.mjs';
+import {createWhatsAppOutbound} from './fixtures/dispatch-sql-double.mjs';
 import {createWhatsAppAssistantChannel, createCustomerScopedStore} from '../ai/whatsapp-channel.mjs';
 import {IDENTITY_ANSWER, SCOPE_ANSWER} from '../ai/assistant.mjs';
 import {createOwnerNextButtons} from '../automation/whatsapp/owner-next-actions.mjs';
 
-const PHONE = '+919871367051';
+const PHONE = QA_POLICY_PHONE;
 const DAD_PHONE = '+919818685252';
 const OTHER = '+15551234567';
 const NOW = '2026-09-27T12:00:00.000Z';

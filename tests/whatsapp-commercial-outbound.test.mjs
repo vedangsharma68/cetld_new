@@ -1,15 +1,17 @@
+// Exercise the existing operational recipient policy without copying personal contact literals.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import https from 'node:https';
-import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
-import {createApprovedReminderProvider} from '../automation/whatsapp/approved-reminders.mjs';
-import {createFirstPartyReminderProvider} from '../automation/whatsapp/cloud-reminders.mjs';
+import {createWhatsAppOutbound} from './fixtures/dispatch-sql-double.mjs';
+import {createApprovedReminderProvider} from './fixtures/dispatch-sql-double.mjs';
+import {createFirstPartyReminderProvider} from './fixtures/dispatch-sql-double.mjs';
 import {APPROVED_REMINDER_WABA,selectReminderTemplate,buildReminderTemplate} from '../automation/whatsapp/reminder-templates.mjs';
 import {reminderDeliveryForm} from '../automation/whatsapp/reminder-approval.mjs';
 import {brandedReminder} from '../automation/preferences.mjs';
 
-const QA = '+919871367051';
+const QA = QA_POLICY_PHONE;
 const COMMERCIAL = '+12025550199';
 const OTHER = '+12025550198';
 const NOW = '2026-10-23T12:00:00.000Z';

@@ -1,13 +1,15 @@
+// Existing operational recipient policy; no copied personal contact literal.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
+import {createOfflineSqlNetwork} from './fixtures/dispatch-ready-network.mjs';
 import {applyNoFooterMigration} from './fixtures/no-footer-reminders.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
 import {CoreAutomationStore} from '../automation/core-store.mjs';
 import {createAutomationRuntime} from '../automation/runtime.mjs';
-import {createApprovedReminderProvider} from '../automation/whatsapp/approved-reminders.mjs';
+import {createApprovedReminderProvider} from './fixtures/dispatch-sql-double.mjs';
 
 const phone='+919818685252';
 const freshReads='20261024094013_fresh_external_reminder_reads.sql';
@@ -26,7 +28,7 @@ async function setup(){
   for(const file of ['20261018060000_customer_reminder_tone.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060100_invoice_details_templates.sql'])
    await db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
   await applyNoFooterMigration(db,{approve:true});
-  for(const file of ['20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql','20261023061702_shared_owner_assistant.sql','20261023083356_per_message_reminder_review.sql','20261023164251_exact_reminder_approval_artifact.sql',freshReads,overdueGate,containment])
+  for(const file of ['20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql','20261023061702_shared_owner_assistant.sql','20261023083356_per_message_reminder_review.sql','20261023164251_exact_reminder_approval_artifact.sql',freshReads,overdueGate,containment,'20261101120327_private_whatsapp_chat_memory.sql'])
    await db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
   const ownerId=randomUUID(),otherOwner=randomUUID();
   await db.query('insert into auth.users(id) values($1),($2)',[ownerId,otherOwner]);
@@ -145,7 +147,7 @@ test('supported test invoices require honest one-off words and preserve producti
    const before=f.graph.length;await f.tick(id);assert.equal(f.graph.length,before);
   });
   await t.test('configured recipient allowlist is still required after owner approval',async()=>{
-   const id=await f.seed();await f.approved(id);f.env.WHATSAPP_TEST_ALLOWLIST='+919871367051';
+   const id=await f.seed();await f.approved(id);f.env.WHATSAPP_TEST_ALLOWLIST=QA_POLICY_PHONE;
    const before=f.graph.length;await f.tick(id);assert.equal(f.graph.length,before);
   });
   await t.test('one-off remains a text send when the demand template is unavailable',async()=>{

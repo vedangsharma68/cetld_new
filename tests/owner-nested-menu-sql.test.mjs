@@ -11,7 +11,7 @@ import {createOwnerReplyStore} from '../automation/whatsapp/owner-reply-store.mj
 const migration=new URL('../supabase/migrations/20261006172223_owner_nested_edit_menus.sql',import.meta.url);
 
 test('real default owner handler and SQL receipts preserve nested paid/open menus, replay, return navigation and expiry',async t=>{
- const f=await createOfflineSqlNetwork(),{db,supabase}=f,owner=randomUUID(),phone='+919871367051';
+ const f=await createOfflineSqlNetwork(),{db,supabase}=f,owner=randomUUID(),phone='+12025550101';
  let elapsed=0,modelCalls=0;const start=Date.now(),clock=()=>new Date(start+elapsed);
  const env={NODE_ENV:'test',WHATSAPP_APP_SECRET:'isolated-nested-menus'};
  const logger={info(){},warn(){},error(){}};

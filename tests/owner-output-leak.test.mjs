@@ -46,7 +46,7 @@ function toolsForReview(executions){
     getReplyRequirement:()=>requirement};
 }
 
-test('event248 synthetic leaked working draft is repaired before any owner answer is returned',async()=>{
+test('event248 synthetic leaked working draft is replaced with the locally verified review',async()=>{
   const requests=[],executions=[],logs=[];
   const result=await runOwnerAgent({message:'Review the uploaded invoice.',tools:toolsForReview(executions),
     logger:{info:(...args)=>logs.push(args),error:(...args)=>logs.push(args)},
@@ -54,24 +54,22 @@ test('event248 synthetic leaked working draft is repaired before any owner answe
       if(requests.length===1)return {toolCalls:[{id:'pending-review',type:'function',function:{name:'workspaceData',arguments:'{"operation":"pending"}'}}]};
       return {content:requests.length===2?leakedRequirements+'\n'+narration+'\n'+safeReview:safeReview};}}});
   assert.equal(result.answer,safeReview);
-  assert.equal(requests.length,3);
-  assert.equal(requests[2].tools,undefined,'repair cannot execute a write or a new lookup');
-  assert.match(requests[2].messages.at(-1).content,/only the owner-facing answer/i);
+  assert.equal(requests.length,2,'verified local review bypasses further model repair');
   assert.deepEqual(executions,['workspaceData']);
   assert.ok(result.agentDiagnostics.safetyRejects.includes('internal_reply_requirements'));
   assert.doesNotMatch(JSON.stringify(logs),/replyRequirements|missingFields|draft a concise/);
 });
 
-test('leaking tools-off drafts use the verified retained invoice-review fallback after bounded repair',async()=>{
+test('a verified retained invoice review bypasses all tools-off model drafts',async()=>{
   const requests=[],executions=[];
   const result=await runOwnerAgent({message:'Review the uploaded invoice.',tools:toolsForReview(executions),initialToolResults,
     provider:{async generate(request){requests.push(request);return {content:requests.length===1?'Analysis: Prepare the invoice reply.\n'+safeReview:leakedRequirements+'\n'+safeReview};}}});
   assert.equal(result.answer,safeReview);
-  assert.equal(result.attachmentReviewFallback,true);
-  assert.equal(requests.length,2);
+  assert.equal(result.attachmentReviewReply,true);
+  assert.equal(requests.length,0);
   assert.ok(requests.every(request=>request.tools===undefined));
   assert.deepEqual(executions,[]);
-  assert.deepEqual(result.agentDiagnostics.safetyRejects,['internal_drafting_narration','internal_reply_requirements']);
+  assert.deepEqual(result.agentDiagnostics.safetyRejects,[]);
 });
 
 test('persistently leaking output without a grounded fallback fails closed',async()=>{

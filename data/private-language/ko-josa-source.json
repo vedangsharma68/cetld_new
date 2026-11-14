@@ -1,0 +1,10 @@
+{
+  "project": "Open Korean Text",
+  "commit": "74cc4ae7d3dab232747cd5ddb723e4b73c476e4f",
+  "source": "https://github.com/open-korean-text/open-korean-text/blob/74cc4ae7d3dab232747cd5ddb723e4b73c476e4f/src/main/resources/org/openkoreantext/processor/util/josa/josa.txt",
+  "license": "Apache-2.0",
+  "sourceBytes": 5219,
+  "sourceSha256": "d0c2be2f0d8b69ddbfd7c2eff4136768c97fa521aa8db388a053935e9d1f75a2",
+  "entries": 506,
+  "modifications": "None to the source dictionary; the JS artifact stores its sorted unique entries."
+}

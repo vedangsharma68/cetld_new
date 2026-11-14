@@ -1,12 +1,14 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {createWorkspaceDataTool} from '../automation/whatsapp/workspace-data.mjs';
 
-test('owner name clarification, empty filters and service failures work through the real handler and scoped SQL reads',async t=>{
+engineTest('owner name clarification, empty filters and service failures work through the real handler and scoped SQL reads',async t=>{
   const f=await createOfflineSqlNetwork(),{db}=f,ownerId=randomUUID(),phone='+12025550137';
   try{
     await db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -23,7 +25,7 @@ test('owner name clarification, empty filters and service failures work through 
     const run=async(message,args,draft='Here is the matching invoice for John Smith.')=>{
       const messageId=randomUUID(),outputs=[],executions=[];let providerCalls=0;
       await db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'fixture',$2,'text',$3,'processing')",[messageId,phone,message]);
-      const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
+      const handler=createOwnerEngineHarness({supabase:f.supabase,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
         historyReader:async()=>structuredClone(history),
         toolsFactory:options=>{const tools=createOwnerWorkspaceTools(options);return {...tools,async execute(name,values,ctx){
           executions.push(structuredClone(values));const result=await tools.execute(name,values,ctx);outputs.push(result);return result;

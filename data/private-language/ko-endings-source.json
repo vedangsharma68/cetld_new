@@ -1,0 +1,19 @@
+{
+  "project": "Open Korean Text",
+  "commit": "74cc4ae7d3dab232747cd5ddb723e4b73c476e4f",
+  "license": "Apache-2.0",
+  "files": {
+    "data/private-language/ko-eomi.txt": {
+      "source": "https://github.com/open-korean-text/open-korean-text/blob/74cc4ae7d3dab232747cd5ddb723e4b73c476e4f/src/main/resources/org/openkoreantext/processor/util/verb/eomi.txt",
+      "bytes": 12618,
+      "sha256": "8e64ba9f86f3033320bac902554c6274db289f690bacf66584dae88e4c09e7b5",
+      "entries": 1236
+    },
+    "data/private-language/ko-pre_eomi.txt": {
+      "source": "https://github.com/open-korean-text/open-korean-text/blob/74cc4ae7d3dab232747cd5ddb723e4b73c476e4f/src/main/resources/org/openkoreantext/processor/util/verb/pre_eomi.txt",
+      "bytes": 285,
+      "sha256": "b433f5c1c006f2dec41e0c72099718109ba43c0227a3735453bed0be4a62fba7",
+      "entries": 69
+    }
+  }
+}

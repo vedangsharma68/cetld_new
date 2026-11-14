@@ -85,13 +85,13 @@ export function ownerMenuInvoiceEdit(message){
   const field={'customer name':'customer_name',note:'notes',notes:'notes','due date':'due_date','issue date':'issue_date','invoice date':'issue_date'}[match[1].toLowerCase().replace(/\s+/g,' ')];
   return {[field]:match[2].trim()};
 }
-export async function loadOwnerMenuEditTarget({supabase,scope,authorize,clock=()=>new Date()}={}){
+export async function loadOwnerMenuEditTarget({supabase,scope,authorize,clock=()=>new Date(),allowedActions=['edit_more','edit_due_date']}={}){
   if(!await authorize(scope))return {stale:true};
   const row=data(await supabase.from('whatsapp_messages').select('owner_next_action_ref')
     .eq('workspace_id',scope.workspaceId).eq('phone',scope.phone).eq('audience','owner').eq('direction','outbound').eq('kind','normal')
     .order('created_at',{ascending:false}).limit(1).maybeSingle());
   const reference=normalizeOwnerNextActionRef(row?.owner_next_action_ref);
-  if(!reference||reference.choices.length!==1||!['edit_more','edit_due_date'].includes(reference.choices[0].action))return null;
+  if(!reference||reference.choices.length!==1||!allowedActions.includes(reference.choices[0].action))return null;
   if(Date.parse(reference.expiresAt)<=now(clock))return {stale:true};
   const choice=reference.choices[0],record=await currentRecord({supabase,scope,choice,authorize});
   return record?{id:record.id,updatedAt:record.updated_at,invoiceNumber:record.invoice_number,reference:{...reference,key:randomUUID()}}:{stale:true};
@@ -186,7 +186,7 @@ export async function runOwnerNextAction({supabase,scope,env=process.env,clock=(
     if(!await authorize(scope))return {answer:NEXT_ACTION_STALE_REPLY};
     if(payment.error||reversal.error)return {answer:'I could not verify this invoice’s payment history, so I have not started an amount change.'};
     const history=payment.data||reversal.data?' Payment and reversal history will stay intact; excess paid will be shown as overpayment, with no automatic refund, transfer or allocation.':'';
-    return {answer:`What should the new total for ${label} be? It is currently ${record.currency||''} ${record.total_amount}.${history} I will verify the ledger and totals and follow your confirmation preference before saving. Nothing has changed yet.`};
+    return {answer:`What should the new total for ${label} be? It is currently ${record.currency||''} ${record.total_amount}.${history} I will verify the ledger and totals and follow your confirmation preference before saving. Nothing has changed yet.`,ownerNextActionRef:refFor([choice],clock)};
   }
   if(choice.action==='edit_due_date')return {answer:`What should the new due date for ${label} be? It is currently ${record.due_date||'not set'}. Nothing has changed yet.`,ownerNextActionRef:refFor([choice],clock)};
   if(choice.action==='edit_more')return {answer:`What other details should I change for ${label}? Tell me the field and new value. Nothing has changed yet.`,ownerNextActionRef:refFor([choice],clock)};

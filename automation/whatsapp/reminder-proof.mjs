@@ -1,3 +1,4 @@
+import {dispatchWhatsApp,prepareWhatsAppDispatch} from './private-dispatch.mjs';
 import {APIError} from '../../ai/http.mjs';
 import {getSendEligibility} from './consent.mjs';
 import {selectReminderTemplate,buildReminderTemplate,APPROVED_REMINDER_WABA,matchesApprovedReminderTemplate} from './reminder-templates.mjs';
@@ -29,6 +30,7 @@ export async function approvedReminderProof({workspaceId,ownerId,env,supabase,fe
     parameters,text:rendered.body,footer:actual.components.find(c=>c.type==='FOOTER')?.text||null,
     providerTemplateId:actual.id,migrationRequired:true,idempotencyKey:reminderProofKey};
   const callbackToken=conversationCallbackToken(workspaceId,reminderProofKey);
+  const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:REMINDER_PROOF_PHONE,publicIdentities:[REMINDER_PROOF_NUMBER]});
   const claim=await supabase.rpc('cetld_core_claim_reminder_proof',{
     p_owner_id:ownerId,p_workspace_id:workspaceId,p_customer_id:eligibility.customer.id,
     p_body:rendered.body,p_callback_token:callbackToken,
@@ -39,16 +41,16 @@ export async function approvedReminderProof({workspaceId,ownerId,env,supabase,fe
   // phone, business/customer facts and suppression. No async work before POST.
   let result;
   try{
-    const response=await fetchImpl(`https://graph.facebook.com/${env.WHATSAPP_GRAPH_API_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,{
+    const response=await dispatchWhatsApp({supabase,workspaceId,fetchImpl,admission,url:`https://graph.facebook.com/${env.WHATSAPP_GRAPH_API_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,init:{
       method:'POST',redirect:'error',headers:{Authorization:`Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,'Content-Type':'application/json'},
       body:JSON.stringify({messaging_product:'whatsapp',recipient_type:'individual',to:REMINDER_PROOF_PHONE.slice(1),
-        type:'template',template:rendered.template,biz_opaque_callback_data:callbackToken}),signal:AbortSignal.timeout(10_000)});
+        type:'template',template:rendered.template,biz_opaque_callback_data:callbackToken}),signal:AbortSignal.timeout(10_000)}});
     if(!response.ok)result={status:response.status>=500||response.status===408?'unknown':'failed'};
     else{
       const id=JSON.parse((await readBounded(response,64*1024)).toString('utf8'))?.messages?.[0]?.id;
       result=typeof id==='string'&&id.trim()&&id.length<=256?{status:'accepted',providerMessageId:id}:{status:'unknown'};
     }
-  }catch{result={status:'unknown'};}
+  }catch(error){result=error?.code==='PRIVATE_PAYLOAD_BLOCKED'?{status:'blocked',reason:'private_payload'}:{status:'unknown'};}
   try{await createConversationStore(supabase).finish({workspaceId,key:reminderProofKey,...result});}
   catch{return {...result,historySyncPending:true};}
   return {...result,recipient:REMINDER_PROOF_PHONE,templateName:entry.name,language:'en',synthetic:true};

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {AIProvider, CF_PRIMARY_MODEL, DEFAULT_EXTRACTION_MODEL, GEMINI_FALLBACK_MODEL} from '../ai/provider.mjs';
+import {AIProvider, CF_BACKUP_MODEL, CF_PRIMARY_MODEL, DEFAULT_EXTRACTION_MODEL, GEMINI_FALLBACK_MODEL} from '../ai/provider.mjs';
 import {createProviderHealthStore, providerHealthIdentity} from '../ai/provider-health.mjs';
 
 const rows = [];
@@ -49,9 +49,10 @@ function provider({healthStore, fetchImpl, account = 'account-secret', token = '
   });
 }
 
-function googleProvider({healthStore, fetchImpl, fallbackModel = DEFAULT_EXTRACTION_MODEL, logger = {warn() {}, info() {}}} = {}) {
+function singleModelProvider({healthStore, fetchImpl, fallbackModel = CF_BACKUP_MODEL, logger = {warn() {}, info() {}}} = {}) {
   return new AIProvider({
-    primaryModel: GEMINI_FALLBACK_MODEL,
+    primaryModel: CF_PRIMARY_MODEL,
+    cfAccountId:'account-secret',cfApiToken:'cloudflare-secret',
     fallbackModel,
     geminiApiKey: 'gemini-secret',
     healthStore,
@@ -89,9 +90,8 @@ test('quota health persists across provider instances and skips the Cloudflare l
     logger: {warn: (...args) => logEntries.push(args), info: (...args) => logEntries.push(args)},
     sleepImpl: async () => { sleepCalls++; },
   });
-  const result = await first.generate({messages: [{role: 'user', content: 'lookup'}]});
-  assert.equal(result.model, GEMINI_FALLBACK_MODEL);
-  assert.deepEqual(firstCalls, ['cloudflare', 'google']);
+  await assert.rejects(first.generate({messages:[{role:'user',content:'lookup'}]}),e=>e.code==='RATE_LIMITED');
+  assert.deepEqual(firstCalls,['cloudflare']);
   assert.equal(rows.length, 2);
 
   const serialized = JSON.stringify(rows);
@@ -109,9 +109,8 @@ test('quota health persists across provider instances and skips the Cloudflare l
     logger: {warn: (...args) => logEntries.push(args), info: (...args) => logEntries.push(args)},
     sleepImpl: async () => { sleepCalls++; },
   });
-  const secondResult = await second.generate({messages: [{role: 'user', content: 'next message'}]});
-  assert.equal(secondResult.model, GEMINI_FALLBACK_MODEL);
-  assert.deepEqual(secondCalls, ['google']);
+  await assert.rejects(second.generate({messages:[{role:'user',content:'next message'}]}),e=>e.code==='RATE_LIMITED');
+  assert.deepEqual(secondCalls,[]);
   assert.equal(sleepCalls, 0, 'a persisted quota failure must not enter the retry delay');
   const skipLog = logEntries.find(([message, fields]) => message === 'AI provider leg skipped:' && fields?.reason === 'quota_exceeded');
   assert.ok(skipLog);
@@ -125,7 +124,7 @@ test('a Cloudflare daily quota leg resumes after its UTC reset time', async () =
   let now = Date.now();
   const healthStore = store(() => now);
   const daily = mixedProviderFetch({cloudflare: quotaExceededDaily});
-  await provider({healthStore, fetchImpl: daily}).generate({messages: [{role: 'user', content: 'before reset'}]});
+  await assert.rejects(provider({healthStore,fetchImpl:daily}).generate({messages:[{role:'user',content:'before reset'}]}),e=>e.code==='RATE_LIMITED');
   const resetAt = Date.parse(rows[0].disabled_until);
   assert.ok(resetAt > now);
 
@@ -137,60 +136,22 @@ test('a Cloudflare daily quota leg resumes after its UTC reset time', async () =
   assert.deepEqual(calls, ['cloudflare']);
 });
 
-test('a Google RPD quota persists through the next America/Los_Angeles midnight and skips across instances', async () => {
-  rows.length = 0;
-  const googleDailyQuota = () => response(429, {error: {
-    status: 'RESOURCE_EXHAUSTED',
-    message: 'Quota exceeded for GenerateContentRequestsPerDayPerProjectPerModel-FreeTier',
-    details: [{'@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{
-      quotaId: 'GenerateContentRequestsPerDayPerProjectPerModel-FreeTier',
-      description: 'Requests per day quota exhausted',
-    }]}, {'@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '60s'}],
-  }});
-  const modelFromUrl = url => new URL(url).pathname.split('/models/')[1].split(':')[0];
-  const firstCalls = [];
-  const first = googleProvider({
-    healthStore: store(),
-    fetchImpl: async url => {
-      const model = modelFromUrl(url);
-      firstCalls.push(model);
-      if (model === GEMINI_FALLBACK_MODEL) return googleDailyQuota();
-      return response(200, {candidates: [{content: {parts: [{text: 'Gemini answer'}]}, finishReason: 'STOP'}]});
-    },
-  });
-  const firstResult = await first.generate({messages: [{role: 'user', content: 'before reset'}]});
-  assert.equal(firstResult.model, DEFAULT_EXTRACTION_MODEL);
-  assert.deepEqual(firstCalls, [GEMINI_FALLBACK_MODEL, DEFAULT_EXTRACTION_MODEL]);
-
-  const quotaRow = rows.find(row => row.provider === 'google' && row.model === GEMINI_FALLBACK_MODEL);
-  assert.ok(quotaRow, 'the Google daily quota leg should be stored');
-  const resetAt = Date.parse(quotaRow.disabled_until);
-  const now = Date.now();
-  assert.ok(resetAt > now && resetAt <= now + 25 * 60 * 60 * 1000);
-  const resetParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  }).formatToParts(new Date(resetAt)).filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
-  assert.equal(resetParts.hour, '00', 'Google RPD reset should use Pacific midnight');
-  assert.equal(resetParts.minute, '00');
-
-  const secondCalls = [];
-  const second = googleProvider({
-    healthStore: store(),
-    fetchImpl: async url => {
-      const model = modelFromUrl(url);
-      secondCalls.push(model);
-      return response(200, {candidates: [{content: {parts: [{text: 'Gemini answer'}]}, finishReason: 'STOP'}]});
-    },
-  });
-  const secondResult = await second.generate({messages: [{role: 'user', content: 'next message'}]});
-  assert.equal(secondResult.model, DEFAULT_EXTRACTION_MODEL);
-  assert.deepEqual(secondCalls, [DEFAULT_EXTRACTION_MODEL], 'a fresh provider should skip the quota-dead Gemini model');
+test('a model-scoped Cloudflare quota persists to its reset without disabling the selected backup',async()=>{
+ rows.length=0;const until=new Date();until.setUTCHours(24,0,0,0);const calls=[];
+ const first=singleModelProvider({healthStore:store(),fetchImpl:async(url,init)=>{
+  assert.equal(new URL(url).hostname,'api.cloudflare.com');const model=JSON.parse(init.body).model;calls.push(model);
+  return model===CF_PRIMARY_MODEL?new Response(JSON.stringify({error:{status:'RESOURCE_EXHAUSTED',message:'model quota exhausted'}}),{status:429,headers:{'x-quota-reset-at':until.toISOString()}}):response(200,{choices:[{message:{content:'Backup answer'}}]});
+ }});
+ assert.equal((await first.generate({messages:[{role:'user',content:'before reset'}]})).model,CF_BACKUP_MODEL);
+ assert.deepEqual(calls,[CF_PRIMARY_MODEL,CF_BACKUP_MODEL]);assert.equal(rows.length,1);assert.equal(Date.parse(rows[0].disabled_until),until.getTime());
+ const secondCalls=[];const second=singleModelProvider({healthStore:store(),fetchImpl:async(url,init)=>{assert.equal(new URL(url).hostname,'api.cloudflare.com');secondCalls.push(JSON.parse(init.body).model);return response(200,{choices:[{message:{content:'Backup answer'}}]});}});
+ assert.equal((await second.generate({messages:[{role:'user',content:'next message'}]})).model,CF_BACKUP_MODEL);assert.deepEqual(secondCalls,[CF_BACKUP_MODEL]);
 });
 
 test('retry-after-ms is persisted in milliseconds rather than seconds', async () => {
   rows.length = 0;
   const startedAt = Date.now();
-  const onlyGoogle = googleProvider({
+  const onlyGoogle = singleModelProvider({
     healthStore: store(),
     fallbackModel: null,
     fetchImpl: async () => new Response(JSON.stringify({error: {status: 'RESOURCE_EXHAUSTED', message: 'quota exceeded'}}), {
@@ -198,16 +159,16 @@ test('retry-after-ms is persisted in milliseconds rather than seconds', async ()
     }),
   });
   await assert.rejects(onlyGoogle.generate({messages: [{role: 'user', content: 'limited'}]}), error => error.providerReason === 'quota_exceeded');
-  const quotaRow = rows.find(row => row.provider === 'google');
+  const quotaRow = rows.find(row => row.provider === 'cloudflare');
   assert.ok(quotaRow);
   const delay = Date.parse(quotaRow.disabled_until) - startedAt;
   assert.ok(delay >= 450 && delay < 3000, `expected about 500ms, got ${delay}ms`);
 });
 
-test('Google minute RetryInfo is interpreted as seconds when no daily quota is present', async () => {
+test('Cloudflare minute retryDelay is interpreted as seconds when no daily quota is present', async () => {
   rows.length = 0;
   const startedAt = Date.now();
-  const onlyGoogle = googleProvider({
+  const onlyGoogle = singleModelProvider({
     healthStore: store(),
     fallbackModel: null,
     fetchImpl: async () => response(429, {error: {
@@ -216,7 +177,7 @@ test('Google minute RetryInfo is interpreted as seconds when no daily quota is p
     }}),
   });
   await assert.rejects(onlyGoogle.generate({messages: [{role: 'user', content: 'limited'}]}), error => error.providerReason === 'quota_exceeded');
-  const quotaRow = rows.find(row => row.provider === 'google');
+  const quotaRow = rows.find(row => row.provider === 'cloudflare');
   assert.ok(quotaRow);
   const delay = Date.parse(quotaRow.disabled_until) - startedAt;
   assert.ok(delay >= 29_000 && delay < 32_000, `expected about 30s, got ${delay}ms`);
@@ -225,7 +186,7 @@ test('Google minute RetryInfo is interpreted as seconds when no daily quota is p
 test('provider health is isolated by Cloudflare account and credential fingerprints', async () => {
   rows.length = 0;
   const first = provider({healthStore: store(), fetchImpl: mixedProviderFetch({cloudflare: quotaExceededDaily})});
-  await first.generate({messages: [{role: 'user', content: 'quota'}]});
+  await assert.rejects(first.generate({messages:[{role:'user',content:'quota'}]}),e=>e.code==='RATE_LIMITED');
   const before = rows.length;
 
   for (const identity of [{account: 'account-secret', token: 'rotated-cloudflare-secret'}, {account: 'another-account', token: 'cloudflare-secret'}]) {
@@ -286,17 +247,17 @@ test('all persistently exhausted legs retain quota exhaustion metadata', async (
   await assert.rejects(first.generate({messages: [{role: 'user', content: 'every provider is out'}]}), error => {
     assert.equal(error.code, 'RATE_LIMITED');
     assert.equal(error.quotaExhausted, true);
-    assert.deepEqual(error.quotaProviders, ['cloudflare', 'google']);
+    assert.deepEqual(error.quotaProviders, ['cloudflare']);
     return true;
   });
-  assert.deepEqual(firstCalls, ['cloudflare', 'google', 'google']);
+  assert.deepEqual(firstCalls, ['cloudflare']);
 
   const secondCalls = [];
   const second = provider({healthStore: store(), fetchImpl: makeFetch(secondCalls)});
   await assert.rejects(second.generate({messages: [{role: 'user', content: 'still exhausted'}]}), error => {
     assert.equal(error.code, 'RATE_LIMITED');
     assert.equal(error.quotaExhausted, true);
-    assert.deepEqual(error.quotaProviders, ['cloudflare', 'google']);
+    assert.deepEqual(error.quotaProviders, ['cloudflare']);
     return true;
   });
   assert.deepEqual(secondCalls, [], 'all exhausted model legs should be skipped before provider requests');
@@ -316,8 +277,8 @@ test('durable quota skips retain quota metadata even while the Cloudflare circui
       ? response(503, {error: {message: 'temporary provider outage'}})
       : response(200, {candidates: [{content: {parts: [{text: 'Gemini answer'}]}, finishReason: 'STOP'}]}),
   });
-  await warmup.generate({messages: [{role: 'user', content: 'first transient request'}]});
-  await warmup.generate({messages: [{role: 'user', content: 'open the circuit'}]});
+  await assert.rejects(warmup.generate({messages:[{role:'user',content:'first transient request'}]}),e=>e.code==='PROVIDER_UNAVAILABLE');
+  await assert.rejects(warmup.generate({messages:[{role:'user',content:'open the circuit'}]}),e=>e.code==='PROVIDER_UNAVAILABLE');
 
   const healthStore = store();
   const until = Date.now() + 60_000;
@@ -336,7 +297,7 @@ test('durable quota skips retain quota metadata even while the Cloudflare circui
   });
   await assert.rejects(exhausted.generate({messages: [{role: 'user', content: 'all quota-dead'}]}), error => {
     assert.equal(error.quotaExhausted, true);
-    assert.deepEqual(error.quotaProviders.sort(), ['cloudflare', 'google']);
+    assert.deepEqual(error.quotaProviders.sort(), ['cloudflare']);
     return true;
   });
   assert.equal(providerFetches, 0);

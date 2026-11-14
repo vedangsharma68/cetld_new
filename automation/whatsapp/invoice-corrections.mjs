@@ -75,7 +75,7 @@ export function requestedInvoiceMoneyChange(message){
 // Only a complete current instruction selects this model-independent route.
 // Questions, quoted text, extra edits and alternative amounts remain unselected.
 export function requestedOwnerInvoiceTotalChange(message){
-  const match=/^\s*(?:please\s+)?(?:change|update|set)\s+(?:the\s+)?(?:test\s+)?invoice\s+(?<invoiceNumber>[A-Z0-9][A-Z0-9_./-]{0,99})\s+total(?:_amount)?\s+to\s+(?<currency>[A-Z]{3})\s+(?<amount>\d[\d,]*(?:\.\d+)?)\s*(?<taxClause>(?:(?:with|and)\s+(?:zero|no|0(?:\.00)?)\s+tax|and\s+tax\s+(?:to\s+)?(?:zero|0(?:\.00)?)))?[.!]?(?:\s+keep\s+(?:its|the)\s+(?:existing\s+(?<paidCurrency>[A-Z]{3})\s+(?<paidAmount>\d[\d,]*(?:\.\d+)?)\s+payment|payment\s+history)[.!]?)?\s*$/i.exec(String(message||''));
+  const match=/^\s*(?:please\s+)?(?:change|update|set|correct|fix)\s+(?:the\s+)?(?:test\s+)?invoice\s+(?<invoiceNumber>[A-Z0-9][A-Z0-9_./-]{0,99})\s+total(?:_amount)?\s+to\s+(?<currency>[A-Z]{3})\s+(?<amount>\d[\d,]*(?:\.\d+)?)\s*(?<taxClause>(?:(?:with|and)\s+(?:zero|no|0(?:\.00)?)\s+tax|and\s+tax\s+(?:to\s+)?(?:zero|0(?:\.00)?)))?[.!]?(?:\s+keep\s+(?:its|the)\s+(?:existing\s+(?<paidCurrency>[A-Z]{3})\s+(?<paidAmount>\d[\d,]*(?:\.\d+)?)\s+payment|payment\s+history)[.!]?)?\s*$/i.exec(String(message||'').replace(/,?\s+please[.!]?\s*$/i,''));
   if(!match)return null;
   const {invoiceNumber,currency,amount,taxClause,paidCurrency,paidAmount}=match.groups;
   const iso=currency.toUpperCase();if(!isSupportedCurrency(iso)||paidCurrency&&paidCurrency.toUpperCase()!==iso)return null;

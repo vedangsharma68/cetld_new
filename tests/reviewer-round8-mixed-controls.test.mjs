@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {writeFile} from 'node:fs/promises';import {setup} from './fixtures/reviewer-round8-harness.mjs';
+const evidence=[];test.after(()=>writeFile('work/r8-mixed-controls.json',JSON.stringify(evidence,null,2)));
+test('the previously asymmetric separable mixed requests answer their ordinary part for both audiences',async t=>{
+ const f=await setup();try{await f.retain({total:1250});for(const audience of ['owner','customer'])for(const [input,ordinary]of [['give me a pasta recipe and is 1250 due','give me a pasta recipe'],['plan a walk and also remind me about 1250','plan a walk']])await t.test(audience+'/'+input,async()=>{await f.clear();const row=await f.turn(audience,input);evidence.push(row);assert.equal(row.wires.length,1,JSON.stringify(row));assert.equal(row.wires[0].body.messages.at(-1).content,ordinary);assert.match(JSON.stringify(row.result),/ordinary answer/);assert.ok(!row.wires[0].serializedMessages.includes('1250'));});}finally{await f.close();}
+});

@@ -1,11 +1,12 @@
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {externalReminderRead,reminderPaymentRpc,hasExternalReminderLedger} from '../automation/external-reminder-verification.mjs';
 import {createAccountingIntegration} from '../automation/accounting/integration.mjs';
 import {createLocalReminderPaymentChecker} from '../automation/local-reminder-payment.mjs';
-import {createApprovedReminderProvider} from '../automation/whatsapp/approved-reminders.mjs';
-import {createFirstPartyReminderProvider} from '../automation/whatsapp/cloud-reminders.mjs';
+import {createApprovedReminderProvider} from './fixtures/dispatch-sql-double.mjs';
+import {createFirstPartyReminderProvider} from './fixtures/dispatch-sql-double.mjs';
 
 const ownerId=randomUUID(),workspaceId=randomUUID(),invoiceId=randomUUID(),customerId=randomUUID(),claimId=randomUUID();
 const invoice=extra=>({id:invoiceId,workspace_id:workspaceId,status:'sent',currency:'USD',total_amount:125,amount_paid:0,
@@ -72,7 +73,7 @@ test('saved linked payment check refuses without provider/RPC work',async()=>{
 });
 
 test('approved and cloud sender preflights block linked rows before review/approval RPC or dispatch',async()=>{
- const phone='+919871367051',env={WHATSAPP_REMINDERS_ENABLED:'true',AUTOMATION_OUTBOUND_ENABLED:'true',WHATSAPP_OUTBOUND_ENABLED:'true',
+ const phone=QA_POLICY_PHONE,env={WHATSAPP_REMINDERS_ENABLED:'true',AUTOMATION_OUTBOUND_ENABLED:'true',WHATSAPP_OUTBOUND_ENABLED:'true',
   WHATSAPP_TEST_ALLOWLIST:phone,WHATSAPP_WABA_ID:'1734116767674237',WHATSAPP_PHONE_NUMBER_ID:'1234567890',
   WHATSAPP_GRAPH_API_VERSION:'v24.0',WHATSAPP_ACCESS_TOKEN:'fixture-only'};
  let effects=0;

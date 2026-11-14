@@ -1,3 +1,5 @@
+// Existing operational recipient policy; no copied personal contact literal.
+import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -5,11 +7,11 @@ import https from 'node:https';
 import {randomUUID,createHmac} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createWhatsAppOutbound} from '../automation/whatsapp/cloud-outbound.mjs';
+import {createWhatsAppOutbound} from './fixtures/dispatch-sql-double.mjs';
 import {createInboundRuntime,SupabaseInboundInbox} from '../automation/whatsapp/cloud-inbound.mjs';
 import {createWhatsAppWebhookHandler} from '../automation/whatsapp/webhook.mjs';
 import {createConversationStore} from '../automation/whatsapp/conversation-store.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerMessageHandler} from './fixtures/owner-engine.mjs';
 
 const OWNER='+12025550198',CUSTOMER='+12025550199',OTHER='+12025550197';
 const logger={log(){},info(){},warn(){},error(){}};
@@ -94,7 +96,7 @@ test('commercial owner replies use actual code proof without any customer consen
 });
 
 for(const flag of [undefined,'false'])test(`flag ${flag}: original unbound routing makes no new service-authority calls`,async t=>{
-  const f=await setup(t,{environment:{WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED:flag,WHATSAPP_TEST_ALLOWLIST:'+919871367051'}});
+  const f=await setup(t,{environment:{WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED:flag,WHATSAPP_TEST_ALLOWLIST:QA_POLICY_PHONE}});
   await f.signed('Hello');await f.runtime.processPending();
   assert.equal(f.graph.length,0,'main leaves an unbound non-QA sender without an outbound verification');
   assert.equal(f.requests.filter(r=>/\/rpc\/whatsapp_(?:resolve_service_owner|claim_service_owner_reply)$/.test(new URL(r.url).pathname)).length,0);

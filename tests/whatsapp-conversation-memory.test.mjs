@@ -22,13 +22,13 @@ function memorySupabase(rows = []) {
 
 test('conversation memory retains only the newest 20 turns and reads them oldest-first', async () => {
   const supabase = memorySupabase(Array.from({length: 20}, (_, index) => ({id: index + 1,
-    workspace_id: 'workspace-a', phone: '+919871367051', role: index % 2 ? 'assistant' : 'user',
+    workspace_id: 'workspace-a', phone: '+12025550101', role: index % 2 ? 'assistant' : 'user',
     content: `turn-${index + 1}`, created_at: new Date(index).toISOString()})));
   await writeConversationTurn({supabase, workspaceId: 'workspace-a', customerId: 'customer-a',
-    phone: '+919871367051', role: 'user', content: 'turn-21'});
+    phone: '+12025550101', role: 'user', content: 'turn-21'});
   assert.equal(supabase.rows.length, 20);
   assert.equal(supabase.rows.some(row => row.content === 'turn-1'), false);
-  const history = await readConversationHistory({supabase, workspaceId: 'workspace-a', phone: '+919871367051'});
+  const history = await readConversationHistory({supabase, workspaceId: 'workspace-a', phone: '+12025550101'});
   assert.equal(history.length, 20);
   assert.equal(history[0].content, 'turn-2');
   assert.equal(history.at(-1).content, 'turn-21');

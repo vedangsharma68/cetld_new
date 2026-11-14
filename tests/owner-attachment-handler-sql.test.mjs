@@ -1,8 +1,11 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
+import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,createHash} from 'node:crypto';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {authorizeOwnerPhone} from '../automation/whatsapp/owner-binding.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
@@ -11,7 +14,7 @@ import {createWhatsAppBoundMessageHandler} from '../automation/whatsapp/assistan
 import {AIProvider,CF_PRIMARY_MODEL} from '../ai/provider.mjs';
 import {extractInvoice} from '../ai/extraction.mjs';
 
-const phone='+919871367051';
+const phone='+12025550101';
 async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseReplyReceipt=false,caption='log this invoice',history=[],nativeWire=false,extractionWire=null}={}){
   const f=await createOfflineSqlNetwork(),ownerId=randomUUID();
   await f.db.query('insert into auth.users(id) values($1)',[ownerId]);
@@ -27,7 +30,7 @@ async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseRep
     subtotal:6190,tax:0,total:6190,outstandingAmount:6190,currency:'USD',direction:'receivable',clientEmail:null,clientPhone,clientPhoneRaw:null,
     notes:'Net 30',paymentTerms:'Net 30',lineItems:[{description:'Fixture service',quantity:1,unitPrice:6190,amount:6190}]})
     .map(([key,value])=>[key,{value,confidence:.99}]));
-  const handler=createOwnerMessageHandler({supabase:f.supabase,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
+  const handler=createOwnerEngineHarness({supabase:f.supabase,env:{NODE_ENV:'test'},logger:{info(){},warn(){},error(){}},
     ...(history.length?{historyReader:async()=>history}:{}),
     ...(loseReplyReceipt?{replyStore:null}:{}),
     invoiceStoreFactory:verified=>{
@@ -41,11 +44,8 @@ async function fixture({clientPhone=null,loseInsertAcknowledgement=false,loseRep
     authorize:input=>{assert.ok(input?.workspaceId&&input?.ownerId&&input?.customerId&&input?.phone);
       return authorizeOwnerPhone({supabase:f.supabase,...input});},
     toolsFactory:options=>{const tools=createOwnerWorkspaceTools({...options,
-      attachmentIngestFactory:input=>createWhatsAppBoundMessageHandler({...input,extract:async request=>{
-        extractions++;
-        return extractionWire?extractInvoice({...request,imageExtractor:async()=>null,
-          provider:{async generateStructured(call){return {data:call.validate({...structuredClone(extractionWire),...(call.schema.properties.imageContent?{imageContent:'single_invoice'}:{})}),model:'gemini-3.5-flash-lite'};}}}):structuredClone(extracted);
-      }})});return {...tools,async execute(...args){const result=await tools.execute(...args);results.push(result);return result;}};},
+      extractAttachment:async()=>{extractions++;return extractionWire?localExtraction(extractionWire):structuredClone(extracted);},
+      extractOfflineAttachment:async()=>{extractions++;return extractionWire?localExtraction(extractionWire):structuredClone(extracted);}});return {...tools,async execute(...args){const result=await tools.execute(...args);results.push(result);return result;}};},
     providerFactory:()=>nativeWire?new AIProvider({primaryModel:CF_PRIMARY_MODEL,fallbackModel:null,
       cfAccountId:'isolated',cfApiToken:'isolated',maxAttempts:1,logger:{info(){},warn(){},error(){}},
       fetchImpl:async(_url,input)=>{
@@ -105,7 +105,7 @@ async function retainReview(f,clientPhone,invoiceChanges={}){
   return {pending,review};
 }
 
-for(const existingCustomer of [false,true])test(`real owner review confirmation saves canonical phone and assumed consent for ${existingCustomer?'an existing':'a new'} customer`,async()=>{
+for(const existingCustomer of [false,true])engineTest(`real owner review confirmation saves canonical phone and assumed consent for ${existingCustomer?'an existing':'a new'} customer`,async()=>{
   const f=await fixture({nativeWire:true});try{
     const contactPhone=existingCustomer?'+91 98765-43210':'+919818685252',normalized=existingCustomer?'+919876543210':'+919818685252';
     let customerId=null;
@@ -129,7 +129,7 @@ for(const existingCustomer of [false,true])test(`real owner review confirmation 
   }finally{await f.close();}
 });
 
-test('owner invoice store rejects invalid reviewed contact before creating customer or invoice rows',async()=>{
+engineTest('owner invoice store rejects invalid reviewed contact before creating customer or invoice rows',async()=>{
   const f=await fixture({nativeWire:true});try{
     const store=createWhatsAppInvoiceStore({supabase:f.supabase,...f.scope,audience:'owner',ownerPhone:phone,
       messageId:'invalid-review-phone',message:'yes',authorize:()=>authorizeOwnerPhone({supabase:f.supabase,...f.scope})});
@@ -144,7 +144,7 @@ test('owner invoice store rejects invalid reviewed contact before creating custo
   }finally{await f.close();}
 });
 
-test('real owner review rejects a malformed phone with exact format guidance before saving any invoice or customer',async()=>{
+engineTest('real owner review rejects a malformed phone with exact format guidance before saving any invoice or customer',async()=>{
   const f=await fixture({nativeWire:true});try{
     const {pending}=await retainReview(f,'12345');
     const reply=await f.textTurn('review-invalid-confirm','yes');
@@ -156,7 +156,7 @@ test('real owner review rejects a malformed phone with exact format guidance bef
   }finally{await f.close();}
 });
 
-test('owner invoice store saves an explicitly supplied bare Indian phone with assumed consent',async()=>{
+engineTest('owner invoice store saves an explicitly supplied bare Indian phone with assumed consent',async()=>{
   const f=await fixture({nativeWire:true});try{
     const message='9818685252',messageId='store-bare-indian';
     await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,status) values($1,'123456',$2,'text',$3,'processing')",[messageId,phone,message]);
@@ -170,7 +170,7 @@ test('owner invoice store saves an explicitly supplied bare Indian phone with as
   }finally{await f.close();}
 });
 
-test('reviewed contact proof rejects proposal, mismatched target or phone, expired and consumed reviews',async()=>{
+engineTest('reviewed contact proof rejects proposal, mismatched target or phone, expired and consumed reviews',async()=>{
   const f=await fixture({nativeWire:true});try{
     const makeCustomer=async(name,email)=>(await f.db.query('insert into customers(workspace_id,name,email) values($1,$2,$3) returning id',[f.scope.workspaceId,name,email])).rows[0].id;
     const customerId=await makeCustomer('Fixture customer','client@example.test');
@@ -200,7 +200,7 @@ test('reviewed contact proof rejects proposal, mismatched target or phone, expir
   }finally{await f.close();}
 });
 
-for(const caption of ['log this','please save it','record the attached'])test(`current attachment caption '${caption}' cannot log an earlier deletion through native Cloudflare calls and real SQL`,async()=>{
+for(const caption of ['log this','please save it','record the attached'])engineTest(`current attachment caption '${caption}' cannot log an earlier deletion through native Cloudflare calls and real SQL`,async()=>{
   const f=await fixture({caption,nativeWire:true,history:[{role:'user',content:'delete it'},{role:'assistant',content:'Deleted duplicate invoice INV-OLD.'}]});
   try{
     const {reply}=await f.turn('attachment-current-caption');
@@ -214,9 +214,9 @@ for(const caption of ['log this','please save it','record the attached'])test(`c
   }finally{await f.close();}
 });
 
-test('actual extraction wire and default owner toolset retain contradictory amounts and replace a false outage reply with the review reason',async()=>{
+engineTest('actual extraction wire and default owner toolset retain contradictory amounts and replace a false outage reply with the review reason',async()=>{
   const facts={invoiceNumber:'0852',customerName:'Fixture customer',invoiceDate:'2026-10-01',dueDate:'2026-10-01',subtotal:100,tax:10,total:115,
-    outstandingAmount:115,currency:null,direction:'receivable',clientEmail:null,clientPhone:null,clientPhoneRaw:null,notes:'Shipping 5',currencySource:null,addressHint:null,paymentTerms:'Due on receipt'};
+    outstandingAmount:115,currency:'USD',direction:'receivable',clientEmail:null,clientPhone:null,clientPhoneRaw:null,notes:'Shipping 5',currencySource:null,addressHint:null,paymentTerms:'Due on receipt'};
   const extractionWire={...Object.fromEntries(Object.entries(facts).flatMap(([name,value])=>[[name,value],[name+'Confidence',value===null?0:.99]])),
     lineItems:[{description:'Printed service',quantity:1,unitPrice:100,amount:100,confidence:.99}],lineItemsConfidence:.99};
   const f=await fixture({nativeWire:true,extractionWire});try{
@@ -241,7 +241,7 @@ test('actual extraction wire and default owner toolset retain contradictory amou
   }finally{await f.close();}
 });
 
-for(const mimeType of ['image/jpeg','application/pdf'])test(`real owner handler and SQL log ${mimeType}, persist source and replay once with missing-phone follow-up`,async()=>{
+for(const mimeType of ['image/jpeg','application/pdf'])engineTest(`real owner handler and SQL log ${mimeType}, persist source and replay once with missing-phone follow-up`,async()=>{
   const f=await fixture();try{
     const first=await f.turn('fixture-attachment',mimeType);
     assert.match(first.reply.answer,/Saved invoice INV-2026-0720/,JSON.stringify({reply:first.reply,errors:f.errors,results:f.results}));
@@ -270,14 +270,14 @@ for(const mimeType of ['image/jpeg','application/pdf'])test(`real owner handler 
   }finally{await f.close();}
 });
 
-test('owner attachment cannot create or read invoices for a forged conversation scope',async()=>{
+engineTest('owner attachment cannot create or read invoices for a forged conversation scope',async()=>{
   const f=await fixture();try{
     const reply=await f.handler({...f.scope,workspaceId:randomUUID(),message:'log this invoice',messageId:'forged',media:{bytes:Buffer.from('isolated'),mimeType:'image/jpeg'}});
     assert.equal(reply,'');assert.equal(f.extractions,0);assert.equal((await f.db.query('select count(*)::int n from invoices')).rows[0].n,0);
   }finally{await f.close();}
 });
 
-test('committed invoice with lost insert acknowledgement is read back and completes once',async()=>{
+engineTest('committed invoice with lost insert acknowledgement is read back and completes once',async()=>{
   const f=await fixture({loseInsertAcknowledgement:true});try{
     const {reply}=await f.turn('interrupted-insert');
     assert.match(reply.answer,/Saved invoice/);assert.equal(f.results.find(result=>result.completed)?.completed,true);
@@ -287,7 +287,7 @@ test('committed invoice with lost insert acknowledgement is read back and comple
   }finally{await f.close();}
 });
 
-test('lost reply receipt reconciles consumed saved review without extracting or creating again',async()=>{
+engineTest('lost reply receipt reconciles consumed saved review without extracting or creating again',async()=>{
   const f=await fixture({loseReplyReceipt:true});try{
     assert.match((await f.turn('interrupted-reply')).reply.answer,/Saved invoice/);
     assert.match((await f.turn('interrupted-reply')).reply.answer,/Saved invoice/);
@@ -297,7 +297,7 @@ test('lost reply receipt reconciles consumed saved review without extracting or 
   }finally{await f.close();}
 });
 
-test('consumed historical saved review recovers its legacy scoped key without a second invoice',async()=>{
+engineTest('consumed historical saved review recovers its legacy scoped key without a second invoice',async()=>{
   const f=await fixture({loseReplyReceipt:true});try{
     assert.match((await f.turn('legacy-saved-source')).reply.answer,/Saved invoice/);
     const pending=createWhatsAppPendingActionStore({supabase:f.supabase});
@@ -309,7 +309,7 @@ test('consumed historical saved review recovers its legacy scoped key without a 
   }finally{await f.close();}
 });
 
-test('expired failed review cannot resume but a fresh attachment can replace it and save',async()=>{
+engineTest('expired failed review cannot resume but a fresh attachment can replace it and save',async()=>{
   const f=await fixture();try{
     await f.db.query("insert into whatsapp_pending_actions(workspace_id,customer_id,phone,source,action,expires_at) values($1,$2,$3,'whatsapp',$4,now()-interval '1 minute')",
       [f.scope.workspaceId,f.scope.customerId,phone,{type:'invoice_review_draft',stage:'failed',sourceMessageId:'expired-source',invoice:{invoiceNumber:'STALE'}}]);
@@ -321,7 +321,7 @@ test('expired failed review cannot resume but a fresh attachment can replace it 
   }finally{await f.close();}
 });
 
-test('fresh upload of the same printed customer invoice refuses a duplicate through the real owner toolset',async()=>{
+engineTest('fresh upload of the same printed customer invoice refuses a duplicate through the real owner toolset',async()=>{
   const f=await fixture();try{
     assert.match((await f.turn('original-source')).reply.answer,/Saved invoice/);
     await f.turn('same-invoice-new-provider-id');

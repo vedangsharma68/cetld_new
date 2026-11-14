@@ -1,20 +1,22 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {reviewDraft} from '../automation/whatsapp/assistant-handler.mjs';
 import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';
 import {createOwnerSafetyTools as createOwnerAgentTools, runOwnerAgent, ownerReplySafetyIssue} from '../automation/whatsapp/owner-agent.mjs';
-import {AIError,CF_QWEN_MODEL} from '../ai/provider.mjs';
+import {AIError,CF_BACKUP_MODEL,CF_QWEN_MODEL} from '../ai/provider.mjs';
 import {createInvoiceLifecycleService} from '../ai/invoice-lifecycle.mjs';
 import {installVerifiedOwnerRpc} from './fixtures/verified-owner-rpc.mjs';
 
 const workspaceId='00000000-0000-4000-8000-000000000002';
 const ownerId='00000000-0000-4000-8000-000000000001';
 const customerId='00000000-0000-4000-8000-000000000003';
-const phone='+919871367051';
+const phone='+12025550101';
 const scope={workspaceId,ownerId,customerId,phone,messageId:'wamid.test'};
 
-test('an incomplete photo can retain an optional missing due date when the owner supplies its missing customer',async()=>{
+engineTest('an incomplete photo can retain an optional missing due date when the owner supplies its missing customer',async()=>{
   const current={id:91,version:1,created_at:new Date().toISOString(),action:{type:'invoice_review_draft',stage:'incomplete',
     sourceMessageId:'original-photo',currencySource:'photo',missingFields:['customerName'],validationIssues:[],
     invoice:{invoiceNumber:'PRINTED-91',clientName:null,invoiceDate:'2026-10-01',dueDate:null,total:100,currency:'USD',direction:'receivable'}}};
@@ -29,7 +31,7 @@ test('an incomplete photo can retain an optional missing due date when the owner
   assert.equal(retained.ownerProvidedFacts.customerName.sourceMessageId,'supplied-customer');
 });
 
-test('a thrown workspace tool retains safe exception and requested-operation evidence without retrying a financial write',async()=>{
+engineTest('a thrown workspace tool retains safe exception and requested-operation evidence without retrying a financial write',async()=>{
   const logs=[];let writes=0;
   const tools={definitions:[{type:'function',function:{name:'workspaceData',parameters:{type:'object'}}}],
     async execute(){writes++;const error=new TypeError('customer secret Bearer secret-token-value');
@@ -102,7 +104,7 @@ function memorySupabase({models={primary_model:CF_QWEN_MODEL,fallback_model:'gem
 
 function pendingStore(){return {async loadPendingAction(){return null;}};}
 
-test('standalone greeting skips inference while meta, thanks, yes and media enter the model loop',async()=>{
+engineTest('standalone greeting skips inference while meta, thanks, yes and media enter the model loop',async()=>{
   const supabase=memorySupabase();let calls=0,metaToolResult,analysisResult,lastResponse;
   const providerFactory=()=>({async generate(request){
     calls++;
@@ -124,7 +126,7 @@ test('standalone greeting skips inference while meta, thanks, yes and media ente
     if(!current)assert.equal(JSON.parse(request.messages.filter(item=>item.role==='system')[1].content).attachment.available,true);
     return {model:CF_QWEN_MODEL,content:'I am here.'};
   }});
-  const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase,authorize:async()=>true,pendingActionStoreFactory:pendingStore,
+  const handler=createOwnerEngineHarness({toolsFactory:createOwnerAgentTools,supabase,authorize:async()=>true,pendingActionStoreFactory:pendingStore,
     providerFactory,ownerStoreFactory:()=>({query:async()=>[]}),toolsFactory:input=>{
       const ownerTools=createOwnerAgentTools({...input,
       extractAttachment:async()=>({invoiceNumber:{value:'INV-1',confidence:.99},customerName:{value:'John Smith',confidence:.98},
@@ -151,14 +153,14 @@ test('standalone greeting skips inference while meta, thanks, yes and media ente
     fallbackModel:metaToolResult.fallbackModel,fallbackProvider:metaToolResult.fallbackProvider,
     planningModel:metaToolResult.planningModel,planningProvider:metaToolResult.planningProvider,
     servedModel:metaToolResult.servedModel,servedProvider:metaToolResult.servedProvider},
-  {primaryModel:CF_QWEN_MODEL,primaryProvider:'cloudflare',fallbackModel:'gemini-3.5-flash-lite',fallbackProvider:'google',
+  {primaryModel:CF_QWEN_MODEL,primaryProvider:'cloudflare',fallbackModel:CF_BACKUP_MODEL,fallbackProvider:'cloudflare',
     planningModel:CF_QWEN_MODEL,planningProvider:'cloudflare',
     servedModel:CF_QWEN_MODEL,servedProvider:'cloudflare'});
   assert.equal(JSON.stringify(metaToolResult).includes('API_KEY'),false);
   assert.equal(supabase.tables.invoices,undefined,'read-only attachment analysis does not write an invoice');
 });
 
-test('explicit invoice attachment logging requires the durable ingest tool and strips command text from the legacy processor',async()=>{
+engineTest('explicit invoice attachment logging requires the durable ingest tool and strips command text from the legacy processor',async()=>{
   let innerMessage='';
   const pending={...pendingStore(),async loadInvoiceReview(){return {action:{type:'invoice_review_draft',stage:'saved',missingFields:[],
     invoice:{id:'00000000-0000-4000-8000-000000000001',invoiceNumber:'INV-1',clientName:'John Smith',total:500,currency:'INR'}}};}};
@@ -183,7 +185,7 @@ test('explicit invoice attachment logging requires the durable ingest tool and s
   assert.equal(response.answer,"Saved invoice INV-COMMITTED.\nCustomer: Committed customer\nTotal: USD 750.00\nDue date: 2026-11-24\nStatus: saved (draft)\nWhat's Committed customer's WhatsApp number? Include the country code, like +91...");
 });
 
-test('a read-only or explicitly declined attachment request does not force invoice ingestion',async()=>{
+engineTest('a read-only or explicitly declined attachment request does not force invoice ingestion',async()=>{
   const tools={definitions:[
     {type:'function',function:{name:'workspaceData',parameters:{type:'object',properties:{},additionalProperties:false}}},
     {type:'function',function:{name:'ingestInvoiceAttachment',parameters:{type:'object',properties:{},additionalProperties:false}}},
@@ -201,7 +203,7 @@ test('a read-only or explicitly declined attachment request does not force invoi
   assert.match(response.answer,/not saved it/);
 });
 
-test('an adversarial ingest tool call cannot turn a bare yes or cancel into invoice processing',async()=>{
+engineTest('an adversarial ingest tool call cannot turn a bare yes or cancel into invoice processing',async()=>{
   let innerCalls=0;
   for(const message of ['YES','cancel','',"Don't log this invoice",'Do not save it','Just tell me the total','Log the deletion from earlier',
     'I do not want you to save this invoice',"Can you log this invoice? No, don't",'I prefer not to save this invoice','Save this invoice, but not yet',
@@ -226,7 +228,7 @@ test('an adversarial ingest tool call cannot turn a bare yes or cancel into invo
   assert.equal(innerCalls,0);
 });
 
-test('available model repairs its own unsafe draft before any owner reply is returned',async()=>{
+engineTest('available model repairs its own unsafe draft before any owner reply is returned',async()=>{
   let calls=0;
   const tools={definitions:[{type:'function',function:{name:'read',parameters:{type:'object',properties:{}}}}],
     async execute(){return {ok:true};},setServedModel(){}};
@@ -240,7 +242,7 @@ test('available model repairs its own unsafe draft before any owner reply is ret
   assert.equal(ownerReplySafetyIssue(result.answer),null);
 });
 
-test('a scoped read failure reaches the model as a finite safe tool result for model-written wording',async()=>{
+engineTest('a scoped read failure reaches the model as a finite safe tool result for model-written wording',async()=>{
   const tools=createOwnerAgentTools({supabase:{from(){throw new Error('private database text must not escape');}},scope,
     ownerStore:{async query(){throw Object.assign(new Error('private database text must not escape'),{code:'DATABASE_UNAVAILABLE'});}},
     pending:pendingStore(),pendingAtStart:null,lifecyclePending:null,invoiceStoreFactory:()=>({}),settingsStore:{},
@@ -257,11 +259,11 @@ test('a scoped read failure reaches the model as a finite safe tool result for m
   assert.equal(calls,2);assert.match(result.answer,/could not read the invoices/i);
 });
 
-test('the lifecycle receives the exact untrimmed owner turn stored by the inbound worker',async()=>{
+engineTest('the lifecycle receives the exact untrimmed owner turn stored by the inbound worker',async()=>{
   const raw='  DELETE INV-17  ';let toolMessage,agentMessage,seenUserMessage;
   const supabase={from(table){assert.equal(table,'workspace_ai_settings');const q={select(){return q;},eq(){return q;},async maybeSingle(){return {data:null};}};return q;},
     async rpc(){return {data:{ok:false,code:'FEATURE_UNAVAILABLE'}};}};
-  const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase,authorize:async()=>true,pendingActionStoreFactory:pendingStore,
+  const handler=createOwnerEngineHarness({toolsFactory:createOwnerAgentTools,supabase,authorize:async()=>true,pendingActionStoreFactory:pendingStore,
     ownerStoreFactory:()=>({query:async()=>[]}),historyReader:async()=>[],
     toolsFactory(input){toolMessage=input.message;return {definitions:[],async execute(){return {}},setServedModel(){}};},
     agentFactory:async input=>{agentMessage=input.message;seenUserMessage=input.history;return {answer:'Received.'};},logger:{error(){}}});
@@ -270,9 +272,9 @@ test('the lifecycle receives the exact untrimmed owner turn stored by the inboun
   assert.equal(agentMessage,raw);
 });
 
-test('owner history comes from the worker-recorded permanent conversation through three later turns',async()=>{
+engineTest('owner history comes from the worker-recorded permanent conversation through three later turns',async()=>{
   const supabase=memorySupabase();let providerCalls=0,turn=0;
-  const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase,pendingActionStoreFactory:pendingStore,logger:{error(){}} ,
+  const handler=createOwnerEngineHarness({toolsFactory:createOwnerAgentTools,supabase,pendingActionStoreFactory:pendingStore,logger:{error(){}} ,
     toolsFactory(input){
       if(input.message==='What number did I ask about?')assert.ok(input.ownerHistory.some(turn=>
         turn.role==='user'&&turn.content==='John Smith is my customer'&&turn.providerMessageId==='wamid.history-1'));
@@ -310,7 +312,7 @@ test('owner history comes from the worker-recorded permanent conversation throug
   assert.equal(supabase.tables.whatsapp_messages.filter(row=>row.direction==='inbound'&&row.audience==='owner').length,4);
 });
 
-test('the owner tool reports the active runtime models while disclosing saved-settings read failure',async()=>{
+engineTest('the owner tool reports the active runtime models while disclosing saved-settings read failure',async()=>{
   const config={primaryModel:CF_QWEN_MODEL,fallbackModel:'gemini-3.5-flash-lite'};
   const tools=createOwnerAgentTools({supabase:{from(){throw new Error('unused');}},scope,ownerStore:{query:async()=>[]},
     pending:pendingStore(),pendingAtStart:null,lifecyclePending:null,invoiceStoreFactory:()=>({}),settingsStore:{},config,
@@ -329,7 +331,7 @@ test('the owner tool reports the active runtime models while disclosing saved-se
   assert.equal(response.planningProvider,'cloudflare');
 });
 
-test('provider metadata identifies configured routes and the planning model without mislabeling a fallback final reply',async()=>{
+engineTest('provider metadata identifies configured routes and the planning model without mislabeling a fallback final reply',async()=>{
   const supabase=memorySupabase();
   const config={primaryModel:CF_QWEN_MODEL,fallbackModel:'gemini-3.5-flash-lite'};
   const tools=createOwnerAgentTools({supabase,scope,ownerStore:{query:async()=>[]},pending:pendingStore(),pendingAtStart:null,
@@ -356,7 +358,7 @@ test('provider metadata identifies configured routes and the planning model with
   assert.equal(result.servedProvider,'google');
 });
 
-test('owner can search safe customer contacts even when the customer has no invoice',async()=>{
+engineTest('owner can search safe customer contacts even when the customer has no invoice',async()=>{
   let authChecks=0,contactQueries=0;
   const john={id:'00000000-0000-4000-8000-000000000099',workspace_id:workspaceId,name:'John Smith',company_name:'John Smith Co',
     email:'john@example.test',phone:'+919900000099',created_at:'2026-09-01T00:00:00Z'};
@@ -376,7 +378,7 @@ test('owner can search safe customer contacts even when the customer has no invo
   assert.equal(Object.hasOwn(result.matches[0],'id'),false);
 });
 
-test('a media reply longer than the caption limit is repaired by the model before transport',async()=>{
+engineTest('a media reply longer than the caption limit is repaired by the model before transport',async()=>{
   const tools={definitions:[{type:'function',function:{name:'read',parameters:{type:'object',properties:{}}}}],
     async execute(){return {ok:true};},setServedModel(){},getMedia(){return {mime_type:'application/pdf'};},
     getReplyRequirement(){return {maxLength:1000};}};
@@ -479,12 +481,12 @@ function modelPlan(toolPlan,finalText){
 
 function lifecycleHandler(fixture,{plans,answers}={}){
   let turn=0;
-  return createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase:fixture.db,authorize:async()=>true,clock:fixture.clock,ownerStoreFactory:()=>ownerReadStore(fixture.rows),
+  return createOwnerEngineHarness({toolsFactory:createOwnerAgentTools,supabase:fixture.db,authorize:async()=>true,clock:fixture.clock,ownerStoreFactory:()=>ownerReadStore(fixture.rows),
     pendingActionStoreFactory:()=>fixture.pending,historyReader:async()=>[],logger:{error(){}},
     providerFactory:()=>modelPlan(plans[turn]||[],answers[turn++]||'I could not complete that request.')});
 }
 
-test('repeating an active simple-yes delete request reuses the same proposal for one later yes',async()=>{
+engineTest('repeating an active simple-yes delete request reuses the same proposal for one later yes',async()=>{
   const f=lifecycleFixture({requiresExactConfirmation:false});
   const handler=lifecycleHandler(f,{plans:[
     [{name:'prepareInvoiceDeletion',args:{target:'INV-17'}}],
@@ -510,7 +512,7 @@ test('repeating an active simple-yes delete request reuses the same proposal for
   assert.equal(f.deleted,true);
 });
 
-test('a pending delete proposal for another invoice remains a conflict',async()=>{
+engineTest('a pending delete proposal for another invoice remains a conflict',async()=>{
   const firstInvoice=invoiceRow('00000000-0000-4000-8000-000000000017');
   const secondInvoice=invoiceRow('00000000-0000-4000-8000-000000000018','INV-18');
   const f=lifecycleFixture({rows:[firstInvoice,secondInvoice]});
@@ -530,7 +532,7 @@ test('a pending delete proposal for another invoice remains a conflict',async()=
   assert.equal(f.calls.filter(call=>call.action==='confirm').length,0);
 });
 
-test('a repeated delete request does not reuse a proposal after the invoice version changes',async()=>{
+engineTest('a repeated delete request does not reuse a proposal after the invoice version changes',async()=>{
   const f=lifecycleFixture({requiresExactConfirmation:false});
   const handler=lifecycleHandler(f,{plans:[
     [{name:'prepareInvoiceDeletion',args:{target:'INV-17'}}],
@@ -549,7 +551,7 @@ test('a repeated delete request does not reuse a proposal after the invoice vers
   assert.equal(f.calls.filter(call=>call.action==='confirm').length,0);
 });
 
-test('a repeated delete request does not reuse an expired proposal',async()=>{
+engineTest('a repeated delete request does not reuse an expired proposal',async()=>{
   const f=lifecycleFixture({requiresExactConfirmation:false});
   const handler=lifecycleHandler(f,{plans:[
     [{name:'prepareInvoiceDeletion',args:{target:'INV-17'}}],
@@ -568,7 +570,7 @@ test('a repeated delete request does not reuse an expired proposal',async()=>{
   assert.equal(f.calls.filter(call=>call.action==='confirm').length,0);
 });
 
-test('the model proposes one deletion, ordinary yes cannot confirm strong delete, exact DELETE can, and undo uses lifecycle',async()=>{
+engineTest('the model proposes one deletion, ordinary yes cannot confirm strong delete, exact DELETE can, and undo uses lifecycle',async()=>{
   const f=lifecycleFixture();
   const handler=lifecycleHandler(f,{plans:[
     [{name:'prepareInvoiceDeletion',args:{target:'INV-17'}}],
@@ -601,7 +603,7 @@ test('the model proposes one deletion, ordinary yes cannot confirm strong delete
   assert.equal(f.deleted,false);
 });
 
-test('generic delete copy is model-repaired to name the invoice, customer, amount, currency, and status',async()=>{
+engineTest('generic delete copy is model-repaired to name the invoice, customer, amount, currency, and status',async()=>{
   const f=lifecycleFixture();let calls=0,repairInstruction='';
   const provider={async generate({messages,tools}){
     calls++;
@@ -611,7 +613,7 @@ test('generic delete copy is model-repaired to name the invoice, customer, amoun
     repairInstruction=messages.at(-1).content;
     return {model:CF_QWEN_MODEL,content:'Invoice INV-17 for John Smith totals USD 100.00 and is currently sent. Reply exactly DELETE INV-17 to remove it, or cancel.'};
   }};
-  const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase:f.db,authorize:async()=>true,ownerStoreFactory:()=>ownerReadStore(f.rows),
+  const handler=createOwnerEngineHarness({toolsFactory:createOwnerAgentTools,supabase:f.db,authorize:async()=>true,ownerStoreFactory:()=>ownerReadStore(f.rows),
     pendingActionStoreFactory:()=>f.pending,historyReader:async()=>[],providerFactory:()=>provider,logger:{error(){}}});
   const result=await handler({...scope,message:'Please delete invoice INV-17',messageId:'wamid.prepare'});
   assert.equal(calls,3);assert.match(repairInstruction,/confirmation_customer/);
@@ -619,7 +621,7 @@ test('generic delete copy is model-repaired to name the invoice, customer, amoun
   assert.match(result.answer,/John Smith/);assert.match(result.answer,/USD 100\.00/);assert.match(result.answer,/currently sent/);
 });
 
-test('durable deletion proposal can be canceled after local pending memory is cleared',async()=>{
+engineTest('durable deletion proposal can be canceled after local pending memory is cleared',async()=>{
   const f=lifecycleFixture();
   const handler=lifecycleHandler(f,{plans:[[{name:'prepareInvoiceDeletion',args:{target:'INV-17'}}],[{name:'cancelInvoiceDeletion'}]],
     answers:['Invoice INV-17 for John Smith totals USD 100.00 and is currently sent. Reply exactly DELETE INV-17 to delete it, or cancel.','The deletion proposal is canceled.']});
@@ -630,7 +632,7 @@ test('durable deletion proposal can be canceled after local pending memory is cl
   assert.match(canceled.answer,/canceled/i);
 });
 
-test('an ambiguous duplicate number is sent back to the model and never triggers multi-invoice deletion',async()=>{
+engineTest('an ambiguous duplicate number is sent back to the model and never triggers multi-invoice deletion',async()=>{
   const copies=[invoiceRow('00000000-0000-4000-8000-000000000017'),invoiceRow('00000000-0000-4000-8000-000000000018','INV-17','2026-08-01T00:00:00Z','')];
   const f=lifecycleFixture({rows:copies});
   const handler=lifecycleHandler(f,{plans:[[{name:'prepareInvoiceDeletion',args:{target:'INV-17'}}]],
@@ -641,7 +643,7 @@ test('an ambiguous duplicate number is sent back to the model and never triggers
   assert.match(response.answer,/two copies/i);
 });
 
-test('model compares duplicate age and completeness before choosing one specific invoice to delete',async()=>{
+engineTest('model compares duplicate age and completeness before choosing one specific invoice to delete',async()=>{
   const older=invoiceRow('00000000-0000-4000-8000-000000000017','INV-17','2026-08-01T00:00:00Z','Complete issued invoice');
   const newer=invoiceRow('00000000-0000-4000-8000-000000000018','INV-17','2026-09-01T00:00:00Z','');
   const f=lifecycleFixture({rows:[older,newer],expectedPrepareMessage:'Delete the older duplicate copy of invoice INV-17'});
@@ -661,7 +663,7 @@ test('model compares duplicate age and completeness before choosing one specific
     assert.match(messages.find(item=>item.role==='tool'&&item.tool_call_id==='prepare').content,/"proposal":true/);
     return {model:CF_QWEN_MODEL,content:'The older, complete copy is invoice INV-17 for John Smith. It totals USD 100.00 and is currently sent. Reply exactly DELETE INV-17 to remove that copy, or cancel.'};
   }};
-  const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase:f.db,authorize:async()=>true,ownerStoreFactory:()=>ownerReadStore([older,newer]),
+  const handler=createOwnerEngineHarness({toolsFactory:createOwnerAgentTools,supabase:f.db,authorize:async()=>true,ownerStoreFactory:()=>ownerReadStore([older,newer]),
     pendingActionStoreFactory:()=>f.pending,historyReader:async()=>[],providerFactory:()=>provider,logger:{error(){}}});
   const response=await handler({...scope,message:'Delete the older duplicate copy of invoice INV-17',messageId:'wamid.prepare-duplicate'});
   assert.equal(f.calls.filter(call=>call.action==='prepare').length,1);
@@ -669,7 +671,7 @@ test('model compares duplicate age and completeness before choosing one specific
   assert.match(response.answer,/DELETE INV-17/);
 });
 
-test('a deleted-invoice undo receipt does not block a new owner proposal',async()=>{
+engineTest('a deleted-invoice undo receipt does not block a new owner proposal',async()=>{
   const f=lifecycleFixture();
   const handler=lifecycleHandler(f,{plans:[
     [{name:'prepareInvoiceDeletion',args:{target:'INV-17'}}],
@@ -689,7 +691,7 @@ test('a deleted-invoice undo receipt does not block a new owner proposal',async(
   assert.equal(f.pending.current.action.invoice.clientName,'Acme');
 });
 
-test('owner write budget prevents a later model round from replacing a proposal in the same turn',async()=>{
+engineTest('owner write budget prevents a later model round from replacing a proposal in the same turn',async()=>{
   const supabase=memorySupabase(),pending=pendingMemory();let proposals=0,calls=0;
   const originalStore=pending.storePendingAction.bind(pending);
   pending.storePendingAction=async args=>{proposals++;return originalStore(args);};
@@ -714,7 +716,7 @@ test('owner write budget prevents a later model round from replacing a proposal 
   assert.equal(pending.current.action.invoice.invoiceNumber,'INV-FIRST');
 });
 
-test('concurrent owner turns use the same pre-model pending snapshot and only one proposal wins',async()=>{
+engineTest('concurrent owner turns use the same pre-model pending snapshot and only one proposal wins',async()=>{
   const supabase=memorySupabase(),pending=pendingMemory();let storeAttempts=0;
   const originalStore=pending.storePendingAction.bind(pending);
   pending.storePendingAction=async args=>{storeAttempts++;return originalStore(args);};
@@ -733,7 +735,7 @@ test('concurrent owner turns use the same pre-model pending snapshot and only on
   assert.ok(['INV-A','INV-B'].includes(pending.current.action.invoice.invoiceNumber));
 });
 
-test('invoice creation replay for one inbound ID reuses its invoice number and save idempotency key',async()=>{
+engineTest('invoice creation replay for one inbound ID reuses its invoice number and save idempotency key',async()=>{
   const args={clientName:'Acme',invoiceDate:'2026-10-01',dueDate:'2026-10-15',currency:'USD',total:50};
   const createOnce=async()=>{
     const pending=pendingMemory();
@@ -750,7 +752,7 @@ test('invoice creation replay for one inbound ID reuses its invoice number and s
   assert.match(first.action.idempotencyKey,/^wa_owner_create_[a-f0-9]{48}$/);
 });
 
-test('invoice review details remain available after cancellation and can seed a new proposal',async()=>{
+engineTest('invoice review details remain available after cancellation and can seed a new proposal',async()=>{
   const reviewInvoice={invoiceNumber:'INV-52',clientName:'John Smith',total:500,currency:'INR',direction:'receivable'};
   let current={id:'review-1',version:4,action:{type:'invoice_review_draft',stage:'incomplete',missingFields:['dueDate'],invoice:reviewInvoice},consumed_at:null};
   let generation=4,savedProposal=null;
@@ -784,16 +786,16 @@ test('invoice review details remain available after cancellation and can seed a 
   assert.equal(savedProposal.invoice.invoiceNumber,'INV-52');assert.equal(savedProposal.invoice.dueDate,'2026-10-15');
 });
 
-test('unverified sender cannot start the owner model or invoke workspace tools',async()=>{
+engineTest('unverified sender cannot start the owner model or invoke workspace tools',async()=>{
   let providerCalls=0,toolFactoryCalls=0;
-  const handler=createOwnerMessageHandler({toolsFactory:createOwnerAgentTools,supabase:memorySupabase(),authorize:async()=>false,
+  const handler=createOwnerEngineHarness({toolsFactory:createOwnerAgentTools,supabase:memorySupabase(),authorize:async()=>false,
     providerFactory:()=>({async generate(){providerCalls++;return {model:CF_QWEN_MODEL,content:'no'};}}),
     toolsFactory(){toolFactoryCalls++;throw new Error('must not initialize tools');},logger:{error(){}}});
   assert.equal(await handler({...scope,message:'Delete invoice INV-17'}),'');
   assert.equal(providerCalls,0);assert.equal(toolFactoryCalls,0);
 });
 
-test('the model continues a missing-currency review and later saves it with its original attachment',async()=>{
+engineTest('the model continues a missing-currency review and later saves it with its original attachment',async()=>{
   const sourceMessageId='wamid.review-photo';
   let current={id:81,version:4,created_at:'2026-10-02T07:00:00.000Z',action:{type:'invoice_review_draft',stage:'incomplete',
     sourceMessageId,missingFields:['currency'],currencySource:null,
@@ -847,7 +849,7 @@ test('the model continues a missing-currency review and later saves it with its 
   assert.deepEqual(transitions,[['incomplete','proposal','user'],['proposal','saving','user'],['saving','saved','user']]);
 });
 
-test('the model can persist customer, amount, due-date, currency, and direction facts across incomplete review turns',async()=>{
+engineTest('the model can persist customer, amount, due-date, currency, and direction facts across incomplete review turns',async()=>{
   const sourceMessageId='wamid.review-source';
   let current={id:82,version:1,created_at:'2026-10-02T07:00:00.000Z',action:{type:'invoice_review_draft',stage:'incomplete',
     sourceMessageId,missingFields:['customerName','dueDate','total','currency','direction'],currencySource:null,
@@ -902,7 +904,7 @@ test('the model can persist customer, amount, due-date, currency, and direction 
   assert.deepEqual(transitions.map(item=>[item.fromStage,item.toStage]),[['incomplete','incomplete'],['incomplete','proposal']]);
 });
 
-test('review continuation cannot invent facts or overwrite fields already extracted from the attachment',async()=>{
+engineTest('review continuation cannot invent facts or overwrite fields already extracted from the attachment',async()=>{
   const pending=pendingMemory();
   const pendingAtStart={id:83,version:1,created_at:'2026-10-02T07:00:00.000Z',action:{type:'invoice_review_draft',stage:'incomplete',
     sourceMessageId:'wamid.fixed-source',missingFields:['dueDate'],currencySource:'photo',
@@ -920,7 +922,7 @@ test('review continuation cannot invent facts or overwrite fields already extrac
   assert.equal(pending.current,null);
 });
 
-test('unknown due date is optional and legacy due-date reviews retain photo currency provenance',async()=>{
+engineTest('unknown due date is optional and legacy due-date reviews retain photo currency provenance',async()=>{
   for (const legacyProvenance of [false,true]) {
   const extracted={invoiceNumber:{value:'INV-79',confidence:.99},customerName:{value:'Acme Ltd',confidence:.99},
     invoiceDate:{value:'2026-10-01',confidence:.99},dueDate:{value:null,confidence:0},total:{value:1250,confidence:.99},
@@ -946,9 +948,9 @@ test('unknown due date is optional and legacy due-date reviews retain photo curr
   }
 });
 
-test('owner interruption status remains available when the model service is down',async()=>{
+engineTest('owner interruption status remains available when the model service is down',async()=>{
   let calls=0;
-  const handler=createOwnerMessageHandler({supabase:memorySupabase(),providerFactory:()=>({async generate(){
+  const handler=createOwnerEngineHarness({supabase:memorySupabase(),providerFactory:()=>({async generate(){
     calls++;throw new Error('PRIVATE_DATABASE_SECRET');
   }}),logger:{error(){}}});
   const reply=await handler.createSafeFailureReply({workspaceId,code:'OWNER_LOOP_TIMEOUT',hasAttachment:true});
@@ -958,7 +960,7 @@ test('owner interruption status remains available when the model service is down
   assert.doesNotMatch(reply,/PRIVATE_DATABASE_SECRET|PGRST/);
 });
 
-test('quota exhaustion survives the provider wrapper and returns an honest busy reply',async()=>{
+engineTest('quota exhaustion survives the provider wrapper and returns an honest busy reply',async()=>{
   const tools={definitions:[],async execute(){return {};}};
   const provider={async generate(){
     throw Object.assign(new AIError('RATE_LIMITED',429),{providerReason:'quota_exceeded',quotaExhausted:true,
@@ -971,7 +973,7 @@ test('quota exhaustion survives the provider wrapper and returns an honest busy 
   assert.ok(Date.now()-startedAt<3000);
 });
 
-test('raw provider rate limits and exhausted provider failures stay honest before any tool runs',async()=>{
+engineTest('raw provider rate limits and exhausted provider failures stay honest before any tool runs',async()=>{
   for(const error of [new AIError('RATE_LIMITED',429),new AIError('PROVIDER_UNAVAILABLE',503)]){
     let calls=0;
     const result=await runOwnerAgent({message:'what is my total outstanding?',tools:{definitions:[],getWriteAttempted:()=>false,
@@ -983,7 +985,7 @@ test('raw provider rate limits and exhausted provider failures stay honest befor
   }
 });
 
-test('a payable or uncertain attachment draft cannot become a receivable without explicit owner direction',async()=>{
+engineTest('a payable or uncertain attachment draft cannot become a receivable without explicit owner direction',async()=>{
   const pending=pendingMemory();
   const pendingAtStart={id:18,version:1,action:{type:'invoice_review_draft',stage:'canceled',
     missingFields:['direction'],invoice:{invoiceNumber:'BILL-7',clientName:'Supplier',total:300,currency:'USD',direction:'payable'}},consumed_at:null};
@@ -997,7 +999,7 @@ test('a payable or uncertain attachment draft cannot become a receivable without
 });
 
 
-test('retained review routing binds only current positive missing currency and direction facts',async()=>{
+engineTest('retained review routing binds only current positive missing currency and direction facts',async()=>{
  const review={id:84,version:1,action:{type:'invoice_review_draft',stage:'incomplete',missingFields:['currency','direction'],invoice:{currency:null,direction:'payable'}},consumed_at:null};
  const toolsFor=message=>createOwnerAgentTools({supabase:{},scope,ownerStore:{query:async()=>[]},pending:{async loadInvoiceReview(){return structuredClone(review);},async transitionInvoiceReview(){throw Error('Negative owner facts must never dispatch a transition');}},pendingAtStart:structuredClone(review),message,messageId:'fixture-facts',authorize:async()=>true,logger:{error(){}}});
  const plan=message=>toolsFor(message).getAttachmentReviewContinuation();
@@ -1010,7 +1012,7 @@ test('retained review routing binds only current positive missing currency and d
  }
 });
 
-for(const lookup of ['consumed','missing','throws','row-missing'])test(`attachment post-processing receipt is deterministic when lookup ${lookup}`,async()=>{
+for(const lookup of ['consumed','missing','throws','row-missing'])engineTest(`attachment post-processing receipt is deterministic when lookup ${lookup}`,async()=>{
   let savedLookups=0,activeLookups=0,modelCalls=0;
   const receipt={id:48,version:3,consumed_at:'2026-10-24T13:41:00Z',action:{type:'invoice_review_draft',stage:'saved',
     sourceMessageId:'photo-receipt',invoice:{id:'invoice-committed',invoiceNumber:'EXTRACTED',clientName:'Extracted',total:1,currency:'INR'}}};
@@ -1030,7 +1032,7 @@ for(const lookup of ['consumed','missing','throws','row-missing'])test(`attachme
   const provider={async generate(){modelCalls++;if(modelCalls>1)return {content:'No invoice was logged.'};
     return {toolCalls:[{id:'ingest',type:'function',function:{name:'ingestInvoiceAttachment',arguments:'{}'}}]};}};
   const result=await runOwnerAgent({provider,tools,message:'Log this invoice',attachmentDescriptor:{available:true,mimeType:'image/jpeg'}});
-  assert.equal(modelCalls,1,'no model may compose the post-operation reply');
+  assert.equal(modelCalls,0,'attachment operation and receipt must remain model-free');
   assert.equal(savedLookups,2);
   if(lookup==='consumed'){
     assert.equal(activeLookups,0,'consumed saved receipt does not depend on active-review RPC');

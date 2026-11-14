@@ -1,0 +1,27 @@
+[
+  {
+    "file": "tests/reviewer-round6-independent-regressions.test.mjs",
+    "anchor": "async function setup",
+    "sha256": "eeacec1cc20b9e2bc2e65af2fcc8eaa1014b40be9663fb74764881d64335d225"
+  },
+  {
+    "file": "tests/reviewer-round6-date-variants.test.mjs",
+    "anchor": "async function setup",
+    "sha256": "711acdb26278515997e3734f61bbf7f6dc6d297159ee2b9e37887388ae353e2e"
+  },
+  {
+    "file": "tests/reviewer-round6-boundary-regressions.test.mjs",
+    "anchor": "test('new ordinary",
+    "sha256": "9596719dbc834e01a104541f53e69e032243e9e27e195babdbcca9b73e062804"
+  },
+  {
+    "file": "tests/reviewer-round6-long-list.test.mjs",
+    "anchor": "async function setup",
+    "sha256": "412f1872493a10f623f1896c09f6fdfd1f831b89d9bee7a56ef365219ca216fd"
+  },
+  {
+    "file": "tests/reviewer-round6-native-cache-audit.mjs",
+    "anchor": "",
+    "sha256": "baaed00fe7d41560ec4abc78649b7555fa0dfed60c8c28b4bba83d1098852294"
+  }
+]

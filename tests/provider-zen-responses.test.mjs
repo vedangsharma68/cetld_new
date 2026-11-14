@@ -36,7 +36,7 @@ test('retired raw selections survive sanitization and retired-only generation fa
   let calls=0;
   await assert.rejects(ai(retired,()=>{calls++;throw Error('No retired model');}).generate({messages:[{role:'user',content:'Hello'}]}),error=>error.code==='INVALID_MODEL');
   assert.equal(calls,0);
-  const valid=ai(retired,async url=>{calls++;assert.match(url,/gemini-3\.5-flash/);return response({candidates:[{content:{parts:[{text:'Existing selected backup'}]}}]});},{fallbackModel:GEMINI_FALLBACK_MODEL});
+  const valid=ai(retired,async url=>{calls++;assert.equal(new URL(url).hostname,'api.cloudflare.com');return response({choices:[{message:{content:'Existing selected backup'}}]});},{fallbackModel:CF_PRIMARY_MODEL});
   assert.equal((await valid.generate({messages:[{role:'user',content:'Hello'}]})).content,'Existing selected backup');assert.equal(calls,1);
 });
 
@@ -103,6 +103,7 @@ test('opaque metadata never leaks to other provider wires or across Muse model i
   const message={role:'assistant',content:'Previous',zenResponsesModel:'other-model',zenResponsesOutput:[{type:'reasoning',encrypted_content:'do-not-leak'}],
     zenChatModel:ZEN_MIMO_MODEL,zenChatReasoningContent:'do-not-leak',zenChatToolCalls:[]};
   for(const model of [DEFAULT_MODEL,CF_PRIMARY_MODEL,GEMINI_FALLBACK_MODEL,ZEN_MUSE_MODEL]){
+    if(model===GEMINI_FALLBACK_MODEL){await assert.rejects(ai(model,()=>assert.fail('Disabled Gemini')).generate({messages:[message,{role:'user',content:'Continue'}]}),e=>e.code==='INVALID_MODEL');continue;}
     await ai(model,async(_url,init)=>{assert(!init.body.includes('do-not-leak'));assert(!init.body.includes('zenResponses'));assert(!init.body.includes('zenChat'));
       return response(model===ZEN_MUSE_MODEL?final('Answer'):model===GEMINI_FALLBACK_MODEL?{candidates:[{content:{parts:[{text:'Answer'}]}}]}:{choices:[{message:{content:'Answer'}}]});
     }).generate({messages:[message,{role:'user',content:'Continue'}]});

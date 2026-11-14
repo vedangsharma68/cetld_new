@@ -5,7 +5,7 @@ import {readFile,readdir} from 'node:fs/promises';
 
 const owner='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const stranger='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-const phone='+919871367051';
+const phone='+12025550101';
 
 async function boot(){
   const db=new PGlite();

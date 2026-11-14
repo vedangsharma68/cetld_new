@@ -183,7 +183,7 @@ for(const lineEndings of ['LF','CRLF'])test(`real SQL ${lineEndings} predecessor
    await db.query(`update ${table} set ${column}=$1 where provider_message_id='valid-owner'`,[good]);
   }
   for(const [table,column] of [['whatsapp_messages','created_at'],['whatsapp_inbound_events','received_at']]){
-   await db.query(`update ${table} set ${column}=now()-interval '2 minutes' where provider_message_id='valid-owner'`);await assert.rejects(transition(valid),/source is outside current owner scope/);
+   await db.query(`update ${table} set ${column}=(select created_at-interval '1 microsecond' from whatsapp_pending_actions where id=31) where provider_message_id='valid-owner'`);await assert.rejects(transition(valid),/source is outside current owner scope/);
    await db.query(`update ${table} set ${column}=now() where provider_message_id='valid-owner'`);
   }
   await db.query("update whatsapp_pending_actions set expires_at=now()-interval '1 second' where id=31");assert.equal((await transition(valid)).rows.length,0);
@@ -227,5 +227,27 @@ for(const lineEndings of ['LF','CRLF'])test(`superseding migration accepts froze
   await db.exec(await migration());const after=await routine();assert.equal(after.normalized_md5,forwardHash);assert.deepEqual(security(after),security(before));assert.deepEqual(await review(),baseline);
   const earlierSql=await readFile(new URL('./fixtures/superseded-migrations/'+earlierMigration,import.meta.url),'utf8');
   await assert.rejects(db.exec(earlierSql),/Unexpected retained invoice review source/);await db.exec('rollback');assert.deepEqual(await routine(),after);
+ }finally{await f.close();}
+});
+
+test('source scope uses the review boundary even after a long-running review; before rejects and exact/after accepts',async()=>{
+ const f=await fixture();try{
+  await f.db.exec(await migration());await f.persist('clock-boundary');
+  for(const [table,column]of [['whatsapp_messages','created_at'],['whatsapp_inbound_events','received_at']])for(const offset of ['-1 microsecond','0 microseconds','1 microsecond']){
+   await f.db.exec('begin');try{
+    // Simulate elapsed processing without wall-clock sleeps. The old now()-2m
+    // probe is inside this review's scope, not an expired/foreign source.
+    await f.db.exec("update whatsapp_pending_actions set created_at=now()-interval '10 minutes' where id=31");
+    await f.db.query(`update ${table} set ${column}=(select created_at+$1::interval from whatsapp_pending_actions where id=31) where provider_message_id='clock-boundary'`,[offset]);
+    const relation=(await f.db.query(`select t.${column}<p.created_at outside_scope from ${table} t cross join whatsapp_pending_actions p where t.provider_message_id='clock-boundary' and p.id=31`)).rows[0];
+    assert.equal(relation.outside_scope,offset.startsWith('-'));
+    if(relation.outside_scope){const before=await f.review();await f.db.exec('savepoint outside_source');await assert.rejects(f.transition(candidate('clock-boundary')),/source is outside current owner scope/);await f.db.exec('rollback to savepoint outside_source');assert.deepEqual(await f.review(),before);}
+    else assert.equal((await f.transition(candidate('clock-boundary'))).rows[0].version,3);
+   }finally{await f.db.exec('rollback');}
+  }
+  await f.db.exec('begin');try{
+   await f.db.exec("update whatsapp_pending_actions set created_at=now()-interval '10 minutes' where id=31;update whatsapp_messages set created_at=now()-interval '2 minutes' where provider_message_id='clock-boundary';update whatsapp_inbound_events set received_at=now()-interval '2 minutes' where provider_message_id='clock-boundary'");
+   assert.equal((await f.transition(candidate('clock-boundary'))).rows[0].version,3,'Two minutes ago is in scope when the review predates it');
+  }finally{await f.db.exec('rollback');}
  }finally{await f.close();}
 });

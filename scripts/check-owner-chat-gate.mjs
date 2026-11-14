@@ -1,12 +1,12 @@
 import {spawn} from 'node:child_process';
-import {writeFile,readFile,unlink,mkdtemp,rm} from 'node:fs/promises';
+import {writeFile,readFile,readdir,unlink,mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 import path from 'node:path';
 
-// Each command must finish successfully before Vercel may publish this build.
+// CI requires every release command; Vercel independently builds the frontend.
 // Child tests receive no production service credentials or messaging flags.
 export async function runReleaseGate({run=runCommand}={}) {
   await run('test:owner-chat');
@@ -74,6 +74,15 @@ export async function writeReleaseManifest({outputPath='owner-chat-build.json'}=
   paths.push('automation/external-reminder-verification.mjs','automation/accounting/integration.mjs',
     'automation/accounting/providers.mjs','automation/accounting/http.mjs',
     'supabase/migrations/20261024094013_fresh_external_reminder_reads.sql');
+  paths.push('tests/fixtures/private-origin-store.mjs','tests/fixtures/verified-owner-rpc.mjs','tests/fixtures/native-postgres.mjs','tests/private-origin-lifecycle.test.mjs','package.json','package-lock.json','tests/fixtures/legacy-main-owner-handler.source','tests/private-rollout-compatibility.test.mjs','tests/private-native-postgres.test.mjs','tests/private-round5-production.test.mjs','tests/private-round6-production.test.mjs','tests/fictional-contact-fixtures.test.mjs','tests/owner-unfiltered-actions-regression.test.mjs','tests/provider-tool-boundary.test.mjs','tests/reviewer-round5-adversarial-production.test.mjs','tests/reviewer-round5-integrity.test.mjs','tests/reviewer-round5-origin-boundaries.test.mjs','tests/reviewer-round5-party-and-magnitude.test.mjs','tests/reviewer-round4-independent.test.mjs','tests/reviewer-round4-indic-overblock.test.mjs','tests/reviewer-round4-native-month.test.mjs','tests/reviewer-round4-watermark.test.mjs','scripts/backfill-private-invoice-terms.mjs','scripts/generate-private-value-sql.mjs','scripts/generate-private-value-unicode.mjs','tests/private-invoice-backfill.test.mjs','tests/private-round4-production.test.mjs','invoice/receivables.mjs','ai/assistant.mjs','tests/fixtures/owner-engine.mjs','tests/private-production-containment.test.mjs','ai/private-value-unicode.mjs','ai/private-value-language.mjs','ai/private-value-matcher.mjs','ai/private-chat-memory.mjs','supabase/migrations/20261101120327_private_whatsapp_chat_memory.sql','ai/private-chat.mjs','automation/whatsapp/private-invoice-read.mjs');
+  paths.push('tests/private-retention-cache.test.mjs','tests/owner-retained-general-currency-correction-sql.test.mjs');
+  paths.push('ai/private-reference-frames.mjs','scripts/generate-private-reference-frames.mjs','scripts/extract-private-reference-frames.py','data/private-language/wordnet-person-heads.txt','data/private-language/wordnet-collection-verbs.txt','data/private-language/wordnet-verb-frames.json','data/private-language/wordnet-verb-exceptions.txt','data/private-language/wordnet-verb-source.json','docs/private-wordnet-LICENSE.txt','data/private-language/ko-eomi.txt','data/private-language/ko-pre_eomi.txt','data/private-language/ko-endings-source.json','tests/private-round13-generalizations.test.mjs','tests/private-round13-boundaries.test.mjs','tests/private-round13-current.test.mjs','tests/private-round13-projection.test.mjs','ai/private-number-role.mjs','ai/private-name-morphology.mjs','scripts/generate-private-name-morphology.mjs','data/private-language/ko-josa.txt','data/private-language/ko-josa-source.json','docs/private-ko-morphology-LICENSE.txt','tests/private-round10-classes.test.mjs','tests/private-round10-boundaries.test.mjs','tests/private-round10-invariants.test.mjs','tests/private-round12-generalizations.test.mjs','tests/private-round12-boundaries.test.mjs','tests/private-round12-provenance.test.mjs','docs/private-language-model-LICENSE.txt','ai/private-language-model.mjs','scripts/generate-private-language-model.mjs','ai/private-language-syntax.mjs','invoice/chat-intent.mjs','tests/private-round9-semantics.test.mjs','tests/fixtures/reviewer-round8-harness.mjs','tests/fixtures/reviewer-round8-pins.json',...(await readdir('tests')).filter(file=>file.startsWith('reviewer-round8-')).sort().map(file=>'tests/'+file));
+  paths.push('tests/private-round8-structure.test.mjs','tests/private-round8-provenance.test.mjs','tests/private-round8-native.test.mjs','tests/private-round8-numeric-scale.test.mjs');
+  paths.push(...(await readdir('tests')).filter(file=>file.startsWith('reviewer-round7-')).sort().map(file=>'tests/'+file),'tests/fixtures/reviewer-round7-pins.json','tests/fixtures/reviewer-round7-fixture-corrections.mjs','tests/fixtures/private-migration-61fea77.sql');
+  paths.push('tests/private-round7-production.test.mjs','tests/reviewer-round6-independent-regressions.test.mjs','tests/reviewer-round6-date-variants.test.mjs','tests/reviewer-round6-boundary-regressions.test.mjs','tests/reviewer-round6-long-list.test.mjs','tests/reviewer-round6-native-cache-audit.mjs','tests/reviewer-round6-native-cache.test.mjs','tests/reviewer-round6-integrity.test.mjs','tests/fixtures/reviewer-round6-pins.json');
+  paths.push('ai/private-runtime-lexicon.mjs','ai/private-runtime-lexicon-data.mjs','scripts/generate-private-runtime-lexicon.mjs','data/private-language/wordnet-mass-nouns.txt','data/private-language/wordnet-representation-verbs.txt','tests/private-round14-model.test.mjs','tests/private-round14-classes.test.mjs','tests/private-round14-batch.test.mjs');
+  paths.push('automation/whatsapp/private-dispatch.mjs','supabase/migrations/20261114000100_customer_dispatch_privacy.sql','scripts/release-shard.mjs','tests/private-round16-dispatch.test.mjs','tests/private-round16-build.test.mjs','tests/fixtures/dispatch-sql-double.mjs','tests/fixtures/dispatch-ready-network.mjs');
+  paths.push('ai/private-payload-boundary.mjs','ai/private-calendar-components.mjs','tests/private-round15-classes.test.mjs','tests/private-round15-wrappers.test.mjs','tests/private-round15-dispatch.test.mjs','tests/private-round15-index.test.mjs','tests/private-round15-projection.test.mjs','tests/private-round15-customer.test.mjs');
   const files={};for(const path of paths)files[path]=createHash('sha256').update(await readFile(path)).digest('hex');
   let commit=process.env.VERCEL_GIT_COMMIT_SHA||process.env.GITHUB_SHA;
   if(!commit)try{commit=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();}catch{commit=null;}
@@ -85,7 +94,17 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1]
   process.env.CETLD_SQL_FIXTURE_CACHE_DIR=fixtureCacheDir;
   try{
     await unlink('owner-chat-build.json').catch(error=>{if(error.code!=='ENOENT')throw error;});
-    await runReleaseGate();await writeReleaseManifest();
+    const option=process.argv.find(arg=>arg.startsWith('--shards='));
+    const count=option?Number(option.slice(9)):null;
+    if(option&&(!Number.isInteger(count)||count<1||count>16))throw Error('Invalid release shard count');
+    await runReleaseGate({run:async(script,overrides)=>{
+      if(script!=='test'||!count)return runCommand(script,overrides);
+      for(let shard=0;shard<count;shard++){
+        console.log('RELEASE_SHARD_START',shard,count);
+        await new Promise((resolve,reject)=>{const child=spawn(process.execPath,['scripts/release-shard.mjs',String(shard),String(count)],{stdio:'inherit',env:releaseTestEnvironment()});child.once('error',reject);child.once('exit',code=>code===0?resolve():reject(Error('Release test shard failed: '+shard)));});
+        console.log('RELEASE_SHARD_EXIT',shard,0);
+      }
+    }});await writeReleaseManifest();
     console.log('Owner chat release gate passed.');
   }catch(error){console.error(error.message);process.exitCode=1;}
   finally{

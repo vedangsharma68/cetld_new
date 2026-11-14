@@ -182,7 +182,7 @@ function simpleLedgerReadTool(message) {
   const prompt = message.trim().toLowerCase().replace(/[!?.,]+$/g, '').replace(/\s+/g, ' ');
   if (/^(?:which|what) invoices? (?:are|were|is|was) overdue$/.test(prompt)
     || /^(?:list|show(?: me)?)(?: all| the)? overdue invoices?$/.test(prompt)) return 'getOverdueInvoices';
-  if (isOutstandingBalanceQuestion(message) || /^how many (?:(?:outstanding|unpaid) invoices(?: (?:do (?:i|we) have|are there))?|invoices are (?:outstanding|unpaid))$/.test(prompt)) return 'getOutstandingSummary';
+  if (isOutstandingBalanceQuestion(prompt.replace(/^(?:please )?(?:explain|tell me|show me|check|summari[sz]e) /i,'what is ')) || /^how many (?:(?:outstanding|unpaid) invoices(?: (?:do (?:i|we) have|are there))?|invoices are (?:outstanding|unpaid))$/.test(prompt)) return 'getOutstandingSummary';
   if (/^what payments were recorded$/.test(prompt)) return 'getPayments';
   if (/^what happened recently$/.test(prompt)) return 'getActivity';
   return null;
@@ -707,7 +707,7 @@ export async function answerWorkspaceQuestion({provider, store, message, history
     const sourceTruncated = Boolean(invoice.paymentHistoryTruncated || invoice.lineItemsTruncated);
     const sources = [{tool: 'getInvoiceDetails', label: 'Matching invoice context', data: {...invoice,complete:!sourceTruncated,truncated:sourceTruncated}}];
     const messages = finalMessages(message, history, sources);
-    const response = /\b(?:tax|subtotal|breakdown|break down|igst|cgst|sgst)\b/i.test(message)
+    const response = provider.privateChatBoundary||/\b(?:tax|subtotal|breakdown|break down|igst|cgst|sgst)\b/i.test(message)
       ? {content:'',model:null,usedFallback:false}
       : await provider.generate({messages, maxTokens: 700, temperature: 0.1});
     const answer = String(response.content || '').trim();
@@ -737,6 +737,7 @@ export async function answerWorkspaceQuestion({provider, store, message, history
     return withEvidence({answer:/\bhow many\b/i.test(message) ? factualFallback([source],message) : emptyAnswer(source) || factualFallback([source],message),asOf:clock().toISOString(),timezone,model:null,usedFallback:false,readOnly:true},source);
   }
   const allowedTools = [...(writeIntent ? [...tools.definitions, createProposalTool, updateProposalTool] : tools.definitions),...(ownerActions?[ownerActions.definition]:[])];
+  provider.setTools?.(allowedTools);
   let plan;
   try { plan = await provider.generate({
     messages: [

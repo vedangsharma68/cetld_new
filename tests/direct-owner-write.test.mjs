@@ -5,7 +5,7 @@ import {createDirectOwnerWriteAdapter} from '../automation/whatsapp/direct-owner
 const workspaceId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const ownerId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const entityId='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
-const phone='+919871367051';
+const phone='+12025550101';
 const updatedAt='2026-10-03T10:00:00.000Z';
 
 test('instruction identity omits only the parser-generated issue date and preserves supplied dates and amounts',async()=>{

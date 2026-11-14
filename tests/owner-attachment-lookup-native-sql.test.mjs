@@ -1,3 +1,6 @@
+// Explicit planner/tool-state subsystem checks; production privacy is tested separately.
+const engineTest=(name,...args)=>test('engine subsystem: '+name,...args);
+import {localExtraction} from './fixtures/local-extraction.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -5,7 +8,7 @@ import {readFile} from 'node:fs/promises';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import {createCanvas} from '@napi-rs/canvas';
 import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
-import {createOwnerMessageHandler} from '../automation/whatsapp/owner-handler.mjs';
+import {createOwnerEngineHarness} from './fixtures/owner-engine-unit.mjs';
 import {createOwnerWorkspaceTools} from '../automation/whatsapp/owner-workspace-tools.mjs';
 import {createWhatsAppPendingActionStore} from '../automation/whatsapp/pending-actions.mjs';
 
@@ -42,7 +45,7 @@ async function fixture(){
     lineItems:[{description:'Web Design',quantity:1,unitPrice:85,amount:85,confidence:.99}],lineItemsConfidence:.99});
   let extractionOverride=null,failExtraction=false,currentMessage='';
   const calls={executions:[],extractions:[],planner:[]};
-  const handler=createOwnerMessageHandler({supabase,env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
+  const handler=createOwnerEngineHarness({supabase,localExtraction:async input=>{calls.extractions.push({source:'local',message:currentMessage});if(failExtraction)throw Error('fixture local extraction unavailable');return localExtraction({...extractedWire(),...(extractionOverride||{})});},env:{NODE_ENV:'test',GEMINI_API_KEY:'isolated',CLOUDFLARE_ACCOUNT_ID:'isolated',CLOUDFLARE_API_TOKEN:'isolated'},
     logger:{info(){},warn(){},error(){}},toolsFactory:options=>{
       const tools=createOwnerWorkspaceTools(options);
       return {...tools,async execute(name,args,context){calls.executions.push({name,args});return tools.execute(name,args,context);}};
@@ -106,7 +109,7 @@ function assertNoAbsenceClaim(reply){
   assert.doesNotMatch(reply,/not logged|no matching invoice|hasn.t been logged|not already logged/i);
 }
 
-test('attachment duplicate question uses exact read-only source match and preserves saved invoice review',async()=>{
+engineTest('attachment duplicate question uses exact read-only source match and preserves saved invoice review',async()=>{
   const f=await fixture();try{
     const before=await f.snapshot(),savedReview=await f.savedReview(),executionStart=f.calls.executions.length;
     const extractionStart=f.calls.extractions.length,plannerStart=f.calls.planner.length;
@@ -122,7 +125,7 @@ test('attachment duplicate question uses exact read-only source match and preser
   }finally{await f.close();}
 });
 
-test('missing or ambiguous attachment identity and extraction failure never assert a duplicate or absence',async()=>{
+engineTest('missing or ambiguous attachment identity and extraction failure never assert a duplicate or absence',async()=>{
   const f=await fixture();try{
     const before=await f.snapshot();
     for(const [id,override] of [
@@ -145,7 +148,7 @@ test('missing or ambiguous attachment identity and extraction failure never asse
   }finally{await f.close();}
 });
 
-test('ambiguous same-customer source matches stay unverified and no source is selected arbitrarily',async()=>{
+engineTest('ambiguous same-customer source matches stay unverified and no source is selected arbitrarily',async()=>{
   const f=await fixture();try{
     const invoice=f.state.invoices[0];
     const historical=(await f.db.query("insert into invoices(workspace_id,customer_id,invoice_number,issue_date,due_date,currency,total_amount,status,metadata) values($1,$2,'OTHER-HISTORICAL','2016-01-25','2016-01-31','USD',93.5,'draft',$3) returning id",
@@ -160,7 +163,7 @@ test('ambiguous same-customer source matches stay unverified and no source is se
   }finally{await f.close();}
 });
 
-test('a current payment proposal and saved review history survive the read-only attachment inquiry',async()=>{
+engineTest('a current payment proposal and saved review history survive the read-only attachment inquiry',async()=>{
   const f=await fixture();try{
     const pending=createWhatsAppPendingActionStore({supabase:f.supabase});
     const state=await pending.loadPendingActionState(f.scope);
@@ -179,7 +182,7 @@ test('a current payment proposal and saved review history survive the read-only 
   }finally{await f.close();}
 });
 
-test('a foreign workspace cannot use the attachment inquiry to reveal owner invoice identity',async()=>{
+engineTest('a foreign workspace cannot use the attachment inquiry to reveal owner invoice identity',async()=>{
   const f=await fixture();try{
     const before=await f.snapshot(),plannerStart=f.calls.planner.length,extractStart=f.calls.extractions.length;
     const reply=await f.handler({...f.scope,workspaceId:randomUUID(),messageId:'event265-foreign',message:duplicateQuestion,

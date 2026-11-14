@@ -25,7 +25,7 @@ for(const scenario of [
 
 for(const phase of ['payment-check','final-read'])test(`an exception appearing during ${phase} prevents transport`,async()=>{
   const store=new MemoryAutomationStore({now:()=>now});
-  store.seedInvoice({id:scope.invoiceId,...scope,amountMinor:10000,paidMinor:4000,followupState:'approved',nextFollowUpAt:'2026-10-19T09:00:00Z',customerPhone:'+919871367051'});
+  store.seedInvoice({id:scope.invoiceId,...scope,amountMinor:10000,paidMinor:4000,followupState:'approved',nextFollowUpAt:'2026-10-19T09:00:00Z',customerPhone:'+12025550101'});
   const hold=()=>{store.invoices.get(scope.invoiceId).metadata={followup_exception:{type:'dispute',note:'Concurrent fixture hold'}};};
   let reads=0,calls=0;const read=store.getInvoice.bind(store);
   store.getInvoice=input=>{if(phase==='final-read'&&++reads===3)hold();return read(input);};
@@ -38,7 +38,7 @@ for(const phase of ['payment-check','final-read'])test(`an exception appearing d
 test('a resolved report still permits an explicitly approved reminder',async()=>{
   const store=new MemoryAutomationStore({now:()=>now});
   store.seedInvoice({id:scope.invoiceId,...scope,amountMinor:10000,paidMinor:4000,followupState:'approved',
-    nextFollowUpAt:'2026-10-19T09:00:00Z',customerPhone:'+919871367051',metadata:{followup_exception:{type:'dispute',resolved_at:now.toISOString()}}});
+    nextFollowUpAt:'2026-10-19T09:00:00Z',customerPhone:'+12025550101',metadata:{followup_exception:{type:'dispute',resolved_at:now.toISOString()}}});
   let calls=0;const engine=new FollowUpEngine({store,clock:()=>now,settings:{businessName:'Fixture'},
     provider:{async sendReminder(){calls++;return {status:'accepted',providerMessageId:'fixture-only'};}},paymentChecker:async()=>({paidMinor:4000})});
   assert.equal((await engine.run(scope)).status,'sent');assert.equal(calls,1);assert.equal(store.getInvoice(scope).paidMinor,4000);
@@ -53,7 +53,7 @@ test('initial and subsequent schedules handle nonexistent local starts without s
 for(const type of ['dispute','paid_claim','stop'])test(`unresolved ${type} independently blocks an active invoice and explicit resume`,async()=>{
   const store=new MemoryAutomationStore({now:()=>now});
   store.seedInvoice({id:scope.invoiceId,...scope,amountMinor:10000,paidMinor:4000,followupState:'approved',
-    nextFollowUpAt:'2026-10-19T09:00:00Z',customerPhone:'+919871367051',metadata:{followup_exception:{type,note:'Fixture report',recorded_at:now.toISOString()}}});
+    nextFollowUpAt:'2026-10-19T09:00:00Z',customerPhone:'+12025550101',metadata:{followup_exception:{type,note:'Fixture report',recorded_at:now.toISOString()}}});
   const before=store.getInvoice(scope);let calls=0;
   const provider={async sendReminder(){calls++;return {status:'accepted',providerMessageId:'fixture-only'};}};
   const engine=new FollowUpEngine({store,provider,clock:()=>now,settings:{businessName:'Fixture'},paymentChecker:async()=>({paidMinor:4000})});
