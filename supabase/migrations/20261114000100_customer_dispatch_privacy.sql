@@ -16,7 +16,10 @@ begin
      join public.whatsapp_owner_verifications v on v.workspace_id=w.id and v.requested_by=w.owner_id and v.phone=p_phone and v.verified_at is not null
      where w.id=p_workspace_id) into owner_scope;
    if not owner_scope then
-     select id into strict recipient from public.customers where workspace_id=p_workspace_id and phone=p_phone;
+     -- A removed binding owns no customer fields. Fixed consent confirmations
+     -- still pass through the boundary and their existing inbound authority;
+     -- multiple bindings remain an error rather than an ownership grant.
+     recipient := (select id from public.customers where workspace_id=p_workspace_id and phone=p_phone);
    end if;
  end if;
  with documents as (
