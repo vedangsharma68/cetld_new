@@ -64,6 +64,8 @@ an empty mocked snapshot. Every such SQL store contains a foreign canary and
 asserts that it remains protected. Real Supabase fixtures use the actual new
 function. Existing test bodies and assertion sites are preserved; only sender
 imports adapt those unit doubles, with additional tests appended separately.
+The owner-test API double preserves its synchronous store-loader contract while
+acquiring that same real snapshot dependency for its internally built sender.
 The pre-existing build-contract test now asserts the explicitly requested
 frontend-only Vercel command and the complete dependent CI pipeline; its timeout
 checks require the original 30-minute limit. Privacy assertions are unchanged.

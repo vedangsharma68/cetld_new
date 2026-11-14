@@ -7,6 +7,7 @@ import {createWhatsAppOutbound as outbound} from '../../automation/whatsapp/clou
 import {createApprovedReminderProvider as approved} from '../../automation/whatsapp/approved-reminders.mjs';
 import {createFirstPartyReminderProvider as firstParty} from '../../automation/whatsapp/cloud-reminders.mjs';
 import {approvedReminderProof as proof} from '../../automation/whatsapp/reminder-proof.mjs';
+import {createWhatsAppInvoiceTestHandler as invoiceTest} from '../../automation/whatsapp/test-send.mjs';
 let network;const scopes=new Map();let queue=Promise.resolve();
 after(async()=>{if(network)await(await network).close();});
 async function sqlSnapshot(workspace,phone){
@@ -19,3 +20,4 @@ export const createWhatsAppOutbound=o=>outbound(options(o));
 export const createApprovedReminderProvider=o=>approved(options(o));
 export const createFirstPartyReminderProvider=o=>firstParty(options(o));
 export const approvedReminderProof=o=>proof(options(o));
+export const createWhatsAppInvoiceTestHandler=o=>invoiceTest(o?.loadSupabase?{...o,loadSupabase:(...args)=>options({supabase:o.loadSupabase(...args)}).supabase}:o);
