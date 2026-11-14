@@ -67,10 +67,12 @@ imports adapt those unit doubles, with additional tests appended separately.
 The pre-existing build-contract test now asserts the explicitly requested
 frontend-only Vercel command and the complete dependent CI pipeline; its timeout
 checks require the original 30-minute limit. Privacy assertions are unchanged.
-Three historical suites that install the privacy migration manually now use an
+Historical suites that install the privacy migration manually now use an
 explicit fixture wrapper that completes the real bounded backfill after install,
 matching ordinary SQL fixture bootstrap. Readiness/rollback suites continue to
 use the original fixture; unready production dispatch still fails closed.
+The shared exact-review fixture also installs its missing privacy schema before
+completing that prerequisite; all its original assertions remain unchanged.
 
 Vercel builds only `npm run build:frontend`. CI runs every discovered test file
 exactly once across four independent jobs (each retains the 30-minute timeout),
