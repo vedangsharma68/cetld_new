@@ -19,6 +19,11 @@ canonical keys agree with owned facts. Whole opaque invoice/file identities can
 consume their internal numeric fragments; they cannot authorize those numbers
 elsewhere or conceal an enclosing foreign date/range. Unknown collection
 interpretations must all be owned before their spans can be consumed.
+Reviewed prose certifies only its complete field identity. It never certifies
+embedded numbers, dates or independent person references. Inferred person labels
+from that same prose require a separate name/declaration witness before they can
+block its delivery; registered customers and retained declarations supply those
+witnesses. Invoice client-name fields retain their existing recipient ownership.
 
 Preparation occurs before the sender's existing final authorization. The final
 scan is synchronous and sends the exact serialized bytes it admitted. There is
@@ -62,6 +67,10 @@ imports adapt those unit doubles, with additional tests appended separately.
 The pre-existing build-contract test now asserts the explicitly requested
 frontend-only Vercel command and the complete dependent CI pipeline; its timeout
 checks require the original 30-minute limit. Privacy assertions are unchanged.
+Three historical suites that install the privacy migration manually now use an
+explicit fixture wrapper that completes the real bounded backfill after install,
+matching ordinary SQL fixture bootstrap. Readiness/rollback suites continue to
+use the original fixture; unready production dispatch still fails closed.
 
 Vercel builds only `npm run build:frontend`. CI runs every discovered test file
 exactly once across four independent jobs (each retains the 30-minute timeout),

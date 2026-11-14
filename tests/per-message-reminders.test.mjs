@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {createOfflineSqlNetwork} from './fixtures/offline-sql-network.mjs';
+import {createOfflineSqlNetwork} from './fixtures/dispatch-ready-network.mjs';
 import {applyNoFooterMigration} from './fixtures/no-footer-reminders.mjs';
 import {createAIHandler} from '../ai/routes.mjs';
 import {createApprovedReminderProvider} from './fixtures/dispatch-sql-double.mjs';
