@@ -329,6 +329,20 @@ export function createZohoBooksProvider({ clientId = process.env.ZOHO_BOOKS_CLIE
       if (!invoice || invoice.externalId !== String(invoiceId)) throw new Error('Zoho Books returned an invalid invoice balance');
       return { balanceMinor: invoice.balanceMinor, paidMinor: invoice.paidMinor, status: invoice.status, currency: invoice.currency, totalMinor: invoice.amountMinor, externalId: invoice.externalId };
     },
+    async deleteInvoiceDraft({ token, accountId, invoiceId, signal }) {
+      if (!accountId || !invoiceId) throw new AccountingProviderError('zoho_books', 400, 'missing_invoice_identity');
+      const url = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices/${encodeURIComponent(invoiceId)}`);
+      url.search = new URLSearchParams({ organization_id: accountId }).toString();
+      const response = await providerFetch(fetchImpl, 'zoho_books', url, { method: 'DELETE', signal,
+        retryReads: false, readErrorBody: false,
+        headers: { Authorization: `Zoho-oauthtoken ${token.accessToken}`, Accept: 'application/json' } });
+      try {
+        const body = await diagnosticJson(response, signal);
+        if (body?.code !== 0) throw new Error('Delete unconfirmed');
+      } catch {
+        throw new AccountingProviderError('zoho_books', 502, 'delete_unconfirmed');
+      }
+    },
     async fetchInvoice({ token, accountId, invoiceId }) {
       if (!accountId || !invoiceId) throw new Error('Zoho Books organization and invoice IDs are required');
       const url = new URL(`${token.apiDomain || ZOHO_DEFAULT_API}/books/v3/invoices/${encodeURIComponent(invoiceId)}`);
