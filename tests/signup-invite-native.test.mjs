@@ -26,9 +26,9 @@ test('Supabase auth INSERT boundary gates password and Google account creation a
     assert.equal(user.raw_user_meta_data.signup_invite_code,undefined);
     const row=(await db.query('select * from app.signup_invites where id=$1',[invite.id])).rows[0];
     assert.equal(row.consumed_by,user.id);assert.ok(row.consumed_at);assert.notEqual(row.code_hash.toString(),invite.code);
-    assert.deepEqual(await counts(email),{users:1,profiles:1,workspaces:0});
+    assert.deepEqual(await counts(email),{users:1,profiles:1,workspaces:1});
     await db.query("select set_config('request.jwt.claim.role','authenticated',false),set_config('request.jwt.claim.sub',$1,false)",[user.id]);
-    await db.query('set role authenticated');try{assert.ok((await db.query("select (create_workspace('Invited business',$1)).id",[randomUUID()])).rows[0].id);}finally{await db.query('reset role');}
+    await db.query('set role authenticated');try{assert.ok((await db.query('select id from workspaces where owner_id=$1',[user.id])).rows[0].id);await assert.rejects(db.query("select create_workspace('Uninvited second business',$1)",[randomUUID()]),/Access is by invite/);}finally{await db.query('reset role');}
     assert.equal((await counts(email)).workspaces,1);
     await assert.rejects(prepare(email,invite.code),/Access is by invite/);
     await assert.rejects(insert(provider,email,invite.code),/Access is by invite/);

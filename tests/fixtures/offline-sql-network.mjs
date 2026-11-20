@@ -50,6 +50,17 @@ async function createFixtureDatabase(excludeMigrations){
     const result=await db.exec(privateBackfillBatchSQL());
     if(result.find(item=>item.rows?.[0]?.result)?.rows[0].result.allComplete)break;
   }
+  // Business fixtures create pre-approved operators directly in auth.users,
+  // rather than using GoTrue registration. Seed two explicit tenant grants for
+  // their cross-tenant scenarios. Auth gate regressions use unmodified native
+  // migrations and do NOT install this fixture-only operator approval hook.
+  if(!excludeMigrations.includes('20261120125758_signup_invites.sql'))await db.exec(`
+   create function app.fixture_operator_tenant_grants() returns trigger language plpgsql as $$begin
+    insert into app.signup_invites(email,code_hash,expires_at,consumed_at,consumed_by)
+    select 'fixture-'||new.id::text||'@example.test',sha256(convert_to(gen_random_uuid()::text,'UTF8')),now()+interval '1 day',now(),new.id from generate_series(1,2);
+    return new;end$$;
+   create trigger fixture_operator_tenant_grants after insert on auth.users for each row when(current_user='postgres') execute function app.fixture_operator_tenant_grants();
+  `);
   return db;
   }catch(error){await db.close();throw error;}
   }});

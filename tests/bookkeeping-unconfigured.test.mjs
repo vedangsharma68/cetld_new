@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {syncInvoiceRow} from '../automation/invoice-sync.mjs';
-import {bookkeepingSyncLabel,isUnconfiguredBookkeeping,showBookkeepingSyncError,invoiceSyncMessage} from '../invoice/bookkeeping-client.mjs';
+import {bookkeepingSyncLabel,bookkeepingSyncError,isUnconfiguredBookkeeping,showBookkeepingSyncError,invoiceSyncMessage} from '../invoice/bookkeeping-client.mjs';
 import {readFile} from 'node:fs/promises';import vm from 'node:vm';
 
 function fixture(metadata={}){
@@ -36,11 +36,26 @@ test('actual invoice drawer replaces the enum and suppresses only never-connecte
  const app=await readFile(new URL('../app.js',import.meta.url),'utf8'),source=app.slice(app.indexOf('function detail(id){'),app.indexOf('function invoiceDeleteStatus('));
  for(const connectedFailure of [false,true]){
   let html;const row={id:'invoice',number:'INV-1',client:'Client',currency:'INR',invoice_direction:'receivable',bookkeeping_sync_status:connectedFailure?'failed':'not_configured',bookkeeping_sync_error:connectedFailure?'UPSTREAM_FAILED':'ACCOUNTING_NOT_CONNECTED',bookkeeping_sync_next_at:new Date(Date.now()+100000).toISOString()};
-  const context={state:{invoices:[row]},bookkeepingSyncLabel,isUnconfiguredBookkeeping,showBookkeepingSyncError,remaining:()=>1250,terminalInvoice:()=>false,activeException:()=>null,receivableBalanceLabel:()=>'',followupStage:()=>['Draft',''],
+  const context={state:{invoices:[row]},bookkeepingSyncLabel,bookkeepingSyncError,isUnconfiguredBookkeeping,showBookkeepingSyncError,remaining:()=>1250,terminalInvoice:()=>false,activeException:()=>null,receivableBalanceLabel:()=>'',followupStage:()=>['Draft',''],
    openDialog:(_,body)=>html=body,escape:String,status:()=> 'Open',money:()=>'',tag:String,day:()=>'',deliveryState:()=>'',invoiceBusinessDetails:()=>'',customFieldsView:()=>'',icon:()=>'',canRetryInvoiceSync:()=>false,ownerTemplateTestUI:{canReview:()=>false},isExternallyManagedInvoice:()=>false,button:()=>''};
   vm.runInNewContext(source+"detail('invoice')",context);
   assert.doesNotMatch(html,/not_configured/);
-  if(connectedFailure){assert.match(html,/Sync error: UPSTREAM_FAILED/);assert.match(html,/Next retry after/);}
+  if(connectedFailure){assert.match(html,/Sync error: The bookkeeping service is temporarily unavailable/);assert.match(html,/Next retry after/);assert.ok(!html.includes('UPSTREAM_FAILED'));}
   else{assert.match(html,/Not connected/);assert.doesNotMatch(html,/role="alert"|Sync error|Next retry after/);}
+ }
+});
+
+test('a saved pre-dispatch refresh failure and retry state survive missing adapters and a later missing-connection result',async()=>{
+ for(const missingAdapter of [true,false]){
+  const metadata={bookkeeping_sync_status:'failed',bookkeeping_sync_attempts:0,bookkeeping_sync_error:'ACCOUNTING_TOKEN_REFRESH_FAILED',bookkeeping_sync_next_at:'2025-01-01T00:00:00Z',bookkeeping_sync_attempted_at:'2024-12-31T23:00:00Z',bookkeeping_sync_http_status:401,bookkeeping_sync_provider_message:'Refresh denied'};
+  const f=fixture(metadata);f.row.last_sync_error='ACCOUNTING_TOKEN_REFRESH_FAILED';f.row.sync_status='failed';const original=structuredClone(f.row);
+  const accounting=missingAdapter?{}:{syncInvoice:async()=>{assert.fail('No provider send is allowed')},prepareInvoiceSync:async()=>{throw Object.assign(Error('no connection'),{code:'ACCOUNTING_NOT_CONNECTED'});}};
+  const result=await syncInvoiceRow({store:f.store,row:f.row,invoice,accounting,clock:()=>new Date('2026-11-20T00:00:00Z')});
+  assert.equal(result.sync.status,'failed');assert.equal(result.sync.retryable,true);for(const key of Object.keys(metadata))assert.deepEqual(f.row.metadata[key],original.metadata[key],key);assert.equal(f.row.last_sync_error,original.last_sync_error);assert.equal(showBookkeepingSyncError(f.row),true);assert.match(bookkeepingSyncError(f.row),/Reconnect/);assert.ok(!bookkeepingSyncError(f.row).includes('ACCOUNTING_TOKEN_REFRESH_FAILED'));
+ }
+});
+test('visible sync failures are humanized while all machine diagnostics remain in stored metadata',()=>{
+ for(const code of ['TOKEN_REFRESH_FAILED','ZOHO_AUTH_EXPIRED','HTTP_429','UPSTREAM_FAILED','UNKNOWN_MACHINE_CODE']){
+  const invoice={metadata:{bookkeeping_sync_status:'failed',bookkeeping_sync_error:code}};assert.equal(showBookkeepingSyncError(invoice),true);const message=bookkeepingSyncError(invoice);assert.ok(message.length>20);assert.ok(!message.includes(code));assert.equal(invoice.metadata.bookkeeping_sync_error,code);
  }
 });

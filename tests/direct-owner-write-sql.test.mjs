@@ -1,3 +1,4 @@
+import {fixtureTenantGrantsSQL} from './fixtures/tenant-invites.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -689,7 +690,7 @@ async function boot({crlfLegacyWorkspaceData=false,supabaseDefaultGrants=false,s
     const sql=await readFile(new URL(`../supabase/migrations/${name}`,import.meta.url),'utf8');
     await db.exec(sql.replace('create extension if not exists pgcrypto;',''));
   }
-  await db.exec(`insert into auth.users(id) values('${owner}'),('${stranger}') on conflict(id) do nothing;
+  await db.exec(`insert into auth.users(id) values('${owner}'),('${stranger}') on conflict(id) do nothing;${fixtureTenantGrantsSQL([owner,stranger])}
     set request.jwt.claim.role='authenticated';set role authenticated;set request.jwt.claim.sub='${owner}'`);
   const workspaceId=(await db.query("select (public.create_workspace('Direct writes','direct-write-test')).id")).rows[0].id;
   return {db,workspaceId};

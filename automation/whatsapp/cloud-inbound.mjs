@@ -9,8 +9,9 @@ const MAX_MESSAGES = 100;
 const MAX_INBOUND_RETRY_AGE_MS = 60 * 60_000;
 const MAX_INTERACTION_ID_LENGTH = 256;
 function staleInboundEvent(event, now) {
-  const receivedAt = Date.parse(event.received_at || event.created_at || event.provider_timestamp || '');
-  return Number.isFinite(receivedAt) && now - receivedAt > MAX_INBOUND_RETRY_AGE_MS;
+  const receivedAt=Date.parse(event.reply_has_pending_intent?(event.provider_timestamp||event.received_at||event.created_at||''):(event.received_at||event.created_at||event.provider_timestamp||''));
+  const maxAge=event.reply_has_pending_intent?24*60*60_000:MAX_INBOUND_RETRY_AGE_MS;
+  return Number.isFinite(receivedAt)&&now-receivedAt>=maxAge;
 }
 const TIMEOUT_REPLY = 'That took too long, so I stopped. I received your message; try again in a minute.';
 const DEFAULT_PROCESS_BUDGET_MS = 240_000;
@@ -184,7 +185,10 @@ export class SupabaseInboundInbox {
     }), 'mark stop');
   }
 
-  async claimReply({ workspaceId, phone, kind, messageId }) {
+  async claimReply({ workspaceId, phone, kind, messageId,reservationNonce,audience='customer',phase='answer' }) {
+    if(reservationNonce)return {allowed:dataOrThrow(await this.supabase.rpc('whatsapp_claim_reserved_reply',{
+      p_workspace_id:workspaceId||null,p_message_id:messageId,p_phone:phone,p_kind:kind,p_phase:phase,p_audience:audience,
+      p_phone_number_id:this.env.WHATSAPP_PHONE_NUMBER_ID||'',p_commercial:this.env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true',p_nonce:reservationNonce}),'claim reply reservation')===true};
     const rpc = kind === 'start_confirmation' ? 'whatsapp_claim_resubscribe_reply' : 'whatsapp_claim_inbound_reply';
     const data = dataOrThrow(await this.supabase.rpc(rpc, {
       p_provider_message_id: messageId, p_sender_phone: phone, p_kind: kind, p_workspace_id: workspaceId || null,
@@ -194,7 +198,7 @@ export class SupabaseInboundInbox {
 
   async complete(event, errorCode = null, errorDetail = null, retryable = true) {
     const failed = Boolean(errorCode);
-    if (failed && retryable && staleInboundEvent(event, Date.now())) return this.deadLetter(event, errorDetail || errorCode);
+    if(failed&&retryable&&staleInboundEvent(event,Date.now())){const current=dataOrThrow(await this.supabase.from('whatsapp_inbound_events').select('reply_has_pending_intent').eq('id',event.id).maybeSingle(),'pending reply state');event={...event,reply_has_pending_intent:current?.reply_has_pending_intent===true};if(staleInboundEvent(event,Date.now()))return this.deadLetter(event,errorDetail||errorCode);}
     const retry = failed && retryable && event.attempts < 5;
     const next = new Date(Date.now() + Math.min(60_000 * 2 ** Math.max(0, event.attempts - 1), 60 * 60_000)).toISOString();
     dataOrThrow(await this.supabase.from('whatsapp_inbound_events')
@@ -214,7 +218,7 @@ export class SupabaseInboundInbox {
   }
 
   async defer(event, errorCode = null, errorDetail = null) {
-    if (errorCode && staleInboundEvent(event, Date.now())) return this.deadLetter(event, errorDetail || errorCode);
+    if(errorCode&&staleInboundEvent(event,Date.now())){const current=dataOrThrow(await this.supabase.from('whatsapp_inbound_events').select('reply_has_pending_intent').eq('id',event.id).maybeSingle(),'pending reply state');event={...event,reply_has_pending_intent:current?.reply_has_pending_intent===true};if(staleInboundEvent(event,Date.now()))return this.deadLetter(event,errorDetail||errorCode);}
     const receivedAt=Date.parse(event.received_at||event.created_at||'');
     const retryAgeSteps=Number.isFinite(receivedAt)
       ?Math.floor(Math.max(0,Date.now()-receivedAt)/60_000):Math.max(0,Number(event.attempts||1)-1);
@@ -262,12 +266,10 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     outboundPromise ||= import('./cloud-outbound.mjs').then(({ createWhatsAppOutbound }) => {
       const invoiceUpdates = createWhatsAppInvoiceUpdateStore({supabase});
       return createWhatsAppOutbound({env, fetchImpl, supabase, logger, ...invoiceUpdates,
-        authorizeInboundReply: async input => input.audience==='owner'
-          ? {allowed:dataOrThrow(await supabase.rpc(env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'?'whatsapp_claim_service_owner_reply'
-            :input.phase==='ack'?'whatsapp_claim_owner_ack':'whatsapp_claim_owner_reply',{
-              p_provider_message_id:input.messageId,p_sender_phone:input.phone,p_workspace_id:input.workspaceId,
-              ...(env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'?{p_phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID,p_phase:input.phase||'answer'}:{})}),'claim owner reply')===true}
-          : inbox.claimReply(input)});
+        authorizeInboundReply:async input=>({allowed:dataOrThrow(await supabase.rpc('whatsapp_claim_reserved_reply',{
+          p_workspace_id:input.workspaceId||null,p_message_id:input.messageId,p_phone:input.phone,p_kind:input.kind,
+          p_phase:input.phase||'answer',p_audience:input.audience||'customer',p_phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID,
+          p_commercial:env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true',p_nonce:input.reservationNonce}),'claim reply reservation')===true})});
     });
     return outboundPromise;
   };

@@ -73,8 +73,8 @@ async function setup(t,{environment={},handler,realOwnerHandler=false,boundHandl
   const outbound=createWhatsAppOutbound({env,supabase,fetchImpl:transport,logger,
     authorizeInboundReply:async input=>{
       if(input.audience!=='owner')return inbox.claimReply(input);
-      const result=await supabase.rpc('whatsapp_claim_service_owner_reply',{p_provider_message_id:input.messageId,
-        p_sender_phone:input.phone,p_workspace_id:input.workspaceId,p_phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID,p_phase:input.phase||'answer'});
+      const result=await supabase.rpc('whatsapp_claim_reserved_reply',{p_message_id:input.messageId,
+        p_phone:input.phone,p_workspace_id:input.workspaceId,p_phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID,p_kind:input.kind,p_audience:'owner',p_commercial:true,p_phase:input.phase||'answer',p_nonce:input.reservationNonce});
       if(result.error)throw result.error;return {allowed:result.data===true};
     }});
   const args=e=>({workspaceId,to:e.sender_phone,body:'A transactional answer.',lastInboundAt:e.provider_timestamp,
@@ -250,7 +250,7 @@ test('commercial verified owner media and progress acknowledgments use the real 
 test('commercial STOP between reply preparation and claim denies a normal customer reply',async t=>{
   const f=await setup(t),e=await f.event();await f.bindCustomer(e);
   f.intercept(async url=>{
-    if(url.pathname.endsWith('/rpc/whatsapp_claim_inbound_reply')){
+    if(url.pathname.endsWith('/rpc/whatsapp_claim_reserved_reply')){
       await f.db.query('insert into whatsapp_global_suppressions(phone) values($1)',[CUSTOMER]);
     }
   });

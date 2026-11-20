@@ -1,56 +1,75 @@
-# Invite-only registration
+# Invite-only registration and new businesses
 
-Apply the new `20261120125758_signup_invites.sql` migration before publishing the
-signup UI. This migration is the enforcement boundary; deploying UI alone does
-not close registration. No existing migration is changed.
+The database is the enforcement boundary for password signup, first Google
+sign-in, and **every new workspace**, including direct REST and nested RPCs.
+Existing accounts keep their sessions, sign-in methods and existing workspaces.
+Creating another business requires a new email-bound invitation. A single code
+approves one account (or an existing account) and one new business, never an
+unlimited tenant-creation entitlement. Deleting that business does not restore
+the grant.
 
-Hosted Supabase's GoTrue account creation runs as `supabase_auth_admin`. A BEFORE
-INSERT trigger on `auth.users` gates all non-database-operator roles, including
-that role, before profile triggers or client workspace setup. Existing-user
-sign-in, identity linking, refresh, password recovery and existing sessions do
-not insert a new user and do not need an invitation. Trusted `postgres` and
-`supabase_admin` database maintenance/seeding remain privileged operations, not
-public signup APIs. Do not run a custom GoTrue instance as a database superuser.
-No Auth-hook dashboard setting or paid service is required.
+Hosted GoTrue must use `supabase_auth_admin`, never a database superuser. The
+`auth.users` BEFORE INSERT trigger consumes a valid invite under a row lock;
+the AFTER INSERT trigger creates the initial workspace in that same transaction,
+after the normal profile trigger. Failure rolls the account, profile, workspace
+and consumption back together. Concurrent uses have one winner. Trusted database
+operator seeding remains a privileged operation, not a public signup path.
 
-Email signup supplies `signup_invite_code` as an untrusted credential. The database
-checks its hash and exact normalized email, consumes it under a row lock, and
-removes the credential from user metadata before insertion. User metadata never
-grants authority by itself. Google registration first calls
-`prepare_signup_invite(email, code)`; this authorizes only that email for ten
-minutes, capped by code expiry. GoTrue's server-owned Google provider identity
-then consumes the invitation when it creates the account. Selecting a different
-Google email fails. Preparation alone creates no account and does not consume a
-code. Existing Google sign-in uses its normal flow, without preparation.
-
-Consumption commits in the same transaction as the account insertion. Concurrent
-uses have one winner; a failed downstream insertion rolls consumption back.
-Expired, revoked, consumed, cross-email and absent credentials fail closed.
-Reissuing an invitation revokes earlier unused codes for that email. Codes are
-stored only as SHA-256 digests; the service-role RPC returns a code once.
+Password clients prepare an opaque ten-minute, email-bound, one-use ticket.
+Only the ticket goes to Auth; the original invite code does not enter its user
+metadata. Google preparation authorizes the invited email for ten minutes, capped
+by invite expiry; the server-owned provider identity consumes it at creation.
+Changing the selected Google email fails. Legacy invite clients that send the
+code remain compatible. Both user metadata and `auth.identities.identity_data`
+are stripped on insert/update; the migration also scrubs historical copies.
+The database stores only code/ticket hashes. Missing, expired, revoked, replayed
+and cross-email credentials fail closed. Existing Google/password sign-in does
+not require an invite.
 
 ## Operator issuance
 
-From a trusted operator shell, configure `SUPABASE_URL` and the server-only
-`SUPABASE_SERVICE_ROLE_KEY` using the normal secret mechanism, then run:
+Set `SUPABASE_URL` and the server-only `SUPABASE_SERVICE_ROLE_KEY` through the
+normal secret mechanism, then run:
 
 ```sh
 node scripts/issue-signup-invite.mjs invitee@example.com 24
 ```
 
-The second argument is expiry in hours (default 24, maximum 168). Deliver the
-returned code privately to that invitee. Do not put the service key in browser
-configuration, command arguments, logs, or a committed environment file. This
-script issues a code; it does not send email or create an account. Anonymous and
-authenticated clients can neither issue codes nor read the invite table.
+Expiry is in hours (default 24, maximum 168). Deliver the code privately together
+with the site's `/invite.html` entry link. Issuance sends no email and creates no
+account. API clients cannot issue codes or inspect the private invite table.
+The service key must never enter browser configuration, logs or committed files.
 
-## Verification and rollout
+Existing signed-in accounts use that same entry to redeem an email-matching code.
+For an account without a workspace, redemption atomically provisions its first
+business. Otherwise it grants exactly one further workspace creation.
 
-`tests/signup-invite-native.test.mjs` exercises the actual migration with a
-non-superuser GoTrue role and real core profile/workspace functions in disposable
-PostgreSQL. It covers both providers, replay, wrong email/code, expiry, revocation,
-missing preparation, editable-metadata spoofing, rollback, concurrent use, and
-existing-account updates. Browser-controller tests preserve normal sign-in.
-Apply through the normal migration process; confirm the trigger is enabled on
-`auth.users` before issuing invitations. No production changes are made by the
-repository tests. The public landing page and demo do not use this creation path.
+## Required deploy order and mixed versions
+
+1. Apply `20261120125758_signup_invites.sql`, then
+   `20261120132445_dispatch_privacy_performance.sql`, then
+   `20261120181032_recoverable_reply_reservations.sql` through the normal operator
+   migration process. Verify `signup_invite_status()` reports all v2 capabilities.
+2. Publish the frontend and worker code. The **production frontend build refuses
+   publication** unless the database reports account/tenant enforcement, identity
+   scrubbing, a current global privacy index and the recoverable dispatch protocol.
+3. Issue invitations using the compatible `/invite.html` entry, which is independent
+   of cached main-app code. Newly invited accounts already have a workspace when
+   old or new main-app bootstrap runs. Existing sign-in remains available.
+
+An untouched pre-invite database is inherently open: no UI can close its direct
+Auth API. Old/old deployment is therefore unsupported, not claimed secure. New
+UI with old/incomplete schema fails before Auth account creation and shows an
+upgrade message. Cached pre-invite UI with the new schema cannot create accounts
+without admission; invitees use the dedicated entry. Legacy invite-aware clients
+remain accepted and their credentials are scrubbed. Landing and demo do not use
+account creation. Local/preview builds do not query production.
+
+The v1 upgrade marks already consumed invitations with existing workspaces as
+spent tenant grants; replay preserves genuinely unused v2 grants. Both original
+PR migrations are replay-safe, as is the reservation migration.
+Existing historical migrations are unchanged. Tests use disposable native
+PostgreSQL with the real Auth role, not the business-test fixture's operator
+approvals. `signup-invite-native`, `pr213-auth-replay`, `signup-invite` and
+`pr213-signup-matrix` cover provider failures, replay, concurrency, rollback,
+identity copies, no-invite tenant RPCs and the supported deployment matrix.

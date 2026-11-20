@@ -43,3 +43,59 @@ test('a deferred pending reply older than the service window cannot send or clai
  assert.equal((await f.db.query('select status from whatsapp_messages where idempotency_key=$1',['reply:'+id])).rows[0].status,'pending');
  }finally{await f.close();}
 });
+
+test('lost committed claim acknowledgement is recovered after two hours with one delivered send',async()=>{
+ const f=await fixture();try{
+ const id='wamid.lost-claim-ack',timestamp=new Date(Date.now()-2*3600_000).toISOString();let lose=true,deliveries=0;
+ await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,provider_timestamp,received_at,status,error_code) values($1,'123456',$2,'text','Hello',$3,$3,'pending','OWNER_REPLY_NOT_ACCEPTED')",[id,f.scope.phone,timestamp]);
+ const store=createConversationStore(f.supabase);await store.record({workspaceId:f.scope.workspaceId,phone:f.scope.phone,direction:'outbound',audience:'owner',body:'Stored reply survives claim acknowledgement loss',kind:'normal',status:'pending',key:'reply:'+id});
+ const supabase={from:f.supabase.from.bind(f.supabase),rpc:async(name,args)=>{const result=await f.supabase.rpc(name,args);if(name==='whatsapp_claim_reserved_reply'&&result.data===true&&lose){lose=false;return {error:{code:'NETWORK_ACK_LOST',message:'Claim committed but response was lost'}};}return result;}};
+ const runtime=()=>createInboundRuntime({supabase,env,logger,onOwnerMessage:async()=>({answer:'New answer is not the saved intent'}),fetchImpl:async(_,init)=>{const body=JSON.parse(init.body);if(body.status==='read')return Response.json({success:true});deliveries++;assert.equal(body.text.body,'Stored reply survives claim acknowledgement loss');return Response.json({messages:[{id:'wamid.claim-recovered'}]});}});
+ await runtime().processPending();assert.equal(deliveries,0);let row=(await f.db.query('select * from whatsapp_inbound_events where provider_message_id=$1',[id])).rows[0];assert.equal(row.status,'pending');assert.ok(row.reply_claimed_at);assert.equal(row.reply_dispatch_started_at,null);assert.equal(row.reply_has_pending_intent,true);
+ await f.db.query("update whatsapp_inbound_events set next_attempt_at=now()-interval '1 minute' where provider_message_id=$1",[id]);await runtime().processPending();assert.equal(deliveries,1);
+ row=(await f.db.query('select * from whatsapp_inbound_events where provider_message_id=$1',[id])).rows[0];assert.ok(row.reply_dispatch_started_at);assert.equal(row.status,'done');
+ await store.status({messageId:'wamid.claim-recovered',phone:f.scope.phone,status:'delivered'});assert.equal((await f.db.query('select status from whatsapp_messages where idempotency_key=$1',['reply:'+id])).rows[0].status,'delivered');
+ await runtime().processPending();assert.equal(deliveries,1);
+ }finally{await f.close();}
+});
+
+test('service-window cutoff during a binding await fails closed before Graph',async()=>{
+ const f=await fixture();try{
+ const id='wamid.binding-cutoff';let now=Date.now(),sends=0;const initial=now;
+ await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,provider_timestamp,status) values($1,'123456',$2,'text','Hello',$3,'processing')",[id,f.scope.phone,new Date(now-24*3600_000+10000).toISOString()]);
+ const supabase={from:f.supabase.from.bind(f.supabase),rpc:async(name,args)=>{const result=await f.supabase.rpc(name,args);if(name==='whatsapp_resolve_service_owner')now=initial+11000;return result;}};
+ const sender=createWhatsAppOutbound({supabase,env,logger,clock:()=>new Date(now),authorizeInboundReply:async()=>({allowed:true}),fetchImpl:async()=>{sends++;return Response.json({});}});
+ const result=await sender.sendServiceReply({workspaceId:f.scope.workspaceId,to:f.scope.phone,body:'Safe reply',lastInboundAt:new Date(initial-24*3600_000+10000).toISOString(),messageId:id,audience:'owner',businessName:'Offline Studio'});assert.equal(result.status,'blocked');assert.equal(result.reason,'service_window_closed');assert.equal(sends,0);
+ }finally{await f.close();}
+});
+
+test('service-window cutoff after transport-fence await also prevents Graph',async()=>{
+ const f=await fixture();try{
+ const id='wamid.fence-cutoff';let now=Date.now(),sends=0;const initial=now,timestamp=new Date(now-24*3600_000+10000).toISOString();
+ await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,provider_timestamp,status) values($1,'123456',$2,'text','Hello',$3,'processing')",[id,f.scope.phone,timestamp]);
+ const supabase={from:f.supabase.from.bind(f.supabase),rpc:async(name,args)=>{const result=await f.supabase.rpc(name,args);if(name==='whatsapp_begin_reply_dispatch')now=initial+11000;return result;}};
+ const sender=createWhatsAppOutbound({supabase,env,logger,clock:()=>new Date(now),authorizeInboundReply:async input=>{const r=await f.supabase.rpc('whatsapp_claim_reserved_reply',{p_message_id:input.messageId,p_phone:input.phone,p_workspace_id:input.workspaceId,p_phone_number_id:'123456',p_kind:input.kind,p_phase:'answer',p_audience:'owner',p_commercial:true,p_nonce:input.reservationNonce});return {allowed:r.data===true};},fetchImpl:async()=>{sends++;return Response.json({});}});
+ const result=await sender.sendServiceReply({workspaceId:f.scope.workspaceId,to:f.scope.phone,body:'Safe reply',lastInboundAt:timestamp,messageId:id,audience:'owner',businessName:'Offline Studio'});assert.equal(result.status,'blocked');assert.equal(result.reason,'service_window_closed');assert.equal(sends,0);
+ }finally{await f.close();}
+});
+
+
+test('lost committed transport-fence acknowledgement reconciles only its own invocation and sends once',async()=>{
+ const f=await fixture();try{
+ const id='wamid.lost-fence-ack';let lose=true,sends=0;const nonces=[];
+ await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,provider_timestamp,status) values($1,'123456',$2,'text','Hello',now(),'pending')",[id,f.scope.phone]);
+ const supabase={from:f.supabase.from.bind(f.supabase),rpc:async(name,args)=>{const result=await f.supabase.rpc(name,args);if(name==='whatsapp_begin_reply_dispatch'){nonces.push(args.p_nonce);if(result.data===true&&lose){lose=false;return {error:{message:'Committed fence acknowledgement lost'}};}}return result;}};
+ const runtime=()=>createInboundRuntime({supabase,env,logger,onOwnerMessage:async()=>({answer:'A safe answer'}),fetchImpl:async(_,init)=>{if(JSON.parse(init.body).status==='read')return Response.json({success:true});sends++;return Response.json({messages:[{id:'wamid.fence-once'}]});}});
+ await runtime().processPending();assert.equal(sends,1);assert.equal(nonces.length,2);assert.equal(nonces[0],nonces[1]);
+ await f.db.query("update whatsapp_inbound_events set status='pending',next_attempt_at=now()-interval '1 minute' where provider_message_id=$1",[id]);await runtime().processPending();assert.equal(sends,1);
+ }finally{await f.close();}
+});
+test('historical claimed replies without a registered handoff remain quarantined rather than duplicated',async()=>{
+ const f=await fixture();try{
+ const id='wamid.legacy-ambiguous';let sends=0;
+ await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,provider_timestamp,status,reply_claimed_at) values($1,'123456',$2,'text','Hello',now(),'pending',now())",[id,f.scope.phone]);
+ const store=createConversationStore(f.supabase);await store.record({workspaceId:f.scope.workspaceId,phone:f.scope.phone,direction:'outbound',audience:'owner',body:'Ambiguous historical intent',kind:'normal',status:'pending',key:'reply:'+id});
+ const runtime=createInboundRuntime({supabase:f.supabase,env,logger,onOwnerMessage:async()=>({answer:'Different answer'}),fetchImpl:async(_,init)=>{if(JSON.parse(init.body).status==='read')return Response.json({success:true});sends++;return Response.json({messages:[{id:'must-not-send'}]});}});
+ await runtime.processPending();assert.equal(sends,0);const row=(await f.db.query('select reply_claimed_at,reply_reservation_nonce from whatsapp_inbound_events where provider_message_id=$1',[id])).rows[0];assert.ok(row.reply_claimed_at);assert.equal(row.reply_reservation_nonce,null);
+ }finally{await f.close();}
+});

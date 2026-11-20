@@ -1,3 +1,4 @@
+import {randomUUID} from 'node:crypto';
 import {dispatchWhatsApp,prepareWhatsAppDispatch} from './private-dispatch.mjs';
 import {authorizeOwnerPhone} from './owner-binding.mjs';
 import {createConversationStore,conversationCallbackToken} from './conversation-store.mjs';
@@ -170,7 +171,7 @@ export function createWhatsAppOutbound({
     return block(logger,reason,{workspaceId,to,kind});
   }
 
-  async function postMessage({workspaceId,to,kind,payload,key,admission,audience}) {
+  async function postMessage({workspaceId,to,kind,payload,key,admission,audience,lastInboundAt,authorizeTransport}) {
     const finish=async result=>{
       if(workspaceId&&conversationStore){
         for(let attempt=0;attempt<3;attempt++){
@@ -185,15 +186,33 @@ export function createWhatsAppOutbound({
       return result;
     };
     const version = env.WHATSAPP_GRAPH_API_VERSION;
+    const replyKey=/^(reply|ack):(.+)$/.exec(key||'');
+    const transport=replyKey?async(url,init)=>{
+      const nonce=randomUUID();let result;
+      // No HTTP request has started yet. Reconcile one lost fence acknowledgement
+      // with this invocation's nonce, never a new worker's handoff nonce.
+      for(let attempt=0;attempt<2;attempt++){
+        result=await supabase.rpc('whatsapp_begin_reply_dispatch',{p_workspace_id:workspaceId,p_message_id:replyKey[2],p_phone:to,p_kind:kind,p_phase:replyKey[1]==='ack'?'ack':'answer',p_nonce:nonce});
+        if(!result?.error)break;
+      }
+      if(result?.error)throw Object.assign(Error('Reply handoff acknowledgement unavailable'),{code:'REPLY_HANDOFF_UNAVAILABLE'});
+      if(result?.data!==true)throw Object.assign(Error('Reply handoff already started or expired'),{code:'REPLY_HANDOFF_DENIED'});
+      if(authorizeTransport){const current=await authorizeTransport();if(!current.allowed)throw Object.assign(Error(current.reason||'Reply authority changed'),{code:current.reason==='service_window_closed'?'SERVICE_WINDOW_CLOSED':'REPLY_AUTHORITY_CHANGED',reason:current.reason||'reply_authority_changed'});}
+      // No await, lookup or composition may follow this clock read before fetch.
+      if(!withinServiceWindow(lastInboundAt,clock))throw Object.assign(Error('Service window closed'),{code:'SERVICE_WINDOW_CLOSED'});
+      return fetchImpl(url,init);
+    }:fetchImpl;
     let response;
     try {
-      response = await dispatchWhatsApp({supabase,workspaceId,fetchImpl,admission,audience,url:`https://graph.facebook.com/${version}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,init:{
+      response = await dispatchWhatsApp({supabase,workspaceId,fetchImpl:transport,admission,audience,url:`https://graph.facebook.com/${version}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,init:{
         method: 'POST',
         headers: {Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json'},
         body: JSON.stringify({messaging_product: 'whatsapp', recipient_type: 'individual', to: to.slice(1), ...payload}),
         signal: AbortSignal.timeout(15000),
       }});
     } catch (error) {
+      if(error?.code==='SERVICE_WINDOW_CLOSED')return finish({status:'blocked',reason:'service_window_closed'});
+      if(['REPLY_AUTHORITY_CHANGED','REPLY_HANDOFF_DENIED'].includes(error?.code))return finish({status:'blocked',reason:error.reason||'reply_authority_changed'});
       if(error?.code==='PRIVATE_PAYLOAD_BLOCKED')return finish({status:'blocked',reason:'private_payload'});
       logger?.error?.({event: 'whatsapp_outbound_unknown', workspaceId, recipient: maskedPhone(to), kind, message: error?.message});
       return finish({status: 'unknown', reason: 'network_error'});
@@ -357,7 +376,10 @@ export function createWhatsAppOutbound({
     if(audience==='owner'&&ownerButtonClaimIssue(payload.text?.body||payload.interactive?.body?.text,{buttonsAvailable:Boolean(payload.interactive?.action?.buttons?.length)}))throw new TypeError('stored owner reply advertises missing buttons');
     if(audience!=='owner'&&!payload.text.body.endsWith(`\n\n- ${owner}`))return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed'});
     const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to});
-    const authorization = await authorizeInboundReply({workspaceId, phone: to, kind, messageId: inboundId,...(audience==='owner'?{audience,phase}: {})});
+    const claimInput={workspaceId,phone:to,kind,messageId:inboundId,...(audience==='owner'?{audience,phase}:{})};
+    const reservation=await supabase.rpc('whatsapp_prepare_reply_reservation',{p_workspace_id:workspaceId,p_message_id:claimInput.messageId,p_phone:to,p_kind:kind,p_phase:claimInput.phase||'answer'});if(reservation?.error)throw reservation.error;if(!reservation?.data)return denyPrepared({workspaceId,to,kind,key,reason:'reply_reservation_unavailable'});claimInput.reservationNonce=reservation.data;
+    let authorization=await authorizeInboundReply(claimInput);
+    if(authorization?.allowed!==true){const recovery=await supabase.rpc('whatsapp_rearm_unsent_reply',{p_workspace_id:workspaceId,p_message_id:inboundId,p_phone:to,p_kind:kind,p_phase:phase});if(recovery?.error)throw recovery.error;if(recovery?.data===true)authorization=await authorizeInboundReply(claimInput);}
     if (authorization?.allowed !== true) return denyPrepared({workspaceId,to,kind,key,reason:authorization?.reason||'inbound_reply_denied'});
     if(workspaceId&&!await verifiedBusinessName(supabase,workspaceId,owner))
       return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed',claimed:true});
@@ -375,7 +397,13 @@ export function createWhatsAppOutbound({
       const finalAuthority=await serviceAuthority(authorityInput);
       if(!finalAuthority.allowed)return denyPrepared({workspaceId,to,kind,key,reason:finalAuthority.reason,claimed:true});
     }
-    return postMessage({workspaceId,to,kind,key,payload,admission,audience});
+    return postMessage({workspaceId,to,kind,key,payload,admission,audience,lastInboundAt,authorizeTransport:async()=>{
+      if(workspaceId&&!await verifiedBusinessName(supabase,workspaceId,owner))return {allowed:false,reason:'business_name_changed'};
+      if(env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true')return serviceAuthority(authorityInput);
+      if(kind==='normal'){const current=audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}:await getSendEligibility({supabase,workspaceId,phone:to,category:'invoice_updates'});return {...current,allowed:current.allowed&&(audience!=='customer'||current.customer?.id===customerId)};}
+      if(['verification','start_confirmation'].includes(kind)){const reason=await unboundSuppression(supabase,to);if(reason)return {allowed:false,reason};}
+      return {allowed:true};
+    }});
   }
 
   async function sendServiceMedia({workspaceId, to, media, caption, lastInboundAt, messageId, businessName,audience='customer'} = {}) {
@@ -421,7 +449,10 @@ export function createWhatsAppOutbound({
       return {status:'failed',reason:'missing_media_id'};
     }
     admission.bindMediaId(uploaded.id);
-    const authorization=await authorizeInboundReply({workspaceId,phone:to,kind,messageId,...(audience==='owner'?{audience}:{})});
+    const claimInput={workspaceId,phone:to,kind,messageId,...(audience==='owner'?{audience}:{})};
+    const reservation=await supabase.rpc('whatsapp_prepare_reply_reservation',{p_workspace_id:workspaceId,p_message_id:claimInput.messageId,p_phone:to,p_kind:kind,p_phase:claimInput.phase||'answer'});if(reservation?.error)throw reservation.error;if(!reservation?.data)return denyPrepared({workspaceId,to,kind,key,reason:'reply_reservation_unavailable'});claimInput.reservationNonce=reservation.data;
+    let authorization=await authorizeInboundReply(claimInput);
+    if(authorization?.allowed!==true){const recovery=await supabase.rpc('whatsapp_rearm_unsent_reply',{p_workspace_id:workspaceId,p_message_id:messageId,p_phone:to,p_kind:kind,p_phase:'answer'});if(recovery?.error)throw recovery.error;if(recovery?.data===true)authorization=await authorizeInboundReply(claimInput);}
     if(authorization?.allowed!==true)return denyPrepared({workspaceId,to,kind,key,reason:authorization?.reason||'inbound_reply_denied'});
     const finalEligibility=env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'?await serviceAuthority(authorityInput)
       :audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}
@@ -430,7 +461,11 @@ export function createWhatsAppOutbound({
       return denyPrepared({workspaceId,to,kind,key,reason:finalEligibility.allowed?'customer_binding_changed':finalEligibility.reason||'owner_binding_changed',claimed:true});
     if(!await verifiedBusinessName(supabase,workspaceId,businessName))return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed',claimed:true});
     if(image)payload.image.id=uploaded.id;else payload.document.id=uploaded.id;
-    return postMessage({workspaceId,to,kind,key,payload,admission,audience});
+    return postMessage({workspaceId,to,kind,key,payload,admission,audience,lastInboundAt,authorizeTransport:async()=>{
+      if(!await verifiedBusinessName(supabase,workspaceId,businessName))return {allowed:false,reason:'business_name_changed'};
+      if(env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true')return serviceAuthority(authorityInput);
+      const current=audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}:await getSendEligibility({supabase,workspaceId,phone:to,category:'invoice_updates'});return {...current,allowed:current.allowed&&(audience!=='customer'||current.customer?.id===eligibility.customer?.id)};
+    }});
   }
 
   async function sendOwnerTestTemplate({review}={}) {

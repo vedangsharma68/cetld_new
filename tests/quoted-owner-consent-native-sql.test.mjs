@@ -57,7 +57,7 @@ async function fixture(){
  const graphCalls=[];
  const outbound=createWhatsAppOutbound({supabase,env,logger:quiet,
   authorizeInboundReply:async input=>{
-   const result=await supabase.rpc('whatsapp_claim_owner_reply',{p_provider_message_id:input.messageId,p_sender_phone:input.phone,p_workspace_id:input.workspaceId});
+   const result=await supabase.rpc('whatsapp_claim_reserved_reply',{p_message_id:input.messageId,p_phone:input.phone,p_workspace_id:input.workspaceId,p_kind:input.kind,p_phase:input.phase||'answer',p_audience:'owner',p_phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID,p_commercial:false,p_nonce:input.reservationNonce});
    assert.equal(result.error,null);return {allowed:result.data===true};
   },
   fetchImpl:async(url,init)=>{

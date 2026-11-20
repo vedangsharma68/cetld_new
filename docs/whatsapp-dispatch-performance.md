@@ -1,89 +1,75 @@
-# Dispatch snapshot performance repair
+# Dispatch privacy index and recoverable replies
 
-`20261120132445_dispatch_privacy_performance.sql` is a forward-only migration.
-It changes computation, not admission policy. Apply it through the normal
-migration process before expecting the delivery outage to recover. Repository
-verification uses disposable databases; it does not apply production migrations
-or send real WhatsApp messages.
+The PR changes computation, not admission policy. Apply its migrations through
+the normal operator process before expecting production delivery to recover.
+Repository verification uses disposable databases and intercepted transports;
+it does not send real WhatsApp messages or change production.
 
-The previous snapshot repeatedly expanded origin grammar even for already typed
-canonical keys, repeatedly expanded raw aliases, and compared every alias against
-an owned-value array. Its cost grew with both retained terms and owned values.
-The same immutable expansions were repeated for every reply.
+## Global source projection
 
-The replacement:
+The original snapshot reparsed retained terms globally for each send. Workspace
+memoization reduced repeated expansion but still paid per-global-source projection
+and witness costs. The repair maintains a private canonical index transactionally:
 
-- Projects origin grammar only for actual source origins; typed canonical terms
-  never enter that parser merely to have the result discarded.
-- Deduplicates inputs, materializes their projections once, and uses set joins for
-  ownership and forbidden membership instead of repeated array membership scans.
-- Memoizes **pure alias outputs** by workspace, exact input hash/value, semantic
-  role and canonicalizer revision. Lookup uses the complete indexed key. Numeric
-  scalars and UUIDs take their existing unambiguous interpretations before calendar
-  or word grammar construction. Tests compare these aliases with the old parser.
-- Reuses computations during retention. Memo writes use a nonblocking advisory
-  try-lock; competing transactions compute the same uncached result rather than
-  waiting for a cache writer. Failed transactions roll memo writes back.
-- Avoids independent-party witness traversal when there are no reviewed inferred
-  parties to resolve. When reviews contain parties, the full independent witness
-  check remains in force.
+- Source-scoped rows store each term's exact projection. Statement transition-table
+  triggers maintain inserts, updates and deletes; TRUNCATE invalidates the index.
+- Hash-and-text indexed alias edges implement the same all-aliases-owned exemption.
+  Indexed party witnesses preserve independent-review validation. Hash matches
+  always include exact text checks; collisions do not authorize values.
+- Source-scoped canonical rows avoid a shared global reference-count hot row.
+  The read deduplicates their union and subtracts the current recipient's live
+  owned set. **All global forbidden keys remain in the output**. Output itself
+  necessarily scales with its cardinality; expensive parsing no longer repeats.
+- Pure alias memoization remains keyed by workspace, exact input, semantic role
+  and canonicalizer revision. Typed keys, integer/UUID scalars, encoded JSON and
+  sources without an origin use their existing unambiguous interpretations.
+  Literal CREATE OR REPLACE definitions replace the previous runtime function
+  source-text rewrite. No deployed function-body search/replacement remains.
 
-The memo is private, has RLS and no API-role table privileges, and cascades on
-workspace deletion. It stores no authorization result. Current owner verification,
-recipient binding, active private terms (including foreign workspaces), owned
-schema facts, opaque identifiers, reviewed-content rules, readiness and file
-ownership are read again for every snapshot. Updates/deletions immediately change
-those live sets. A different field value or semantic revision selects a different
-memo entry. Old pure entries cannot authorize anything. There is no TTL during
-which an ownership or consent decision remains trusted.
+Index/memo tables have RLS and no API-role table privileges. Ownership, binding,
+readiness, active private membership, reviewed facts and file authority remain
+live reads. A revision change rebuilds the index; rollback restores its updates.
+No ownership decision is cached. Final assembled payload screening is unchanged.
 
-Final transport still scans the exact assembled bytes. No admission check,
-assertion, service window, retry claim, timeout or source limit is removed or
-increased. Existing mutations of source data, verified binding checks and final
-send authorization continue to run in their original order.
+`pr213-global-index.test.mjs` seeds 100,000 foreign keys, executes actual snapshots
+under `statement_timeout='1s'`, checks **every** key, tests rollback, then replays
+all three PR migrations. A query timeout fails the test; a wall-clock assertion
+is not a substitute for completion. `dispatch-snapshot-performance` compares full
+old/new admission sets for own/foreign/owner/unbound recipients and exact aliases,
+then tests 1,001 invoices and live source/ownership/revision changes. Existing
+privacy tests continue to check foreign blocking and own-value admission.
 
-## Retry recovery
+## Claim acknowledgements, retries and the final cutoff
 
-`prepareMessage` records/reuses the original outbound intent before admission.
-A snapshot outage throws before the atomic reply claim, so the pending message
-and deferred event remain retryable. After recovery, the original stored body is
-screened again; recipient/audience/kind/customer/invoice mismatches fail closed.
-The reply claim and callback token prevent concurrent or recovered workers from
-resending an accepted/uncertain request. Commercial authority and the reply claim
-both enforce the durable inbound timestamp's 24-hour window. A stale deferred
-reply is blocked before transport. No retry semantics needed modification.
+A durable reservation is registered before the original authorization/claim RPC.
+Registered events reject legacy workers' claims, permitting safe mixed-worker
+rollout without two competing protocols. The new wrapper delegates to the same
+owner/customer/transactional claim functions: it does not grant new authority.
 
-`tests/whatsapp-dispatch-retry.test.mjs` uses the real SQL inbox, conversation
-store, worker and outbound adapter, injects one snapshot timeout, reconstructs the
-worker, and observes one accepted send followed by a delivered callback. It also
-forces lease recovery/concurrent processing and checks that there is no second
-Graph request; a stale pending intent remains unsent.
+If the claim commits but its response is lost, a reconstructed worker can re-arm
+only the pending, registered intent for which no HTTP handoff has started. It
+repeats admission and original authorization, then uses one durable invocation
+nonce to fence the transport. A lost fence acknowledgement can be reconciled
+with that **same invocation nonce**, never a different worker's nonce. Concurrent
+workers cannot start a second handoff. Stored body reuse is intentional; changed
+recipient, audience, kind, business, files or private membership still fail closed.
 
-`tests/dispatch-snapshot-performance.test.mjs` compares old/new complete snapshot
-sets, exercises a cold memo in a thousand-invoice workspace under a one-second
-SQL budget, checks live ownership/source changes, semantic revision separation,
-API privileges and incomplete-readiness failure. Existing dispatch tests cover
-foreign values, own-value controls, reconstruction, tools/media and final bytes.
+Pending intents remain eligible beyond the old one-hour error limit, only within
+the actual inbound timestamp's 24-hour window. Other inbound work retains its
+existing retry-age policy. After all awaited binding/consent checks and the fence,
+the sender reads the clock synchronously immediately before `fetch`; no lookup
+can move a service reply across the cutoff after that read.
 
-## Local measurements (same disposable database before/after)
+Accepted or uncertain Graph handoffs are never automatically resent. Historical
+claimed rows without a registered fence are ambiguous and stay quarantined.
+Arbitrary crash atomicity between PostgreSQL and Graph is impossible without a
+provider-side idempotency contract; this protocol deliberately prefers no duplicate
+for an uncertain handoff. The specified committed-claim/no-handoff case recovers
+to exactly one delivered send. The original snapshot-outage backlog had no claim
+and remains recoverable. `whatsapp-dispatch-retry` proves these cases, delivered
+callbacks, reconstructed workers, stale replies, cutoff races and concurrency.
 
-`node scripts/benchmark-dispatch-snapshot.mjs` retains a 100-invoice baseline,
-installs only the new performance migration, compares complete snapshot sets,
-and expands the same workspace to 1,000 invoices. Recorded on the author machine:
-
-| Profile | Before | After cold memo | After warm memo |
-| --- | ---: | ---: | ---: |
-| 100 invoices for one recipient | 1,111.9 ms | 129.8 ms | 30.0 ms |
-| 1,000 invoices for one recipient | — | 1,130.4 ms | 274.3 ms |
-
-After retaining an additional 2,400-character declaration, snapshot time was
-303.0 ms; capture itself took 400.6 ms. The separate regression's 1,001-invoice,
-ten-customer workspace measured 745.2 ms cold and 139.9 ms warm under its tighter
-one-second SQL limit. These are local measurements, not a production SLA. The
-reported production timeout (>80 seconds) was not rerun against production.
-
-Historical fixture loading omits this dependent extension when canonical capture
-is intentionally absent. The archived parent/head numeric comparison likewise
-omits this future migration only for its frozen parent schema. Every archived
-assertion and both comparison phases still execute unchanged; the current phase
-loads the performance extension. No test is skipped and no timeout is raised.
+Local before/after measurements and full release results are recorded in
+`docs/pr213-review-repair.md` and the accompanying evidence archive. They are
+measurements, not a production SLA. The reported >80-second production query was
+not rerun on production. No timeout, admission safeguard or budget is raised.
