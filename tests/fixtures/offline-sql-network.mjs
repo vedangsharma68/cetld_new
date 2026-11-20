@@ -22,6 +22,10 @@ export const OFFLINE_SQL_BOOTSTRAP=`create role anon;create role authenticated;c
     alter table storage.objects enable row level security;`;
 
 export async function offlineSqlMigrationSources(excludeMigrations=[]){
+  // A historical schema without canonical capture cannot install its later
+  // performance extension; the historical tests still run their original body.
+  if(excludeMigrations.includes('20261101120327_private_whatsapp_chat_memory.sql'))
+    excludeMigrations=[...excludeMigrations,'20261120132445_dispatch_privacy_performance.sql'];
   const files=(await readdir(new URL('../../supabase/migrations/',import.meta.url))).filter(file=>file.endsWith('.sql') && !['20261023164251_exact_reminder_approval_artifact.sql','20261023083356_per_message_reminder_review.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060000_customer_reminder_tone.sql','20261018060100_invoice_details_templates.sql','20261018090021_remove_stop_footer.sql','20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql'].includes(file) && !excludeMigrations.includes(file)).sort();
   const migrations=await Promise.all(files.map(async file=>[file,await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8')]));
   return migrations;
