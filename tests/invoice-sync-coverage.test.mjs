@@ -1,3 +1,4 @@
+import {bookkeepingSyncLabel,isUnconfiguredBookkeeping,showBookkeepingSyncError} from '../invoice/bookkeeping-client.mjs';
 import {receivableBalanceLabel} from '../invoice/receivables.mjs';
 import {APIError} from '../ai/http.mjs';
 import test from 'node:test';
@@ -177,7 +178,7 @@ test('real drawer renders retry on eligible states with connection and escapes s
     const row={...initial,id:invoiceId,number:'INV-1',client:'Client',invoice_direction:'receivable',bookkeeping_sync_status:status,bookkeeping_sync_error:'<failure>'};
     const context={state:{invoices:[row],accountingStatus:{status:connected?'connected':'not_connected'}},remaining:()=>11800,terminalInvoice:()=>false,activeException:()=>null,receivableBalanceLabel,followupStage:()=>['Draft',''],
       openDialog:(_,content)=>html=content,escape:value=>String(value).replaceAll('<','&lt;').replaceAll('>','&gt;'),status:()=> 'Open',money:()=>'',tag:String,day:()=>'',deliveryState:()=>'',invoiceBusinessDetails:()=>'',customFieldsView:()=>'',icon:()=>'',
-      canRetryInvoiceSync,ownerTemplateTestUI:{canReview:()=>false},isExternallyManagedInvoice:()=>false,
+      bookkeepingSyncLabel,isUnconfiguredBookkeeping,showBookkeepingSyncError,canRetryInvoiceSync,ownerTemplateTestUI:{canReview:()=>false},isExternallyManagedInvoice:()=>false,
       button:(action,label)=>`<button data-action="${action}">${label}</button>`,whatsappTestRequest:async()=>{throw Error('unused')}};
     vm.runInNewContext(source+`detail('${invoiceId}')`,context);
     assert.equal(html.includes('data-action="retry-invoice-sync"'),['pending','failed'].includes(status)||status==='not_configured'&&connected);

@@ -43,7 +43,8 @@ export async function syncInvoiceRow({store, row, invoice, accounting, clock = (
     return result(saved,saved.metadata?.bookkeeping_sync_status || 'failed');
   }
   if (eligibility === 'excluded' || !accounting?.syncInvoice) {
-    const saved = await updateState({...row.metadata,bookkeeping_sync_status:'not_configured'});
+    const unconfigured=!accounting?.syncInvoice&&attemptCount(row.metadata)===0&&!row.metadata?.bookkeeping_provider&&!row.external_provider;
+    const saved = await updateState({...row.metadata,bookkeeping_sync_status:'not_configured',...(unconfigured?{bookkeeping_sync_error:null,bookkeeping_sync_next_at:null,bookkeeping_sync_http_status:null,bookkeeping_sync_exhausted:false}:{})},unconfigured?{sync_status:'local',last_sync_error:null}:{});
     return result(saved,saved.metadata?.bookkeeping_sync_status || 'not_configured');
   }
   // New-cutover operations must start before the first caller-editable lease
@@ -101,6 +102,13 @@ export async function syncInvoiceRow({store, row, invoice, accounting, clock = (
     if (['INVOICE_NOT_FOUND','WORKSPACE_SCOPE_VIOLATION','INVOICE_SYNC_LEASE_CHANGED'].includes(error?.code)) throw error;
     const disconnected = ['ACCOUNTING_NOT_CONNECTED','ACCOUNTING_NOT_CONFIGURED'].includes(error?.code);
     const status = disconnected ? 'not_configured' : 'failed';
+    // No provider dispatch/history means bookkeeping was never configured,
+    // rather than a failed export. Connecting later lets the existing sweep
+    // discover this row; there is no timer or error to show in the meantime.
+    if(error?.code==='ACCOUNTING_NOT_CONNECTED'&&!dispatched&&previousAttempts===0&&!row.metadata?.bookkeeping_provider&&!row.external_provider){
+      const saved=await finish({bookkeeping_sync_status:'not_configured',bookkeeping_sync_error:null,bookkeeping_sync_http_status:null,bookkeeping_sync_provider_code:null,bookkeeping_sync_provider_message:null,bookkeeping_sync_provider_operation:null,bookkeeping_sync_exhausted:false,bookkeeping_sync_next_at:null},{sync_status:'local',last_sync_error:null});
+      return result(saved,'not_configured',false);
+    }
     const errorCode = String(error?.code || 'SYNC_FAILED').slice(0,80);
     const exhausted = (dispatched ? attempts : previousAttempts) >= MAX_SYNC_ATTEMPTS;
     const diagnostics=providerDiagnostics(error);
