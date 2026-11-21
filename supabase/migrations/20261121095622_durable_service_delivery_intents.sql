@@ -93,13 +93,15 @@ end $$;
 -- Lease the parent briefly so ALL original authorization/claim/fence routines
 -- still require status=processing. A completed answer is restored after its ack
 -- phase; this does not reopen model work or reset an accepted transport fence.
-create or replace function public.whatsapp_claim_service_delivery() returns jsonb
+create or replace function public.whatsapp_claim_ready_service_delivery(p_excluded jsonb) returns jsonb
 language plpgsql security definer set search_path='' as $$
 declare e public.whatsapp_inbound_events;d app.whatsapp_service_deliveries;token uuid:=gen_random_uuid();started timestamptz;
 begin
+ if jsonb_typeof(p_excluded) is distinct from 'array' or jsonb_array_length(p_excluded)>10 then raise exception 'INVALID_DELIVERY_EXCLUSIONS';end if;
  select q.* into d from app.whatsapp_service_deliveries q join public.whatsapp_inbound_events i on i.id=q.event_id
  where q.status='pending' and (q.lease_until is null or q.lease_until<clock_timestamp())
- and (q.next_attempt_at<=clock_timestamp() or i.status='pending' and i.next_attempt_at<=clock_timestamp())
+ and q.next_attempt_at<=clock_timestamp()
+ and not (p_excluded ? (q.event_id::text||':'||q.phase))
  and (i.status<>'processing' or i.claimed_at<clock_timestamp()-interval '5 minutes')
  order by q.event_id,q.phase desc -- answer before ack, using the pending index
  for update of q,i skip locked limit 1;
@@ -119,6 +121,11 @@ begin
  return jsonb_build_object('event',to_jsonb(e),'delivery',to_jsonb(d));
 end $$;
 
+-- Keep the round-six SQL/RPC signature replay-compatible; new workers pass a
+-- bounded run-local exclusion set through the uniquely named API above.
+create or replace function public.whatsapp_claim_service_delivery() returns jsonb
+language sql security definer set search_path='' as $$select public.whatsapp_claim_ready_service_delivery('[]'::jsonb)$$;
+
 create or replace function public.whatsapp_release_service_delivery(p_event_id bigint,p_phase text,p_token uuid) returns void
 language plpgsql security definer set search_path='' as $$
 declare d app.whatsapp_service_deliveries;e public.whatsapp_inbound_events;previous text;
@@ -132,7 +139,7 @@ begin
   -- its lease while restoring processing would strand it: inbox claims require
   -- a non-null expired claimed_at. Return unfinished work to pending instead.
   update public.whatsapp_inbound_events set status=case when previous='processing' then 'pending' else previous end,
-   next_attempt_at=case when previous='processing' then clock_timestamp() else next_attempt_at end,
+   next_attempt_at=coalesce((d.resume_state->>'next_attempt_at')::timestamptz,next_attempt_at),
    processed_at=(d.resume_state->>'processed_at')::timestamptz,
    claim_token=null,claimed_at=null,error_code=d.resume_state->>'error_code',error_detail=d.resume_state->>'error_detail' where id=e.id;
  else
@@ -154,6 +161,67 @@ begin
  return new;
 end $$;
 
-revoke all on function public.whatsapp_save_service_delivery(text,text,text,jsonb),public.whatsapp_service_delivery_state(text,text),public.whatsapp_finish_service_delivery(text,text,text,text,text),public.whatsapp_claim_service_delivery(),public.whatsapp_release_service_delivery(bigint,text,uuid) from public,anon,authenticated;
-grant execute on function public.whatsapp_save_service_delivery(text,text,text,jsonb),public.whatsapp_service_delivery_state(text,text),public.whatsapp_finish_service_delivery(text,text,text,text,text),public.whatsapp_claim_service_delivery(),public.whatsapp_release_service_delivery(bigint,text,uuid) to service_role;
+revoke all on function public.whatsapp_save_service_delivery(text,text,text,jsonb),public.whatsapp_service_delivery_state(text,text),public.whatsapp_finish_service_delivery(text,text,text,text,text),public.whatsapp_claim_service_delivery(),public.whatsapp_claim_ready_service_delivery(jsonb),public.whatsapp_release_service_delivery(bigint,text,uuid) from public,anon,authenticated;
+grant execute on function public.whatsapp_save_service_delivery(text,text,text,jsonb),public.whatsapp_service_delivery_state(text,text),public.whatsapp_finish_service_delivery(text,text,text,text,text),public.whatsapp_claim_service_delivery(),public.whatsapp_claim_ready_service_delivery(jsonb),public.whatsapp_release_service_delivery(bigint,text,uuid) to service_role;
+-- Reconcile persisted legacy phase receipts before publishing queue readiness.
+-- Ordinary answers retain their existing inbox/reply-store recovery. Acks need
+-- independent scheduling even when their parent is already terminal.
+create index if not exists whatsapp_legacy_pending_ack on public.whatsapp_messages(idempotency_key,phone)
+ where direction='outbound' and status='pending' and idempotency_key like 'ack:%';
+with candidates as materialized (
+ select distinct on(e.id) e.id event_id,m.workspace_id,e.next_attempt_at,
+ jsonb_build_object('method','reply','source','legacy_receipt','input',jsonb_build_object(
+  'workspaceId',m.workspace_id,'to',e.sender_phone,'messageId',e.provider_message_id,
+  'kind',m.kind,'audience',m.audience,'phase','ack','body',m.body,
+  'lastInboundAt',coalesce(e.provider_timestamp,e.received_at))) request,
+ case when m.dispatch_started_at is not null or m.provider_message_id is not null
+   or e.ack_dispatch_started_at is not null or e.ack_dispatch_nonce is not null
+   or (e.owner_ack_claimed_at is not null and e.ack_reservation_nonce is null)
+   or exists(select 1 from public.whatsapp_messages other where other.direction='outbound'
+      and other.idempotency_key=m.idempotency_key and other.id<>m.id)
+   or m.kind<>'normal' or m.audience<>'owner' or m.invoice_id is not null
+   or m.owner_action_ref is not null or m.owner_next_action_ref is not null or m.owner_reply_media_ref is not null
+  then 'quarantined'
+  when coalesce(e.provider_timestamp,e.received_at)<=clock_timestamp()-interval '24 hours'
+    or coalesce(e.provider_timestamp,e.received_at)>clock_timestamp() then 'blocked'
+  else 'pending' end status
+ from public.whatsapp_messages m join public.whatsapp_inbound_events e
+  on m.idempotency_key='ack:'||e.provider_message_id and m.phone=e.sender_phone
+ where m.direction='outbound' and m.status='pending' and m.idempotency_key like 'ack:%'
+ and not exists(select 1 from app.whatsapp_service_deliveries d where d.event_id=e.id and d.phase='ack')
+ -- Preserve the earliest stored receipt for audit. Conflicting receipts still
+ -- force quarantine; chronology never grants authority to send either one.
+ order by e.id,m.created_at,m.id
+)
+insert into app.whatsapp_service_deliveries(event_id,workspace_id,phase,request,status,reason,next_attempt_at)
+select event_id,workspace_id,'ack',request,status,
+ case status when 'quarantined' then 'legacy_handoff_uncertain' when 'blocked' then 'service_window_closed' else null end,
+ coalesce(next_attempt_at,clock_timestamp()) from candidates
+on conflict(event_id,phase) do nothing;
+
+-- Never reset a marker/nonce or turn an uncertain historical receipt into a
+-- retry. A populated round-six queue always wins over reconstructed metadata.
+update public.whatsapp_messages m set status=case when d.status='quarantined' then 'unknown' else 'blocked' end
+from app.whatsapp_service_deliveries d join public.whatsapp_inbound_events e on e.id=d.event_id
+where d.phase='ack' and d.reason in ('legacy_handoff_uncertain','service_window_closed')
+ and d.status in ('quarantined','blocked') and m.idempotency_key='ack:'||e.provider_message_id
+ and m.direction='outbound' and m.status='pending';
+select app.refresh_service_delivery_pending(e.id) from public.whatsapp_inbound_events e
+where exists(select 1 from app.whatsapp_service_deliveries d where d.event_id=e.id and d.phase='ack')
+ and not e.reply_has_pending_intent and exists(select 1 from app.whatsapp_service_deliveries d
+ where d.event_id=e.id and d.status='pending');
+
+-- Installed atomically AFTER reconciliation. This public, data-free capability
+-- lets publication refuse a three-migration backend without exposing receipts.
+create or replace function public.whatsapp_service_delivery_status() returns jsonb
+language sql stable security definer set search_path='' as $$
+ select jsonb_build_object('version',1,'queueRevision',2,'legacyAcknowledgmentsReconciled',true,
+ 'ready',to_regclass('app.whatsapp_service_deliveries') is not null
+ and to_regprocedure('public.whatsapp_claim_ready_service_delivery(jsonb)') is not null
+ and to_regprocedure('public.whatsapp_save_service_delivery(text,text,text,jsonb)') is not null
+ and to_regprocedure('public.whatsapp_finish_service_delivery(text,text,text,text,text)') is not null
+ and to_regprocedure('public.whatsapp_release_service_delivery(bigint,text,uuid)') is not null)
+$$;
+revoke all on function public.whatsapp_service_delivery_status() from public;
+grant execute on function public.whatsapp_service_delivery_status() to anon,authenticated,service_role;
 commit;

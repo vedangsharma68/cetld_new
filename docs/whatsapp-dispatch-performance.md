@@ -172,3 +172,30 @@ Local before/after measurements and full release results are recorded in
 `docs/pr213-review-repair.md` and the accompanying evidence archive. They are
 measurements, not a production SLA. The reported >80-second production query was
 not rerun on production. No timeout, admission safeguard or budget is raised.
+
+### Queue scheduling and populated cutover (repair round 7)
+
+The current worker and production publication require all four migrations, in
+the order specified in [the signup rollout contract](signup-invites.md). Fence and
+drain old workers before application, keep them stopped through reconciliation
+and capability checks, then resume only the new worker.
+`whatsapp_service_delivery_status()` must report version 1, queueRevision 2, ready
+true and legacyAcknowledgmentsReconciled true. `signup_invite_status()` alone is
+not dispatch readiness; the three-migration schema supports existing signup but
+must not publish or start the new worker. Old-worker/four-migration compatibility
+is a control, not an authorized resume path. An earlier candidate fourth schema
+requires replaying the revised fourth under the same drain; existing table/queue
+rows do not substitute for queueRevision 2 and reconciliation readiness.
+
+The fourth migration reconciles pending legacy ack receipts before publishing
+that capability. Exact stored body, recipient, workspace and original inbound
+window survive. Registered known-unsent claims and not-yet-claimed receipts become
+queue work; receipt/event fences, orphan dispatch nonces, provider IDs, historical
+unregistered claims and conflicting receipts stay quarantined. Expired windows
+stay blocked. Existing populated round-six queue rows win on replay; ordinary
+answer receipts retain inbox/reply-store recovery. No transport marker is reset.
+
+A queue claim always uses its own retry deadline. Parent dues cannot advance it.
+Workers exclude phases already attempted in the run, alternate queue and ordinary
+inbox work, and release a repeated phase without ending the whole run. Ack release
+restores the prior parent deadline instead of inventing an immediate retry.

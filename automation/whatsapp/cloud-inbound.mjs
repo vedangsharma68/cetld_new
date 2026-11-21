@@ -163,7 +163,8 @@ export class SupabaseInboundInbox {
     return {...event,...state,reply_has_pending_intent:state?.reply_has_pending_intent===true,replyIntent:intents?.[0]||null,deliveryIntent:deliveries.find(d=>d.phase==='answer')||null};
   }
   stageProtocol(event,protocol){return createServiceDeliveryStore(this.supabase).protocol(event,protocol);}
-  claimDelivery(){return createServiceDeliveryStore(this.supabase).claim();}
+  claimDelivery(excluded){return createServiceDeliveryStore(this.supabase).claim(excluded);}
+  assertDeliveryReady(){return createServiceDeliveryStore(this.supabase).ready();}
   releaseDelivery(lease){return createServiceDeliveryStore(this.supabase).release(lease);}
 
   async checkpoint(event, workspaceId, ownerId, checkpoint) {
@@ -608,13 +609,16 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     if(sent?.status!=='accepted')throw Object.assign(Error('Saved customer reply awaits delivery'),{code:'CUSTOMER_REPLY_NOT_ACCEPTED'});
     await inbox.complete(event);return true;
   }
-  async function dispatchDelivery(lease){
+  async function dispatchDelivery(lease,release=true){
     const event={...lease.event,deliveryIntent:lease.delivery};
     const store=createServiceDeliveryStore(supabase);
     try{
       if(lease.delivery.request.method==='protocol')await processEvent(event);
       else{
         const input={...lease.delivery.request.input};
+        // Legacy receipts preserve bytes but never stored display metadata.
+        // Resolve that missing authority input through the original helper.
+        if(lease.delivery.request.source==='legacy_receipt')input.businessName=await businessName(input.workspaceId);
         let method=lease.delivery.request.method;
         if(input.audience==='owner'&&input.kind==='normal'&&input.phase==='answer'){
           const owner=await resolveReplyOwner({supabase,phone:input.to});
@@ -637,7 +641,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       const input=lease.delivery.request.input;
       try{await store.finish(input,{status:'pending',reason:error?.code||'delivery_unavailable'});}catch{}
       logger?.error?.('WhatsApp saved delivery deferred',{code:String(error?.code||'DELIVERY_PENDING').slice(0,80)});
-    }finally{await inbox.releaseDelivery(lease);}
+    }finally{if(release)await inbox.releaseDelivery(lease);}
   }
   async function failFinalAttempt(event) {
     event=await refreshDelivery(event);
@@ -700,25 +704,32 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       const deadlineAt = startedAt + budgetMs;
       const controller = new AbortController();
       const deadlineTimer = setTimeout(() => controller.abort(), budgetMs);
-      const seen = new Set();
+      const seen = new Set(),deliveryPhases=new Set();
+      let preferInbox=false;
       let claimed = 0;
       let completed = 0;
-      try { while (claimed < 10 && deadlineAt - clock() >= MIN_EVENT_BUDGET_MS) {
-        if(typeof inbox.claimDelivery==='function'){
-          const lease=await inbox.claimDelivery();
+      try {
+        if(typeof inbox.assertDeliveryReady==='function')await inbox.assertDeliveryReady();
+        while (claimed < 10 && deadlineAt - clock() >= MIN_EVENT_BUDGET_MS) {
+        if(!preferInbox&&typeof inbox.claimDelivery==='function'){
+          const lease=await inbox.claimDelivery([...deliveryPhases]);
           if(lease){
             const key='delivery:'+lease.event.id+':'+lease.delivery.phase;
-            if(seen.has(key)){await inbox.releaseDelivery(lease);break;}
-            seen.add(key);claimed++;await dispatchDelivery(lease);
+            if(seen.has(key)){await inbox.releaseDelivery(lease);preferInbox=true;}
+            else{
+            seen.add(key);deliveryPhases.add(lease.event.id+':'+lease.delivery.phase);claimed++;await dispatchDelivery(lease);preferInbox=true;
             const rows=await createServiceDeliveryStore(supabase).state(lease.event);
             if(rows.find(d=>d.phase===lease.delivery.phase)?.status!=='pending')completed++;
             continue;
+            }
           }
         }
         // Claim individually so a deadline never leaves an unstarted batch
         // leased for five minutes.
         let [event] = await inbox.claim(1);
-        if (!event || seen.has(event.id)) break;
+        if(!event){if(preferInbox){preferInbox=false;continue;}break;}
+        preferInbox=false;
+        if(seen.has(event.id))break;
         seen.add(event.id);
         claimed++;
         if (deadlineAt - clock() < MIN_EVENT_BUDGET_MS) {
@@ -726,6 +737,16 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           break;
         }
         if(event.reply_has_pending_intent||event.reply_claimed_at)event=await refreshDelivery(event);
+        // A normal inbox lease may own a saved answer retry. Resume its first
+        // immutable intent before binding-based routing can reinterpret it.
+        // Independent ack phases remain exclusively scheduled by their queue.
+        if(event.deliveryIntent){
+          if(event.deliveryIntent.status==='pending')await dispatchDelivery({event,delivery:event.deliveryIntent},false);
+          event=await refreshDelivery(event);
+          if(event.deliveryIntent.status==='pending')await inbox.defer(event,'DELIVERY_PENDING');
+          else{await inbox.complete(event);completed++;}
+          continue;
+        }
         if (staleInboundEvent(event, clock()) && (event.error_code || event.reply_claimed_at || (!event.owner_job_workspace_id&&!event.owner_job_checkpoint&&Number(event.attempts) > 1))) {
           await deadLetter(event, 'Stale delivery retry expired before reprocessing.');
           completed++;

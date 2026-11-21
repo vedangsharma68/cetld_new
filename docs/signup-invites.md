@@ -54,15 +54,25 @@ business. Otherwise it grants exactly one further workspace creation.
    Do not allow it to claim work during the migration or restart it afterward.
 2. Apply `20261120125758_signup_invites.sql`, then
    `20261120132445_dispatch_privacy_performance.sql`, then
-   `20261120181032_recoverable_reply_reservations.sql` through the normal operator
-   migration process. Keep all three migrations: they establish invitation
-   enforcement, the populated canonical index, and recoverable handoff fencing
-   respectively. Each is replay-safe; their count is not a deployment gate.
+   `20261120181032_recoverable_reply_reservations.sql`, then
+   `20261121095622_durable_service_delivery_intents.sql` through the normal operator
+   migration process. Keep all four migrations: invitation enforcement, the populated
+   canonical index, recoverable handoff fencing, and durable per-phase scheduling
+   with legacy acknowledgment reconciliation respectively. Each is replay-safe; their count is not a deployment gate.
    Verify `signup_invite_status()` reports v2 capabilities,
-   `privacyRepairRevision: 3`, and the claim/release dispatch protocol.
+   `privacyRepairRevision: 3`, and the claim/release dispatch protocol. Also verify
+   `whatsapp_service_delivery_status()` reports `version: 1`, `queueRevision: 2`,
+   `ready: true` and `legacyAcknowledgmentsReconciled: true`. Migration four must
+   commit its reconciliation before this capability is published. If an earlier
+   candidate fourth migration is already installed, replay the revised fourth
+   through the operator migration process while workers remain drained; its
+   populated replay preserves queue requests, outcomes and retry deadlines.
+   Table existence alone is not readiness.
 3. Publish the frontend and worker code. The **production frontend build refuses
    publication** unless the database reports account/tenant enforcement, identity
-   scrubbing, a current global privacy index and the recoverable dispatch protocol.
+   scrubbing, a current global privacy index, the recoverable dispatch protocol
+   **and the ready migration-four phase queue**. Worker startup checks the queue
+   capability before any claims. Three migrations are insufficient for this worker.
 4. Resume dispatch only on the new worker code after the capabilities and build
    checks pass. Issue invitations using the compatible `/invite.html` entry, which is independent
    of cached main-app code. Newly invited accounts already have a workspace when

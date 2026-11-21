@@ -1,5 +1,8 @@
 # PR #213 — repair round 3
 
+Historical evidence for the named round. For any new publication or worker resume,
+use the current [four-migration rollout and readiness contract](signup-invites.md#required-deploy-order-and-mixed-versions).
+
 Reviewed baseline: `fc393eebcad5f999efb92375cd8c9f91c88f8dd7`.
 This repair does not apply migrations, query production, deploy, merge, or make a
 live Auth/AI/WhatsApp request. Historical migrations remain unchanged. The three

@@ -1,5 +1,8 @@
 # PR #213 — repair round 5
 
+Historical evidence for the named round. For any new publication or worker resume,
+use the current [four-migration rollout and readiness contract](signup-invites.md#required-deploy-order-and-mixed-versions).
+
 Reviewed head: `df251c1888f320f6241696535d1807574df2bf33`.
 
 ## P1 E — confirmation delivery is part of event completion

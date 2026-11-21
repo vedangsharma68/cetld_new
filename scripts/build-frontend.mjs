@@ -1,4 +1,4 @@
-import {assertSignupServerReady} from '../signup-rollout.mjs';
+import {assertSignupServerReady,assertDispatchServerReady} from '../signup-rollout.mjs';
 import {config as signupConfig} from '../config.js';
 import {readFile,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
@@ -8,6 +8,7 @@ import {pathToFileURL} from 'node:url';
 // Hash the actual browser import graph, including transitive .mjs dependencies.
 export async function buildFrontend(root=process.cwd()) {
   if(process.env.VERCEL_ENV==='production')await assertSignupServerReady(signupConfig);
+  if(process.env.VERCEL_ENV==='production')await assertDispatchServerReady(signupConfig);
   const files=new Map();
   async function visit(name) {
     name=path.posix.normalize(name);

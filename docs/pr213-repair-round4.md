@@ -1,5 +1,8 @@
 # PR #213 — repair round 4
 
+Historical evidence for the named round. For any new publication or worker resume,
+use the current [four-migration rollout and readiness contract](signup-invites.md#required-deploy-order-and-mixed-versions).
+
 Reviewed base: `2fbe6260665503fc747760802819f319c91eccc5`.
 
 | Finding | Root cause | Mechanism repair | Executable evidence |

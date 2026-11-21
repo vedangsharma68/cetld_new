@@ -1,5 +1,8 @@
 # PR #213 independent-review repair
 
+Historical evidence for the named round. For any new publication or worker resume,
+use the current [four-migration rollout and readiness contract](signup-invites.md#required-deploy-order-and-mixed-versions).
+
 This repair stays on `codex/signup-gate` and the existing PR. It makes no
 production query, migration application, backfill, deployment or live send.
 The two un-applied PR migrations are corrected in place for replay safety;

@@ -1,5 +1,8 @@
 # PR #213 — repair round 6
 
+Historical evidence for the named round. For any new publication or worker resume,
+use the current [four-migration rollout and readiness contract](signup-invites.md#required-deploy-order-and-mixed-versions).
+
 Reviewed base: `5815425d1b06a66bcce201d3fb40f6785596fe67`.
 
 ## Shared defect and architectural repair
