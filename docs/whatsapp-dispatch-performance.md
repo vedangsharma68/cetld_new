@@ -129,6 +129,30 @@ against resend and actual terminal denials stay terminal.
 verification and LINK; exact stored-body delivery once after reconstruction;
 unchanged STOP suppression throughout; and normal-owner reply isolation.
 
+## Durable phase queue (round 6)
+
+Scoped receipts and reservation predicates are insufficient as the root intent
+store. The private `app.whatsapp_service_deliveries` queue records every service
+request before sender authority reads, keyed by event and `answer`/`ack` phase.
+A route-changing protocol is staged before its side effect, then seals the first
+concrete request. Unbound requests have the same durable 24-hour retry horizon;
+ack due work is independent of the final inbox event's status. Typing indicators
+and template sends stay outside this reply protocol.
+
+A bounded row lease temporarily gives queued work the original processing context
+so all existing authorization/claim/fence routines still run. Ack completion
+restores a previously completed parent; it never reruns the final handler. Media
+bytes are hash-checked from their immutable source or a private bucket, under the
+existing file cap. The final payload scanner is unchanged. An uncertain phase
+handoff remains quarantined; actual terminal denials do not re-arm.
+
+Apply the additional forward migration
+`20261121095622_durable_service_delivery_intents.sql` after the three existing PR
+migrations, while old workers are drained, before publishing/resuming the new
+worker. No existing migration is edited or consolidated. Full caller inventory,
+fault/phase matrix, lease/security/replay evidence and limitations are recorded in
+`pr213-repair-round6.md`.
+
 Pending intents remain eligible beyond the old one-hour error limit, only within
 the actual inbound timestamp's 24-hour window. Other inbound work retains its
 existing retry-age policy. After all awaited binding/consent checks and the fence,

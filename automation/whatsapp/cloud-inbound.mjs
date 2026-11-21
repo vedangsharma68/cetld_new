@@ -4,6 +4,7 @@ import {createConversationStore} from './conversation-store.mjs';
 import { resolveActiveBindings, revokeConsentForPhone, suppressUnknownPhone } from './consent.mjs';
 import {createWhatsAppInvoiceUpdateStore} from './invoice-update-store.mjs';
 import {writeConversationTurn} from './conversation-memory.mjs';
+import {createServiceDeliveryStore,wrapServiceDelivery} from './service-delivery.mjs';
 
 const MAX_MESSAGES = 100;
 const MAX_INBOUND_RETRY_AGE_MS = 60 * 60_000;
@@ -155,11 +156,15 @@ export class SupabaseInboundInbox {
   }
 
   async deliveryState(event){
-    const state=dataOrThrow(await this.supabase.from('whatsapp_inbound_events').select('reply_has_pending_intent').eq('id',event.id).maybeSingle(),'reply state');
+    const state=dataOrThrow(await this.supabase.from('whatsapp_inbound_events').select('reply_has_pending_intent,reply_claimed_at,reply_reservation_nonce,reply_dispatch_started_at,ack_dispatch_started_at').eq('id',event.id).maybeSingle(),'reply state');
     const intents=dataOrThrow(await this.supabase.from('whatsapp_messages').select('*').eq('idempotency_key','reply:'+event.provider_message_id).eq('direction','outbound').eq('phone',event.sender_phone).limit(2),'saved reply');
     if(intents?.length>1)throw Error('Ambiguous saved reply intent');
-    return {...event,reply_has_pending_intent:state?.reply_has_pending_intent===true,replyIntent:intents?.[0]||null};
+    const deliveries=await createServiceDeliveryStore(this.supabase).state(event);
+    return {...event,...state,reply_has_pending_intent:state?.reply_has_pending_intent===true,replyIntent:intents?.[0]||null,deliveryIntent:deliveries.find(d=>d.phase==='answer')||null};
   }
+  stageProtocol(event,protocol){return createServiceDeliveryStore(this.supabase).protocol(event,protocol);}
+  claimDelivery(){return createServiceDeliveryStore(this.supabase).claim();}
+  releaseDelivery(lease){return createServiceDeliveryStore(this.supabase).release(lease);}
 
   async checkpoint(event, workspaceId, ownerId, checkpoint) {
     if(!checkpoint||checkpoint.version!==1||Buffer.byteLength(JSON.stringify(checkpoint))>256*1024)
@@ -268,7 +273,8 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
   }
   async function transcript(input){await conversationStore?.record(input);}
   let outboundPromise;
-  const getOutbound = async () => {
+  let rawOutbound;
+  const getRawOutbound = async () => {
     if (outbound) return outbound;
     outboundPromise ||= import('./cloud-outbound.mjs').then(({ createWhatsAppOutbound }) => {
       const invoiceUpdates = createWhatsAppInvoiceUpdateStore({supabase});
@@ -279,6 +285,12 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           p_commercial:env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true',p_nonce:input.reservationNonce}),'claim reply reservation')===true})});
     });
     return outboundPromise;
+  };
+  let wrappedOutbound;
+  const getOutbound=async()=>{
+    rawOutbound=await getRawOutbound();
+    if(typeof inbox.stageProtocol!=='function')return rawOutbound;
+    return wrappedOutbound||=(wrapServiceDelivery(rawOutbound,createServiceDeliveryStore(supabase)));
   };
   async function sendConfirmation(input) {
     const sender=await getOutbound();
@@ -431,10 +443,12 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       // A committed linking side effect changes the current binding. A known
       // unsent confirmation still belongs to the original protocol turn, not
       // a new owner/model turn; the verification RPC itself replays safely.
-      const unsentConfirmation=!event.replyIntent&&event.reply_claimed_at&&event.reply_reservation_nonce&&!event.reply_dispatch_started_at;
+      const unsentConfirmation=event.deliveryIntent?.request?.method==='protocol'&&event.deliveryIntent.request.protocol==='link';
       if (linkMatch&&(!owner||unsentConfirmation)) {
         // The sender phone comes from WhatsApp, so a matching dashboard code proves they hold the number.
+        let protocolDelivery=false;
         try {
+          if(typeof inbox.stageProtocol==='function'){protocolDelivery=true;await inbox.stageProtocol(event,'link');}
           const { data: result, error } = await supabase.rpc('whatsapp_verify_owner_code', { p_phone: event.sender_phone, p_code: linkMatch[1] });
           if (error) throw error;
           await sendConfirmation({ workspaceId: null, to: event.sender_phone, body: '',
@@ -443,7 +457,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
             messageId: event.provider_message_id, businessName: 'CETLD' });
           return 'verify';
         } catch (error) {
-          if(error?.deliveryPending)throw error;
+          if(protocolDelivery||error?.deliveryPending)throw Object.assign(error,{deliveryPending:true});
           logger?.error?.('WhatsApp owner link failed', { message: String(error?.message || '').slice(0, 200) });
         }
       }
@@ -569,6 +583,13 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
   }
   async function refreshDelivery(event){return typeof inbox.deliveryState==='function'?inbox.deliveryState(event):event;}
   async function retainSavedReply(event,error){
+    if(event.deliveryIntent){
+      if(event.deliveryIntent.status==='pending'&&!event.reply_dispatch_started_at){
+        await createServiceDeliveryStore(supabase).finish(event.deliveryIntent.request.input,{status:'pending',reason:error?.code||'delivery_unavailable'});
+        await inbox.defer(event,event.replyIntent?(event.replyIntent.audience==='owner'?'OWNER_REPLY_NOT_ACCEPTED':'CUSTOMER_REPLY_NOT_ACCEPTED'):'DELIVERY_PENDING',String(error?.message||'Saved delivery awaits transport').slice(0,1000));return 'deferred';
+      }
+      await inbox.complete(event);return 'completed';
+    }
     if(!event.replyIntent)return false;
     const intent=event.replyIntent;
     if(intent.status==='pending'&&!intent.dispatch_started_at){await inbox.defer(event,intent.audience==='owner'?'OWNER_REPLY_NOT_ACCEPTED':'CUSTOMER_REPLY_NOT_ACCEPTED',String(error?.message||'Saved reply awaits delivery').slice(0,1000));}
@@ -586,6 +607,37 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       lastInboundAt:event.provider_timestamp||event.received_at,kind:intent.kind,audience:intent.audience,messageId:event.provider_message_id,businessName:await businessName(intent.workspace_id)});
     if(sent?.status!=='accepted')throw Object.assign(Error('Saved customer reply awaits delivery'),{code:'CUSTOMER_REPLY_NOT_ACCEPTED'});
     await inbox.complete(event);return true;
+  }
+  async function dispatchDelivery(lease){
+    const event={...lease.event,deliveryIntent:lease.delivery};
+    const store=createServiceDeliveryStore(supabase);
+    try{
+      if(lease.delivery.request.method==='protocol')await processEvent(event);
+      else{
+        const input={...lease.delivery.request.input};
+        let method=lease.delivery.request.method;
+        if(input.audience==='owner'&&input.kind==='normal'&&input.phase==='answer'){
+          const owner=await resolveReplyOwner({supabase,phone:input.to});
+          if(!owner||owner.workspaceId!==input.workspaceId){await store.finish(input,{status:'blocked',reason:'owner_binding_changed'});return;}
+          const receipt=dataOrThrow(await supabase.from('whatsapp_messages').select('owner_action_ref,owner_next_action_ref,owner_reply_media_ref').eq('workspace_id',input.workspaceId).eq('idempotency_key','reply:'+input.messageId).maybeSingle(),'delivery references');
+          if(receipt&&(receipt.owner_action_ref||receipt.owner_next_action_ref||receipt.owner_reply_media_ref)){
+            const {createOwnerReplyStore}=await import('./owner-reply-store.mjs');
+            const reply=await createOwnerReplyStore({supabase,env}).find({...owner,phone:input.to,messageId:input.messageId});
+            if(reply){input.body=reply.answer;input.caption=reply.answer;input.buttons=reply.buttons||[];input.ownerActionFallback=reply.ownerActionFallback;if(reply.media){input.media=reply.media;method='media';}}
+          }
+        }
+        if(method==='media'&&!input.media?.bytes){
+          input.media=await store.media(input);
+        }
+        const sender=await getRawOutbound();
+        const result=await sender[method==='media'?'sendServiceMedia':'sendServiceReply'](input);
+        await store.finish(input,result);
+      }
+    }catch(error){
+      const input=lease.delivery.request.input;
+      try{await store.finish(input,{status:'pending',reason:error?.code||'delivery_unavailable'});}catch{}
+      logger?.error?.('WhatsApp saved delivery deferred',{code:String(error?.code||'DELIVERY_PENDING').slice(0,80)});
+    }finally{await inbox.releaseDelivery(lease);}
   }
   async function failFinalAttempt(event) {
     event=await refreshDelivery(event);
@@ -652,6 +704,17 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       let claimed = 0;
       let completed = 0;
       try { while (claimed < 10 && deadlineAt - clock() >= MIN_EVENT_BUDGET_MS) {
+        if(typeof inbox.claimDelivery==='function'){
+          const lease=await inbox.claimDelivery();
+          if(lease){
+            const key='delivery:'+lease.event.id+':'+lease.delivery.phase;
+            if(seen.has(key)){await inbox.releaseDelivery(lease);break;}
+            seen.add(key);claimed++;await dispatchDelivery(lease);
+            const rows=await createServiceDeliveryStore(supabase).state(lease.event);
+            if(rows.find(d=>d.phase===lease.delivery.phase)?.status!=='pending')completed++;
+            continue;
+          }
+        }
         // Claim individually so a deadline never leaves an unstarted batch
         // leased for five minutes.
         let [event] = await inbox.claim(1);
