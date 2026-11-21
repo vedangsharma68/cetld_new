@@ -19,7 +19,7 @@ begin
        and other.idempotency_key=m.idempotency_key and other.id<>m.id)
      or m.kind<>'normal' or m.workspace_id is null or s.business_name is null
      or m.invoice_id is not null or m.owner_action_ref is not null
-     or m.owner_next_action_ref is not null or m.owner_reply_media_ref is not null or m.owner_receipt_ref is not null
+     or m.owner_next_action_ref is not null or m.owner_reply_media_ref is not null or to_jsonb(m)->>'owner_receipt_ref' is not null
     then 'quarantined'
     when coalesce(e.provider_timestamp,e.received_at)<=clock_timestamp()-interval '24 hours'
       or coalesce(e.provider_timestamp,e.received_at)>clock_timestamp() then 'blocked'
