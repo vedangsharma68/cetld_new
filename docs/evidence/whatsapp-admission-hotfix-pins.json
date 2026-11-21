@@ -1,0 +1,71 @@
+{
+  "base": "0f72c6c2dee253e1d3730f87cce84d088b88c0a2",
+  "testedSourceCommit": "48bf3ec7a915712af9169163cc58b96b538d3b69",
+  "sourceSHA256": {
+    "ai/private-payload-boundary.mjs": "438441785bd37f1d7c687c6ff1b36b8036962067bd5fc1f82744659f3bcdcc7a",
+    "ai/private-value-matcher.mjs": "7e4a8638d1652543e2a93bdaadef698a720d49cff6d72219dd115cd35d1b02ec",
+    "automation/whatsapp/cloud-outbound.mjs": "880a2e7109edb0dabf3eafc8eef548e54e6f3c431b8de93ae0a1a48692754f46",
+    "automation/whatsapp/private-dispatch.mjs": "2585b42747c43f978a1ab782eacce276f6c8e61fade681b90b4f737b46b9a878",
+    "scripts/generate-private-value-sql.mjs": "1c353eab149bf3b6f6bb43aa6439028b8e8151e388c533ec88d8a969278b67e5",
+    "scripts/private-capture-baseline.json": "5824c256b269dcb6c971246c47689580659b5c8fc389e532c840ccc1e3da3a2f",
+    "supabase/migrations/20261121212253_whatsapp_admission_recovery.sql": "4b0d3a591c2b11f9af844941834953f82668b3c72ff8ce3cc51af4599e6c7f30",
+    "tests/whatsapp-admission-hotfix.test.mjs": "0b4fface6126d006bf0daef364dbce11b7fdc985bad4414915c76dc81264f361",
+    "tests/whatsapp-admission-recovery.test.mjs": "b9405570eb52a6e417607f495b8c7dd6d2f2a34daa7ef6b2f55ad76175bef1a1",
+    "tests/whatsapp-admission-revision.test.mjs": "5eeba6161dc6ad2c64b6f802ed8a9eef1c4f0a4684b26bdc4b325ed093fa8e2a",
+    "docs/whatsapp-admission-hotfix.md": "7275c4ed680e9998fe1284706f7f9be0c5b867a74f7f5387b5fd02361ce8efdc"
+  },
+  "preservation": {
+    "base": "0f72c6c2dee253e1d3730f87cce84d088b88c0a2",
+    "unchangedTestsFiles": 437,
+    "immutableMigrationSHA256": "841034b20e9faee511248ed8ee2ebd7becab6c082003abee5489889f027c118d"
+  },
+  "verification": {
+    "exit": 0,
+    "seconds": 2670.878752708435,
+    "shards": [
+      {
+        "shard": 0,
+        "tests": 1831,
+        "pass": 1830,
+        "fail": 0,
+        "skipped": 1
+      },
+      {
+        "shard": 1,
+        "tests": 1107,
+        "pass": 1107,
+        "fail": 0,
+        "skipped": 0
+      },
+      {
+        "shard": 2,
+        "tests": 2036,
+        "pass": 2035,
+        "fail": 0,
+        "skipped": 1
+      },
+      {
+        "shard": 3,
+        "tests": 1498,
+        "pass": 1497,
+        "fail": 0,
+        "skipped": 1
+      }
+    ],
+    "total": {
+      "tests": 6472,
+      "pass": 6469,
+      "fail": 0,
+      "skipped": 3
+    },
+    "typecheck": true,
+    "frontendBuild": true,
+    "productionBatteryScenarios": 43,
+    "offlineRoute": {
+      "pass": 2,
+      "fail": 0
+    }
+  },
+  "productionEffects": false,
+  "executionPermissions": "Localhost/subprocess support enabled; clean environment contains no production credentials."
+}
