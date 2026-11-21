@@ -714,6 +714,11 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
         if(!preferInbox&&typeof inbox.claimDelivery==='function'){
           const lease=await inbox.claimDelivery([...deliveryPhases]);
           if(lease){
+            // Retiring a locked candidate is progress, not an empty queue.
+            // No delivery lease was acquired, so do not consume the existing
+            // claim quota. Cleanup remains bounded by the unchanged deadline;
+            // give the ordinary inbox its turn, then continue queue progress.
+            if(lease.retired===true){preferInbox=true;continue;}
             const key='delivery:'+lease.event.id+':'+lease.delivery.phase;
             if(seen.has(key)){await inbox.releaseDelivery(lease);preferInbox=true;}
             else{

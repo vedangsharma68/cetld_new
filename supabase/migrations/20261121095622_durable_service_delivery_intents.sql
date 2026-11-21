@@ -113,7 +113,9 @@ begin
   update public.whatsapp_messages set status=case when started is not null then 'unknown' else 'blocked' end
   where idempotency_key=(case when d.phase='ack' then 'ack:' else 'reply:' end)||e.provider_message_id and phone=e.sender_phone
   and direction='outbound' and workspace_id is not distinct from (d.request#>>'{input,workspaceId}')::uuid and status='pending';
-  perform app.refresh_service_delivery_pending(e.id);return null;
+  perform app.refresh_service_delivery_pending(e.id);
+  return jsonb_build_object('retired',true,'eventId',d.event_id,'phase',d.phase,
+   'status',case when started is not null then 'quarantined' else 'blocked' end);
  end if;
  update app.whatsapp_service_deliveries set lease_token=token,lease_until=clock_timestamp()+interval '5 minutes',
  resume_state=coalesce(resume_state,to_jsonb(e)) where event_id=d.event_id and phase=d.phase returning * into d;
@@ -124,7 +126,10 @@ end $$;
 -- Keep the round-six SQL/RPC signature replay-compatible; new workers pass a
 -- bounded run-local exclusion set through the uniquely named API above.
 create or replace function public.whatsapp_claim_service_delivery() returns jsonb
-language sql security definer set search_path='' as $$select public.whatsapp_claim_ready_service_delivery('[]'::jsonb)$$;
+language sql security definer set search_path='' as $$
+ with outcome as materialized(select public.whatsapp_claim_ready_service_delivery('[]'::jsonb) value)
+ select case when value->>'retired'='true' then null else value end from outcome
+$$;
 
 create or replace function public.whatsapp_release_service_delivery(p_event_id bigint,p_phase text,p_token uuid) returns void
 language plpgsql security definer set search_path='' as $$
@@ -215,7 +220,7 @@ where exists(select 1 from app.whatsapp_service_deliveries d where d.event_id=e.
 -- lets publication refuse a three-migration backend without exposing receipts.
 create or replace function public.whatsapp_service_delivery_status() returns jsonb
 language sql stable security definer set search_path='' as $$
- select jsonb_build_object('version',1,'queueRevision',2,'legacyAcknowledgmentsReconciled',true,
+ select jsonb_build_object('version',1,'queueRevision',2,'legacyAcknowledgmentsReconciled',true,'retirementProgress',true,
  'ready',to_regclass('app.whatsapp_service_deliveries') is not null
  and to_regprocedure('public.whatsapp_claim_ready_service_delivery(jsonb)') is not null
  and to_regprocedure('public.whatsapp_save_service_delivery(text,text,text,jsonb)') is not null

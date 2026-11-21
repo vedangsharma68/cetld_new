@@ -62,7 +62,9 @@ business. Otherwise it grants exactly one further workspace creation.
    Verify `signup_invite_status()` reports v2 capabilities,
    `privacyRepairRevision: 3`, and the claim/release dispatch protocol. Also verify
    `whatsapp_service_delivery_status()` reports `version: 1`, `queueRevision: 2`,
-   `ready: true` and `legacyAcknowledgmentsReconciled: true`. Migration four must
+   `ready: true`, `legacyAcknowledgmentsReconciled: true` and
+   `retirementProgress: true`. Publication and worker startup share the exact
+   version/feature predicate; unknown versions are rejected before any claim. Migration four must
    commit its reconciliation before this capability is published. If an earlier
    candidate fourth migration is already installed, replay the revised fourth
    through the operator migration process while workers remain drained; its

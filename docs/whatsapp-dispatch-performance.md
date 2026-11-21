@@ -180,12 +180,12 @@ the order specified in [the signup rollout contract](signup-invites.md). Fence a
 drain old workers before application, keep them stopped through reconciliation
 and capability checks, then resume only the new worker.
 `whatsapp_service_delivery_status()` must report version 1, queueRevision 2, ready
-true and legacyAcknowledgmentsReconciled true. `signup_invite_status()` alone is
+true, legacyAcknowledgmentsReconciled true and retirementProgress true. `signup_invite_status()` alone is
 not dispatch readiness; the three-migration schema supports existing signup but
 must not publish or start the new worker. Old-worker/four-migration compatibility
 is a control, not an authorized resume path. An earlier candidate fourth schema
 requires replaying the revised fourth under the same drain; existing table/queue
-rows do not substitute for queueRevision 2 and reconciliation readiness.
+rows do not substitute for queueRevision 2, reconciliation and retirement-progress readiness.
 
 The fourth migration reconciles pending legacy ack receipts before publishing
 that capability. Exact stored body, recipient, workspace and original inbound
@@ -199,3 +199,20 @@ A queue claim always uses its own retry deadline. Parent dues cannot advance it.
 Workers exclude phases already attempted in the run, alternate queue and ordinary
 inbox work, and release a repeated phase without ending the whole run. Ack release
 restores the prior parent deadline instead of inventing an immediate retry.
+
+### Retirement progress and shared version admission (repair round 8)
+
+The ready-claim API distinguishes a leased delivery, a retired terminal candidate,
+and an empty queue. Retirement acquires no delivery lease and does not consume the existing
+ten-claim quota; the worker continues within its unchanged deadline and alternates the ordinary
+inbox before asking for more queue work. An empty inbox after retirement cannot
+be mistaken for an empty delivery queue. Expired items stay blocked, fenced items
+stay quarantined, and no marker is released or cleared by retirement.
+
+The zero-argument historical claim API retains its nullable compatibility result.
+Only the ready-claim API provides retirement progress to the new worker. The
+shared dispatch-readiness predicate requires version 1, queueRevision 2, ready,
+legacyAcknowledgmentsReconciled and retirementProgress. Both production builds
+and worker startup reject unknown/missing versions or incomplete features. Drain
+old workers and apply/replay the revised fourth migration before publishing or
+resuming matching code; the migration count remains four.

@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {hasDispatchReadiness} from '../../dispatch-readiness.mjs';
 const unwrap=r=>{if(r?.error)throw r.error;return r?.data;};
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const bucket='whatsapp-delivery-private';
@@ -31,7 +32,7 @@ export function createServiceDeliveryStore(supabase){
   protocol:async(event,protocol)=>unwrap(await supabase.rpc('whatsapp_save_service_delivery',{p_message_id:event.provider_message_id,p_phone:event.sender_phone,p_phase:'answer',p_request:{method:'protocol',protocol,input:{workspaceId:null,to:event.sender_phone,messageId:event.provider_message_id,kind:'verification',audience:'customer',phase:'answer'}}})),
   state:async event=>unwrap(await supabase.rpc('whatsapp_service_delivery_state',{p_message_id:event.provider_message_id,p_phone:event.sender_phone}))||[],
   claim:async(excluded=[])=>unwrap(await supabase.rpc('whatsapp_claim_ready_service_delivery',{p_excluded:excluded})),
-  async ready(){const response=await supabase.rpc('whatsapp_service_delivery_status',{}),value=response?.data;if(response?.error||value?.ready!==true||value?.queueRevision!==2||value?.legacyAcknowledgmentsReconciled!==true)throw Error('Apply all four signup and dispatch migrations before starting this worker');return value;},
+  async ready(){const response=await supabase.rpc('whatsapp_service_delivery_status',{}),value=response?.data;if(response?.error||!hasDispatchReadiness(value))throw Error('Apply all four signup and dispatch migrations before starting this worker');return value;},
   finish:async(input,result)=>unwrap(await supabase.rpc('whatsapp_finish_service_delivery',{p_message_id:input.messageId,p_phone:input.to,p_phase:phase(input),p_status:result?.status==='accepted'?'accepted':result?.status==='blocked'?'blocked':['unknown','failed'].includes(result?.status)?'quarantined':'pending',p_reason:result?.reason||null})),
   release:async lease=>unwrap(await supabase.rpc('whatsapp_release_service_delivery',{p_event_id:lease.event.id,p_phase:lease.delivery.phase,p_token:lease.delivery.lease_token})),
   async media(input){

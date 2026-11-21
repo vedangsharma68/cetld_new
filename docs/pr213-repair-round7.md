@@ -1,5 +1,8 @@
 # PR #213 — repair round 7
 
+Historical evidence for the named round. New publication and worker resume must
+follow the current [four-migration readiness contract](signup-invites.md#required-deploy-order-and-mixed-versions), including retirement-progress admission.
+
 Reviewed base: `5474e7fb95c75a9d82748616d19dcd1fbec04c99`.
 No production action is performed by this repair.
 
