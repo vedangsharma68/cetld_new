@@ -28,6 +28,16 @@ main snapshot set before/after migration and each tagged row's exact canonical
 set, including when free-text classification rejects the declaration. Fixture
 sibling terms are removed so duplicate canonical rows cannot mask under-retention.
 
+Approved reminder fields also establish review provenance. Their party projection
+uses the same unconditional origin-parser role as main and explicit `origin:`
+rows, rather than classifying already approved text again. Independent stored
+customer identities and other-source witnesses still prevent a review from
+certifying somebody else's name. `pr213-approved-reminder-parity` compares the
+entire main allowed/forbidden snapshot and the assignment of **every** parser
+key, for both approval fields, cold/warm cache and migration replay. It includes
+independent-party and embedded-amount negative controls. The final-byte scanner
+and its rules are unchanged.
+
 ## Global source projection
 
 The original snapshot reparsed retained terms globally for each send. Workspace
@@ -90,6 +100,18 @@ provider ID. Successful release keeps the original intent retryable; the origina
 claim and privacy checks run again. No exception after HTTP starts invokes this
 release. Unreconciled reservations remain quarantined. The final clock check
 remains immediately before transport after all awaited reads.
+
+That distinction also applies **before** nonce reservation: an explicitly
+retryable/unavailable authority result is pending, never a terminal denial.
+All pre-fence service reply paths (text, interactive text and invoice media)
+preserve the saved intent and existing claim without finishing it as blocked or
+abandoning it. The worker defers the known-unsent intent; reconstruction re-arms
+it through the original admission/claim/fence protocol and sends its stored body.
+An actual missing/mismatched binding, suppression or closed service window stays
+a terminal denial. `pr213-prefence-recovery` injects a binding read failure after
+the claim commits but before the fence, asserts zero initial sends and a pending
+event/receipt, then proves exactly one stored-body send and a delivered callback.
+Its paired terminal-denial test remains blocked across reconstruction.
 
 Pending intents remain eligible beyond the old one-hour error limit, only within
 the actual inbound timestamp's 24-hour window. Other inbound work retains its

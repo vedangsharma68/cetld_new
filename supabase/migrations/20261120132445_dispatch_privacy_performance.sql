@@ -452,7 +452,9 @@ begin
  cross join lateral (values(i.metadata->>'approved_reminder_text'),(i.metadata#>>'{approved_reminder_delivery,body}')) x(value)
  where i.workspace_id=p_workspace_id and i.customer_id=recipient and x.value is not null
  ), review_parties as (
- select distinct k from approval_words cross join lateral unnest(app.private_dispatch_aliases(p_workspace_id,value,'origin',revision,memo_write)) k where k like 'party:%'
+ -- Review provenance is established by the approved field, just as an origin:
+ -- tag establishes retained provenance. Main parses it without reclassification.
+ select distinct k from approval_words cross join lateral unnest(app.private_dispatch_aliases(p_workspace_id,value,'origin-tagged',revision,memo_write)) k where k like 'party:%'
  ), independent_parties as (
  select p.party_key k from review_parties r
  join app.private_dispatch_customer_parties p on p.party_hash=sha256(convert_to(r.k,'UTF8')) and p.party_key=r.k

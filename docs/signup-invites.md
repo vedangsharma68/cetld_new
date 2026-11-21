@@ -50,18 +50,23 @@ business. Otherwise it grants exactly one further workspace creation.
 
 ## Required deploy order and mixed versions
 
-1. Apply `20261120125758_signup_invites.sql`, then
+1. Fence and drain the old inbound worker **before** the schema/code switch.
+   Do not allow it to claim work during the migration or restart it afterward.
+2. Apply `20261120125758_signup_invites.sql`, then
    `20261120132445_dispatch_privacy_performance.sql`, then
    `20261120181032_recoverable_reply_reservations.sql` through the normal operator
-   migration process. Fence/drain the old inbound worker during the schema/code
-   switch. Verify `signup_invite_status()` reports v2 capabilities,
+   migration process. Keep all three migrations: they establish invitation
+   enforcement, the populated canonical index, and recoverable handoff fencing
+   respectively. Each is replay-safe; their count is not a deployment gate.
+   Verify `signup_invite_status()` reports v2 capabilities,
    `privacyRepairRevision: 3`, and the claim/release dispatch protocol.
-2. Publish the frontend and worker code. The **production frontend build refuses
+3. Publish the frontend and worker code. The **production frontend build refuses
    publication** unless the database reports account/tenant enforcement, identity
    scrubbing, a current global privacy index and the recoverable dispatch protocol.
-3. Issue invitations using the compatible `/invite.html` entry, which is independent
+4. Resume dispatch only on the new worker code after the capabilities and build
+   checks pass. Issue invitations using the compatible `/invite.html` entry, which is independent
    of cached main-app code. Newly invited accounts already have a workspace when
-   old or new main-app bootstrap runs. Resume the worker only on the new code.
+   old or new main-app bootstrap runs.
    Existing sign-in remains available.
 
 An untouched pre-invite database is inherently open: no UI can close its direct
@@ -72,6 +77,19 @@ without admission; invitees use the dedicated entry. Legacy code-input clients u
 Unmodified clients posting raw codes directly to GoTrue must upgrade; their
 requests fail before consumption, and their existing sign-in remains available. Landing and demo do not use
 account creation. Local/preview builds do not query production.
+
+The performance migration's populated build is staged within one transaction;
+readiness is published only after every stage, and failure rolls it all back.
+Do not interpret its total elapsed time as the duration of one SQL statement.
+The round-4 native measurement with **100,000 rows present before installation**
+was **1,337.764 ms total**, **443.968 ms slowest statement**. Each command was
+enforced under a **1,000 ms test statement budget**. The production migration's
+statement limit remains **5,000 ms**. Separately, the snapshot was enforced under
+a **1,000 ms statement budget**, measuring **151.234 ms cold / 149.644 ms warm**
+with all 100,000 keys checked. These are local measurements, not a production SLA;
+the round-4 evidence records these measurements at the repaired head. No timeout
+or migration budget is increased. See `whatsapp-dispatch-performance.md` for the
+build stages, atomic readiness and canonical admission contract.
 
 The v1 upgrade marks already consumed invitations with existing workspaces as
 spent tenant grants; replay preserves genuinely unused v2 grants. Both original

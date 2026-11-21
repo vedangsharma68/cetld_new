@@ -41,9 +41,9 @@ function maskedPhone(value) {
   return typeof value === 'string' && value.length >= 4 ? `***${value.slice(-4)}` : '***';
 }
 
-function block(logger, reason, {workspaceId = null, to = null, kind = null} = {}) {
-  logger?.warn?.({event: 'whatsapp_outbound_blocked', reason, workspaceId, recipient: maskedPhone(to), kind});
-  return {status: 'blocked', reason};
+function block(logger, reason, {workspaceId = null, to = null, kind = null, retryable = false} = {}) {
+  logger?.warn?.({event: retryable?'whatsapp_outbound_deferred':'whatsapp_outbound_blocked', reason, workspaceId, recipient: maskedPhone(to), kind});
+  return {status: retryable?'pending':'blocked', reason};
 }
 
 function withinServiceWindow(lastInboundAt, clock) {
@@ -118,7 +118,7 @@ export function createWhatsAppOutbound({
       const eligibility = reply
         ? await serviceAuthority({workspaceId,phone:to,kind,...reply})
         : await getCommercialRecipientEligibility({env, supabase, workspaceId, phone: to});
-      if (!eligibility.allowed) return block(logger, eligibility.reason, {workspaceId, to, kind});
+      if (!eligibility.allowed) return block(logger, eligibility.reason, {workspaceId, to, kind,retryable:eligibility.retryable===true});
     } else {
       // Default test mode: the configured allowlist can only narrow the fixed QA set.
       if (!allowlist) return block(logger, 'invalid_test_allowlist', {workspaceId, to, kind});
@@ -163,7 +163,11 @@ export function createWhatsAppOutbound({
     return payload;
   }
 
-  async function denyPrepared({workspaceId,to,kind,key,reason,claimed=false}) {
+  async function denyPrepared({workspaceId,to,kind,key,reason,claimed=false,retryable=false}) {
+    // An unavailable authority read is not a denial. Before the handoff fence
+    // no HTTP send has started: preserve the saved intent and claim for retry.
+    // Only explicit terminal decisions may abandon or block that intent.
+    if(retryable)return block(logger,reason||'reply_authority_unavailable',{workspaceId,to,kind,retryable:true});
     if(workspaceId&&conversationStore){
       if(claimed)await conversationStore.finish({workspaceId,key,status:'blocked'});
       else await conversationStore.abandonReply?.({workspaceId,key});
@@ -373,7 +377,7 @@ export function createWhatsAppOutbound({
       if (!supabase) return block(logger, 'missing_store', {workspaceId, to, kind});
       const eligibility = env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'?await serviceAuthority(authorityInput)
         :audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}:await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
-      if (!eligibility.allowed) return block(logger, eligibility.reason, {workspaceId, to, kind});
+      if (!eligibility.allowed) return block(logger, eligibility.reason, {workspaceId, to, kind,retryable:eligibility.retryable===true});
       customerId=eligibility.customer?.id||null;
     }
     if(audience!=='owner')text=`${text}\n\n- ${owner}`;
@@ -400,11 +404,11 @@ export function createWhatsAppOutbound({
       const finalEligibility = env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'?await serviceAuthority(authorityInput)
         :audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}:await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
       if (!finalEligibility.allowed||(audience==='customer'&&finalEligibility.customer?.id!==customerId))
-        return denyPrepared({workspaceId,to,kind,key,reason:finalEligibility.allowed?'customer_binding_changed':finalEligibility.reason||'owner_binding_changed',claimed:true});
+        return denyPrepared({workspaceId,to,kind,key,reason:finalEligibility.allowed?'customer_binding_changed':finalEligibility.reason||'owner_binding_changed',claimed:true,retryable:!finalEligibility.allowed&&finalEligibility.retryable===true});
     }
     if(env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'&&kind!=='normal'){
       const finalAuthority=await serviceAuthority(authorityInput);
-      if(!finalAuthority.allowed)return denyPrepared({workspaceId,to,kind,key,reason:finalAuthority.reason,claimed:true});
+      if(!finalAuthority.allowed)return denyPrepared({workspaceId,to,kind,key,reason:finalAuthority.reason,claimed:true,retryable:finalAuthority.retryable===true});
     }
     return postMessage({workspaceId,to,kind,key,payload,admission,audience,lastInboundAt,authorizeTransport:async()=>{
       if(workspaceId&&!await verifiedBusinessName(supabase,workspaceId,owner))return {allowed:false,reason:'business_name_changed'};
@@ -427,7 +431,7 @@ export function createWhatsAppOutbound({
     const eligibility = env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'?await serviceAuthority(authorityInput)
       :audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}
       :await getSendEligibility({supabase, workspaceId, phone: to, category: 'invoice_updates'});
-    if (!eligibility.allowed) return block(logger, eligibility.reason, {workspaceId, to, kind});
+    if (!eligibility.allowed) return block(logger, eligibility.reason, {workspaceId, to, kind,retryable:eligibility.retryable===true});
     if(typeof authorizeInboundReply!=='function')return block(logger,'missing_inbound_authorizer',{workspaceId,to,kind});
     const bytes = media?.bytes;
     if (!bytes?.length || bytes.length > 10 * 1024 * 1024) throw new TypeError('invalid invoice media');
@@ -467,7 +471,7 @@ export function createWhatsAppOutbound({
       :audience==='owner'?{allowed:await authorizeOwnerPhone({supabase,workspaceId,phone:to})}
       :await getSendEligibility({supabase,workspaceId,phone:to,category:'invoice_updates'});
     if(!finalEligibility.allowed||audience==='customer'&&finalEligibility.customer?.id!==eligibility.customer?.id)
-      return denyPrepared({workspaceId,to,kind,key,reason:finalEligibility.allowed?'customer_binding_changed':finalEligibility.reason||'owner_binding_changed',claimed:true});
+      return denyPrepared({workspaceId,to,kind,key,reason:finalEligibility.allowed?'customer_binding_changed':finalEligibility.reason||'owner_binding_changed',claimed:true,retryable:!finalEligibility.allowed&&finalEligibility.retryable===true});
     if(!await verifiedBusinessName(supabase,workspaceId,businessName))return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed',claimed:true});
     if(image)payload.image.id=uploaded.id;else payload.document.id=uploaded.id;
     return postMessage({workspaceId,to,kind,key,payload,admission,audience,lastInboundAt,authorizeTransport:async()=>{
