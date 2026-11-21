@@ -19,8 +19,12 @@ Password clients prepare an opaque ten-minute, email-bound, one-use ticket.
 Only the ticket goes to Auth; the original invite code does not enter its user
 metadata. Google preparation authorizes the invited email for ten minutes, capped
 by invite expiry; the server-owned provider identity consumes it at creation.
-Changing the selected Google email fails. Legacy invite clients that send the
-code remain compatible. Both user metadata and `auth.identities.identity_data`
+Changing the selected Google email fails. The compatibility signup adapter accepts legacy email/code input, exchanges it
+for a ticket before calling GoTrue, and removes credential fields recursively
+from returned user/identity/session objects. Direct raw-code GoTrue signup is
+rejected before account creation or invite consumption; cached clients use the
+compatible invitation entry. Hosted GoTrue returns an in-memory identity copy, so
+SQL trigger sanitization alone cannot secure that response. Both user metadata and `auth.identities.identity_data`
 are stripped on insert/update; the migration also scrubs historical copies.
 The database stores only code/ticket hashes. Missing, expired, revoked, replayed
 and cross-email credentials fail closed. Existing Google/password sign-in does
@@ -49,20 +53,24 @@ business. Otherwise it grants exactly one further workspace creation.
 1. Apply `20261120125758_signup_invites.sql`, then
    `20261120132445_dispatch_privacy_performance.sql`, then
    `20261120181032_recoverable_reply_reservations.sql` through the normal operator
-   migration process. Verify `signup_invite_status()` reports all v2 capabilities.
+   migration process. Fence/drain the old inbound worker during the schema/code
+   switch. Verify `signup_invite_status()` reports v2 capabilities,
+   `privacyRepairRevision: 3`, and the claim/release dispatch protocol.
 2. Publish the frontend and worker code. The **production frontend build refuses
    publication** unless the database reports account/tenant enforcement, identity
    scrubbing, a current global privacy index and the recoverable dispatch protocol.
 3. Issue invitations using the compatible `/invite.html` entry, which is independent
    of cached main-app code. Newly invited accounts already have a workspace when
-   old or new main-app bootstrap runs. Existing sign-in remains available.
+   old or new main-app bootstrap runs. Resume the worker only on the new code.
+   Existing sign-in remains available.
 
 An untouched pre-invite database is inherently open: no UI can close its direct
 Auth API. Old/old deployment is therefore unsupported, not claimed secure. New
 UI with old/incomplete schema fails before Auth account creation and shows an
 upgrade message. Cached pre-invite UI with the new schema cannot create accounts
-without admission; invitees use the dedicated entry. Legacy invite-aware clients
-remain accepted and their credentials are scrubbed. Landing and demo do not use
+without admission; invitees use the dedicated entry. Legacy code-input clients use the compatibility adapter or invitation entry.
+Unmodified clients posting raw codes directly to GoTrue must upgrade; their
+requests fail before consumption, and their existing sign-in remains available. Landing and demo do not use
 account creation. Local/preview builds do not query production.
 
 The v1 upgrade marks already consumed invitations with existing workspaces as

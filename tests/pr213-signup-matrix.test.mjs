@@ -1,8 +1,8 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {redeemInvitation} from '../invite-entry.mjs';import {assertSignupServerReady} from '../signup-rollout.mjs';import {readFile} from 'node:fs/promises';
-const current={version:2,accountInvites:true,tenantInvites:true,identityCredentialScrub:true,globalPrivacyIndex:true,dispatchProtocol:true};
+const current={version:2,privacyRepairRevision:3,accountInvites:true,tenantInvites:true,identityCredentialScrub:true,globalPrivacyIndex:true,dispatchProtocol:true};
 function client(capability=current,session=null){const calls=[];return {calls,rpc:async(name,args)=>{calls.push({name,args});if(name==='signup_invite_status')return capability?{data:capability}:{error:{code:'PGRST202'}};return {data:{ok:true,schemaVersion:2,ticket:'opaque-one-use-ticket'}};},auth:{getSession:async()=>({data:{session}}),signUp:async request=>{calls.push({signUp:request});return {data:{session:null}};},signInWithOAuth:async request=>{calls.push({oauth:request});return {};}}};}
 test('R7 production publication rejects pre-gate/v1/incomplete schemas, and accepts the enforced v2 contract',async()=>{
- for(const capability of [null,{version:1},{version:2,tenantInvites:false,identityCredentialScrub:true},{version:2,tenantInvites:true,identityCredentialScrub:false},current]){
+ for(const capability of [null,{version:1},{...current,privacyRepairRevision:2},{version:2,tenantInvites:false,identityCredentialScrub:true},{version:2,tenantInvites:true,identityCredentialScrub:false},current]){
   const action=assertSignupServerReady({url:'https://fixture.supabase.test',key:'publishable-test'},{fetchImpl:async()=>capability?Response.json(capability):new Response('',{status:404})});if(capability===current)assert.deepEqual(await action,current);else await assert.rejects(action,/migrations before publishing/);
  }
  const source=await readFile(new URL('../scripts/build-frontend.mjs',import.meta.url),'utf8');assert.match(source,/VERCEL_ENV==='production'\)await assertSignupServerReady/);

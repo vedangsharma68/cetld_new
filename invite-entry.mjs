@@ -1,4 +1,4 @@
-import {prepareSignupInvite,INVITE_NOTICE} from './signup-invite.mjs';
+import {prepareSignupInvite,INVITE_NOTICE,signupWithInvite} from './signup-invite.mjs';
 export async function redeemInvitation(client,{email,code,password,provider='email',redirectTo}){
  const capability=await client.rpc('signup_invite_status');
  if(capability.error||capability.data?.version!==2||capability.data?.accountInvites!==true||capability.data?.tenantInvites!==true||capability.data?.identityCredentialScrub!==true)throw Error('Invitation signup is being updated. Please try your invitation link again shortly. Existing sign-in remains available.');
@@ -6,7 +6,7 @@ export async function redeemInvitation(client,{email,code,password,provider='ema
  if(session.data?.session){const r=await client.rpc('redeem_workspace_invite',{p_code:code});if(r.error||r.data?.ok!==true)throw Error(INVITE_NOTICE);return {tenantReady:true};}
  const ticket=await prepareSignupInvite(client,{email,code});
  if(provider==='google'){const result=await client.auth.signInWithOAuth({provider:'google',options:{redirectTo}});if(result.error)throw result.error;return {redirecting:true};}
- const result=await client.auth.signUp({email,password,options:{emailRedirectTo:redirectTo,data:{signup_invite_ticket:ticket}}});if(result.error)throw Error(INVITE_NOTICE);return {checkEmail:!result.data?.session,accountReady:Boolean(result.data?.session)};
+ const result=await signupWithInvite(client,{email,password,options:{emailRedirectTo:redirectTo,data:{signup_invite_ticket:ticket}}});if(result.error)throw Error(INVITE_NOTICE);return {checkEmail:!result.data?.session,accountReady:Boolean(result.data?.session)};
 }
 if(typeof document!=='undefined'&&document.querySelector('#invite-entry')){
  const form=document.querySelector('#invite-entry'),message=document.querySelector('#invite-message');

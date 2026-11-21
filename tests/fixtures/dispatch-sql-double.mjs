@@ -33,7 +33,7 @@ async function sqlReplyControl(name,input,namespace){
  const keys=Object.keys(args),r=await f.db.query('select public.'+name+'('+keys.map((k,i)=>k+'=>$'+(i+1)).join(',')+') value',keys.map(k=>args[k]));return {data:r.rows[0].value};
 }
 function options(o){if(!o?.supabase||o.supabase.auth)return o;const namespace=randomUUID();const supabase=new Proxy(o.supabase,{get(t,key){if(key==='rpc')return(name,args)=>{
- const control=['whatsapp_prepare_reply_reservation','whatsapp_rearm_unsent_reply','whatsapp_begin_reply_dispatch'].includes(name);
+ const control=['whatsapp_prepare_reply_reservation','whatsapp_rearm_unsent_reply','whatsapp_begin_reply_dispatch','whatsapp_release_reply_dispatch'].includes(name);
  if(name!=='whatsapp_dispatch_privacy_snapshot'&&!control)return t.rpc?.call(t,name,args);
  const task=queue.then(()=>control?sqlReplyControl(name,args,namespace):sqlSnapshot(args.p_workspace_id,args.p_phone));queue=task.catch(()=>{});return task;
  };const v=t[key];return typeof v==='function'?v.bind(t):v;}});return {...o,supabase};}

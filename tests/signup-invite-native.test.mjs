@@ -15,7 +15,13 @@ test('Supabase auth INSERT boundary gates password and Google account creation a
   const issue=async email=>{await db.query('set role service_role');try{return(await db.query('select issue_signup_invite($1) value',[email])).rows[0].value;}finally{await db.query('reset role');}};
   const prepare=async(email,code)=>{await db.query('set role anon');try{return await db.query('select prepare_signup_invite($1,$2)',[email,code]);}finally{await db.query('reset role');}};
   const insert=async(provider,email,code,client=db,extra={})=>{
-   await client.query('begin');try{await client.query('set local role supabase_auth_admin');const r=await client.query('insert into auth.users(id,email,raw_app_meta_data,raw_user_meta_data) values($1,$2,$3,$4) returning *',[randomUUID(),email,{provider},{signup_invite_code:code,...extra}]);await client.query('commit');return r.rows[0];}catch(e){await client.query('rollback');throw e;}
+   let credential={signup_invite_code:code,...extra};
+   if(provider==='email'){
+    // Invalid credentials must still reach Auth INSERT: callers can bypass prep.
+    let ticket;try{ticket=(await client.query('select prepare_signup_invite($1,$2) value',[email,code])).rows[0].value.ticket;}catch{}
+    credential={...(ticket?{signup_invite_ticket:ticket}:{}),...extra};
+   }
+   await client.query('begin');try{await client.query('set local role supabase_auth_admin');const r=await client.query('insert into auth.users(id,email,raw_app_meta_data,raw_user_meta_data) values($1,$2,$3,$4) returning *',[randomUUID(),email,{provider},credential]);await client.query('commit');return r.rows[0];}catch(e){await client.query('rollback');throw e;}
   };
   const counts=async email=>(await db.query('select (select count(*)::int from auth.users where lower(email)=lower($1)) users,(select count(*)::int from profiles p join auth.users u on u.id=p.user_id where lower(u.email)=lower($1)) profiles,(select count(*)::int from workspaces w join auth.users u on u.id=w.owner_id where lower(u.email)=lower($1)) workspaces',[email])).rows[0];
   for(const provider of ['email','google']){
@@ -73,6 +79,12 @@ test('Supabase auth INSERT boundary gates password and Google account creation a
    const results=await Promise.allSettled([insert(provider,email,invite.code,db),insert(provider,email,invite.code,other)]);
    assert.equal(results.filter(r=>r.status==='fulfilled').length,1);assert.equal(results.filter(r=>r.status==='rejected').length,1);
    assert.equal((await counts(email)).users,1);
+  });
+  await t.test('raw legacy password credentials are rejected before consumption; use the ticket compatibility entry',async()=>{
+   const email='raw-legacy@example.test',invite=await issue(email);
+   await db.query('set role supabase_auth_admin');try{await assert.rejects(db.query('insert into auth.users(id,email,raw_app_meta_data,raw_user_meta_data) values($1,$2,$3,$4)',[randomUUID(),email,{provider:'email'},{signup_invite_code:invite.code}]),/invitation entry/);}finally{await db.query('reset role');}
+   assert.equal((await db.query('select consumed_at from app.signup_invites where id=$1',[invite.id])).rows[0].consumed_at,null);assert.deepEqual(await counts(email),{users:0,profiles:0,workspaces:0});
+   const admitted=await insert('email',email,invite.code);assert.ok(admitted.id);assert.ok(!JSON.stringify(admitted.raw_user_meta_data).includes(invite.code));
   });
   await t.test('clients cannot issue or inspect invite codes',async()=>{
    for(const role of ['anon','authenticated']){await db.query('set role '+role);try{

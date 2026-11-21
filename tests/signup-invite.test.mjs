@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
-import {INVITE_NOTICE,prepareGoogleSignup,prepareSignupInvite,signupError} from '../signup-invite.mjs';
+import {INVITE_NOTICE,prepareGoogleSignup,prepareSignupInvite,signupError,signupWithInvite} from '../signup-invite.mjs';
 import {issueSignupInvite} from '../scripts/issue-signup-invite.mjs';
 
 test('Google signup prepares the email-bound invite before redirect; existing Google sign-in requires none',async()=>{
@@ -34,7 +34,7 @@ test('password signup sends an opaque one-use ticket rather than its invite code
  const fn=source.slice(source.indexOf('async function submitAuth('),source.indexOf('async function googleSignIn('));
  for(const mode of ['signup','login']){
   const calls=[],button={innerHTML:'Submit'},form={querySelector:selector=>selector==='[type=submit]'?button:{classList:{add(){}}}};
-  const context={state:{authMode:mode},location:{origin:'https://app.example.test'},authRedirectUrl:origin=>origin+'/app/',signupError,prepareSignupInvite,
+  const context={state:{authMode:mode},location:{origin:'https://app.example.test'},authRedirectUrl:origin=>origin+'/app/',signupError,prepareSignupInvite,signupWithInvite,
    FormData:class{get(key){return {email:'a@example.test',password:'correct-horse-password',inviteCode:'email-bound-code'}[key];}},
    authPage(){},showError(_,error){throw error;},syncLandingSessionCookie(){},enterAccount:async user=>calls.push({user}),
    db:{rpc:async name=>name==='signup_invite_status'?{data:{version:2,accountInvites:true,tenantInvites:true,identityCredentialScrub:true}}:{data:{ok:true,schemaVersion:2,ticket:'opaque-ticket'}},auth:{signUp:async request=>{calls.push(request);return{data:{session:null}};},signInWithPassword:async request=>{calls.push(request);return{data:{session:{},user:{id:'existing'}}};}}}};

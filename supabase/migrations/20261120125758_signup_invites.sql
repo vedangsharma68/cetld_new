@@ -72,6 +72,9 @@ create or replace function app.enforce_signup_invite() returns trigger
 language plpgsql security definer set search_path='' as $$
 declare invitation app.signup_invites%rowtype;provider text:=new.raw_app_meta_data->>'provider';
 begin
+ if provider='email' and new.raw_user_meta_data ? 'signup_invite_code' then
+  raise exception 'Use the invitation entry to upgrade this signup request. Existing sign-in remains available.' using errcode='P0001';
+ end if;
  if provider='email' then
   select * into invitation from app.signup_invites
   where email=lower(btrim(new.email)) and (code_hash=sha256(convert_to(lower(btrim(new.raw_user_meta_data->>'signup_invite_code')),'UTF8'))
@@ -180,14 +183,14 @@ create or replace function public.signup_invite_status() returns jsonb
 language plpgsql stable security definer set search_path='' as $$
 declare index_ready boolean:=false;
 begin
- if to_regclass('app.private_dispatch_index_state') is not null and to_regprocedure('app.private_invoice_canonical_revision()') is not null then
-  select exists(select 1 from app.private_dispatch_index_state s where s.singleton and s.revision=app.private_invoice_canonical_revision()) into index_ready;
+ if to_regclass('app.private_dispatch_index_state') is not null and to_regprocedure('app.private_dispatch_index_revision()') is not null then
+  select exists(select 1 from app.private_dispatch_index_state s where s.singleton and s.revision=app.private_dispatch_index_revision()) into index_ready;
  end if;
- return jsonb_build_object('version',2,
+ return jsonb_build_object('version',2,'privacyRepairRevision',3,
  'accountInvites',exists(select 1 from pg_catalog.pg_trigger where tgrelid='auth.users'::regclass and tgname='require_signup_invite' and tgenabled<>'D'),
  'tenantInvites',exists(select 1 from pg_catalog.pg_trigger where tgrelid='public.workspaces'::regclass and tgname='require_workspace_invite' and tgenabled<>'D'),
  'identityCredentialScrub',exists(select 1 from pg_catalog.pg_trigger where tgrelid=to_regclass('auth.identities') and tgname='strip_identity_invite' and tgenabled<>'D'),
- 'globalPrivacyIndex',index_ready,'dispatchProtocol',to_regprocedure('public.whatsapp_claim_reserved_reply(uuid,text,text,text,text,text,text,boolean,uuid)') is not null);
+ 'globalPrivacyIndex',index_ready,'dispatchProtocol',to_regprocedure('public.whatsapp_claim_reserved_reply(uuid,text,text,text,text,text,text,boolean,uuid)') is not null and to_regprocedure('public.whatsapp_release_reply_dispatch(uuid,text,text,text,text,uuid)') is not null);
 end $$;
 revoke all on function public.signup_invite_status() from public;
 grant execute on function public.signup_invite_status() to anon,authenticated,service_role;

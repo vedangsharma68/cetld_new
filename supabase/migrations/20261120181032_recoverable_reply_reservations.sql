@@ -10,6 +10,10 @@ alter table public.whatsapp_inbound_events add column if not exists reply_has_pe
 alter table public.whatsapp_inbound_events add column if not exists reply_reservation_nonce uuid;
 alter table public.whatsapp_inbound_events add column if not exists ack_reservation_nonce uuid;
 
+-- Recovery resolves an intent before its workspace is known. The existing
+-- workspace/key unique index cannot serve that lookup or cross-scope fences.
+create index if not exists whatsapp_outbound_intent_lookup on public.whatsapp_messages(idempotency_key,phone) where direction='outbound';
+
 -- Register a new protocol reservation BEFORE claiming it. A historical claim
 -- with no handoff marker is ambiguous and must not be automatically resent.
 create or replace function public.whatsapp_prepare_reply_reservation(p_workspace_id uuid,p_message_id text,p_phone text,p_kind text,p_phase text) returns uuid
@@ -17,6 +21,9 @@ language plpgsql security definer set search_path='' as $$
 declare e public.whatsapp_inbound_events;nonce uuid;
 begin
  if p_phase not in ('answer','ack') then return null;end if;
+ if exists(select 1 from public.whatsapp_messages m where m.idempotency_key=(case when p_phase='ack' then 'ack:' else 'reply:' end)||p_message_id and m.direction='outbound'
+ and (m.workspace_id is distinct from p_workspace_id or m.phone is distinct from p_phone or m.kind is distinct from p_kind)) then return null;end if;
+
  select * into e from public.whatsapp_inbound_events where provider_message_id=p_message_id and sender_phone=p_phone and status='processing' for update;
  if e.id is null or coalesce(e.provider_timestamp,e.received_at)<=clock_timestamp()-interval '24 hours' then return null;end if;
  if p_phase='ack' then
@@ -61,6 +68,9 @@ language plpgsql security definer set search_path='' as $$
 declare e public.whatsapp_inbound_events;
 begin
  if p_phase not in ('answer','ack') then return false;end if;
+ if exists(select 1 from public.whatsapp_messages m where m.idempotency_key=(case when p_phase='ack' then 'ack:' else 'reply:' end)||p_message_id and m.direction='outbound'
+ and (m.workspace_id is distinct from p_workspace_id or m.phone is distinct from p_phone or m.kind is distinct from p_kind)) then return false;end if;
+
  select * into e from public.whatsapp_inbound_events where provider_message_id=p_message_id and sender_phone=p_phone and status='processing' for update;
  if e.id is null or coalesce(e.provider_timestamp,e.received_at)<=clock_timestamp()-interval '24 hours' then return false;end if;
  if p_workspace_id is not null and not exists(select 1 from public.whatsapp_messages m where m.workspace_id=p_workspace_id and m.phone=p_phone and m.kind=p_kind
@@ -85,6 +95,9 @@ language plpgsql security definer set search_path='' as $$
 declare e public.whatsapp_inbound_events;started timestamptz;nonce uuid;
 begin
  if p_phase not in ('answer','ack') or p_nonce is null then return false;end if;
+ if exists(select 1 from public.whatsapp_messages m where m.idempotency_key=(case when p_phase='ack' then 'ack:' else 'reply:' end)||p_message_id and m.direction='outbound'
+ and (m.workspace_id is distinct from p_workspace_id or m.phone is distinct from p_phone or m.kind is distinct from p_kind)) then return false;end if;
+
  select * into e from public.whatsapp_inbound_events where provider_message_id=p_message_id and sender_phone=p_phone and status='processing' for update;
  if e.id is null or coalesce(e.provider_timestamp,e.received_at)>clock_timestamp() or coalesce(e.provider_timestamp,e.received_at)<=clock_timestamp()-interval '24 hours' then return false;end if;
  if p_phase='ack' then if e.ack_reservation_nonce is null then return false;end if;started:=e.ack_dispatch_started_at;nonce:=e.ack_dispatch_nonce;if e.owner_ack_claimed_at is null then return false;end if;
@@ -102,6 +115,29 @@ begin
 end $$;
 revoke all on function public.whatsapp_rearm_unsent_reply(uuid,text,text,text,text),public.whatsapp_begin_reply_dispatch(uuid,text,text,text,text,uuid) from public,anon,authenticated;
 grant execute on function public.whatsapp_rearm_unsent_reply(uuid,text,text,text,text),public.whatsapp_begin_reply_dispatch(uuid,text,text,text,text,uuid) to service_role;
+
+-- Release is valid ONLY before this invocation calls HTTP. A pending receipt
+-- and exact invocation nonce prevent releasing another worker or accepted send.
+create or replace function public.whatsapp_release_reply_dispatch(p_workspace_id uuid,p_message_id text,p_phone text,p_kind text,p_phase text,p_nonce uuid) returns boolean
+language plpgsql security definer set search_path='' as $$
+declare e public.whatsapp_inbound_events;
+begin
+ if p_nonce is null or p_phase not in ('answer','ack') then return false;end if;
+ select * into e from public.whatsapp_inbound_events where provider_message_id=p_message_id and sender_phone=p_phone and status='processing' for update;
+ if e.id is null then return false;end if;
+ if (case when p_phase='ack' then e.ack_dispatch_nonce else e.reply_dispatch_nonce end) is distinct from p_nonce then return false;end if;
+ if p_workspace_id is not null then
+  perform 1 from public.whatsapp_messages where workspace_id=p_workspace_id and phone=p_phone and kind=p_kind
+  and idempotency_key=(case when p_phase='ack' then 'ack:' else 'reply:' end)||p_message_id and direction='outbound' and status='pending' and provider_message_id is null for update;
+  if not found then return false;end if;
+ elsif exists(select 1 from public.whatsapp_messages where idempotency_key=(case when p_phase='ack' then 'ack:' else 'reply:' end)||p_message_id and direction='outbound') then return false;end if;
+ if p_phase='ack' then update public.whatsapp_inbound_events set ack_dispatch_started_at=null,ack_dispatch_nonce=null where id=e.id;
+ else update public.whatsapp_inbound_events set reply_dispatch_started_at=null,reply_dispatch_nonce=null where id=e.id;end if;
+ update public.whatsapp_messages set dispatch_started_at=null where workspace_id=p_workspace_id and idempotency_key=(case when p_phase='ack' then 'ack:' else 'reply:' end)||p_message_id;
+ return true;
+end $$;
+revoke all on function public.whatsapp_release_reply_dispatch(uuid,text,text,text,text,uuid) from public,anon,authenticated;
+grant execute on function public.whatsapp_release_reply_dispatch(uuid,text,text,text,text,uuid) to service_role;
 
 create or replace function app.track_pending_reply_intent() returns trigger language plpgsql security definer set search_path='' as $$
 declare message_id text;

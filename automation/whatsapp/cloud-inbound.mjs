@@ -154,6 +154,13 @@ export class SupabaseInboundInbox {
     return dataOrThrow(await this.supabase.rpc('whatsapp_claim_inbound_events', { p_limit: limit }), 'claim') || [];
   }
 
+  async deliveryState(event){
+    const state=dataOrThrow(await this.supabase.from('whatsapp_inbound_events').select('reply_has_pending_intent').eq('id',event.id).maybeSingle(),'reply state');
+    const intents=dataOrThrow(await this.supabase.from('whatsapp_messages').select('*').eq('idempotency_key','reply:'+event.provider_message_id).eq('direction','outbound').eq('phone',event.sender_phone).limit(2),'saved reply');
+    if(intents?.length>1)throw Error('Ambiguous saved reply intent');
+    return {...event,reply_has_pending_intent:state?.reply_has_pending_intent===true,replyIntent:intents?.[0]||null};
+  }
+
   async checkpoint(event, workspaceId, ownerId, checkpoint) {
     if(!checkpoint||checkpoint.version!==1||Buffer.byteLength(JSON.stringify(checkpoint))>256*1024)
       throw Object.assign(new Error('Owner checkpoint exceeds its storage bounds'),{code:'OWNER_JOB_CHECKPOINT_INVALID'});
@@ -453,7 +460,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
         body:unreadableContentReply(event),lastInboundAt:event.provider_timestamp||event.received_at,
         kind:'normal',audience:owner?'owner':'customer',messageId:event.provider_message_id,
         businessName:await businessName(binding.workspaceId)});
-      if(owner&&sent?.status!=='accepted')throw Object.assign(new Error('Owner reply was not accepted for delivery.'),{code:'OWNER_REPLY_NOT_ACCEPTED'});
+      if(sent?.status!=='accepted')throw Object.assign(new Error('Reply was not accepted for delivery.'),{code:owner?'OWNER_REPLY_NOT_ACCEPTED':'CUSTOMER_REPLY_NOT_ACCEPTED'});
       return 'bound';
     }
     if(!owner)dataOrThrow(await supabase.rpc('whatsapp_pause_customer_followups',{
@@ -527,7 +534,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           ...(owner&&response?.ownerActionFallback?{ownerActionFallback:response.ownerActionFallback}:{}),
           lastInboundAt: event.provider_timestamp || event.received_at, kind: 'normal', audience:owner?'owner':'customer', messageId: event.provider_message_id,
           businessName: await businessName(binding.workspaceId) });
-        if(owner&&sent?.status!=='accepted')throw Object.assign(new Error('Owner reply was not accepted for delivery.'),{code:'OWNER_REPLY_NOT_ACCEPTED'});
+        if(sent?.status!=='accepted')throw Object.assign(new Error('Reply was not accepted for delivery.'),{code:owner?'OWNER_REPLY_NOT_ACCEPTED':'CUSTOMER_REPLY_NOT_ACCEPTED'});
         if (sent?.status === 'accepted') {
           try {
             await writeConversationTurn({supabase, workspaceId: binding.workspaceId,
@@ -549,7 +556,29 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       code: 'INBOUND_DEAD_LETTER', reason, receivedAt: event.received_at || event.created_at || event.provider_timestamp || null});
     return true;
   }
+  async function refreshDelivery(event){return typeof inbox.deliveryState==='function'?inbox.deliveryState(event):event;}
+  async function retainSavedReply(event,error){
+    if(!event.replyIntent)return false;
+    const intent=event.replyIntent;
+    if(intent.status==='pending'&&!intent.dispatch_started_at){await inbox.defer(event,intent.audience==='owner'?'OWNER_REPLY_NOT_ACCEPTED':'CUSTOMER_REPLY_NOT_ACCEPTED',String(error?.message||'Saved reply awaits delivery').slice(0,1000));}
+    else {await inbox.complete(event);return 'completed';} // Accepted, uncertain or blocked intent: never substitute a fallback.
+    return 'deferred';
+  }
+  async function resumeCustomerReply(event){
+    const intent=event.replyIntent;
+    if(!intent||intent.audience!=='customer')return false;
+    if(intent.status!=='pending'||intent.dispatch_started_at){await inbox.complete(event);return true;}
+    // Attachments keep their existing source-resolution path; they must not be
+    // downgraded to text. Their saved intent still prevents any fallback.
+    if(intent.invoice_id||intent.owner_reply_media_ref)return false;
+    const sender=await getOutbound();const sent=await sender.sendServiceReply({workspaceId:intent.workspace_id,to:event.sender_phone,body:intent.body,
+      lastInboundAt:event.provider_timestamp||event.received_at,kind:intent.kind,audience:intent.audience,messageId:event.provider_message_id,businessName:await businessName(intent.workspace_id)});
+    if(sent?.status!=='accepted')throw Object.assign(Error('Saved customer reply awaits delivery'),{code:'CUSTOMER_REPLY_NOT_ACCEPTED'});
+    await inbox.complete(event);return true;
+  }
   async function failFinalAttempt(event) {
+    event=await refreshDelivery(event);
+    const retained=await retainSavedReply(event);if(retained)return retained==='completed';
     if (staleInboundEvent(event, clock())) return deadLetter(event, 'Stale event exhausted delivery attempts.');
     let failedOwner=null;
     try {
@@ -613,7 +642,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       try { while (claimed < 10 && deadlineAt - clock() >= MIN_EVENT_BUDGET_MS) {
         // Claim individually so a deadline never leaves an unstarted batch
         // leased for five minutes.
-        const [event] = await inbox.claim(1);
+        let [event] = await inbox.claim(1);
         if (!event || seen.has(event.id)) break;
         seen.add(event.id);
         claimed++;
@@ -621,16 +650,18 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           if (typeof inbox.defer === 'function') await inbox.defer(event);
           break;
         }
+        if(event.reply_has_pending_intent||event.reply_claimed_at)event=await refreshDelivery(event);
         if (staleInboundEvent(event, clock()) && (event.error_code || event.reply_claimed_at || (!event.owner_job_workspace_id&&!event.owner_job_checkpoint&&Number(event.attempts) > 1))) {
           await deadLetter(event, 'Stale delivery retry expired before reprocessing.');
           completed++;
           continue;
         }
-        if (event.attempts >= 5) {
+        if (event.attempts >= 5 && !event.replyIntent) {
           if(await failFinalAttempt(event))completed++;
           continue;
         }
         try {
+          if(await resumeCustomerReply(event)){completed++;continue;}
           const result = await processEvent(event, {signal: controller.signal, deadlineAt});
           if(result?.deferred)break;
           if (result?.plannerFailure) {
@@ -643,6 +674,8 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           const timedOut = controller.signal.aborted || clock() >= deadlineAt;
           logger.error('WhatsApp inbound event failed', { messageId: event.provider_message_id, name: error?.name || 'Error',
             timedOut, message: String(error?.message || '').slice(0, 200) });
+          try{event=await refreshDelivery(event);}catch{await inbox.defer({...event,reply_has_pending_intent:true},'REPLY_STATE_UNAVAILABLE');if(timedOut)break;continue;}
+          const retained=await retainSavedReply(event,error);if(retained){if(retained==='completed')completed++;if(timedOut)break;continue;}
           if(timedOut&&typeof inbox.yieldJob==='function'){
             await inbox.yieldJob(event);
             logger?.info?.('WhatsApp background work retained',{code:'OWNER_JOB_CONTINUATION',durationMs:clock()-startedAt});

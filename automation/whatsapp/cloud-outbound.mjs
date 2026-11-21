@@ -197,9 +197,17 @@ export function createWhatsAppOutbound({
       }
       if(result?.error)throw Object.assign(Error('Reply handoff acknowledgement unavailable'),{code:'REPLY_HANDOFF_UNAVAILABLE'});
       if(result?.data!==true)throw Object.assign(Error('Reply handoff already started or expired'),{code:'REPLY_HANDOFF_DENIED'});
-      if(authorizeTransport){const current=await authorizeTransport();if(!current.allowed)throw Object.assign(Error(current.reason||'Reply authority changed'),{code:current.reason==='service_window_closed'?'SERVICE_WINDOW_CLOSED':'REPLY_AUTHORITY_CHANGED',reason:current.reason||'reply_authority_changed'});}
-      // No await, lookup or composition may follow this clock read before fetch.
-      if(!withinServiceWindow(lastInboundAt,clock))throw Object.assign(Error('Service window closed'),{code:'SERVICE_WINDOW_CLOSED'});
+      try{
+        if(authorizeTransport){const current=await authorizeTransport();if(!current.allowed)throw Object.assign(Error(current.reason||'Reply authority changed'),{code:current.reason==='service_window_closed'?'SERVICE_WINDOW_CLOSED':'REPLY_AUTHORITY_CHANGED',reason:current.reason||'reply_authority_changed',retryable:current.retryable===true});}
+        // No await or lookup follows this clock read before the HTTP handoff.
+        if(!withinServiceWindow(lastInboundAt,clock))throw Object.assign(Error('Service window closed'),{code:'SERVICE_WINDOW_CLOSED'});
+      }catch(error){
+        // This invocation has NOT called transport. Its nonce can release only
+        // its own reservation; accepted/uncertain handoffs are never released.
+        const release=await supabase.rpc('whatsapp_release_reply_dispatch',{p_workspace_id:workspaceId,p_message_id:replyKey[2],p_phone:to,p_kind:kind,p_phase:replyKey[1]==='ack'?'ack':'answer',p_nonce:nonce});
+        if(!release?.error&&release?.data===true)error.knownUnsent=true;
+        throw error;
+      }
       return fetchImpl(url,init);
     }:fetchImpl;
     let response;
@@ -211,6 +219,7 @@ export function createWhatsAppOutbound({
         signal: AbortSignal.timeout(15000),
       }});
     } catch (error) {
+      if(error?.knownUnsent&&error.code!=='SERVICE_WINDOW_CLOSED'&&(error.code!=='REPLY_AUTHORITY_CHANGED'||error.retryable))return {status:'pending',reason:'reply_retryable'};
       if(error?.code==='SERVICE_WINDOW_CLOSED')return finish({status:'blocked',reason:'service_window_closed'});
       if(['REPLY_AUTHORITY_CHANGED','REPLY_HANDOFF_DENIED'].includes(error?.code))return finish({status:'blocked',reason:error.reason||'reply_authority_changed'});
       if(error?.code==='PRIVATE_PAYLOAD_BLOCKED')return finish({status:'blocked',reason:'private_payload'});

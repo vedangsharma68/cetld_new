@@ -11,3 +11,14 @@ export const prepareGoogleSignup=prepareSignupInvite;
 export function signupError(error){
  return /invite|database error|unexpected_failure|signup.*disabled/i.test(String(error?.message||error?.code||error))?INVITE_NOTICE:error?.message||'Could not create your account. Please try again.';
 }
+
+// Compatibility input may contain an invite code; GoTrue must NEVER receive it.
+// Database sanitization cannot mutate GoTrue's already-built response model.
+export async function signupWithInvite(client,request){
+ const metadata={...(request.options?.data||{})};
+ const code=metadata.signup_invite_code;delete metadata.signup_invite_code;
+ if(code)metadata.signup_invite_ticket=await prepareSignupInvite(client,{email:request.email,code});
+ const result=await client.auth.signUp({...request,options:{...request.options,data:metadata}});
+ const clean=value=>Array.isArray(value)?value.map(clean):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).filter(([key])=>!['signup_invite_code','signup_invite_ticket'].includes(key)).map(([key,v])=>[key,clean(v)])):value;
+ return {...result,data:clean(result.data)};
+}

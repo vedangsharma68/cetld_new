@@ -34,7 +34,7 @@ import {followUpPreferencesForm,insertReminderToken,readFollowUpPreferences,merg
 import {reminderBody} from './automation/preferences.mjs';
 import {syncLandingSessionCookie} from './session-cookie.mjs';
 import {authRedirectUrl,readEmailAuthLink,consumeEmailAuthLink} from './auth-link.mjs';
-import {INVITE_NOTICE,prepareGoogleSignup,prepareSignupInvite,signupError} from './signup-invite.mjs';
+import {INVITE_NOTICE,prepareGoogleSignup,prepareSignupInvite,signupError,signupWithInvite} from './signup-invite.mjs';
 
 const $=s=>document.querySelector(s);
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -98,7 +98,7 @@ function authPage(){
 }
 async function submitAuth(e){e.preventDefault();const form=e.currentTarget,submit=form.querySelector('[type=submit]');const data=new FormData(form);submit.disabled=true;const original=submit.innerHTML;submit.textContent='Please wait…';form.querySelector('[data-error]').classList.add('hidden');
  try{if(!db)throw Error('Authentication is unavailable. Please try again.');let result;const redirectTo=authRedirectUrl(location.origin);
- if(state.authMode==='signup'){const ticket=await prepareSignupInvite(db,{email:data.get('email'),code:data.get('inviteCode')});result=await db.auth.signUp({email:data.get('email'),password:data.get('password'),options:{emailRedirectTo:redirectTo,data:{signup_invite_ticket:ticket}}});if(result.error)throw result.error;if(!result.data.session){authError='Check your email to confirm your account, then sign in.';state.authMode='login';authPage();return}}
+ if(state.authMode==='signup'){const ticket=await prepareSignupInvite(db,{email:data.get('email'),code:data.get('inviteCode')});result=await signupWithInvite(db,{email:data.get('email'),password:data.get('password'),options:{emailRedirectTo:redirectTo,data:{signup_invite_ticket:ticket}}});if(result.error)throw result.error;if(!result.data.session){authError='Check your email to confirm your account, then sign in.';state.authMode='login';authPage();return}}
  else if(state.authMode==='reset'){result=await (recoveryDb||db).auth.resetPasswordForEmail(data.get('email'),{redirectTo});if(result.error)throw result.error;authError='If this address has an account, a reset link will arrive shortly.';state.authMode='login';authPage();return}
  else if(state.authMode==='recovery'){result=await db.auth.updateUser({password:data.get('password')});if(result.error)throw result.error;state.recovery=false;state.authMode='login';history.replaceState(null,'',location.pathname);toast('Password updated');await enterAccount(result.data.user);return}
  else{result=await db.auth.signInWithPassword({email:data.get('email'),password:data.get('password')});if(result.error)throw result.error}

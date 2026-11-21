@@ -8,12 +8,14 @@ set local statement_timeout='5s';
 create table if not exists app.private_dispatch_alias_cache (
  workspace_id uuid not null references public.workspaces(id) on delete cascade,
  revision bytea not null,
- input_kind text not null check(input_kind in ('generic','party','origin')),
+ input_kind text not null check(input_kind in ('generic','party','origin','origin-tagged')),
  input_hash bytea not null,
  input_value text not null,
  aliases text[] not null,
  primary key(workspace_id,revision,input_kind,input_hash)
 );
+alter table app.private_dispatch_alias_cache drop constraint if exists private_dispatch_alias_cache_input_kind_check;
+alter table app.private_dispatch_alias_cache add constraint private_dispatch_alias_cache_input_kind_check check(input_kind in ('generic','party','origin','origin-tagged'));
 alter table app.private_dispatch_alias_cache enable row level security;
 revoke all on app.private_dispatch_alias_cache from public,anon,authenticated,service_role;
 
@@ -44,6 +46,7 @@ begin
  when 'generic' then keys:=array(select * from app.private_invoice_term_aliases(p_value));
  when 'party' then keys:=array(select * from app.private_invoice_party_aliases(p_value));
  when 'origin' then keys:=array(select * from app.private_invoice_origin_aliases(p_value));
+ when 'origin-tagged' then keys:=array(select * from app.private_invoice_origin_aliases(p_value));
  else raise exception 'INVALID_PRIVATE_DISPATCH_CACHE_KIND';
  end case;
  if p_write and p_workspace_id is not null then
@@ -235,19 +238,26 @@ begin
 end $function$
 ;
 
+-- Projection semantics have their own revision. Canonical grammar may remain
+-- unchanged while a provenance/indexing repair requires rebuilding derived rows.
+create or replace function app.private_dispatch_index_revision() returns text language sql immutable set search_path='' as $$
+ select encode(sha256(convert_to(app.private_invoice_canonical_revision()||'/dispatch-projection-v3','UTF8')),'hex');
+$$;
+revoke all on function app.private_dispatch_index_revision() from public,anon,authenticated,service_role;
+
 -- Source membership and canonical projection are maintained on writes. A send
 -- reads the deduplicated global set, never reparses or regroups every tenant.
 create table if not exists app.private_dispatch_sources(
  workspace_id uuid not null references public.workspaces(id) deferrable initially deferred,
  term_hash text not null,term text not null,keys text[] not null,primary key(workspace_id,term_hash));
-create index if not exists private_dispatch_sources_hash on app.private_dispatch_sources(term_hash);
+
 create table if not exists app.private_dispatch_global_keys(
  workspace_id uuid not null,source_hash text not null,term_hash bytea not null,term text not null,alias_count integer not null default 0,primary key(workspace_id,source_hash,term_hash));
 create table if not exists app.private_dispatch_raw_edges(
  workspace_id uuid not null,source_hash text not null,term_hash bytea not null,
  key_hash bytea not null,key text not null,primary key(workspace_id,source_hash,term_hash,key_hash),
  foreign key(workspace_id,source_hash,term_hash) references app.private_dispatch_global_keys(workspace_id,source_hash,term_hash) on delete cascade);
-create index if not exists private_dispatch_global_order on app.private_dispatch_global_keys(term_hash);
+
 create index if not exists private_dispatch_raw_edges_key on app.private_dispatch_raw_edges(key_hash);
 create table if not exists app.private_dispatch_witnesses(
  workspace_id uuid not null,term_hash text not null,source_value text not null,party_hash bytea not null,party_key text not null,
@@ -273,7 +283,7 @@ begin
  if p_term ~ '^[a-z-]+:' and p_term not like 'origin:%' then return array[p_term];end if;
  if app.private_invoice_decode_json(p_term) is not null then return array[p_term];end if;
  if p_term like 'origin:%' or p_term !~ '^[a-z-]+:' and app.private_invoice_has_origin(p_term) then
-  keys:=array(select distinct k from unnest(app.private_dispatch_aliases(p_workspace_id,case when p_term like 'origin:%' then substring(p_term from 8) else p_term end,'origin',sha256(convert_to(app.private_invoice_canonical_revision(),'UTF8')),pg_try_advisory_xact_lock(1128617036,1146310723))) k
+  keys:=array(select distinct k from unnest(app.private_dispatch_aliases(p_workspace_id,case when p_term like 'origin:%' then substring(p_term from 8) else p_term end,case when p_term like 'origin:%' then 'origin-tagged' else 'origin' end,sha256(convert_to(app.private_invoice_canonical_revision(),'UTF8')),pg_try_advisory_xact_lock(1128617036,1146310723))) k
    where k ~ '^(number|number-run|date|date-range|party|party-native|party-latin|party-ref|identifier):');
   if cardinality(keys)>0 then return keys;end if;
  end if;
@@ -302,20 +312,20 @@ begin
  from (select workspace_id,term_hash,term from app.private_dispatch_sources where term !~ '^[a-z-]+:' or term like 'origin:%')s
  cross join lateral (
   select k from unnest(app.private_dispatch_aliases(s.workspace_id,s.term,'party',sha256(convert_to(app.private_invoice_canonical_revision(),'UTF8')),pg_try_advisory_xact_lock(1128617036,1146310723)))k where s.term !~ '^[a-z-]+:'
-  union select k from unnest(app.private_dispatch_aliases(s.workspace_id,case when s.term like 'origin:%' then substring(s.term from 8) else s.term end,'origin',sha256(convert_to(app.private_invoice_canonical_revision(),'UTF8')),pg_try_advisory_xact_lock(1128617036,1146310723)))k where k like 'party:%'
+  union select k from unnest(app.private_dispatch_aliases(s.workspace_id,case when s.term like 'origin:%' then substring(s.term from 8) else s.term end,case when s.term like 'origin:%' then 'origin-tagged' else 'origin' end,sha256(convert_to(app.private_invoice_canonical_revision(),'UTF8')),pg_try_advisory_xact_lock(1128617036,1146310723)))k where k like 'party:%'
  )a on conflict do nothing;
 end $$;
-create index if not exists private_dispatch_sources_raw on app.private_dispatch_sources(term_hash) where term !~ '^[a-z-]+:' or term like 'origin:%';
+
 
 create or replace function app.ensure_private_dispatch_index() returns boolean
 language plpgsql security definer set search_path='' as $$
-declare current_revision text:=app.private_invoice_canonical_revision();
+declare current_revision text:=app.private_dispatch_index_revision();
 begin
  if exists(select 1 from app.private_dispatch_index_state s where s.singleton and s.revision=current_revision) then return false;end if;
  perform pg_advisory_xact_lock(717717199);
  if exists(select 1 from app.private_dispatch_index_state s where s.singleton and s.revision=current_revision) then return false;end if;
  delete from app.private_dispatch_raw_edges;delete from app.private_dispatch_global_keys;delete from app.private_dispatch_sources;delete from app.private_dispatch_witnesses;
- insert into app.private_dispatch_sources select workspace_id,term_hash,term,app.private_dispatch_projection(workspace_id,term) from public.whatsapp_private_invoice_terms;
+ insert into app.private_dispatch_sources select workspace_id,term_hash,term,case when term ~ '^[a-z-]+:' and term not like 'origin:%' then array[term] else app.private_dispatch_projection(workspace_id,term) end from public.whatsapp_private_invoice_terms;
  insert into app.private_dispatch_global_keys(workspace_id,source_hash,term_hash,term,alias_count)
  select s.workspace_id,s.term_hash,sha256(convert_to(k,'UTF8')),k,case when k !~ '^[a-z-]+:' then -1 else 0 end
  from app.private_dispatch_sources s cross join lateral unnest(s.keys)k;
@@ -347,7 +357,7 @@ begin
   select distinct n.workspace_id,n.term_hash,case when n.term like 'origin:%' then substring(n.term from 8) else n.term end,sha256(convert_to(k,'UTF8')),k
   from dispatch_new_terms n cross join lateral (
    select k from unnest(app.private_dispatch_aliases(n.workspace_id,n.term,'party',sha256(convert_to(app.private_invoice_canonical_revision(),'UTF8')),pg_try_advisory_xact_lock(1128617036,1146310723)))k where n.term !~ '^[a-z-]+:'
-   union select k from unnest(app.private_dispatch_aliases(n.workspace_id,case when n.term like 'origin:%' then substring(n.term from 8) else n.term end,'origin',sha256(convert_to(app.private_invoice_canonical_revision(),'UTF8')),pg_try_advisory_xact_lock(1128617036,1146310723)))k where k like 'party:%'
+   union select k from unnest(app.private_dispatch_aliases(n.workspace_id,case when n.term like 'origin:%' then substring(n.term from 8) else n.term end,case when n.term like 'origin:%' then 'origin-tagged' else 'origin' end,sha256(convert_to(app.private_invoice_canonical_revision(),'UTF8')),pg_try_advisory_xact_lock(1128617036,1146310723)))k where k like 'party:%'
   )a where n.term !~ '^[a-z-]+:' or n.term like 'origin:%' on conflict do nothing;
  end if;
  return null;
@@ -368,7 +378,42 @@ create trigger private_dispatch_truncate after truncate on public.whatsapp_priva
 drop trigger if exists private_dispatch_customer on public.customers;
 create trigger private_dispatch_customer after insert or update of name on public.customers for each row execute function app.maintain_private_dispatch_customer();
 revoke all on function app.private_dispatch_projection(uuid,text),app.fill_private_dispatch_edges(),app.fill_private_dispatch_witnesses(),app.ensure_private_dispatch_index(),app.maintain_private_dispatch_index(),app.truncate_private_dispatch_index(),app.maintain_private_dispatch_customer() from public,anon,authenticated,service_role;
-select app.ensure_private_dispatch_index();
+-- The migration transaction publishes readiness only after every bulk stage.
+-- Canonical rows already ARE projected: no per-row parser/function invocation.
+-- Each statement has its own unchanged statement budget, including populated upgrades.
+select pg_advisory_xact_lock(717717199);
+-- Rebuild only private derived data, atomically. Bulk TRUNCATE avoids per-row
+-- deletion/FK work when upgrading a populated index from an older projection.
+do $rebuild$
+begin
+ if not exists(select 1 from app.private_dispatch_index_state where singleton and revision=app.private_dispatch_index_revision()) then
+  truncate app.private_dispatch_sources,app.private_dispatch_global_keys,app.private_dispatch_raw_edges,app.private_dispatch_witnesses,app.private_dispatch_customer_parties;
+ end if;
+end $rebuild$;
+
+delete from app.private_dispatch_raw_edges where not exists(select 1 from app.private_dispatch_index_state where singleton and revision=app.private_dispatch_index_revision());
+delete from app.private_dispatch_global_keys where not exists(select 1 from app.private_dispatch_index_state where singleton and revision=app.private_dispatch_index_revision());
+delete from app.private_dispatch_sources where not exists(select 1 from app.private_dispatch_index_state where singleton and revision=app.private_dispatch_index_revision());
+delete from app.private_dispatch_witnesses where not exists(select 1 from app.private_dispatch_index_state where singleton and revision=app.private_dispatch_index_revision());
+insert into app.private_dispatch_sources
+select t.workspace_id,t.term_hash,t.term,case when t.term ~ '^[a-z-]+:' and t.term not like 'origin:%' then array[t.term] else app.private_dispatch_projection(t.workspace_id,t.term) end
+from public.whatsapp_private_invoice_terms t where not exists(select 1 from app.private_dispatch_index_state where singleton and revision=app.private_dispatch_index_revision()) order by t.workspace_id,t.term_hash;
+insert into app.private_dispatch_global_keys(workspace_id,source_hash,term_hash,term,alias_count)
+select s.workspace_id,s.term_hash,sha256(convert_to(k,'UTF8')),k,case when k !~ '^[a-z-]+:' then -1 else 0 end
+from app.private_dispatch_sources s cross join lateral unnest(s.keys)k
+where not exists(select 1 from app.private_dispatch_index_state where singleton and revision=app.private_dispatch_index_revision()) order by s.workspace_id,s.term_hash,sha256(convert_to(k,'UTF8'));
+select app.fill_private_dispatch_edges() where not exists(select 1 from app.private_dispatch_index_state where singleton and revision=app.private_dispatch_index_revision());
+select app.fill_private_dispatch_witnesses() where not exists(select 1 from app.private_dispatch_index_state where singleton and revision=app.private_dispatch_index_revision());
+delete from app.private_dispatch_customer_parties where not exists(select 1 from app.private_dispatch_index_state where singleton and revision=app.private_dispatch_index_revision());
+insert into app.private_dispatch_customer_parties select distinct c.id,sha256(convert_to(k,'UTF8')),k from public.customers c cross join lateral app.private_invoice_party_aliases(app.private_invoice_normalize(c.name))k
+where not exists(select 1 from app.private_dispatch_index_state where singleton and revision=app.private_dispatch_index_revision());
+-- Finish the deferred source FK checks before building its indexes.
+set constraints app.private_dispatch_sources_workspace_id_fkey immediate;
+-- Build secondary indexes in bulk after initial heap population. Replays keep them.
+create index if not exists private_dispatch_sources_hash on app.private_dispatch_sources(term_hash);
+create index if not exists private_dispatch_global_order on app.private_dispatch_global_keys(term_hash);
+create index if not exists private_dispatch_sources_raw on app.private_dispatch_sources(term_hash) where term !~ '^[a-z-]+:' or term like 'origin:%';
+insert into app.private_dispatch_index_state values(true,app.private_dispatch_index_revision()) on conflict(singleton) do update set revision=excluded.revision;
 
 create or replace function public.whatsapp_dispatch_privacy_snapshot(p_workspace_id uuid,p_phone text) returns jsonb
 language plpgsql security definer set search_path='' as $$

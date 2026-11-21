@@ -106,7 +106,8 @@ export async function syncInvoiceRow({store, row, invoice, accounting, clock = (
   } catch (error) {
     if (['INVOICE_NOT_FOUND','WORKSPACE_SCOPE_VIOLATION','INVOICE_SYNC_LEASE_CHANGED'].includes(error?.code)) throw error;
     if(!dispatched&&recordedSyncFailure(row)&&['ACCOUNTING_NOT_CONNECTED','ACCOUNTING_NOT_CONFIGURED'].includes(error?.code)){
-      const saved=await finish({...row.metadata},{sync_status:row.sync_status,last_sync_error:row.last_sync_error});
+      const failureState=Object.fromEntries(Object.entries(row.metadata||{}).filter(([key])=>key.startsWith('bookkeeping_sync_')));
+      const saved=await finish(failureState,{sync_status:row.sync_status,last_sync_error:row.last_sync_error});
       return result(saved,row.metadata?.bookkeeping_sync_status||'failed',true);
     }
     const disconnected = ['ACCOUNTING_NOT_CONNECTED','ACCOUNTING_NOT_CONFIGURED'].includes(error?.code);

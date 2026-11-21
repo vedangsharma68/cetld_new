@@ -56,6 +56,6 @@ export async function getServiceReplyAuthority({supabase,env,workspaceId,phone,m
     if(!customer||customer.workspace_id!==workspaceId||customer.phone!==phone||customer.id!==contexts[0].customer_id)return denied('inbound_context_mismatch');
     return allowed({allowed:true,customer,authority:'customer'});
   } catch {
-    return denied('inbound_authority_unavailable');
+    return {...denied('inbound_authority_unavailable'),retryable:true};
   }
 }
