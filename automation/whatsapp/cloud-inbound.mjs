@@ -280,6 +280,16 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     });
     return outboundPromise;
   };
+  async function sendConfirmation(input) {
+    const sender=await getOutbound();
+    const result=await sender.sendServiceReply(input);
+    // Pending is a known-unsent delivery, not successful event processing.
+    // All confirmation routes share this contract, including unbound replies
+    // whose durable claim lives on the inbox rather than a scoped receipt.
+    if(result?.status==='pending')throw Object.assign(new Error('Confirmation awaits delivery'),{
+      code:'CONFIRMATION_REPLY_NOT_ACCEPTED',deliveryPending:true});
+    return result;
+  }
   async function downloadMedia(message) {
     if (!message.media_id) throw new Error('Media ID missing');
     const version = String(env.WHATSAPP_GRAPH_API_VERSION || '');
@@ -374,8 +384,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
         p_claim_token: event.claim_token,
       }), 'resubscribe');
       if (restored === true) {
-        const sender = await getOutbound();
-        await sender.sendServiceReply({workspaceId: null, to: event.sender_phone,
+        await sendConfirmation({workspaceId: null, to: event.sender_phone,
           kind: 'start_confirmation', messageId: event.provider_message_id,
           lastInboundAt: event.provider_timestamp || event.received_at, businessName: 'CETLD'});
       }
@@ -412,34 +421,36 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       }
       await recordOptOut(event);
       if (event.stop_confirmation_due) {
-        const sender = await getOutbound();
-        await sender.sendServiceReply({ workspaceId: event.stop_workspace_id, to: event.sender_phone,
+        await sendConfirmation({ workspaceId: event.stop_workspace_id, to: event.sender_phone,
           body: stopReply, lastInboundAt: event.provider_timestamp || event.received_at, kind: 'stop_confirmation',
           messageId: event.provider_message_id, businessName: await businessName(event.stop_workspace_id) });
       }
       return 'opt_out';
     }
       const linkMatch = /^\s*link[\s:-]*(\d{6})\s*$/i.exec(event.message_text || '');
-      if (!owner&&linkMatch) {
+      // A committed linking side effect changes the current binding. A known
+      // unsent confirmation still belongs to the original protocol turn, not
+      // a new owner/model turn; the verification RPC itself replays safely.
+      const unsentConfirmation=!event.replyIntent&&event.reply_claimed_at&&event.reply_reservation_nonce&&!event.reply_dispatch_started_at;
+      if (linkMatch&&(!owner||unsentConfirmation)) {
         // The sender phone comes from WhatsApp, so a matching dashboard code proves they hold the number.
         try {
           const { data: result, error } = await supabase.rpc('whatsapp_verify_owner_code', { p_phone: event.sender_phone, p_code: linkMatch[1] });
           if (error) throw error;
-          const sender = await getOutbound();
-          await sender.sendServiceReply({ workspaceId: null, to: event.sender_phone, body: '',
+          await sendConfirmation({ workspaceId: null, to: event.sender_phone, body: '',
             ownerLinkResult: result?.ok === true ? 'linked' : 'failed',
             lastInboundAt: event.provider_timestamp || event.received_at, kind: 'verification',
             messageId: event.provider_message_id, businessName: 'CETLD' });
           return 'verify';
         } catch (error) {
+          if(error?.deliveryPending)throw error;
           logger?.error?.('WhatsApp owner link failed', { message: String(error?.message || '').slice(0, 200) });
         }
       }
     const bindings=owner?[owner]:await resolveActiveBindings({supabase,phone:event.sender_phone});
     if(bindings.length!==1){
       if(env.WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED==='true'){
-        const sender=await getOutbound();
-        await sender.sendServiceReply({workspaceId:null,to:event.sender_phone,kind:'verification',
+        await sendConfirmation({workspaceId:null,to:event.sender_phone,kind:'verification',
           messageId:event.provider_message_id,lastInboundAt:event.provider_timestamp||event.received_at,businessName:'CETLD'});
       }
       return 'verify';
@@ -593,12 +604,13 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           body:failedOwner.reply,lastInboundAt:event.provider_timestamp||event.received_at,kind:'normal',audience:'owner',
           messageId:event.provider_message_id,businessName:await businessName(failedOwner.binding.workspaceId)});
         if(sent?.status!=='accepted'){await inbox.defer(event, 'OWNER_REPLY_NOT_ACCEPTED');return false;}
-      }else await sender.sendServiceReply({ workspaceId: null, to: event.sender_phone, body: SAFE_FALLBACK_REPLY,
+      }else await sendConfirmation({ workspaceId: null, to: event.sender_phone, body: SAFE_FALLBACK_REPLY,
         lastInboundAt: event.provider_timestamp || event.received_at, kind: 'verification',
         messageId: event.provider_message_id, businessName: 'CETLD' });
     } catch (error) {
       logger.error('WhatsApp final-attempt fallback failed', { messageId: event.provider_message_id,
         message: String(error?.message || '').slice(0, 200) });
+      if(error?.deliveryPending){await inbox.defer(event,error.code,error.message);return false;}
       if(failedOwner?.verifiedOwner||failedOwner?.bindingUnavailable){await inbox.defer(event, 'OWNER_REPLY_NOT_ACCEPTED');return false;}
     }
     await inbox.complete(event, 'PROCESSING_FAILED', null, false);
@@ -664,6 +676,11 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           if(await resumeCustomerReply(event)){completed++;continue;}
           const result = await processEvent(event, {signal: controller.signal, deadlineAt});
           if(result?.deferred)break;
+          // Confirmation routes must also settle their durable intent. Normal
+          // replies already require the sender's accepted-result contract;
+          // their review drafts are not confirmation delivery receipts.
+          event=await refreshDelivery(event);
+          if(event.replyIntent?.kind!=='normal'&&event.replyIntent?.status==='pending'&&!event.replyIntent.dispatch_started_at){await retainSavedReply(event);continue;}
           if (result?.plannerFailure) {
             const detail = JSON.stringify(result.plannerFailure).slice(0, 1000);
             await inbox.complete(event, 'ASSISTANT_PLANNER_FAILED', detail, false);
@@ -676,6 +693,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
             timedOut, message: String(error?.message || '').slice(0, 200) });
           try{event=await refreshDelivery(event);}catch{await inbox.defer({...event,reply_has_pending_intent:true},'REPLY_STATE_UNAVAILABLE');if(timedOut)break;continue;}
           const retained=await retainSavedReply(event,error);if(retained){if(retained==='completed')completed++;if(timedOut)break;continue;}
+          if(error?.deliveryPending){await inbox.defer(event,error.code,error.message);if(timedOut)break;continue;}
           if(timedOut&&typeof inbox.yieldJob==='function'){
             await inbox.yieldJob(event);
             logger?.info?.('WhatsApp background work retained',{code:'OWNER_JOB_CONTINUATION',durationMs:clock()-startedAt});
@@ -690,6 +708,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
           // Never leave the sender in silence: say what happened, then close the event.
           let failedOwner=null;
           let ownerReplyAccepted=false;
+          let confirmationPending=false;
           try {
             failedOwner=await ownerFailureContext(event);
             if(failedOwner.bindingUnavailable)throw Object.assign(new Error('Owner binding is temporarily unavailable.'),{code:'OWNER_BINDING_UNAVAILABLE'});
@@ -700,14 +719,16 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
                 messageId:event.provider_message_id,businessName:await businessName(failedOwner.binding.workspaceId)});
                 ownerReplyAccepted=sent?.status==='accepted';
               }
-            }else await sender.sendServiceReply({ workspaceId: null, to: event.sender_phone,
+            }else await sendConfirmation({ workspaceId: null, to: event.sender_phone,
               body: timedOut ? TIMEOUT_REPLY : SAFE_FALLBACK_REPLY,
               lastInboundAt: event.provider_timestamp || event.received_at, kind: 'verification',
               messageId: event.provider_message_id, businessName: 'CETLD' });
           } catch (replyError) {
+            confirmationPending=replyError?.deliveryPending===true;
             logger.error('WhatsApp failure notice failed', { messageId: event.provider_message_id,
               message: String(replyError?.message || '').slice(0, 200) });
           }
+          if(confirmationPending){await inbox.defer(event,'CONFIRMATION_REPLY_NOT_ACCEPTED');if(timedOut)break;continue;}
           if((failedOwner?.verifiedOwner&&!ownerReplyAccepted)||failedOwner?.bindingUnavailable){
             if(typeof inbox.defer==='function')await inbox.defer(event, failedOwner?.bindingUnavailable ? 'OWNER_BINDING_UNAVAILABLE' : 'OWNER_REPLY_NOT_ACCEPTED', String(error?.message || '').slice(0, 1000));
             else await inbox.complete(event,timedOut?'PROCESSING_TIMEOUT':'PROCESSING_FAILED',

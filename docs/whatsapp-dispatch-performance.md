@@ -113,6 +113,22 @@ the claim commits but before the fence, asserts zero initial sends and a pending
 event/receipt, then proves exactly one stored-body send and a delivered callback.
 Its paired terminal-denial test remains blocked across reconstruction.
 
+The inbound worker applies the same pending-result contract to every confirmation
+route, not only ordinary replies. STOP/START and verification processing does not
+complete an event while its confirmation is known-unsent. A completion guard
+reloads the saved confirmation receipt; pending without a handoff marker defers
+the event. Normal review drafts retain their existing accepted-result contract.
+Scoped STOP retries resume the exact stored confirmation through the original
+authority/admission/fence checks, without changing committed suppression. Unbound
+confirmations reuse the inbox's original idempotent protocol. A committed LINK's
+pending confirmation stays in that protocol even after binding changes; it cannot
+take over an existing scoped reply. Accepted/uncertain handoffs remain quarantined
+against resend and actual terminal denials stay terminal.
+
+`pr213-confirmation-recovery` proves transient/terminal cases for STOP, START,
+verification and LINK; exact stored-body delivery once after reconstruction;
+unchanged STOP suppression throughout; and normal-owner reply isolation.
+
 Pending intents remain eligible beyond the old one-hour error limit, only within
 the actual inbound timestamp's 24-hour window. Other inbound work retains its
 existing retry-age policy. After all awaited binding/consent checks and the fence,
