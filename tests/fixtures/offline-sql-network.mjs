@@ -22,6 +22,10 @@ export const OFFLINE_SQL_BOOTSTRAP=`create role anon;create role authenticated;c
     alter table storage.objects enable row level security;`;
 
 export async function offlineSqlMigrationSources(excludeMigrations=[]){
+  // A historical schema without canonical capture cannot install its later
+  // performance extension; the historical tests still run their original body.
+  if(excludeMigrations.includes('20261101120327_private_whatsapp_chat_memory.sql'))
+    excludeMigrations=[...excludeMigrations,'20261120132445_dispatch_privacy_performance.sql'];
   const files=(await readdir(new URL('../../supabase/migrations/',import.meta.url))).filter(file=>file.endsWith('.sql') && !['20261023164251_exact_reminder_approval_artifact.sql','20261023083356_per_message_reminder_review.sql','20261005070000_approved_whatsapp_reminders.sql','20261018060000_customer_reminder_tone.sql','20261018060100_invoice_details_templates.sql','20261018090021_remove_stop_footer.sql','20261020105604_invoice_reminder_full_customer_name.sql','20261022221930_default_payment_reminder_draft.sql'].includes(file) && !excludeMigrations.includes(file)).sort();
   const migrations=await Promise.all(files.map(async file=>[file,await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8')]));
   return migrations;
@@ -46,6 +50,17 @@ async function createFixtureDatabase(excludeMigrations){
     const result=await db.exec(privateBackfillBatchSQL());
     if(result.find(item=>item.rows?.[0]?.result)?.rows[0].result.allComplete)break;
   }
+  // Business fixtures create pre-approved operators directly in auth.users,
+  // rather than using GoTrue registration. Seed two explicit tenant grants for
+  // their cross-tenant scenarios. Auth gate regressions use unmodified native
+  // migrations and do NOT install this fixture-only operator approval hook.
+  if(!excludeMigrations.includes('20261120125758_signup_invites.sql'))await db.exec(`
+   create function app.fixture_operator_tenant_grants() returns trigger language plpgsql as $$begin
+    insert into app.signup_invites(email,code_hash,expires_at,consumed_at,consumed_by)
+    select 'fixture-'||new.id::text||'@example.test',sha256(convert_to(gen_random_uuid()::text,'UTF8')),now()+interval '1 day',now(),new.id from generate_series(1,2);
+    return new;end$$;
+   create trigger fixture_operator_tenant_grants after insert on auth.users for each row when(current_user='postgres') execute function app.fixture_operator_tenant_grants();
+  `);
   return db;
   }catch(error){await db.close();throw error;}
   }});

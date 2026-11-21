@@ -9,6 +9,10 @@ export function deadlineFetch(fetchImpl, timeoutMs) {
 export const MAX_SYNC_ATTEMPTS = 5;
 export const SYNC_LEASE_MS = 10 * 60_000;
 export function syncRetryDelay(attempt) { return Math.min(6 * 3600_000, 5 * 60_000 * 2 ** Math.max(0, attempt - 1)); }
+function recordedSyncFailure(row){
+ const m=row.metadata||{},code=m.bookkeeping_sync_error||row.last_sync_error;
+ return Boolean(code&&code!=='ACCOUNTING_NOT_CONNECTED'||m.bookkeeping_sync_http_status||m.bookkeeping_sync_provider_code||m.bookkeeping_sync_provider_message);
+}
 function attemptCount(metadata) {
   const value=Number(metadata?.bookkeeping_sync_attempts || 0);
   return Number.isSafeInteger(value) && value>=0 ? value : MAX_SYNC_ATTEMPTS;
@@ -43,7 +47,9 @@ export async function syncInvoiceRow({store, row, invoice, accounting, clock = (
     return result(saved,saved.metadata?.bookkeeping_sync_status || 'failed');
   }
   if (eligibility === 'excluded' || !accounting?.syncInvoice) {
-    const saved = await updateState({...row.metadata,bookkeeping_sync_status:'not_configured'});
+    const unconfigured=!recordedSyncFailure(row)&&!accounting?.syncInvoice&&attemptCount(row.metadata)===0&&!row.metadata?.bookkeeping_provider&&!row.external_provider&&(!row.metadata?.bookkeeping_sync_error||row.metadata.bookkeeping_sync_error==='ACCOUNTING_NOT_CONNECTED')&&(!row.last_sync_error||row.last_sync_error==='ACCOUNTING_NOT_CONNECTED');
+    if(!accounting?.syncInvoice&&!unconfigured)return result(row,row.metadata?.bookkeeping_sync_status||'failed',true);
+    const saved = await updateState({...row.metadata,bookkeeping_sync_status:'not_configured',...(unconfigured?{bookkeeping_sync_error:null,bookkeeping_sync_next_at:null,bookkeeping_sync_http_status:null,bookkeeping_sync_exhausted:false}:{})},unconfigured?{sync_status:'local',last_sync_error:null}:{});
     return result(saved,saved.metadata?.bookkeeping_sync_status || 'not_configured');
   }
   // New-cutover operations must start before the first caller-editable lease
@@ -99,8 +105,20 @@ export async function syncInvoiceRow({store, row, invoice, accounting, clock = (
     response = await dispatch();
   } catch (error) {
     if (['INVOICE_NOT_FOUND','WORKSPACE_SCOPE_VIOLATION','INVOICE_SYNC_LEASE_CHANGED'].includes(error?.code)) throw error;
+    if(!dispatched&&recordedSyncFailure(row)&&['ACCOUNTING_NOT_CONNECTED','ACCOUNTING_NOT_CONFIGURED'].includes(error?.code)){
+      const failureState=Object.fromEntries(Object.entries(row.metadata||{}).filter(([key])=>key.startsWith('bookkeeping_sync_')));
+      const saved=await finish(failureState,{sync_status:row.sync_status,last_sync_error:row.last_sync_error});
+      return result(saved,row.metadata?.bookkeeping_sync_status||'failed',true);
+    }
     const disconnected = ['ACCOUNTING_NOT_CONNECTED','ACCOUNTING_NOT_CONFIGURED'].includes(error?.code);
     const status = disconnected ? 'not_configured' : 'failed';
+    // No provider dispatch/history means bookkeeping was never configured,
+    // rather than a failed export. Connecting later lets the existing sweep
+    // discover this row; there is no timer or error to show in the meantime.
+    if(error?.code==='ACCOUNTING_NOT_CONNECTED'&&!dispatched&&previousAttempts===0&&!row.metadata?.bookkeeping_provider&&!row.external_provider&&(!row.metadata?.bookkeeping_sync_error||row.metadata.bookkeeping_sync_error==='ACCOUNTING_NOT_CONNECTED')&&(!row.last_sync_error||row.last_sync_error==='ACCOUNTING_NOT_CONNECTED')){
+      const saved=await finish({bookkeeping_sync_status:'not_configured',bookkeeping_sync_error:null,bookkeeping_sync_http_status:null,bookkeeping_sync_provider_code:null,bookkeeping_sync_provider_message:null,bookkeeping_sync_provider_operation:null,bookkeeping_sync_exhausted:false,bookkeeping_sync_next_at:null},{sync_status:'local',last_sync_error:null});
+      return result(saved,'not_configured',false);
+    }
     const errorCode = String(error?.code || 'SYNC_FAILED').slice(0,80);
     const exhausted = (dispatched ? attempts : previousAttempts) >= MAX_SYNC_ATTEMPTS;
     const diagnostics=providerDiagnostics(error);

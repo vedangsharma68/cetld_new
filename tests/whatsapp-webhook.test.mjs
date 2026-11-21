@@ -829,7 +829,7 @@ test('dead-letter state uses the existing terminal failed status and lease-scope
 
 test('deferring a stale failed delivery becomes terminal rather than extending its backoff',async()=>{
   let update;
-  const supabase={from(){return {update(value){update=value;return this;},eq(){return this;},
+  const supabase={from(){return {select(){return this;},maybeSingle:async()=>({data:{reply_has_pending_intent:false}}),update(value){update=value;return this;},eq(){return this;},
     then(resolve){return Promise.resolve({data:null,error:null}).then(resolve);}};}};
   await new SupabaseInboundInbox(supabase).defer({id:46,claim_token:'lease',attempts:1,
     received_at:new Date(Date.now()-3_600_001).toISOString()},'OWNER_REPLY_NOT_ACCEPTED');
