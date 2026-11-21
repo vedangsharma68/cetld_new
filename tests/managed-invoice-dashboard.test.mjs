@@ -1,3 +1,4 @@
+import {bookkeepingSyncLabel,bookkeepingSyncError,isUnconfiguredBookkeeping,showBookkeepingSyncError} from '../invoice/bookkeeping-client.mjs';
 import {receivableBalanceLabel} from '../invoice/receivables.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -46,7 +47,7 @@ test('real incoming payment action and detail drawer deny managed invoices witho
     assert.equal(opened,false);
     const drawerState={invoices:[current],demo:true};
     vm.runInNewContext(detailSource+'detail("own-invoice")',{
-      state:drawerState,ownerTemplateTestUI:createOwnerTemplateTestUI({state:drawerState}),isExternallyManagedInvoice,terminalInvoice:()=>false,remaining:()=>10000,
+      bookkeepingSyncLabel,bookkeepingSyncError,isUnconfiguredBookkeeping,showBookkeepingSyncError,state:drawerState,ownerTemplateTestUI:createOwnerTemplateTestUI({state:drawerState}),isExternallyManagedInvoice,terminalInvoice:()=>false,remaining:()=>10000,
       activeException:()=>null,receivableBalanceLabel,followupStage:()=>['Draft',''],openDialog:(_,html)=>detail=html,escape:String,status:()=> 'Open',
       money:()=>'$100',tag:()=>'',day:()=>'',deliveryState:()=>'',invoiceBusinessDetails:()=>'',customFieldsView:()=>'',icon:()=>'',
       button:action=>`<button data-action="${action}">${action}</button>`,

@@ -1,0 +1,40 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {fixture} from './fixtures/private-invoice.mjs';import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';import {createConversationStore} from '../automation/whatsapp/conversation-store.mjs';
+const env={WHATSAPP_OUTBOUND_ENABLED:'true',WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED:'true',WHATSAPP_ACCESS_TOKEN:'fixture',WHATSAPP_PHONE_NUMBER_ID:'123456',WHATSAPP_GRAPH_API_VERSION:'v24.0'},logger={info(){},warn(){},error(){}};
+for(const kind of ['stop_confirmation','start_confirmation','verification','link-verification'])for(const failure of ['transient','terminal'])test('durable confirmation '+kind+'/'+failure+' preserves delivery and consent state across reconstruction',async()=>{
+ const f=await fixture();try{
+  const phone='+12025550829',id='wamid.confirmation-'+kind+'-'+failure,stamp=new Date().toISOString(),sent=[];
+  const customer=(await f.db.query("insert into customers(workspace_id,name,phone) values($1,'Confirmation Grove',$2) returning id",[f.scope.workspaceId,phone])).rows[0].id;
+  if(!['verification','link-verification'].includes(kind))await f.db.query("insert into whatsapp_consents(workspace_id,customer_id,phone,source,consent_text_version,categories) values($1,$2,$3,'verbal','fixture',array['invoice_updates'])",[f.scope.workspaceId,customer,phone]);
+  let text=kind==='stop_confirmation'?'STOP':kind==='start_confirmation'?'START':'Hello';
+  if(kind==='link-verification'){
+   await f.db.query("select set_config('request.jwt.claim.role','authenticated',false),set_config('request.jwt.claim.sub',$1,false)",[f.scope.ownerId]);const verification=(await f.db.query('select * from owner_start_whatsapp_verification($1,$2)',[f.scope.workspaceId,phone])).rows[0];text='LINK '+verification.code;
+   await f.db.query("select set_config('request.jwt.claim.role','service_role',false),set_config('request.jwt.claim.sub','',false)");
+  }
+  await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,provider_timestamp,received_at,status) values($1,'123456',$2,'text',$3,$4,$4,'pending')",[id,phone,text,stamp]);
+  let claimed=false,injected=false,fences=0;
+  const supabase={from:table=>{const query=f.supabase.from(table);if(table==='whatsapp_inbound_events'){const select=query.select.bind(query);query.select=(...args)=>{const q=select(...args),single=q.maybeSingle.bind(q);q.maybeSingle=async()=>{if(args[0]==='*'&&claimed&&!injected){injected=true;assert.equal(fences,0);return failure==='transient'?{error:{code:'08006',message:'Temporary authority read failure'}}:{data:null,error:null};}return single();};return q;};}return query;},rpc:async(name,args)=>{if(name==='whatsapp_begin_reply_dispatch')fences++;const r=await f.supabase.rpc(name,args);if(name==='whatsapp_claim_reserved_reply'&&r.data===true)claimed=true;return r;}};
+  const runtime=()=>createInboundRuntime({supabase,env,logger,onBoundMessage:()=>assert.fail('Confirmation cannot reach a model'),onOwnerMessage:()=>assert.fail('Confirmation cannot reach owner routing'),fetchImpl:async(_,init)=>{const payload=JSON.parse(init.body);if(payload.status==='read')return Response.json({success:true});sent.push(payload);return Response.json({messages:[{id:'wamid.confirmation-delivered'}]});}});
+  const event=async()=>(await f.db.query('select * from whatsapp_inbound_events where provider_message_id=$1',[id])).rows[0];
+  const receipt=async()=>(await f.db.query("select * from whatsapp_messages where direction='outbound' and idempotency_key=$1",['reply:'+id])).rows[0];
+  const consent=async()=>({consents:(await f.db.query('select * from whatsapp_consents where phone=$1',[phone])).rows,scoped:(await f.db.query('select * from whatsapp_suppressions where phone=$1',[phone])).rows,global:(await f.db.query('select * from whatsapp_global_suppressions where phone=$1',[phone])).rows});
+  const first=await runtime().processPending();assert.equal(injected,true);assert.equal(claimed,true);assert.equal(fences,0);assert.equal(sent.length,0);
+  const preserved=await consent();if(kind==='stop_confirmation'){assert.ok(preserved.consents[0].revoked_at);assert.equal(preserved.consents[0].revoked_via,'stop');assert.equal(preserved.scoped.length,1);assert.equal(preserved.global.length,1);assert.ok((await event()).stop_processed_at);}
+  if(failure==='terminal'){assert.equal((await event()).status,'done');if(kind==='stop_confirmation')assert.equal((await receipt()).status,'blocked');assert.equal((await runtime().processPending()).claimed,0);assert.equal(sent.length,0);assert.deepEqual(await consent(),preserved);return;}
+  assert.equal(first.completed,0);assert.equal((await event()).status,'pending');assert.ok((await event()).error_code);assert.equal((await event()).reply_dispatch_started_at,null);
+  const saved=await receipt();if(kind==='stop_confirmation'){assert.equal(saved.kind,kind);assert.equal(saved.status,'pending');assert.equal(saved.dispatch_started_at,null);assert.ok((await event()).reply_has_pending_intent);}
+  await f.db.query("update whatsapp_inbound_events set next_attempt_at=now()-interval '1 minute' where provider_message_id=$1",[id]);const second=await runtime().processPending();assert.equal(second.claimed,1);assert.equal(second.completed,1);assert.equal(sent.length,1);assert.equal(sent[0].type,'text');assert.equal((await event()).status,'done');assert.deepEqual(await consent(),preserved);
+  if(kind==='stop_confirmation'){assert.equal(sent[0].text.body,saved.body);assert.equal((await receipt()).status,'accepted');const store=createConversationStore(f.supabase);await store.status({messageId:'wamid.confirmation-delivered',phone,status:'delivered'});assert.equal((await receipt()).status,'delivered');}
+  else assert.match(sent[0].text.body,kind==='start_confirmation'?/updates again/:kind==='link-verification'?/Connected\./:/verify your WhatsApp number/);
+  assert.equal((await runtime().processPending()).claimed,0);assert.equal(sent.length,1);assert.deepEqual(await consent(),preserved);
+ }finally{await f.close();}
+});
+test('a saved normal owner reply cannot be reinterpreted as an unbound linking confirmation',async()=>{
+ const f=await fixture();try{
+  const id='wamid.normal-owner-link',phone=f.scope.phone,body='The saved ordinary owner answer',sent=[];
+  await f.db.query("insert into whatsapp_inbound_events(provider_message_id,phone_number_id,sender_phone,message_type,message_text,provider_timestamp,status) values($1,'123456',$2,'text','LINK 123456',now(),'pending')",[id,phone]);
+  const store=createConversationStore(f.supabase);await store.record({workspaceId:f.scope.workspaceId,phone,direction:'outbound',audience:'owner',body,status:'pending',kind:'normal',key:'reply:'+id});
+  let lose=true,verifyCalls=0;const supabase={from:f.supabase.from.bind(f.supabase),rpc:async(name,args)=>{if(name==='whatsapp_verify_owner_code')verifyCalls++;const r=await f.supabase.rpc(name,args);if(name==='whatsapp_claim_reserved_reply'&&r.data===true&&lose){lose=false;return {error:{code:'08006',message:'Committed claim acknowledgement lost'}};}return r;}};
+  const runtime=()=>createInboundRuntime({supabase,env,logger,onOwnerMessage:async()=>({answer:body}),onBoundMessage:()=>assert.fail('Owner cannot become a customer'),fetchImpl:async(_,init)=>{const payload=JSON.parse(init.body);if(payload.status==='read')return Response.json({success:true});sent.push(payload);return Response.json({messages:[{id:'wamid.owner-original'}]});}});
+  await runtime().processPending();assert.equal(sent.length,0);await f.db.query("update whatsapp_inbound_events set next_attempt_at=now()-interval '1 minute' where provider_message_id=$1",[id]);await runtime().processPending();assert.equal(verifyCalls,0);assert.equal(sent.length,1);assert.equal(sent[0].text.body,body);await runtime().processPending();assert.equal(sent.length,1);assert.equal((await f.db.query('select status from whatsapp_inbound_events where provider_message_id=$1',[id])).rows[0].status,'done');
+ }finally{await f.close();}
+});

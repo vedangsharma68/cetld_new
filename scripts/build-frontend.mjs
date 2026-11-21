@@ -1,3 +1,5 @@
+import {assertSignupServerReady,assertDispatchServerReady} from '../signup-rollout.mjs';
+import {config as signupConfig} from '../config.js';
 import {readFile,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
@@ -5,6 +7,8 @@ import {pathToFileURL} from 'node:url';
 
 // Hash the actual browser import graph, including transitive .mjs dependencies.
 export async function buildFrontend(root=process.cwd()) {
+  if(process.env.VERCEL_ENV==='production')await assertSignupServerReady(signupConfig);
+  if(process.env.VERCEL_ENV==='production')await assertDispatchServerReady(signupConfig);
   const files=new Map();
   async function visit(name) {
     name=path.posix.normalize(name);
@@ -15,6 +19,7 @@ export async function buildFrontend(root=process.cwd()) {
     }
   }
   for(const file of ['app.js','styles.css','LatticeLoader.css'])await visit(file);
+  try{const invitation=await readFile(path.join(root,'invite.html'),'utf8');files.set('invite.html',invitation);await visit('invite-entry.mjs');await visit('invite-entry.css');}catch(error){if(error.code!=='ENOENT'||process.env.VERCEL_ENV==='production')throw error;}
   const html=await readFile(path.join(root,'app/index.html'),'utf8');
   const clean=html.replace(/(<meta name="app-version" content=")[^"]+/, '$1development').replace(/\?v=[a-f0-9]{64}/g,'');
   const hash=createHash('sha256').update(process.env.VERCEL_GIT_COMMIT_SHA||'').update('\0').update(clean);

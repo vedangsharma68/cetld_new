@@ -1,3 +1,4 @@
+import {bookkeepingSyncLabel,bookkeepingSyncError,isUnconfiguredBookkeeping,showBookkeepingSyncError} from '../invoice/bookkeeping-client.mjs';
 // Existing own-number proof policy; no copied personal contact literal.
 import {REMINDER_PROOF_PHONE as QA_POLICY_PHONE} from '../automation/whatsapp/reminder-proof.mjs';
 import {receivableBalanceLabel} from '../invoice/receivables.mjs';
@@ -203,7 +204,7 @@ test(`repeated invoice drawer opens gate test-preview requests with button eligi
     openDialog:(_title,body)=>drawers.push(body),escape,status:()=> 'Open',remaining:()=>10000,
     receivableBalanceLabel,terminalInvoice:()=>false,activeException:()=>null,followupStage:()=>['Draft',''],
     money:()=>'$100',tag:()=>'',day:()=>'',deliveryState:()=>'',invoiceBusinessDetails:()=>'',
-    customFieldsView:()=>'',icon:()=>'',canRetryInvoiceSync:()=>false,isExternallyManagedInvoice:()=>false,
+    bookkeepingSyncLabel,bookkeepingSyncError,isUnconfiguredBookkeeping,showBookkeepingSyncError,customFieldsView:()=>'',icon:()=>'',canRetryInvoiceSync:()=>false,isExternallyManagedInvoice:()=>false,
     button:(action,label)=>`<button data-action="${action}">${label}</button>`,
     $:()=>({open:true,querySelector:()=>({insertAdjacentHTML:(_position,html)=>insertions.push(html)})}),
   };

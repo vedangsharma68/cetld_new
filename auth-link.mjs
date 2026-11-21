@@ -1,3 +1,4 @@
+import {INVITE_NOTICE} from './signup-invite.mjs';
 export const AUTH_CALLBACK_PATH = '/app/';
 
 export function authRedirectUrl(origin) {
@@ -39,6 +40,7 @@ export async function consumeEmailAuthLink(client, link, {clearUrl, clearLanding
     clearLandingSession?.();
     return {handled: true, error: true, recovery: link.recovery, notice: link.recovery
       ? 'That reset link expired or could not be verified. You are signed out. Request a new one below.'
+      : /invite|database error|unexpected_failure/i.test(link.problem||'') ? INVITE_NOTICE
       : 'That sign-in link could not be verified. You are signed out. Please sign in below.'};
   } finally {
     clearUrl?.();

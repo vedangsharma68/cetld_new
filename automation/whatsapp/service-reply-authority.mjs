@@ -15,13 +15,14 @@ export async function getServiceReplyAuthority({supabase,env,workspaceId,phone,m
       ||event.phone_number_id!==env.WHATSAPP_PHONE_NUMBER_ID||event.status!=='processing')return denied('inbound_context_mismatch');
     const received=Date.parse(event.provider_timestamp??event.received_at),now=Number(new Date(clock()));
     if(!Number.isFinite(received)||!Number.isFinite(now)||now<received||now-received>=24*60*60*1000)return denied('service_window_closed');
+    const allowed=value=>{const finalNow=Number(new Date(clock()));return finalNow>=received&&finalNow-received<24*60*60*1000?value:denied('service_window_closed');};
     if(!['normal','verification','start_confirmation','stop_confirmation'].includes(kind))return denied('inbound_kind_mismatch');
     // STOP is a single fixed acknowledgment, authorized by its existing claim,
     // not an exception that can send arbitrary text to a suppressed recipient.
     if(event.stop_processed_at){
       return kind==='stop_confirmation'&&audience==='customer'&&phase==='answer'&&event.stop_confirmation_due===true
         &&(event.stop_workspace_id??null)===workspaceId
-        ?{allowed:true,customer:null,authority:'stop_confirmation'}:denied('inbound_kind_mismatch');
+        ?allowed({allowed:true,customer:null,authority:'stop_confirmation'}):denied('inbound_kind_mismatch');
     }
     if(kind==='stop_confirmation')return denied('inbound_kind_mismatch');
     if(isOptOut(event.message_text)&&!/^cancel[.!\s]*$/i.test(event.message_text.trim()))return denied('inbound_kind_mismatch');
@@ -32,7 +33,7 @@ export async function getServiceReplyAuthority({supabase,env,workspaceId,phone,m
       if(!owner||owner.workspaceId!==workspaceId
         ||event.owner_job_workspace_id&&event.owner_job_workspace_id!==workspaceId
         ||event.owner_job_owner_id&&event.owner_job_owner_id!==owner.ownerId)return denied('owner_binding_mismatch');
-      return {allowed:true,customer:null,ownerId:owner.ownerId,authority:'owner'};
+      return allowed({allowed:true,customer:null,ownerId:owner.ownerId,authority:'owner'});
     }
     if(audience!=='customer'||phase!=='answer')return denied('owner_binding_mismatch');
     const global=unwrap(await supabase.from('whatsapp_global_suppressions').select('suppressed_at').eq('phone',phone).maybeSingle());
@@ -41,7 +42,7 @@ export async function getServiceReplyAuthority({supabase,env,workspaceId,phone,m
     const suppressed=workspaceId===null?unwrap(await query.limit(1))?.length:unwrap(await query.eq('workspace_id',workspaceId).maybeSingle());
     if(suppressed)return denied('suppressed');
     if(kind==='verification'||kind==='start_confirmation'){
-      return workspaceId===null?{allowed:true,customer:null,authority:'platform'}:denied('inbound_context_mismatch');
+      return workspaceId===null?allowed({allowed:true,customer:null,authority:'platform'}):denied('inbound_context_mismatch');
     }
     // A current customer binding scopes a transactional answer to this business;
     // it does not authorize a template, reminder, or proactive customer send.
@@ -53,8 +54,8 @@ export async function getServiceReplyAuthority({supabase,env,workspaceId,phone,m
     const customer=unwrap(await supabase.from('customers').select('*')
       .eq('workspace_id',workspaceId).eq('phone',phone).maybeSingle());
     if(!customer||customer.workspace_id!==workspaceId||customer.phone!==phone||customer.id!==contexts[0].customer_id)return denied('inbound_context_mismatch');
-    return {allowed:true,customer,authority:'customer'};
+    return allowed({allowed:true,customer,authority:'customer'});
   } catch {
-    return denied('inbound_authority_unavailable');
+    return {...denied('inbound_authority_unavailable'),retryable:true};
   }
 }

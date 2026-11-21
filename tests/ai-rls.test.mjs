@@ -1,3 +1,4 @@
+import {fixtureTenantGrantsSQL} from './fixtures/tenant-invites.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile, readdir} from 'node:fs/promises';
@@ -34,7 +35,7 @@ test('real Postgres RLS: settings persist, isolate tenants, restrict members, pr
     const migratedLegacy=(await db.query('select primary_model,fallback_model from workspace_ai_settings where workspace_id=$1',[legacyWorkspaceId])).rows[0];
     assert.deepEqual(migratedLegacy,{primary_model:'space-bunny-free',fallback_model:'longcat-2.5-preview-free'});
     const a='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', b='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', member='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
-    await db.exec(`insert into auth.users(id) values ('${a}'),('${b}'),('${member}'); set request.jwt.claim.role='authenticated'; set role authenticated;`);
+    await db.exec(`insert into auth.users(id) values ('${a}'),('${b}'),('${member}'); ${fixtureTenantGrantsSQL([a,b])} set request.jwt.claim.role='authenticated'; set role authenticated;`);
     async function identity(id) { await db.query("select set_config('request.jwt.claim.sub',$1,false)",[id]); }
     await identity(a);
     const wa=(await db.query("select (public.create_workspace('Alpha','alpha-space')).id")).rows[0].id;

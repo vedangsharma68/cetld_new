@@ -1,0 +1,414 @@
+{
+  "reviewedBase": "fc393eebcad5f999efb92375cd8c9f91c88f8dd7",
+  "sourceSHA256": {
+    "app.js": "81af1112326c16fc17821d5ae7919ebac5410f24456987818436a919afe9c427",
+    "automation/invoice-sync.mjs": "1533b7b2e674ccd3b5b3f1e62e6e7534bcb1c641ca313434d464522a39cdab80",
+    "automation/whatsapp/cloud-inbound.mjs": "9af538c3fde39408608514905629490163934b7d9edbc8f11bee0f23935e73f9",
+    "automation/whatsapp/cloud-outbound.mjs": "185dd1925931426a2efd05ed2c628eb92269c94a06d7155859aa16fe26119bc7",
+    "automation/whatsapp/service-reply-authority.mjs": "e15c7051137adb1355fcd29cd832c64752b4ddb010a21a90b79f39c3dce23bbb",
+    "docs/pr213-repair-round3.md": "6702f4d9caf1f0f9bbbccf6fc0e1e369a24ec4b3ca642afd26c9b4faefb14069",
+    "docs/signup-invites.md": "cc5ead0aa8a83a30e82d4831a452be862b8863fdb0a3b29bc9f277d52ba17af4",
+    "docs/whatsapp-dispatch-performance.md": "918db76e915aca852b5ba98511a66f2d36439fac10eb249d1275ba6ebef41029",
+    "invite-entry.mjs": "6dfa7f9cfc15ce61d58457afea7df16e9a2bfe7542cddd0abf88fc10128da7fb",
+    "signup-invite.mjs": "fce2ecf7aca5897a72e675430c63b75321626d4bdd50a6acaf553fbdd3dbc042",
+    "signup-rollout.mjs": "ddb16ee2261bb6a63647aed84c9ae29a9229406eb95c0ea760946e132c592fec",
+    "supabase/migrations/20261120125758_signup_invites.sql": "90d17268251a7f4e5e6d57cd2bd51fdc14288efa7a1c0e77fc00fdda56bed015",
+    "supabase/migrations/20261120132445_dispatch_privacy_performance.sql": "c6284c8e799017b7e8201f0cda5928e25f49b6fc428477de5a3bbf71691b8a22",
+    "supabase/migrations/20261120181032_recoverable_reply_reservations.sql": "8aa7547ff40fd630450bb9229369cc37980ecb6dcbdecba5fe971f45940ce2e8",
+    "tests/fixtures/dispatch-sql-double.mjs": "6d606137684e8a6a64a27a8d13d8730d2a65b1d2588f06980887fa001bd9d25a",
+    "tests/fixtures/migration-statements.mjs": "fe115697c1b427dc0c9d9e4e5c325013502e533b2d308d19ffc1bdeb0dacb1d2",
+    "tests/fixtures/pr213-performance-fc393ee.sql": "4751cbc4bf39441b8359764bedaebda973ef1e92c17f8e6e8ba9ed73e8759c77",
+    "tests/pr213-auth-replay.test.mjs": "3cc2d2c7175f89a736f5d4362b3d35b49472cfe2d9639d7574d5e1232625f842",
+    "tests/pr213-customer-recovery.test.mjs": "3cff6d1ba4e1bf0a6f0e7e92896e8f82a8d584962915c69302f5079fff14ae00",
+    "tests/pr213-populated-index.test.mjs": "815cd4c1109deab8926fb7a7e4535b739a9259b42e0dcf83f8bf05d9a8c3efd5",
+    "tests/pr213-recovery-metadata.test.mjs": "34f8044e128367ca417ebc8694e99b652eeb5819c15f1a1393c734ee12b3d589",
+    "tests/pr213-signup-matrix.test.mjs": "a8c44217837c84317f3302680f66766628bd54a3e6ac7f4da9b6062932c17fa1",
+    "tests/pr213-tagged-origin.test.mjs": "79c60319a50e788cb8d2d1be453ed005780d5477f1e2b084ef44ed1aa2211617",
+    "tests/signup-invite-native.test.mjs": "95f8313d6f0358ffccb27558caa7722fc398211bc079e3f07121634c76599ea7",
+    "tests/signup-invite.test.mjs": "46ae2aa204ab2df0bdd1a4fb63bc06ea7e03b652b0fd2a0a1adbb4bc5851a4ad"
+  },
+  "results": {
+    "shards": [
+      {
+        "shard": 0,
+        "exit": 0,
+        "tests": 1634,
+        "pass": 1633,
+        "fail": 0,
+        "skipped": 1
+      },
+      {
+        "shard": 1,
+        "exit": 0,
+        "tests": 1843,
+        "pass": 1843,
+        "fail": 0,
+        "skipped": 0
+      },
+      {
+        "shard": 2,
+        "exit": 0,
+        "tests": 1160,
+        "pass": 1159,
+        "fail": 0,
+        "skipped": 1
+      },
+      {
+        "shard": 3,
+        "exit": 0,
+        "tests": 1730,
+        "pass": 1729,
+        "fail": 0,
+        "skipped": 1
+      }
+    ],
+    "total": {
+      "tests": 6367,
+      "pass": 6364,
+      "fail": 0,
+      "skipped": 3
+    },
+    "exit": 0,
+    "duration": {
+      "seconds": 2452.1928832530975,
+      "exit": 0
+    },
+    "timings": [
+      {
+        "globalRows": 100000,
+        "snapshots": [
+          {
+            "phase": "cold",
+            "ms": 107.73162200000024,
+            "keys": 100000
+          },
+          {
+            "phase": "warm",
+            "ms": 85.16256599999997,
+            "keys": 100000
+          }
+        ]
+      },
+      {
+        "denseSourceRows": 1000,
+        "cold59RowUpdateMs": 790.9303,
+        "maxSeedStatementMs": 2953.355078999997,
+        "maxBackfillStatementMs": 566.699152000001,
+        "aggregateBackfillMs": 20829.652721,
+        "aliasRows": 7952
+      },
+      {
+        "firstBuildMs": 1548.621013,
+        "maxStageMs": 465.97761900000023,
+        "stages": [
+          {
+            "sql": "begin;",
+            "ms": 1.8583870000002207
+          },
+          {
+            "sql": "set local lock_timeout='1s';",
+            "ms": 0.15359799999987445
+          },
+          {
+            "sql": "set local statement_timeout='5s';",
+            "ms": 0.09731400000009671
+          },
+          {
+            "sql": "-- Cache pure expansions, never authorization, readiness, ownership or membership.\n-- A ch",
+            "ms": 1.784787999999935
+          },
+          {
+            "sql": "alter table app.private_dispatch_alias_cache drop constraint if exists private_dispatch_al",
+            "ms": 0.2076879999999619
+          },
+          {
+            "sql": "alter table app.private_dispatch_alias_cache add constraint private_dispatch_alias_cache_i",
+            "ms": 0.2189949999997225
+          },
+          {
+            "sql": "alter table app.private_dispatch_alias_cache enable row level security;",
+            "ms": 0.12410399999998845
+          },
+          {
+            "sql": "revoke all on app.private_dispatch_alias_cache from public,anon,authenticated,service_role",
+            "ms": 0.14026800000010553
+          },
+          {
+            "sql": "create or replace function app.private_dispatch_aliases(p_workspace_id uuid,p_value text,p",
+            "ms": 0.49430300000040006
+          },
+          {
+            "sql": "revoke all on function app.private_dispatch_aliases(uuid,text,text,bytea,boolean) from pub",
+            "ms": 0.171523999999863
+          },
+          {
+            "sql": "-- Literal, reviewable replacements; no source-text rewriting at migration time.\nCREATE OR",
+            "ms": 2.3269219999997404
+          },
+          {
+            "sql": "CREATE OR REPLACE FUNCTION app.private_invoice_capture_field(p_workspace_id uuid, p_value ",
+            "ms": 0.4187409999999545
+          },
+          {
+            "sql": "CREATE OR REPLACE FUNCTION app.retain_private_origin_terms(p_workspace_id uuid, p_text tex",
+            "ms": 0.3621370000000752
+          },
+          {
+            "sql": "-- Projection semantics have their own revision. Canonical grammar may remain\n-- unchanged",
+            "ms": 0.18911099999968428
+          },
+          {
+            "sql": "revoke all on function app.private_dispatch_index_revision() from public,anon,authenticate",
+            "ms": 0.11593200000015713
+          },
+          {
+            "sql": "-- Source membership and canonical projection are maintained on writes. A send\n-- reads th",
+            "ms": 1.0642990000001191
+          },
+          {
+            "sql": "create table if not exists app.private_dispatch_global_keys(\n workspace_id uuid not null,s",
+            "ms": 0.8304130000001351
+          },
+          {
+            "sql": "create table if not exists app.private_dispatch_raw_edges(\n workspace_id uuid not null,sou",
+            "ms": 1.097639000000072
+          },
+          {
+            "sql": "create index if not exists private_dispatch_raw_edges_key on app.private_dispatch_raw_edge",
+            "ms": 0.2490499999998974
+          },
+          {
+            "sql": "create table if not exists app.private_dispatch_witnesses(\n workspace_id uuid not null,ter",
+            "ms": 0.7780939999997827
+          },
+          {
+            "sql": "create index if not exists private_dispatch_witnesses_party on app.private_dispatch_witnes",
+            "ms": 0.22860899999977846
+          },
+          {
+            "sql": "create table if not exists app.private_dispatch_customer_parties(\n customer_id uuid not nu",
+            "ms": 0.9929030000002967
+          },
+          {
+            "sql": "create index if not exists private_dispatch_customer_party on app.private_dispatch_custome",
+            "ms": 0.2883480000000418
+          },
+          {
+            "sql": "create table if not exists app.private_dispatch_index_state(singleton boolean primary key ",
+            "ms": 0.7602080000001479
+          },
+          {
+            "sql": "alter table app.private_dispatch_sources enable row level security;",
+            "ms": 0.135211000000254
+          },
+          {
+            "sql": "alter table app.private_dispatch_global_keys enable row level security;",
+            "ms": 0.1443240000003243
+          },
+          {
+            "sql": "alter table app.private_dispatch_raw_edges enable row level security;",
+            "ms": 0.09888700000010431
+          },
+          {
+            "sql": "alter table app.private_dispatch_witnesses enable row level security;",
+            "ms": 0.07983800000010888
+          },
+          {
+            "sql": "alter table app.private_dispatch_customer_parties enable row level security;",
+            "ms": 0.07549200000039491
+          },
+          {
+            "sql": "alter table app.private_dispatch_index_state enable row level security;",
+            "ms": 0.07667399999991176
+          },
+          {
+            "sql": "revoke all on app.private_dispatch_sources,app.private_dispatch_global_keys,app.private_di",
+            "ms": 0.2925540000001092
+          },
+          {
+            "sql": "create or replace function app.private_dispatch_projection(p_workspace_id uuid,p_term text",
+            "ms": 0.2199359999999615
+          },
+          {
+            "sql": "create or replace function app.fill_private_dispatch_edges() returns void\nlanguage plpgsql",
+            "ms": 0.21074300000009316
+          },
+          {
+            "sql": "create index if not exists private_dispatch_unprepared_raw on app.private_dispatch_global_",
+            "ms": 0.2854240000001482
+          },
+          {
+            "sql": "create or replace function app.fill_private_dispatch_witnesses() returns void\nlanguage plp",
+            "ms": 0.27459700000008525
+          },
+          {
+            "sql": "create or replace function app.ensure_private_dispatch_index() returns boolean\nlanguage pl",
+            "ms": 0.2242620000001807
+          },
+          {
+            "sql": "create or replace function app.maintain_private_dispatch_index() returns trigger\nlanguage ",
+            "ms": 0.3262039999999615
+          },
+          {
+            "sql": "create or replace function app.truncate_private_dispatch_index() returns trigger language ",
+            "ms": 0.12725899999986723
+          },
+          {
+            "sql": "create or replace function app.maintain_private_dispatch_customer() returns trigger langua",
+            "ms": 0.12418399999978647
+          },
+          {
+            "sql": "drop trigger if exists private_dispatch_insert on public.whatsapp_private_invoice_terms;",
+            "ms": 0.08130100000016682
+          },
+          {
+            "sql": "create trigger private_dispatch_insert after insert on public.whatsapp_private_invoice_ter",
+            "ms": 0.17208500000015192
+          },
+          {
+            "sql": "drop trigger if exists private_dispatch_delete on public.whatsapp_private_invoice_terms;",
+            "ms": 0.10788999999977023
+          },
+          {
+            "sql": "create trigger private_dispatch_delete after delete on public.whatsapp_private_invoice_ter",
+            "ms": 0.1082099999998718
+          },
+          {
+            "sql": "drop trigger if exists private_dispatch_update on public.whatsapp_private_invoice_terms;",
+            "ms": 0.08880099999987578
+          },
+          {
+            "sql": "create trigger private_dispatch_update after update on public.whatsapp_private_invoice_ter",
+            "ms": 0.08374400000002424
+          },
+          {
+            "sql": "drop trigger if exists private_dispatch_truncate on public.whatsapp_private_invoice_terms;",
+            "ms": 0.08037899999999354
+          },
+          {
+            "sql": "create trigger private_dispatch_truncate after truncate on public.whatsapp_private_invoice",
+            "ms": 0.08291300000018964
+          },
+          {
+            "sql": "drop trigger if exists private_dispatch_customer on public.customers;",
+            "ms": 0.06680900000037582
+          },
+          {
+            "sql": "create trigger private_dispatch_customer after insert or update of name on public.customer",
+            "ms": 0.08691900000030728
+          },
+          {
+            "sql": "revoke all on function app.private_dispatch_projection(uuid,text),app.fill_private_dispatc",
+            "ms": 0.20909000000028755
+          },
+          {
+            "sql": "-- The migration transaction publishes readiness only after every bulk stage.\n-- Canonical",
+            "ms": 0.22285099999999147
+          },
+          {
+            "sql": "-- Rebuild only private derived data, atomically. Bulk TRUNCATE avoids per-row\n-- deletion",
+            "ms": 2.1162890000000516
+          },
+          {
+            "sql": "delete from app.private_dispatch_raw_edges where not exists(select 1 from app.private_disp",
+            "ms": 0.249880999999732
+          },
+          {
+            "sql": "delete from app.private_dispatch_global_keys where not exists(select 1 from app.private_di",
+            "ms": 0.20220999999992273
+          },
+          {
+            "sql": "delete from app.private_dispatch_sources where not exists(select 1 from app.private_dispat",
+            "ms": 0.17284599999993588
+          },
+          {
+            "sql": "delete from app.private_dispatch_witnesses where not exists(select 1 from app.private_disp",
+            "ms": 0.1800069999999323
+          },
+          {
+            "sql": "insert into app.private_dispatch_sources\nselect t.workspace_id,t.term_hash,t.term,case whe",
+            "ms": 437.64990899999975
+          },
+          {
+            "sql": "insert into app.private_dispatch_global_keys(workspace_id,source_hash,term_hash,term,alias",
+            "ms": 437.3378359999997
+          },
+          {
+            "sql": "select app.fill_private_dispatch_edges() where not exists(select 1 from app.private_dispat",
+            "ms": 1.1268520000003264
+          },
+          {
+            "sql": "select app.fill_private_dispatch_witnesses() where not exists(select 1 from app.private_di",
+            "ms": 32.40046799999982
+          },
+          {
+            "sql": "delete from app.private_dispatch_customer_parties where not exists(select 1 from app.priva",
+            "ms": 4.321447000000262
+          },
+          {
+            "sql": "insert into app.private_dispatch_customer_parties select distinct c.id,sha256(convert_to(k",
+            "ms": 0.95251399999961
+          },
+          {
+            "sql": "-- Finish the deferred source FK checks before building its indexes.\nset constraints app.p",
+            "ms": 465.97761900000023
+          },
+          {
+            "sql": "-- Build secondary indexes in bulk after initial heap population. Replays keep them.\ncreat",
+            "ms": 38.451710999999705
+          },
+          {
+            "sql": "create index if not exists private_dispatch_global_order on app.private_dispatch_global_ke",
+            "ms": 75.42987500000072
+          },
+          {
+            "sql": "create index if not exists private_dispatch_sources_raw on app.private_dispatch_sources(te",
+            "ms": 25.58087499999965
+          },
+          {
+            "sql": "insert into app.private_dispatch_index_state values(true,app.private_dispatch_index_revisi",
+            "ms": 0.4821059999994759
+          },
+          {
+            "sql": "create or replace function public.whatsapp_dispatch_privacy_snapshot(p_workspace_id uuid,p",
+            "ms": 0.9286179999999149
+          },
+          {
+            "sql": "revoke all on function public.whatsapp_dispatch_privacy_snapshot(uuid,text) from public,an",
+            "ms": 0.20855000000028667
+          },
+          {
+            "sql": "grant execute on function public.whatsapp_dispatch_privacy_snapshot(uuid,text) to service_",
+            "ms": 0.14472500000010768
+          },
+          {
+            "sql": "commit;",
+            "ms": 1.074775000000045
+          }
+        ]
+      },
+      {
+        "invoices": 1001,
+        "timings": [
+          {
+            "phase": "cold",
+            "ms": 167.03453699999955
+          },
+          {
+            "phase": "warm",
+            "ms": 38.47980500000267
+          }
+        ]
+      }
+    ],
+    "productionBattery43": true,
+    "typecheck": true,
+    "frontendBuild": true
+  },
+  "immutableMigration": {
+    "path": "supabase/migrations/20261028030825_offline_invoice_review_corrections.sql",
+    "sha256": "841034b20e9faee511248ed8ee2ebd7becab6c082003abee5489889f027c118d"
+  },
+  "authoritativeRun": "work/r3/gate.log with its recorded exit0; other logs are development provenance, not final run claims",
+  "productionEffects": false
+}

@@ -1,3 +1,4 @@
+import {fixtureTenantGrantsSQL} from './fixtures/tenant-invites.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {PGlite} from '@electric-sql/pglite';
@@ -20,7 +21,7 @@ async function boot(beforeOwnerMigrations){
   if(file==='20261002020102_owner_followup_conversations.sql'&&beforeOwnerMigrations)await beforeOwnerMigrations(db);
   await db.exec((await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8')).replace('create extension if not exists pgcrypto;',''));
  }
- await db.exec(`insert into auth.users(id) values('${owner}'),('${stranger}') on conflict(id) do nothing;set request.jwt.claim.role='authenticated';set role authenticated;set request.jwt.claim.sub='${owner}'`);
+ await db.exec(`insert into auth.users(id) values('${owner}'),('${stranger}') on conflict(id) do nothing;${fixtureTenantGrantsSQL([owner,stranger])}set request.jwt.claim.role='authenticated';set role authenticated;set request.jwt.claim.sub='${owner}'`);
  const ws=(await db.query("select (public.create_workspace('CETLD test','owner-test')).id")).rows[0].id;
  return {db,ws};
 }
