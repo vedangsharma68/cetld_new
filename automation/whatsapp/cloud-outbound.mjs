@@ -1,5 +1,5 @@
-import {randomUUID} from 'node:crypto';
-import {dispatchWhatsApp,prepareWhatsAppDispatch} from './private-dispatch.mjs';
+import {randomUUID,createHash} from 'node:crypto';
+import {dispatchWhatsApp,prepareWhatsAppDispatch,privacyDiagnostic} from './private-dispatch.mjs';
 import {authorizeOwnerPhone} from './owner-binding.mjs';
 import {createConversationStore,conversationCallbackToken} from './conversation-store.mjs';
 import {getSendEligibility} from './consent.mjs';
@@ -226,7 +226,12 @@ export function createWhatsAppOutbound({
       if(error?.knownUnsent&&error.code!=='SERVICE_WINDOW_CLOSED'&&(error.code!=='REPLY_AUTHORITY_CHANGED'||error.retryable))return {status:'pending',reason:'reply_retryable'};
       if(error?.code==='SERVICE_WINDOW_CLOSED')return finish({status:'blocked',reason:'service_window_closed'});
       if(['REPLY_AUTHORITY_CHANGED','REPLY_HANDOFF_DENIED'].includes(error?.code))return finish({status:'blocked',reason:error.reason||'reply_authority_changed'});
-      if(error?.code==='PRIVATE_PAYLOAD_BLOCKED')return finish({status:'blocked',reason:'private_payload'});
+      if(error?.code==='PRIVATE_PAYLOAD_BLOCKED'){
+        const category=privacyDiagnostic(error);
+        logger?.warn?.({event:'whatsapp_privacy_verdict',workspaceId,correlationId:createHash('sha256').update(key||'').digest('hex'),kind,category,retryable:error.retryable===true});
+        if(error.retryable)return {status:'pending',reason:'snapshot_unavailable'};
+        return finish({status:'blocked',reason:'private_payload',privacyCategory:category});
+      }
       logger?.error?.({event: 'whatsapp_outbound_unknown', workspaceId, recipient: maskedPhone(to), kind, message: error?.message});
       return finish({status: 'unknown', reason: 'network_error'});
     }
@@ -504,6 +509,16 @@ export function createWhatsAppOutbound({
     return postMessage({workspaceId,to,key,kind,payload,admission,audience:'owner'});
   }
 
+  // Admission can fail before a claim, upload or transport is prepared. Keep
+  // the same classification at every public send entry, not only postMessage.
+  const privacySafe=send=>async input=>{
+    try{return await send(input);}catch(error){
+      if(error?.code!=='PRIVATE_PAYLOAD_BLOCKED')throw error;
+      const category=privacyDiagnostic(error);
+      logger?.warn?.({event:'whatsapp_privacy_verdict',workspaceId:input?.workspaceId,messageId:input?.messageId,category,retryable:error.retryable===true});
+      return {status:error.retryable?'pending':'blocked',reason:error.retryable?'snapshot_unavailable':'private_payload',privacyCategory:category};
+    }
+  };
   // Intentionally no scheduler or arbitrary reminder send method.
-  return Object.freeze({sendInvoiceUpdateTemplate, sendOwnerTestTemplate, sendServiceReply, sendServiceMedia, sendTypingIndicator});
+  return Object.freeze({sendInvoiceUpdateTemplate:privacySafe(sendInvoiceUpdateTemplate), sendOwnerTestTemplate:privacySafe(sendOwnerTestTemplate), sendServiceReply:privacySafe(sendServiceReply), sendServiceMedia:privacySafe(sendServiceMedia), sendTypingIndicator});
 }

@@ -482,10 +482,23 @@ export function privateFieldKeys(value){
   if(keys.size===1){const key=identifier(term);if(key)keys.add('identifier:'+key);}
   return [...keys];
 }
-export function createPrivateValueMatcher(terms=[],{canonical=false}={}){
+export function createPrivateValueMatcher(terms=[],{canonical=false,languageContext=false}={}){
   const retainedRuns=[],retainedNumbers=new Set(),retainedDates=[],retainedDateRanges=[],literals=[],parties=new Set(),nativeParties=new Set(),latinParties=new Set(),referenceParties=new Set(),inferredParties=new Set();
   const expanded=terms.flatMap(raw=>String(raw??'').startsWith('evidence:')?privateEvidenceValues(String(raw).slice(9)):String(raw??'').startsWith('origin:')?privateOriginKeys(String(raw).slice(7)).filter(key=>!key.startsWith('origin:')):[raw]);
   const attested=new Set(expanded.filter(t=>/^party(?:-native|-latin|-inferred|-ref)?:/.test(t)).map(t=>t.slice(t.indexOf(':')+1)));
+  // Dispatch preserves lexical role for homographs. This is occurrence-scoped,
+  // never a vocabulary certificate: standalone/quoted/labeled field values
+  // retain their exact identity, and unfamiliar spellings remain literals.
+  const lexicalFields=new Set();
+  const lexical=value=>languageContext&&/^[a-z]+$/u.test(value)&&!['NNP','NNPS'].includes(privateLanguageSyntax(value)[0]?.pos||'NNP');
+  const retainLexical=key=>{
+    lexicalFields.add(key);referenceParties.add(key);
+    // Only the exact contiguous spelling can have an ordinary lexical role.
+    // Spaced/punctuated identifier renderings retain the original ID matcher.
+    const whole=escape(key)+'(?![\\p{L}\\p{N}_])';
+    literals.push(new RegExp('(?!'+whole+')'+identifierPattern(key).source,'u'));
+  };
+  const fieldAssignment=new RegExp('(?:'+privateDocumentKeyPattern+')(?: +(number|no|id|name))? +(is|was|equals) *$','u');
   const chunks=new Map();
   const invalidGraph=()=>{throw Object.assign(new Error('Incomplete private numeric graph'),{code:'CHAT_MEMORY_UNAVAILABLE'});};
   const compile=term=>{
@@ -506,10 +519,11 @@ export function createPrivateValueMatcher(terms=[],{canonical=false}={}){
     if(term.startsWith('party-inferred:')){inferredParties.add(term.slice(15));return true;}
     if(term.startsWith('party-ref:')){referenceParties.add(term.slice(10));return true;}
     if(term.startsWith('party:')){parties.add(term.slice(6));return true;}
-    if(term.startsWith('identifier:')){if(attested.has(term.slice(11))&&privateLanguageTags(term.slice(11)).length)return true;literals.push(identifierPattern(term.slice(11)));return true;}return false;
+    if(term.startsWith('identifier:')){if(lexical(term.slice(11))){retainLexical(term.slice(11));return true;}if(attested.has(term.slice(11))&&privateLanguageTags(term.slice(11)).length)return true;literals.push(identifierPattern(term.slice(11)));return true;}return false;
   };
   for(const raw of expanded){
     const term=clean(raw);if(!term||compile(term)||attested.has(term))continue;
+    if(lexical(term)){retainLexical(term);continue;}
     const keys=privateFieldKeys(term);if(keys.length>1){keys.slice(1).forEach(compile);continue;}
     literals.push(new RegExp(`(?<![\\p{L}\\p{N}_])${escape(term)}(?![\\p{L}\\p{N}_])`,'u'));
   }
@@ -553,7 +567,10 @@ export function createPrivateValueMatcher(terms=[],{canonical=false}={}){
     }
     }
     return occurrences.filter(m=>{
-      const term=m[0],matched=/[\u0900-\u097f]/u.test(term)?nativeParties.has(term)||parties.has(partyKey(term)):parties.has(partyKey(term))||latinParties.has(partyKey(term));
+      const term=m[0];
+      const fieldPosition=languageContext&&fieldAssignment.test(content.slice(0,m.index))||/[:=] *[\p{Quotation_Mark}]* *$/u.test(content.slice(0,m.index))||/^[\p{Quotation_Mark}]/u.test(content.slice(m.index-1,m.index))||content===term;
+      if(languageContext&&fieldPosition&&(lexicalFields.has(term)||parties.has(term)||referenceParties.has(term)))return true;
+      const matched=/[\u0900-\u097f]/u.test(term)?nativeParties.has(term)||parties.has(partyKey(term)):parties.has(partyKey(term))||latinParties.has(partyKey(term));
       const referenceKey=referenceParties.has(partyKey(term)),inferredKey=inferredParties.has(partyKey(term)),weakOnly=inferredKey&&!referenceKey&&!matched;if(!matched&&!referenceKey&&!inferredKey)return false;
       const before=content.slice(0,m.index).split(/[;.!?\n]/u).at(-1),after=content.slice(m.index+term.length).split(/[;.!?\n]/u)[0];
       const beforeWords=before.match(/[\p{L}\p{M}]+/gu)||[],afterWords=after.match(/[\p{L}\p{M}]+/gu)||[],next=afterWords[0],last=beforeWords.at(-1);
@@ -567,6 +584,7 @@ export function createPrivateValueMatcher(terms=[],{canonical=false}={}){
       const regularS=/s$/u.test(next||'')&&!/(?:ss|us|is)$/u.test(next||'')&&!auxiliaries.has(continuation)&&(term!=='the'||['me','you','him','her','us','them','it'].includes(continuation));
       const nextToken=syntax.find(token=>token.start>=m.index+term.length&&/^[\p{L}\p{M}]/u.test(token.word)),nextPOS=nextToken?.pos;
       const currentToken=syntax.find(token=>token.start===m.index&&token.word===term),currentPOS=currentToken?.pos;
+      if(languageContext&&!fieldPosition&&/^(?:PRP|PRP\$|DT|CC|IN|TO|MD|UH)$/u.test(currentPOS||'')&&currentToken?.known)return false;
       const incompatibleFunction=['a','an'].includes(term)||auxiliaries.has(term);
       const finiteAlternative=nextToken?.alternatives.includes('VBZ')&&!auxiliaries.has(continuation)&&currentPOS!=='JJ'&&(!beforeWords.length||apposition||complements.has(last));
       const predicate=auxiliaries.has(next)||/^(?:VBD|VBZ)$/u.test(nextPOS||'')||(nextPOS==='VBN'||finitePast.has(next)||/ed$/u.test(next||''))&&finiteTail||finiteAlternative||regularS&&(nextPOS!=='NNS'||incompatibleFunction);
@@ -647,9 +665,9 @@ export function createPrivateValueMatcher(terms=[],{canonical=false}={}){
   };
   contains.ordinary=value=>contains(value,0,true);
   contains.entities=value=>typeof value==='string'&&partyMatches(clean(value),true,value).length>0;
-  contains.spans=(value,{ordinary=false}={})=>{
+  contains.spans=(value,{ordinary=false,origins=true}={})=>{
     const normalized=normalizePrivateText(value),content=normalized.text,ranges=[];
-    const origin=privateOriginStart(value);if(origin!==null)ranges.push([origin,String(value??'').length]);
+    const origin=origins?privateOriginStart(value):null;if(origin!==null)ranges.push([origin,String(value??'').length]);
     const add=(start,end)=>{if(end>start&&normalized.origins[start]&&normalized.origins[end-1])ranges.push([normalized.origins[start].start,normalized.origins[end-1].end]);};
     for(const match of partyMatches(content,ordinary,value))add(match.index,match.index+match[0].length);
     for(const pattern of literals)for(const match of content.matchAll(new RegExp(pattern.source,'gu')))add(match.index,match.index+match[0].length);
