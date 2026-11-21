@@ -1051,11 +1051,26 @@ if(end<0||captureEnd<end)throw Error('Canonical capture boundaries missing');
 const revision=createHash('sha256').update(sql).update(original.slice(0,start)).update(original.slice(end,captureEnd));
 for(const file of ['../ai/private-reference-frames.mjs','../ai/private-number-role.mjs','../ai/private-name-morphology.mjs','../ai/private-value-language.mjs','../ai/private-value-matcher.mjs','../ai/private-value-unicode.mjs','../ai/private-language-syntax.mjs','../ai/private-language-model.mjs','../ai/private-calendar-components.mjs','../ai/private-payload-boundary.mjs','../ai/private-runtime-lexicon.mjs','../ai/private-runtime-lexicon-data.mjs','../package-lock.json'])revision.update(await readFile(new URL(file,import.meta.url),'utf8'));
 const canonicalRevision=revision.digest('hex');
-const artifact=sql+`-- Semantic revision covers shared JS/Unicode/SQL and field-role capture rules.
-create function app.private_invoice_canonical_revision() returns text
+// Capture SQL has shipped. Admission-only changes must never rewrite an
+// applied migration or invalidate its populated canonical index. Verify the
+// complete pinned capture inputs AND generated SQL, then version admission in
+// a forward migration. A capture change requires an explicit forward upgrade.
+const baseline=JSON.parse(await readFile(new URL('./private-capture-baseline.json',import.meta.url),'utf8'));
+const digest=value=>createHash('sha256').update(value).digest('hex');
+if(digest(original)!==baseline.immutableMigrationSHA256||digest(sql)!==baseline.captureSQLSHA256
+ ||!original.slice(start,end).startsWith(sql))throw Error('Capture SQL changed: create an explicit forward capture migration');
+for(const [file,expected] of Object.entries(baseline.captureSourceSHA256)){
+ let source=await readFile(new URL('../'+file,import.meta.url),'utf8');
+ if(file==='ai/private-value-matcher.mjs')source=source.split(baseline.matcherCaptureBoundary)[0];
+ if(digest(source)!==expected)throw Error('Capture input changed: explicit forward capture upgrade required for '+file);
+}
+const forward=baseline.forwardAdmissionMigration,forwardSource=await readFile(forward,'utf8');
+const begin='-- BEGIN GENERATED ADMISSION REVISION\n',finish='-- END GENERATED ADMISSION REVISION\n';
+const a=forwardSource.indexOf(begin),b=forwardSource.indexOf(finish,a);
+if(a<0||b<a)throw Error('Forward admission revision boundaries missing');
+const admission=begin+`create or replace function app.private_invoice_admission_revision() returns text
 language sql immutable set search_path='' as $$select '${canonicalRevision}'::text$$;
-revoke all on function app.private_invoice_canonical_revision() from public,anon,authenticated,service_role;
-
+revoke all on function app.private_invoice_admission_revision() from public,anon,authenticated,service_role;
 `;
-if(process.argv.includes('--check')){if(original.slice(start,end)!==artifact)throw Error('SQL canonicalization artifacts need regeneration');}
-else await writeFile(path,original.slice(0,start)+artifact+original.slice(end));
+if(process.argv.includes('--check')){if(forwardSource.slice(a,b)!==admission)throw Error('Forward admission revision needs regeneration');}
+else await writeFile(forward,forwardSource.slice(0,a)+admission+forwardSource.slice(b));

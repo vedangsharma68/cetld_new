@@ -27,7 +27,10 @@ test('populated legacy answers reconcile once, expire stale/orphan receipts and 
    if(kind==='claimed')await f.db.query("update whatsapp_inbound_events set reply_claimed_at=now() where provider_message_id=$1",[id]);rows.push({id,kind,body});
   }
   await store.record({workspaceId:f.scope.workspaceId,phone:f.scope.phone,direction:'outbound',audience:'owner',body:'Historical reply without a recoverable event key',kind:'normal',status:'pending',key:'old-answer:orphan'});
+  const canonicalBefore=(await f.db.query('select app.private_invoice_canonical_revision() revision')).rows[0].revision;
   await f.db.exec(sql);await f.db.exec(sql);
+  assert.equal((await f.db.query('select app.private_invoice_canonical_revision() revision')).rows[0].revision,canonicalBefore);
+  assert.match((await f.db.query('select app.private_invoice_admission_revision() revision')).rows[0].revision,/^[a-f0-9]{64}$/);
   assert.equal((await f.db.query("select status from whatsapp_messages where idempotency_key='old-answer:orphan'")).rows[0].status,'blocked');
   for(const {id,kind,body}of rows){const receipt=(await f.db.query('select * from whatsapp_messages where idempotency_key=$1',['reply:'+id])).rows[0];assert.equal(receipt.body,body);assert.equal(receipt.status,kind==='ready'?'pending':['fenced','claimed'].includes(kind)?'unknown':'blocked');}
   assert.equal((await f.db.query('select count(*)::int n from app.whatsapp_service_deliveries')).rows[0].n,4);

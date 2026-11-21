@@ -52,4 +52,9 @@ begin
  perform app.refresh_service_delivery_pending(e.id) from public.whatsapp_inbound_events e
  where exists(select 1 from app.whatsapp_service_deliveries d where d.event_id=e.id and d.phase='answer');
 end $reconcile$;
+-- BEGIN GENERATED ADMISSION REVISION
+create or replace function app.private_invoice_admission_revision() returns text
+language sql immutable set search_path='' as $$select 'ba011c8d5b26f5d64cce3377609d62aae06f27e19860a7eba165caa8d69ecd29'::text$$;
+revoke all on function app.private_invoice_admission_revision() from public,anon,authenticated,service_role;
+-- END GENERATED ADMISSION REVISION
 commit;
