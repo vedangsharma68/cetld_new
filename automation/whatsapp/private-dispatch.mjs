@@ -8,26 +8,35 @@ export function privacyDiagnostic(error){
 }
 // Every WhatsApp content transport, including injected transports and retries,
 // admits the final serialized body against recipient-owned canonical keys.
-export async function prepareWhatsAppDispatch({supabase,workspaceId,phone,publicIdentities=[],media}){
- let r,index;
+export async function prepareWhatsAppDispatch({supabase,workspaceId,phone,publicIdentities=[],media,snapshotDeadlineMs}){
+ let r,data,index;
  try{
-  r=await supabase.rpc('whatsapp_dispatch_privacy_snapshot',{p_workspace_id:workspaceId??null,p_phone:phone});
-  const data=r?.data;
+  const snapshot=supabase.rpc('whatsapp_dispatch_privacy_snapshot',{p_workspace_id:workspaceId??null,p_phone:phone});
+  // A snapshot read that outlives the worker's remaining processing budget
+  // admits nothing: expire it as unavailable (retryable) with the same safe
+  // diagnostic instead of holding the queue past its deadline.
+  r=await (Number.isFinite(snapshotDeadlineMs)?Promise.race([snapshot,new Promise((_,reject)=>setTimeout(()=>reject(Error('Snapshot read deadline')),Math.max(0,snapshotDeadlineMs)))]):snapshot);
+  data=r?.data;
+  // The snapshot contract is complete or absent: every admission set must be
+  // present and well-typed. A partial snapshot (for example terms without the
+  // owned identifiers, values or files) is never an empty universe; it is an
+  // unavailable one, and admission stays retryable instead of failing open.
   if(r?.error||!data||!Array.isArray(data.terms)||!data.terms.every(t=>typeof t==='string')
-   ||['identifiers','values'].some(k=>data[k]!==undefined&&(!Array.isArray(data[k])||!data[k].every(v=>typeof v==='string')))
-   ||data.files!==undefined&&(!Array.isArray(data.files)||!data.files.every(f=>f&&typeof f==='object'&&['id','invoice_id','workspace_id','storage_path'].every(k=>typeof f[k]==='string'))))throw Error('Invalid snapshot');
+   ||!Array.isArray(data.identifiers)||!data.identifiers.every(v=>typeof v==='string')
+   ||!Array.isArray(data.values)||!data.values.every(v=>typeof v==='string')
+   ||!Array.isArray(data.files)||!data.files.every(f=>f&&typeof f==='object'&&['id','invoice_id','workspace_id','storage_path'].every(k=>typeof f[k]==='string')))throw Error('Invalid snapshot');
   index=createCanonicalPrivateValueIndex(data.terms,{languageContext:true});
  }catch{throw privacyFailure('snapshot_unavailable',true);}
  let fileOwned=false,ownedFileName;
  if(media){
-  const source=(r.data.files||[]).find(f=>f.id===media.id&&f.invoice_id===media.invoice_id&&f.workspace_id===workspaceId&&f.storage_path===media.storage_path);
+  const source=data.files.find(f=>f.id===media.id&&f.invoice_id===media.invoice_id&&f.workspace_id===workspaceId&&f.storage_path===media.storage_path);
   if(source&&supabase.storage){const downloaded=await supabase.storage.from('invoice-files').download(source.storage_path);
    if(!downloaded.error&&downloaded.data){const actual=Buffer.from(await downloaded.data.arrayBuffer());fileOwned=createHash('sha256').update(actual).digest('hex')===createHash('sha256').update(media.bytes).digest('hex');if(fileOwned)ownedFileName=source.file_name;}}
  }
  // Public identities are compiler constants, never message/user fields. They
  // certify only whole identifiers; numeric fragments remain private elsewhere.
- const identities=new Set([...(r.data.identifiers||[]),...publicIdentities.flatMap(value=>privateFieldKeys(value).filter(k=>k.startsWith('identifier:')))]),owned=createCanonicalPrivateValueIndex([...identities]);
- const values=new Set(r.data.values||[]),ownedValues=createCanonicalPrivateValueIndex([...values].filter(k=>/^(number|date|date-range):/.test(k)));
+ const identities=new Set([...data.identifiers,...publicIdentities.flatMap(value=>privateFieldKeys(value).filter(k=>k.startsWith('identifier:')))]),owned=createCanonicalPrivateValueIndex([...identities]);
+ const values=new Set(data.values),ownedValues=createCanonicalPrivateValueIndex([...values].filter(k=>/^(number|date|date-range):/.test(k)));
  const scoped=value=>{
   if(typeof value==='string'){
    const chars=value.split('');
