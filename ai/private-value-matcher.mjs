@@ -498,7 +498,8 @@ export function createPrivateValueMatcher(terms=[],{canonical=false,languageCont
     const whole=escape(key)+'(?![\\p{L}\\p{N}_])';
     literals.push(new RegExp('(?!'+whole+')'+identifierPattern(key).source,'u'));
   };
-  const fieldAssignment=new RegExp('(?:'+privateDocumentKeyPattern+')(?: +(number|no|id|name))? +(is|was|equals) *$','u');
+  const fieldAssignment=new RegExp('(?:'+privateDocumentKeyPattern+')(?: +(number|no|id|name))?(?: +(is|was|equals)| *[:=]) *$','u');
+  const fieldDeclaration=new RegExp(fieldAssignment.source.slice(0,-1),'gu');
   const chunks=new Map();
   const invalidGraph=()=>{throw Object.assign(new Error('Incomplete private numeric graph'),{code:'CHAT_MEMORY_UNAVAILABLE'});};
   const compile=term=>{
@@ -558,7 +559,7 @@ export function createPrivateValueMatcher(terms=[],{canonical=false,languageCont
   const upper=value=>/\p{Lu}/u.test(Array.from(value||'')[0]||'');
   const partyMatches=(content,ordinary=false,original=content)=>{
     const normalized=normalizePrivateText(original),occurrences=[...content.matchAll(/[\p{L}\p{M}\p{N}]+/gu)];
-    const syntax=parties.size||referenceParties.size||inferredParties.size?privateLanguageSyntax(content):[];
+    const syntax=parties.size||referenceParties.size||inferredParties.size?(languageContext?privateOccurrenceSyntax(content):privateLanguageSyntax(content)):[];
     // Registered spellings are matched independently of script. Multi-grapheme
     // uncased names can carry attached morphology; a single grapheme needs a
     // lexical word boundary so it cannot become a substring blacklist.
@@ -580,19 +581,61 @@ export function createPrivateValueMatcher(terms=[],{canonical=false,languageCont
       }
     }
     }
+    const fieldDeclarations=languageContext?[...content.matchAll(fieldDeclaration)]:[];
+    const fieldEnds=new Map(),clauseProofs=new Map();
+    const fieldLimits=new Map(fieldDeclarations.map((declaration,i)=>[declaration.index,
+      normalized.origins[fieldDeclarations[i+1]?.index]?.start??String(original).length]));
+    const declarationEnd=declaration=>{
+      if(fieldEnds.has(declaration.index))return fieldEnds.get(declaration.index);
+      const valueStart=declaration.index+declaration[0].length;
+      const rawValueStart=normalized.origins[valueStart]?.start??String(original).length;
+      let independent=0;
+      const rawLimit=fieldLimits.get(declaration.index);
+      for(const boundary of String(original).slice(rawValueStart,rawLimit).matchAll(/[;.!?\r\n]/gu)){
+        const rawBoundary=rawValueStart+boundary.index;
+        const prior=clean(String(original).slice(rawValueStart,rawBoundary));
+        const priorTokens=privateOccurrenceSyntax(prior),last=priorTokens.filter(t=>/[\p{L}\p{M}\p{N}]/u.test(t.word)).at(-1);
+        if(!last||last.pos==='CC'||priorTokens.at(-1)?.word===','||!privateFieldValueComplete(prior)||privateFieldLiteralOpen(clean(String(original).slice(0,rawBoundary))))continue;
+        const rawNext=rawBoundary+boundary[0].length;
+        if(!clauseProofs.has(rawNext)){
+          const candidate=clean(String(original).slice(rawNext,rawLimit)).split(/[;.!?]/u)[0];
+          clauseProofs.set(rawNext,privateCompletedActionClause(candidate,{subjectPronouns,singularSubjects,auxiliaries}));
+        }
+        if(!clauseProofs.get(rawNext))continue;
+        independent=syntax.find(t=>(normalized.origins[t.start]?.start??0)>=rawNext)?.start??0;
+        if(independent>0)break;
+      }
+      fieldEnds.set(declaration.index,independent);return independent;
+    };
     return occurrences.filter(m=>{
       const term=m[0];
-      const fieldPosition=languageContext&&fieldAssignment.test(content.slice(0,m.index))||/[:=] *[\p{Quotation_Mark}]* *$/u.test(content.slice(0,m.index))||/^[\p{Quotation_Mark}]/u.test(content.slice(m.index-1,m.index))||content===term;
-      if(languageContext&&fieldPosition&&(lexicalFields.has(term)||parties.has(term)||referenceParties.has(term)))return true;
+      const fieldCandidate=lexicalFields.has(term)||parties.has(term)||referenceParties.has(term)||inferredParties.has(term);
       const matched=/[\u0900-\u097f]/u.test(term)?nativeParties.has(term)||parties.has(partyKey(term)):parties.has(partyKey(term))||latinParties.has(partyKey(term));
-      const referenceKey=referenceParties.has(partyKey(term)),inferredKey=inferredParties.has(partyKey(term)),weakOnly=inferredKey&&!referenceKey&&!matched;if(!matched&&!referenceKey&&!inferredKey)return false;
-      const before=content.slice(0,m.index).split(/[;.!?\n]/u).at(-1),after=content.slice(m.index+term.length).split(/[;.!?\n]/u)[0];
+      const referenceKey=referenceParties.has(partyKey(term)),inferredKey=inferredParties.has(partyKey(term)),weakOnly=inferredKey&&!referenceKey&&!matched;
+      if(!fieldCandidate&&!matched&&!referenceKey&&!inferredKey)return false;
+      let fieldPosition=languageContext&&fieldAssignment.test(content.slice(0,m.index))||/[:=] *[\p{Quotation_Mark}]* *$/u.test(content.slice(0,m.index))||/^[\p{Quotation_Mark}]/u.test(content.slice(m.index-1,m.index))||content===term;
+      let independentClauseStart=0;
+      if(languageContext){
+        const declaration=fieldDeclarations.findLast(d=>d.index+d[0].length<=m.index);
+        if(declaration){
+          // Formatting is not a clause boundary. A declaration keeps its
+          // witness until a later, positively completed action clause starts.
+          // A later clause cannot retroactively clear an earlier value, and
+          // it never overrides an existing quote/direct-field witness.
+          const end=declarationEnd(declaration);
+          if(end>0&&end<=m.index)independentClauseStart=end;
+          else fieldPosition=true;
+        }
+      }
+      if(languageContext&&fieldPosition&&fieldCandidate)return true;
+      if(!matched&&!referenceKey&&!inferredKey)return false;
+      const before=content.slice(independentClauseStart,m.index).split(/[;.!?\n]/u).at(-1),after=content.slice(m.index+term.length).split(/[;.!?\n]/u)[0];
       const beforeWords=before.match(/[\p{L}\p{M}]+/gu)||[],afterWords=after.match(/[\p{L}\p{M}]+/gu)||[],next=afterWords[0],last=beforeWords.at(-1);
       const offset=normalized.origins[m.index]?.start??m.index,end=normalized.origins[m.index+term.length-1]?.end??m.index+term.length;
       const raw=String(original).slice(offset,end),nextRaw=String(original).slice(end).match(/[\p{L}\p{M}]+/u)?.[0];
       const det=beforeWords.findLastIndex(word=>determiners.has(word));
       const proper=upper(raw),apposition=proper&&det>=0&&beforeWords.length>det+1;
-      const nominalScope=det>=0&&beforeWords.slice(det+1).every(word=>(!canonical||privateLanguageTags(word).length>0&&!privateLanguageTags(word).some(tag=>/^(VB|VBD|VBP|VBZ|MD|IN|TO)$/.test(tag)&&!privateLanguageTags(word).includes('JJ')))&&!relations.has(word)&&!auxiliaries.has(word)&&!verbs.has(word)&&(!/^VB/.test(privateLanguageTags(word)[0]||'')||privateLanguageTags(word).includes('JJ')));
+      const legacyNominalScope=det>=0&&beforeWords.slice(det+1).every(word=>(!canonical||privateLanguageTags(word).length>0&&!privateLanguageTags(word).some(tag=>/^(VB|VBD|VBP|VBZ|MD|IN|TO)$/.test(tag)&&!privateLanguageTags(word).includes('JJ')))&&!relations.has(word)&&!auxiliaries.has(word)&&!verbs.has(word)&&(!/^VB/.test(privateLanguageTags(word)[0]||'')||privateLanguageTags(word).includes('JJ')));
       const possessive=/^[’'ʼ]s(?:[^\p{L}\p{N}]|$)/u.test(after);
       const continuation=afterWords[1],finiteTail=!continuation||determiners.has(continuation)||complements.has(continuation)||['me','you','him','her','us','them','it'].includes(continuation)||upper(String(original).slice(end).match(/[\p{L}\p{M}]+/gu)?.[1]);
       const regularS=/s$/u.test(next||'')&&!/(?:ss|us|is)$/u.test(next||'')&&!auxiliaries.has(continuation)&&(term!=='the'||['me','you','him','her','us','them','it'].includes(continuation));
@@ -610,6 +653,16 @@ export function createPrivateValueMatcher(terms=[],{canonical=false,languageCont
       // name position: it is private without consulting the roles below.
       const ordinaryCased=!proper||!beforeWords.length;
       const previousToken=syntax.filter(t=>t.end<=m.index).at(-1);
+      // Contextual roles use positive model membership, not the absence of a
+      // lexical alternative. Unknown-word noun defaults are not evidence.
+      const evidenced=(token,pattern)=>token?.lexical===true&&(pattern.test(token.pos)||token.nominalPOS&&pattern.test(token.nominalPOS));
+      const clauseTokens=syntax.filter(t=>t.start>=m.index-before.length&&t.end<=m.index+term.length+after.length);
+      const prefixTokens=clauseTokens.filter(t=>t.end<=m.index);
+      const articleIndex=prefixTokens.findLastIndex(t=>determiners.has(t.word));
+      const nominalModifier=t=>evidenced(t,/^(?:NN|NNS|JJ|JJR|JJS|VBN)$/u);
+      const nominalScope=languageContext
+        ?articleIndex>=0&&prefixTokens.slice(articleIndex+1).every((token,i,chain)=>nominalModifier(token)||token.pos==='CC'&&i>0&&evidenced(chain[i-1],/^(?:NN|NNS)$/u)&&evidenced(chain[i+1]||currentToken,/^(?:NN|NNS)$/u))
+        :legacyNominalScope;
       const singularFinite=singularAuxiliaries.has(next)||nextPOS==='VBZ'||regularS&&nextPOS!=='NNS';
       const pluralFinite=pluralAuxiliaries.has(next)||nextPOS==='VBP';
       const neutralFinite=modalAuxiliaries.has(next)||nextPOS==='MD'||nextPOS==='VBD'||finitePast.has(next)||/ed$/u.test(next||'');
@@ -658,6 +711,44 @@ export function createPrivateValueMatcher(terms=[],{canonical=false,languageCont
       const verbRole=(/^(?:VB|VBD|VBP|VBZ|VBG|VBN)$/u.test(currentPOS||'')||imperative)&&!personal;
       const compoundRole=currentToken?.known&&!proper&&/^(?:NN|NNS)$/u.test(currentPOS||'')&&/^(?:NN|NNS)$/u.test(nextPOS||'')&&!personal;
       const cased=term.toUpperCase()!==term.toLowerCase();
+      const evidencedPluralModifier=!proper&&evidenced(currentToken,/^(?:JJ|JJR|JJS|VBN)$/u)&&evidenced(nextToken,/^NNS$/u)&&relations.has(previousToken?.word);
+      if(languageContext&&ordinaryCased&&!fieldPosition&&!m.personalAffix&&!possessive&&(!predicate||evidencedPluralModifier)&&!apposition&&!personalCopula&&!personalHead){
+        // A determiner must own a complete evidenced NP. A preceding imperative
+        // does not turn that article into an addressee ("send an invoice").
+        const tail=clauseTokens.filter(t=>t.start>=m.index+term.length);
+        let evidencedHead=false;
+        for(const token of tail){if(!nominalModifier(token))break;if(evidenced(token,/^(?:NN|NNS)$/u)){evidencedHead=true;break;}}
+        const articleEvidence=articleRole&&evidencedHead;
+        // Intervening adverbs do not sever an agreed subject + modal + verb.
+        const bridge=tail.slice(0,tail.findIndex(t=>!evidenced(t,/^RB(?:R|S)?$/u))<0?tail.length:tail.findIndex(t=>!evidenced(t,/^RB(?:R|S)?$/u)));
+        const modalVerb=tail[bridge.length];
+        const modalEvidence=currentPOS==='MD'&&subjectPronouns.has(previousToken?.word)&&bridge.length>0&&evidenced(modalVerb,/^VB$/u);
+        // Bare compounds retain inherited personal/recipient precedence.
+        // An NN continuation cannot rule out a recipient + object reading.
+        // Only the evidenced modifier + plural phrase is licensed here, not
+        // bare prepositional name positions or unknown nouns.
+        let modifierStart=prefixTokens.length;
+        while(modifierStart>0&&evidenced(prefixTokens[modifierStart-1],/^(?:JJ|JJR|JJS|VBN)$/u))modifierStart--;
+        const modifiedPlural=!proper&&evidenced(currentToken,/^NNS$/u)&&modifierStart<prefixTokens.length
+          &&relations.has(prefixTokens[modifierStart-1]?.word);
+        const pluralModifier=evidencedPluralModifier;
+        const objectPronouns=new Set(['me','you','him','her','us','them','it']);
+        const verbInPrefix=prefixTokens.some(t=>evidenced(t,/^(?:VB|VBD|VBP|VBZ)$/u));
+        const adverbEvidence=evidenced(currentToken,/^RB(?:R|S)?$/u)&&!currentToken.alternatives.some(p=>/^(?:NN|NNS|NNP|NNPS)$/u.test(p))
+          &&(previousToken?.pos==='MD'&&evidenced(nextToken,/^VB$/u)
+            ||objectPronouns.has(previousToken?.word)&&verbInPrefix
+            ||nominalScope&&evidenced(previousToken,/^(?:NN|NNS)$/u)&&verbInPrefix);
+        const completeObjectAt=start=>{
+          if(objectPronouns.has(tail[start]?.word))return true;
+          if(!evidenced(tail[start],/^DT$/u))return false;
+          for(const token of tail.slice(start+1)){if(!nominalModifier(token))break;if(evidenced(token,/^(?:NN|NNS)$/u))return true;}
+          return false;
+        };
+        const coordinatedVerb=nextToken?.pos==='CC'&&evidenced(tail[1],/^VB$/u)&&completeObjectAt(2);
+        const infinitiveEvidence=previousToken?.pos==='TO'&&currentToken?.lexical&&currentToken.alternatives.includes('VB')
+          &&(evidenced(currentToken,/^VB$/u)&&completeObjectAt(0)||coordinatedVerb);
+        if(articleEvidence||modalEvidence||modifiedPlural||pluralModifier||adverbEvidence||infinitiveEvidence)return false;
+      }
 
       const monthRole=new RegExp('^'+monthPattern+'$','u').test(term)&&calendarRelations.includes(last)&&!predicate;
       const lexicalImperative=!possessive&&!predicate&&!nextToken?.alternatives.includes('VBZ')&&currentToken?.alternatives.includes('VB')&&(completeNoun||/^(?:IN|TO)$/u.test(nextPOS||''))&&(!proper||!beforeWords.length)&&(!beforeWords.length||previousToken?.alternatives.some(t=>['UH','RB','MD','PRP','TO'].includes(t)));
@@ -723,6 +814,9 @@ export function createPrivateValueMatcher(terms=[],{canonical=false,languageCont
   };
   return contains;
 }
+
+// This admission-only dependency is below the immutable capture boundary.
+import {privateOccurrenceSyntax,privateCompletedActionClause,privateFieldLiteralOpen,privateFieldValueComplete} from './private-occurrence-evidence.mjs';
 
 // Preserve any syntactically independent ordinary clause, with a dependency
 // veto rather than an intent allowlist. Never redact fields inside a sentence.
