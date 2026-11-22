@@ -1,4 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';
+import {expectedAdmissionRevision} from '../automation/whatsapp/admission-revision.mjs';
 import {fixture} from './fixtures/private-invoice.mjs';import {createInboundRuntime} from '../automation/whatsapp/cloud-inbound.mjs';import {createConversationStore} from '../automation/whatsapp/conversation-store.mjs';
 const env={WHATSAPP_OUTBOUND_ENABLED:'true',WHATSAPP_COMMERCIAL_OUTBOUND_ENABLED:'true',WHATSAPP_ACCESS_TOKEN:'fixture',WHATSAPP_PHONE_NUMBER_ID:'123456',WHATSAPP_GRAPH_API_VERSION:'v24.0'};
 test('snapshot unavailability preserves saved body, retries after reconstruction and emits only safe diagnostics',async()=>{
@@ -44,6 +45,16 @@ drop trigger if exists _refresh_audit on public.whatsapp_inbound_events;
 create trigger _refresh_audit after update on public.whatsapp_inbound_events for each row execute function public._refresh_audit_trigger();`);
   const canonicalBefore=(await f.db.query('select app.private_invoice_canonical_revision() revision')).rows[0].revision;
   await f.db.exec(sql);await f.db.exec(sql);
+  // Replaying the historical reconciliation deliberately restores its old
+  // admission revision. Apply the current forward revision before running
+  // today's worker, exactly as an ordered production upgrade must do.
+  const {forwardAdmissionMigration}=JSON.parse(await readFile(new URL('../scripts/private-capture-baseline.json',import.meta.url),'utf8'));
+  const currentForward=await readFile(new URL('../'+forwardAdmissionMigration,import.meta.url),'utf8');
+  const transportState=async()=>({messages:(await f.db.query('select id,status,body,provider_message_id,dispatch_started_at from whatsapp_messages order by id')).rows,deliveries:(await f.db.query('select event_id,phase,status,reason,request from app.whatsapp_service_deliveries order by event_id,phase')).rows});
+  const beforeForward=await transportState();
+  await f.db.exec(currentForward);await f.db.exec(currentForward);
+  assert.deepEqual(await transportState(),beforeForward,'admission revision cannot reopen or change a historical delivery');
+  assert.equal((await f.db.query('select public.whatsapp_dispatch_admission_revision() revision')).rows[0].revision,expectedAdmissionRevision);
   assert.equal((await f.db.query('select app.private_invoice_canonical_revision() revision')).rows[0].revision,canonicalBefore);
   assert.match((await f.db.query('select app.private_invoice_admission_revision() revision')).rows[0].revision,/^[a-f0-9]{64}$/);
   assert.equal((await f.db.query("select status from whatsapp_messages where idempotency_key='old-answer:orphan'")).rows[0].status,'blocked');
