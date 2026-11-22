@@ -9,13 +9,13 @@ export function privacyDiagnostic(error){
 // Every WhatsApp content transport, including injected transports and retries,
 // admits the final serialized body against recipient-owned canonical keys.
 export async function prepareWhatsAppDispatch({supabase,workspaceId,phone,publicIdentities=[],media,snapshotDeadlineMs}){
- let r,data,index;
+ let r,data,index,deadlineTimer;
  try{
   const snapshot=supabase.rpc('whatsapp_dispatch_privacy_snapshot',{p_workspace_id:workspaceId??null,p_phone:phone});
   // A snapshot read that outlives the worker's remaining processing budget
   // admits nothing: expire it as unavailable (retryable) with the same safe
   // diagnostic instead of holding the queue past its deadline.
-  r=await (Number.isFinite(snapshotDeadlineMs)?Promise.race([snapshot,new Promise((_,reject)=>setTimeout(()=>reject(Error('Snapshot read deadline')),Math.max(0,snapshotDeadlineMs)))]):snapshot);
+  r=await (Number.isFinite(snapshotDeadlineMs)?Promise.race([snapshot,new Promise((_,reject)=>{deadlineTimer=setTimeout(()=>reject(Error('Snapshot read deadline')),Math.max(0,snapshotDeadlineMs));})]):snapshot);
   data=r?.data;
   // The snapshot contract is complete or absent: every admission set must be
   // present and well-typed. A partial snapshot (for example terms without the
@@ -27,6 +27,7 @@ export async function prepareWhatsAppDispatch({supabase,workspaceId,phone,public
    ||!Array.isArray(data.files)||!data.files.every(f=>f&&typeof f==='object'&&['id','invoice_id','workspace_id','storage_path'].every(k=>typeof f[k]==='string')))throw Error('Invalid snapshot');
   index=createCanonicalPrivateValueIndex(data.terms,{languageContext:true});
  }catch{throw privacyFailure('snapshot_unavailable',true);}
+ finally{if(deadlineTimer!==undefined)clearTimeout(deadlineTimer);}
  let fileOwned=false,ownedFileName;
  if(media){
   const source=data.files.find(f=>f.id===media.id&&f.invoice_id===media.invoice_id&&f.workspace_id===workspaceId&&f.storage_path===media.storage_path);

@@ -83,6 +83,12 @@ export async function writeReleaseManifest({outputPath='owner-chat-build.json'}=
   paths.push('ai/private-runtime-lexicon.mjs','ai/private-runtime-lexicon-data.mjs','scripts/generate-private-runtime-lexicon.mjs','data/private-language/wordnet-mass-nouns.txt','data/private-language/wordnet-representation-verbs.txt','tests/private-round14-model.test.mjs','tests/private-round14-classes.test.mjs','tests/private-round14-batch.test.mjs');
   paths.push('automation/whatsapp/private-dispatch.mjs','supabase/migrations/20261114000100_customer_dispatch_privacy.sql','scripts/release-shard.mjs','tests/private-round16-dispatch.test.mjs','tests/private-round16-build.test.mjs','tests/fixtures/dispatch-sql-double.mjs','tests/fixtures/dispatch-ready-network.mjs');
   paths.push('ai/private-payload-boundary.mjs','ai/private-calendar-components.mjs','tests/private-round15-classes.test.mjs','tests/private-round15-wrappers.test.mjs','tests/private-round15-dispatch.test.mjs','tests/private-round15-index.test.mjs','tests/private-round15-projection.test.mjs','tests/private-round15-customer.test.mjs');
+  paths.push('ai/private-occurrence-evidence.mjs','scripts/private-capture-baseline.json','supabase/migrations/20261122064000_whatsapp_occurrence_admission.sql','tests/private-round18-occurrence-evidence.test.mjs','tests/reviewer-round18-common-noun-collision.test.mjs');
+  paths.push('tests/reviewer-round19-recipient-regression.test.mjs','tests/whatsapp-admission-revision.test.mjs','tests/whatsapp-admission-recovery.test.mjs');
+  paths.push('tests/whatsapp-admission-deadline-cleanup.test.mjs');
+  paths.push('tests/reviewer-round20-coordinated-field.test.mjs');
+  paths.push('tests/reviewer-round21-field-formatting-boundary.test.mjs');
+  paths.push('tests/reviewer-round22-quoted-field-boundary.test.mjs');
   const files={};for(const path of paths)files[path]=createHash('sha256').update(await readFile(path)).digest('hex');
   let commit=process.env.VERCEL_GIT_COMMIT_SHA||process.env.GITHUB_SHA;
   if(!commit)try{commit=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();}catch{commit=null;}

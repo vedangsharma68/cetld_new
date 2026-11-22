@@ -6,7 +6,7 @@ import {CF_PRIMARY_MODEL, CF_BACKUP_MODEL, isCloudflareModelId} from './provider
 import {financialChatIntent} from '../invoice/chat-intent.mjs';
 
 export const PRIVATE_CHAT_SYSTEM_MESSAGE='You are cetld, a helpful WhatsApp assistant. Answer ordinary conversation concisely using the supplied ordinary chat memory. Use available tools for current non-invoice requests. You have no access to private invoice records. Never invent invoice, customer, payment, balance or reminder facts. Ask the user to use the invoice menu for those questions.';
-export const PRIVATE_CHAT_REPLY = 'I can only answer invoice questions from verified records. I kept the private details local. Use the invoice menu to check a balance or status, or continue the upload review to correct or confirm it. You can send an unrelated chat request separately.';
+export const PRIVATE_CHAT_REPLY = 'I can only answer an invoice question using the verified records. I kept the private details local. Use the invoice menu to check a balance or status, or continue the upload review to correct or confirm it. You can send an unrelated chat request separately.';
 export const CHAT_UNAVAILABLE_REPLY = 'Chat is temporarily unavailable. Please try again shortly. Nothing was lost; your invoices and reviews are still saved.';
 
 // Unparsed create/correction values can themselves contain punctuation or
