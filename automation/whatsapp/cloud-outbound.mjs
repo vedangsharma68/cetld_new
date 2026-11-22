@@ -102,6 +102,7 @@ export function createWhatsAppOutbound({
   authorizeInboundReply,
   claimInvoiceUpdate,
   conversationStore = createConversationStore(supabase),
+  dispatchDeadline,
 } = {}) {
   const allowlist = allowlistFromEnv(env);
 
@@ -308,7 +309,7 @@ export function createWhatsAppOutbound({
     const payload=await prepareMessage({workspaceId,to,customerId,invoiceId,key,kind:'invoice_update',payload:{
       type:'template',template:buildReminderTemplate(selectReminderTemplate({tone:'professional'}),[name,number,nonempty(finalEligibility.customer.name,'customerName',256)]).template,
     }});
-    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to});
+    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to,snapshotDeadlineMs:dispatchDeadline?.()});
     const claim = await claimInvoiceUpdate({workspaceId, invoiceId, customerId, phone: to, idempotencyKey: eventKey, expectedUpdatedAt: revision});
     if (claim?.claimed !== true) return block(logger, claim?.reason || 'duplicate_invoice_update', {workspaceId, to, kind: 'invoice_update'});
     if(!await verifiedBusinessName(supabase,workspaceId,name))
@@ -393,7 +394,7 @@ export function createWhatsAppOutbound({
     const payload=await prepareMessage({workspaceId,to,kind,audience,customerId,key,payload:replyPayload,ownerActionFallback:fallbackRef});
     if(audience==='owner'&&ownerButtonClaimIssue(payload.text?.body||payload.interactive?.body?.text,{buttonsAvailable:Boolean(payload.interactive?.action?.buttons?.length)}))throw new TypeError('stored owner reply advertises missing buttons');
     if(audience!=='owner'&&!payload.text.body.endsWith(`\n\n- ${owner}`))return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed'});
-    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to});
+    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to,snapshotDeadlineMs:dispatchDeadline?.()});
     const claimInput={workspaceId,phone:to,kind,messageId:inboundId,...(audience==='owner'?{audience,phase}:{})};
     const reservation=await supabase.rpc('whatsapp_prepare_reply_reservation',{p_workspace_id:workspaceId,p_message_id:claimInput.messageId,p_phone:to,p_kind:kind,p_phase:claimInput.phase||'answer'});if(reservation?.error)throw reservation.error;if(!reservation?.data)return denyPrepared({workspaceId,to,kind,key,reason:'reply_reservation_unavailable'});claimInput.reservationNonce=reservation.data;
     let authorization=await authorizeInboundReply(claimInput);
@@ -450,7 +451,7 @@ export function createWhatsAppOutbound({
       : {type:'document',document:{id:'',filename:media.file_name||media.fileName||'invoice.pdf',caption:brandedCaption}}});
     if(audience!=='owner'&&!(payload.image?.caption||payload.document?.caption).endsWith(`\n\n- ${businessName}`))
       return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed'});
-    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to,media});
+    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to,media,snapshotDeadlineMs:dispatchDeadline?.()});
     const form = new FormData();
     form.set('messaging_product', 'whatsapp');
     form.set('type', media.mime_type || media.mimeType || 'application/octet-stream');
@@ -497,7 +498,7 @@ export function createWhatsAppOutbound({
     if(JSON.stringify(current)!==JSON.stringify(review))return block(logger,'owner_test_review_changed',{workspaceId,to,kind});
     const payload=await prepareMessage({workspaceId,to,key,kind,audience:'owner',invoiceId,
       customerId:current.customerId,payload:{type:'template',template:current.template}});
-    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to});
+    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to,snapshotDeadlineMs:dispatchDeadline?.()});
     if(!await claimOwnerTest({supabase,workspaceId,key}))return await readOwnerTestReceipt({supabase,workspaceId,ownerId,invoiceId})
       ||block(logger,'duplicate_owner_test',{workspaceId,to,kind});
     try {
@@ -521,4 +522,4 @@ export function createWhatsAppOutbound({
   };
   // Intentionally no scheduler or arbitrary reminder send method.
   return Object.freeze({sendInvoiceUpdateTemplate:privacySafe(sendInvoiceUpdateTemplate), sendOwnerTestTemplate:privacySafe(sendOwnerTestTemplate), sendServiceReply:privacySafe(sendServiceReply), sendServiceMedia:privacySafe(sendServiceMedia), sendTypingIndicator});
-}
+                                    }
