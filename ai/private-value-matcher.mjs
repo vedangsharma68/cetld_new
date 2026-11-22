@@ -539,6 +539,20 @@ export function createPrivateValueMatcher(terms=[],{canonical=false,languageCont
   const relations=new Set(['to','from','with','about','by','for','of','in','on','at']);
   const complements=new Set([...relations,'if','whether','when','where','why','how','who','that','now','today','tomorrow','yesterday','recently','please','again','soon','later']);
   const auxiliaries=new Set(grammarAuxiliaries);
+  // Agreement evidence for attested pronouns. A finite verb carries
+  // person/number features the pronoun subject must match, and a possessive
+  // pronoun needs a nominal continuation unless its independent reading
+  // agrees with the verb ("his has been paid"). Without compatible syntax
+  // the occurrence is a name-position citation, not an ordinary role.
+  const modalAuxiliaries=new Set(['will','would','can','could','shall','should','may','might','must']);
+  const singularAuxiliaries=new Set(['is','was','has','does']);
+  const pluralAuxiliaries=new Set(['am','are','were','have','do']);
+  const subjectPronouns=new Set(['i','you','he','she','it','we','they']);
+  const singularSubjects=new Set(['he','she','it']);
+  // Verbs that license an object pronoun with a bare infinitive ("make it
+  // pay", "I saw him pay"). Only after these can an object reading, not a
+  // subject citation, host a base-form verb.
+  const bareInfinitiveLicensers=new Set(['make','made','let','have','had','see','saw','hear','heard','watch','watched','feel','felt','notice','noticed','observe','observed','help','helped','bid','overhear','overheard','perceive','perceived']);
   const finitePast=new Set('arose awoke bore beat became began bent bet bid bit bled blew broke bred brought broadcast built burnt bought caught chose came cost crept cut dealt dug did drew dreamt drank drove ate fell fed felt fought found fled flew forbade forgot forgave froze got gave went grew hung had heard hid hit held hurt kept knew laid led leant leapt learnt left lent let lay lit lost made meant met paid put quit read rode rang rose ran said saw sought sold sent set sewed shook shone shot showed shrank shut sang sank sat slept slid smelt spoke spelt spent spilt spun spat split spread sprang stood stole stuck stung stank struck swore swept swam swung took taught tore told thought threw understood woke wore wept won wound wrote'.split(' '));
   const verbs=new Set(['ask','contact','call','pay','send','tell','talk','message','email','thank','meet','met','spoke','speak','came','comes','went','said','says']);
   const upper=value=>/\p{Lu}/u.test(Array.from(value||'')[0]||'');
@@ -584,13 +598,38 @@ export function createPrivateValueMatcher(terms=[],{canonical=false,languageCont
       const regularS=/s$/u.test(next||'')&&!/(?:ss|us|is)$/u.test(next||'')&&!auxiliaries.has(continuation)&&(term!=='the'||['me','you','him','her','us','them','it'].includes(continuation));
       const nextToken=syntax.find(token=>token.start>=m.index+term.length&&/^[\p{L}\p{M}]/u.test(token.word)),nextPOS=nextToken?.pos;
       const currentToken=syntax.find(token=>token.start===m.index&&token.word===term),currentPOS=currentToken?.pos;
-      if(languageContext&&!fieldPosition&&/^(?:PRP|PRP\$|DT|CC|IN|TO|MD|UH)$/u.test(currentPOS||'')&&currentToken?.known)return false;
+      // A known pronoun keeps its ordinary grammatical role only in ordinary
+      // casing (lowercase or sentence-initial) AND in syntax that can host
+      // that role: a subject pronoun requires an agreement-compatible finite
+      // continuation (a singular subject cannot take a base-form verb unless
+      // a licensing verb gives the ordinary object + bare-infinitive
+      // reading), and a possessive requires a nominal continuation or an
+      // agreeing independent reading. A mid-sentence capital cites the
+      // registered party or identifier, and an ordinary-cased occurrence
+      // that cannot form valid pronoun syntax cites the registered value in
+      // name position: it is private without consulting the roles below.
+      const ordinaryCased=!proper||!beforeWords.length;
+      const previousToken=syntax.filter(t=>t.end<=m.index).at(-1);
+      const singularFinite=singularAuxiliaries.has(next)||nextPOS==='VBZ'||regularS&&nextPOS!=='NNS';
+      const pluralFinite=pluralAuxiliaries.has(next)||nextPOS==='VBP';
+      const neutralFinite=modalAuxiliaries.has(next)||nextPOS==='MD'||nextPOS==='VBD'||finitePast.has(next)||/ed$/u.test(next||'');
+      const finiteNext=singularFinite||pluralFinite||neutralFinite;
+      const baseForm=(nextPOS==='VB'||nextPOS==='VBP')&&!auxiliaries.has(next);
+      const licensedObject=bareInfinitiveLicensers.has(previousToken?.word.toLowerCase()||'')&&/^(?:VB|VBD|VBP|VBZ|VBN)$/u.test(previousToken?.pos||'');
+      const nominalContinuation=/^(?:NN|NNS|NNP|NNPS|JJ|JJR|JJS|CD|VB|VBP)$/u.test(nextPOS||'');
+      const pronounRole=currentPOS==='PRP'
+        ?baseForm
+          ?licensedObject||subjectPronouns.has(term)&&!singularSubjects.has(term)
+          :!finiteNext||(subjectPronouns.has(term)&&(neutralFinite||singularFinite&&singularSubjects.has(term)||pluralFinite&&!singularSubjects.has(term))||term==='his'&&(singularFinite||neutralFinite))
+        :currentPOS==='PRP$'
+          ?!finiteNext||nominalContinuation||term==='his'&&(singularFinite||neutralFinite)
+          :true;
+      if(languageContext&&!fieldPosition&&currentToken?.known&&ordinaryCased&&/^(?:PRP|PRP\$)$/u.test(currentPOS||''))return pronounRole?false:true;
       const incompatibleFunction=['a','an'].includes(term)||auxiliaries.has(term);
       const finiteAlternative=nextToken?.alternatives.includes('VBZ')&&!auxiliaries.has(continuation)&&currentPOS!=='JJ'&&(!beforeWords.length||apposition||complements.has(last));
       const predicate=auxiliaries.has(next)||/^(?:VBD|VBZ)$/u.test(nextPOS||'')||(nextPOS==='VBN'||finitePast.has(next)||/ed$/u.test(next||''))&&finiteTail||finiteAlternative||regularS&&(nextPOS!=='NNS'||incompatibleFunction);
       const addressed=verbs.has(last),terminal=!next,prepositional=relations.has(last)&&last!=='by';
       const differentName=proper&&upper(nextRaw)&&!parties.has(partyKey(next))&&!auxiliaries.has(next)&&!complements.has(next);
-      const previousToken=syntax.filter(t=>t.end<=m.index).at(-1);
       const personalHead=/^(?:NN|NNP)$/.test(previousToken?.pos||'')&&!/^(?:JJ|JJR|JJS)$/.test(previousToken?.alternatives[0]||'')&&personalHeads.has(previousToken?.word.toLowerCase());
       let governorIndex=syntax.findLastIndex(t=>t.end<=m.index);
       while(governorIndex>=0&&(/^(?:JJ|JJR|JJS|RB|RBR|RBS)$/.test(syntax[governorIndex].pos)||/^(?:JJ|JJR|JJS)$/.test(syntax[governorIndex].alternatives[0]||'')))governorIndex--;
@@ -711,4 +750,4 @@ export function ordinaryPart(message,isPrivate,privateSpans=()=>[]){
   const dependent=/\b(?:it|this|that|these|those|above|below|instead|same|them|their|its|former|latter)\b|^(?:and|but|or|because|so|then|today|tomorrow|yesterday|later|due|do not|don't|never|no changes|no writes)\b/i;
   return {text:clauses.filter(clause=>clause&&!isPrivate(clause)&&!dependent.test(clean(clause))&&/[\p{L}]/u.test(clause)
     &&!clean(clause).split(/[ ,&-]+/u).every(word=>numberWords.has(word))).join('. '),mixed:true};
-}
+  }
