@@ -3,9 +3,9 @@ test('forward admission generation preserves immutable capture and rejects captu
  const root=await mkdtemp(path.join(tmpdir(),'cetld-admission-revision-'));
  const original='supabase/migrations/20261101120327_private_whatsapp_chat_memory.sql',forward='supabase/migrations/20261121212253_whatsapp_admission_recovery.sql';
  try{
-  await mkdir(path.join(root,'scripts'),{recursive:true});await mkdir(path.join(root,'supabase/migrations'),{recursive:true});
+  await mkdir(path.join(root,'scripts'),{recursive:true});await mkdir(path.join(root,'supabase/migrations'),{recursive:true});await mkdir(path.join(root,'automation/whatsapp'),{recursive:true});
   await cp('ai',path.join(root,'ai'),{recursive:true});await symlink(path.resolve('node_modules'),path.join(root,'node_modules'),'dir');
-  for(const file of [original,forward,'package-lock.json','scripts/generate-private-value-sql.mjs','scripts/private-capture-baseline.json'])await copyFile(file,path.join(root,file));
+  for(const file of [original,forward,'package-lock.json','scripts/generate-private-value-sql.mjs','scripts/private-capture-baseline.json','automation/whatsapp/admission-revision.mjs','automation/whatsapp/private-dispatch.mjs'])await copyFile(file,path.join(root,file));
   const run=check=>execFileSync(process.execPath,['scripts/generate-private-value-sql.mjs',...(check?['--check']:[])],{cwd:root,timeout:5000,env:{PATH:process.env.PATH,TMPDIR:tmpdir()},stdio:'pipe'});
   const historical=await readFile(path.join(root,original)),matcherPath=path.join(root,'ai/private-value-matcher.mjs'),matcher=await readFile(matcherPath,'utf8');
   await t.test('current source and both revision contracts check clean',()=>assert.doesNotThrow(()=>run(true)));
@@ -21,6 +21,7 @@ test('forward admission generation preserves immutable capture and rejects captu
    assert.throws(()=>run(true),error=>error.stderr.toString().includes('Forward admission revision needs regeneration'));
    run(false);run(true);assert.deepEqual(await readFile(path.join(root,original)),historical);
    assert.notEqual(await readFile(path.join(root,forward),'utf8'),await readFile(forward,'utf8'));
+   assert.notEqual(await readFile(path.join(root,'automation/whatsapp/admission-revision.mjs'),'utf8'),await readFile(new URL('../automation/whatsapp/admission-revision.mjs',import.meta.url),'utf8'));
   });
  }finally{await rm(root,{recursive:true,force:true});}
 });
