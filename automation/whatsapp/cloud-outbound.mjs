@@ -522,4 +522,4 @@ export function createWhatsAppOutbound({
   };
   // Intentionally no scheduler or arbitrary reminder send method.
   return Object.freeze({sendInvoiceUpdateTemplate:privacySafe(sendInvoiceUpdateTemplate), sendOwnerTestTemplate:privacySafe(sendOwnerTestTemplate), sendServiceReply:privacySafe(sendServiceReply), sendServiceMedia:privacySafe(sendServiceMedia), sendTypingIndicator});
-                                    }
+}
