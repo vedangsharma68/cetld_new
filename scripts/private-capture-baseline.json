@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "immutableMigrationSHA256": "3188a9fdf34b73b0275f1aba8f2034cafb4904bcac9cc6fe41b551c465e1f953",
+  "captureSQLSHA256": "bd321ac4cd6f48a722b9b07f76529a00e934384f4beda807cbe6b08a7e1ca616",
+  "captureSourceSHA256": {
+    "ai/private-reference-frames.mjs": "2aa4dc10cf0f73c41f4d0dd057fc69867cd419dc01164e55289cf69637cd78d5",
+    "ai/private-number-role.mjs": "1be52c92d6a598014172aa775eb36e87b89b2b8b1140edddb537f8e55a95fe3d",
+    "ai/private-name-morphology.mjs": "88b36a83320f72b96429312533f02d68526e074ca61d979c4d8db74b880eaac2",
+    "ai/private-value-language.mjs": "713c14fb5287bcd9e0a1579b3dcb6a02a6da5d8177a1b723d1f43caf408228fc",
+    "ai/private-value-matcher.mjs": "9c1356cd66dc8b2488c5b0f0ec9420b4b2591ce4d6bafcde8b51fe3ff2a34afd",
+    "ai/private-value-unicode.mjs": "93524bf7ea92b345d7bec09e5e8cff0961f530f9721e111b285ad53d69aafba2",
+    "ai/private-language-syntax.mjs": "6b3feec31f2e108cdd27c1d5f0c9bdf36fb0c27aa58a29ce45cecfe4205f0a4f",
+    "ai/private-language-model.mjs": "ca85c641a6c2f83df5c95d246d00bef34521cc633b5942509390b77d47ed4a61",
+    "ai/private-calendar-components.mjs": "e66c99c8b1bfd24ff30821fb0dc63f9a80984857d0d4cc0d347e73bcc99023c5",
+    "ai/private-runtime-lexicon.mjs": "0572312638c3176809688fb2b06c6221dd23dbbe5a6602e851080a4ee761a682",
+    "ai/private-runtime-lexicon-data.mjs": "f7be7a292e5da0f2af70547c6191fcda527cab84ee9e894870ef7a0b18c5ee07",
+    "package-lock.json": "b5402d44736db6ceda379f8ec132a62b7556f5d08973346437a13ada6e15513c"
+  },
+  "matcherCaptureBoundary": "export function createPrivateValueMatcher",
+  "forwardAdmissionMigration": "supabase/migrations/20261121212253_whatsapp_admission_recovery.sql"
+}

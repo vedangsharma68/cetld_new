@@ -4,8 +4,8 @@ export const PRIVATE_PAYLOAD_BLOCKED='PRIVATE_PAYLOAD_BLOCKED';
 // One workspace-scoped canonical index owns every admission boundary. Its
 // candidate lattice retains ambiguous values unless a scalar/common-word
 // interpretation is established; unknown phrasing is never a release proof.
-export function createCanonicalPrivateValueIndex(terms){
- const match=createPrivateValueMatcher(terms,{canonical:true});
+export function createCanonicalPrivateValueIndex(terms,{languageContext=false}={}){
+ const match=createPrivateValueMatcher(terms,{canonical:true,languageContext});
  const blocked=()=>Object.assign(new Error('Private payload withheld'),{code:PRIVATE_PAYLOAD_BLOCKED});
  const fingerprint=(value,memo=new WeakMap(),depth=0)=>{
   if(depth>32)throw blocked();const hash=createHash('sha256');

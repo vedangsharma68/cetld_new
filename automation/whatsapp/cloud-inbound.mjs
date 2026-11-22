@@ -280,6 +280,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     outboundPromise ||= import('./cloud-outbound.mjs').then(({ createWhatsAppOutbound }) => {
       const invoiceUpdates = createWhatsAppInvoiceUpdateStore({supabase});
       return createWhatsAppOutbound({env, fetchImpl, supabase, logger, ...invoiceUpdates,
+        dispatchDeadline:()=>activeDeadlineAt===undefined?undefined:activeDeadlineAt-clock(),
         authorizeInboundReply:async input=>({allowed:dataOrThrow(await supabase.rpc('whatsapp_claim_reserved_reply',{
           p_workspace_id:input.workspaceId||null,p_message_id:input.messageId,p_phone:input.phone,p_kind:input.kind,
           p_phase:input.phase||'answer',p_audience:input.audience||'customer',p_phone_number_id:env.WHATSAPP_PHONE_NUMBER_ID,
@@ -288,6 +289,10 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
     return outboundPromise;
   };
   let wrappedOutbound;
+  // The active processPending budget, exposed to outbound admission so a
+  // stalled snapshot read expires with the worker deadline instead of
+  // starving the queue. Never serialized into durable delivery requests.
+  let activeDeadlineAt;
   const getOutbound=async()=>{
     rawOutbound=await getRawOutbound();
     if(typeof inbox.stageProtocol!=='function')return rawOutbound;
@@ -704,6 +709,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
       const deadlineAt = startedAt + budgetMs;
       const controller = new AbortController();
       const deadlineTimer = setTimeout(() => controller.abort(), budgetMs);
+      activeDeadlineAt=deadlineAt;
       const seen = new Set(),deliveryPhases=new Set();
       let preferInbox=false;
       let claimed = 0;
@@ -831,7 +837,7 @@ export function createInboundRuntime({ env = process.env, fetchImpl = globalThis
         // Media is the long path. Leave later events unclaimed for the next
         // webhook continuation or five-minute cron invocation.
         if (event.media_ref) break;
-      }} finally { clearTimeout(deadlineTimer); }
+      }} finally { clearTimeout(deadlineTimer); activeDeadlineAt=undefined; }
       return { claimed, completed };
     },
   };

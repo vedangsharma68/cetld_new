@@ -1,5 +1,5 @@
-import {randomUUID} from 'node:crypto';
-import {dispatchWhatsApp,prepareWhatsAppDispatch} from './private-dispatch.mjs';
+import {randomUUID,createHash} from 'node:crypto';
+import {dispatchWhatsApp,prepareWhatsAppDispatch,privacyDiagnostic} from './private-dispatch.mjs';
 import {authorizeOwnerPhone} from './owner-binding.mjs';
 import {createConversationStore,conversationCallbackToken} from './conversation-store.mjs';
 import {getSendEligibility} from './consent.mjs';
@@ -102,6 +102,7 @@ export function createWhatsAppOutbound({
   authorizeInboundReply,
   claimInvoiceUpdate,
   conversationStore = createConversationStore(supabase),
+  dispatchDeadline,
 } = {}) {
   const allowlist = allowlistFromEnv(env);
 
@@ -226,7 +227,12 @@ export function createWhatsAppOutbound({
       if(error?.knownUnsent&&error.code!=='SERVICE_WINDOW_CLOSED'&&(error.code!=='REPLY_AUTHORITY_CHANGED'||error.retryable))return {status:'pending',reason:'reply_retryable'};
       if(error?.code==='SERVICE_WINDOW_CLOSED')return finish({status:'blocked',reason:'service_window_closed'});
       if(['REPLY_AUTHORITY_CHANGED','REPLY_HANDOFF_DENIED'].includes(error?.code))return finish({status:'blocked',reason:error.reason||'reply_authority_changed'});
-      if(error?.code==='PRIVATE_PAYLOAD_BLOCKED')return finish({status:'blocked',reason:'private_payload'});
+      if(error?.code==='PRIVATE_PAYLOAD_BLOCKED'){
+        const category=privacyDiagnostic(error);
+        logger?.warn?.({event:'whatsapp_privacy_verdict',workspaceId,correlationId:createHash('sha256').update(key||'').digest('hex'),kind,category,retryable:error.retryable===true});
+        if(error.retryable)return {status:'pending',reason:'snapshot_unavailable'};
+        return finish({status:'blocked',reason:'private_payload',privacyCategory:category});
+      }
       logger?.error?.({event: 'whatsapp_outbound_unknown', workspaceId, recipient: maskedPhone(to), kind, message: error?.message});
       return finish({status: 'unknown', reason: 'network_error'});
     }
@@ -303,7 +309,7 @@ export function createWhatsAppOutbound({
     const payload=await prepareMessage({workspaceId,to,customerId,invoiceId,key,kind:'invoice_update',payload:{
       type:'template',template:buildReminderTemplate(selectReminderTemplate({tone:'professional'}),[name,number,nonempty(finalEligibility.customer.name,'customerName',256)]).template,
     }});
-    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to});
+    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to,snapshotDeadlineMs:dispatchDeadline?.()});
     const claim = await claimInvoiceUpdate({workspaceId, invoiceId, customerId, phone: to, idempotencyKey: eventKey, expectedUpdatedAt: revision});
     if (claim?.claimed !== true) return block(logger, claim?.reason || 'duplicate_invoice_update', {workspaceId, to, kind: 'invoice_update'});
     if(!await verifiedBusinessName(supabase,workspaceId,name))
@@ -388,7 +394,7 @@ export function createWhatsAppOutbound({
     const payload=await prepareMessage({workspaceId,to,kind,audience,customerId,key,payload:replyPayload,ownerActionFallback:fallbackRef});
     if(audience==='owner'&&ownerButtonClaimIssue(payload.text?.body||payload.interactive?.body?.text,{buttonsAvailable:Boolean(payload.interactive?.action?.buttons?.length)}))throw new TypeError('stored owner reply advertises missing buttons');
     if(audience!=='owner'&&!payload.text.body.endsWith(`\n\n- ${owner}`))return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed'});
-    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to});
+    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to,snapshotDeadlineMs:dispatchDeadline?.()});
     const claimInput={workspaceId,phone:to,kind,messageId:inboundId,...(audience==='owner'?{audience,phase}:{})};
     const reservation=await supabase.rpc('whatsapp_prepare_reply_reservation',{p_workspace_id:workspaceId,p_message_id:claimInput.messageId,p_phone:to,p_kind:kind,p_phase:claimInput.phase||'answer'});if(reservation?.error)throw reservation.error;if(!reservation?.data)return denyPrepared({workspaceId,to,kind,key,reason:'reply_reservation_unavailable'});claimInput.reservationNonce=reservation.data;
     let authorization=await authorizeInboundReply(claimInput);
@@ -445,7 +451,7 @@ export function createWhatsAppOutbound({
       : {type:'document',document:{id:'',filename:media.file_name||media.fileName||'invoice.pdf',caption:brandedCaption}}});
     if(audience!=='owner'&&!(payload.image?.caption||payload.document?.caption).endsWith(`\n\n- ${businessName}`))
       return denyPrepared({workspaceId,to,kind,key,reason:'business_name_changed'});
-    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to,media});
+    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to,media,snapshotDeadlineMs:dispatchDeadline?.()});
     const form = new FormData();
     form.set('messaging_product', 'whatsapp');
     form.set('type', media.mime_type || media.mimeType || 'application/octet-stream');
@@ -492,7 +498,7 @@ export function createWhatsAppOutbound({
     if(JSON.stringify(current)!==JSON.stringify(review))return block(logger,'owner_test_review_changed',{workspaceId,to,kind});
     const payload=await prepareMessage({workspaceId,to,key,kind,audience:'owner',invoiceId,
       customerId:current.customerId,payload:{type:'template',template:current.template}});
-    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to});
+    const admission=await prepareWhatsAppDispatch({supabase,workspaceId,phone:to,snapshotDeadlineMs:dispatchDeadline?.()});
     if(!await claimOwnerTest({supabase,workspaceId,key}))return await readOwnerTestReceipt({supabase,workspaceId,ownerId,invoiceId})
       ||block(logger,'duplicate_owner_test',{workspaceId,to,kind});
     try {
@@ -504,6 +510,16 @@ export function createWhatsAppOutbound({
     return postMessage({workspaceId,to,key,kind,payload,admission,audience:'owner'});
   }
 
+  // Admission can fail before a claim, upload or transport is prepared. Keep
+  // the same classification at every public send entry, not only postMessage.
+  const privacySafe=send=>async input=>{
+    try{return await send(input);}catch(error){
+      if(error?.code!=='PRIVATE_PAYLOAD_BLOCKED')throw error;
+      const category=privacyDiagnostic(error);
+      logger?.warn?.({event:'whatsapp_privacy_verdict',workspaceId:input?.workspaceId,messageId:input?.messageId,category,retryable:error.retryable===true});
+      return {status:error.retryable?'pending':'blocked',reason:error.retryable?'snapshot_unavailable':'private_payload',privacyCategory:category};
+    }
+  };
   // Intentionally no scheduler or arbitrary reminder send method.
-  return Object.freeze({sendInvoiceUpdateTemplate, sendOwnerTestTemplate, sendServiceReply, sendServiceMedia, sendTypingIndicator});
+  return Object.freeze({sendInvoiceUpdateTemplate:privacySafe(sendInvoiceUpdateTemplate), sendOwnerTestTemplate:privacySafe(sendOwnerTestTemplate), sendServiceReply:privacySafe(sendServiceReply), sendServiceMedia:privacySafe(sendServiceMedia), sendTypingIndicator});
 }
