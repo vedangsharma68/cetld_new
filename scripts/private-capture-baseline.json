@@ -17,5 +17,5 @@
     "package-lock.json": "b5402d44736db6ceda379f8ec132a62b7556f5d08973346437a13ada6e15513c"
   },
   "matcherCaptureBoundary": "export function createPrivateValueMatcher",
-  "forwardAdmissionMigration": "supabase/migrations/20261122064000_whatsapp_occurrence_admission.sql"
+  "forwardAdmissionMigration": "supabase/migrations/20261122174000_whatsapp_lazy_admission.sql"
 }

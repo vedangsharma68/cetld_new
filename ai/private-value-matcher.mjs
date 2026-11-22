@@ -484,6 +484,24 @@ export function privateFieldKeys(value){
 }
 export function createPrivateValueMatcher(terms=[],{canonical=false,languageContext=false}={}){
   const retainedRuns=[],retainedNumbers=new Set(),retainedDates=[],retainedDateRanges=[],literals=[],parties=new Set(),nativeParties=new Set(),latinParties=new Set(),referenceParties=new Set(),inferredParties=new Set();
+  const literalNecessary=new WeakMap();
+  const compactLiteral=value=>value.replace(/[\p{P} ]/gu,'');
+  const retainLiteral=(makePattern,key,isIdentifier=false)=>{
+    // A run between AND aliases must occur unchanged after deleting only
+    // characters the original identifier regex accepts as separators.
+    // Ampersands can be either aliases or separators, so never expand them
+    // in the candidate. An empty necessary run deliberately skips no checks.
+    const needle=isIdentifier?key.replaceAll('&','and').split('and').map(compactLiteral).sort((a,b)=>b.length-a.length)[0]:key;
+    const entry={makePattern,pattern:null};
+    literalNecessary.set(entry,{needle,isIdentifier});literals.push(entry);
+  };
+  const patternFor=entry=>entry.pattern??=entry.makePattern();
+  const possibleLiteral=content=>{
+    let compact;
+    return pattern=>{const rule=literalNecessary.get(pattern);if(!rule||!rule.needle)return true;
+      if(!rule.isIdentifier)return content.includes(rule.needle);
+      compact??=compactLiteral(content);return compact.includes(rule.needle);};
+  };
   const expanded=terms.flatMap(raw=>String(raw??'').startsWith('evidence:')?privateEvidenceValues(String(raw).slice(9)):String(raw??'').startsWith('origin:')?privateOriginKeys(String(raw).slice(7)).filter(key=>!key.startsWith('origin:')):[raw]);
   const attested=new Set(expanded.filter(t=>/^party(?:-native|-latin|-inferred|-ref)?:/.test(t)).map(t=>t.slice(t.indexOf(':')+1)));
   // Dispatch preserves lexical role for homographs. This is occurrence-scoped,
@@ -496,7 +514,7 @@ export function createPrivateValueMatcher(terms=[],{canonical=false,languageCont
     // Only the exact contiguous spelling can have an ordinary lexical role.
     // Spaced/punctuated identifier renderings retain the original ID matcher.
     const whole=escape(key)+'(?![\\p{L}\\p{N}_])';
-    literals.push(new RegExp('(?!'+whole+')'+identifierPattern(key).source,'u'));
+    retainLiteral(()=>new RegExp('(?!'+whole+')'+identifierPattern(key).source,'u'),key,true);
   };
   const fieldAssignment=new RegExp('(?:'+privateDocumentKeyPattern+')(?: +(number|no|id|name))?(?: +(is|was|equals)| *[:=]) *$','u');
   const fieldDeclaration=new RegExp(fieldAssignment.source.slice(0,-1),'gu');
@@ -520,13 +538,13 @@ export function createPrivateValueMatcher(terms=[],{canonical=false,languageCont
     if(term.startsWith('party-inferred:')){inferredParties.add(term.slice(15));return true;}
     if(term.startsWith('party-ref:')){referenceParties.add(term.slice(10));return true;}
     if(term.startsWith('party:')){parties.add(term.slice(6));return true;}
-    if(term.startsWith('identifier:')){if(lexical(term.slice(11))){retainLexical(term.slice(11));return true;}if(attested.has(term.slice(11))&&privateLanguageTags(term.slice(11)).length)return true;literals.push(identifierPattern(term.slice(11)));return true;}return false;
+    if(term.startsWith('identifier:')){if(lexical(term.slice(11))){retainLexical(term.slice(11));return true;}if(attested.has(term.slice(11))&&privateLanguageTags(term.slice(11)).length)return true;retainLiteral(()=>identifierPattern(term.slice(11)),term.slice(11),true);return true;}return false;
   };
   for(const raw of expanded){
     const term=clean(raw);if(!term||compile(term)||attested.has(term))continue;
     if(lexical(term)){retainLexical(term);continue;}
     const keys=privateFieldKeys(term);if(keys.length>1){keys.slice(1).forEach(compile);continue;}
-    literals.push(new RegExp(`(?<![\\p{L}\\p{N}_])${escape(term)}(?![\\p{L}\\p{N}_])`,'u'));
+    retainLiteral(()=>new RegExp(`(?<![\\p{L}\\p{N}_])${escape(term)}(?![\\p{L}\\p{N}_])`,'u'),term);
   }
   for(const [id,group] of chunks){
    if(group.pieces.size!==group.count)invalidGraph();const run=Array.from({length:group.count},(_,i)=>group.pieces.get(i)??invalidGraph()).join('');
@@ -768,7 +786,7 @@ export function createPrivateValueMatcher(terms=[],{canonical=false,languageCont
   const insideRange=(date,range)=>{const y=date.year??range[0].year??2000,a=range[0].year??y,b=range[1].year??(range[1].month*32+range[1].day<range[0].month*32+range[0].day?a+1:a);const stamp=(v,year)=>year*512+v.month*32+v.day;return stamp(date,y)>=stamp(range[0],a)&&stamp(date,y)<=stamp(range[1],b);};
   const hasNumber=key=>retainedNumbers.has(key)||retainedRuns.some(run=>runHas(run,key));
   const matchText=(text,ordinary=false)=>{
-    const content=clean(text);if(!canonical&&privateOriginStart(text)!==null)return true;if(literals.some(pattern=>pattern.test(content)))return true;
+    const content=clean(text);if(!canonical&&privateOriginStart(text)!==null)return true;const possible=possibleLiteral(content);if(literals.some(entry=>possible(entry)&&patternFor(entry).test(content)))return true;
     if(partyMatches(content,ordinary,text).length)return true;
     const found=dates(content);
     if(found.ranges?.some(range=>retainedDates.some(d=>insideRange(d,range)))||found.values.some(d=>retainedDateRanges.some(range=>insideRange(d,range))))return true;
@@ -800,7 +818,8 @@ export function createPrivateValueMatcher(terms=[],{canonical=false,languageCont
     const origin=origins?privateOriginStart(value):null;if(origin!==null)ranges.push([origin,String(value??'').length]);
     const add=(start,end)=>{if(end>start&&normalized.origins[start]&&normalized.origins[end-1])ranges.push([normalized.origins[start].start,normalized.origins[end-1].end]);};
     for(const match of partyMatches(content,ordinary,value))add(match.index,match.index+match[0].length);
-    for(const pattern of literals)for(const match of content.matchAll(new RegExp(pattern.source,'gu')))add(match.index,match.index+match[0].length);
+    const possible=possibleLiteral(content);
+    for(const entry of literals)if(possible(entry))for(const match of content.matchAll(new RegExp(patternFor(entry).source,'gu')))add(match.index,match.index+match[0].length);
     const found=dates(content),masked=content.split('');
     for(const [i,current] of found.values.entries()){
       const [start,end]=found.spans[i];
@@ -812,7 +831,14 @@ export function createPrivateValueMatcher(terms=[],{canonical=false,languageCont
     numbers(masked.join(''),(keys,start,end)=>{if(keys.some(key=>hasNumber(key)))add(start,end);},retainedNumbers);
     return ranges;
   };
-  return contains;
+  // Required scans never expose engine errors or regex source to callers.
+  // Reuse the provider's typed unavailable contract, without an exception cause.
+  const safeScan=scan=>(...args)=>{try{return scan(...args);}catch{throw Object.assign(Error('Private value scan unavailable'),{code:'CHAT_MEMORY_UNAVAILABLE'});}};
+  const guarded=safeScan(contains);
+  guarded.ordinary=safeScan(contains.ordinary);
+  guarded.entities=safeScan(contains.entities);
+  guarded.spans=safeScan(contains.spans);
+  return guarded;
 }
 
 // This admission-only dependency is below the immutable capture boundary.

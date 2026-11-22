@@ -36,8 +36,9 @@ export async function prepareWhatsAppDispatch({supabase,workspaceId,phone,public
  }
  // Public identities are compiler constants, never message/user fields. They
  // certify only whole identifiers; numeric fragments remain private elsewhere.
- const identities=new Set([...data.identifiers,...publicIdentities.flatMap(value=>privateFieldKeys(value).filter(k=>k.startsWith('identifier:')))]),owned=createCanonicalPrivateValueIndex([...identities]);
- const values=new Set(data.values),ownedValues=createCanonicalPrivateValueIndex([...values].filter(k=>/^(number|date|date-range):/.test(k)));
+ const requiredScan=operation=>{try{return operation();}catch(error){if(error?.code==='PRIVATE_PAYLOAD_BLOCKED')throw error;throw privacyFailure('snapshot_unavailable',true);}};
+ const identities=new Set([...data.identifiers,...publicIdentities.flatMap(value=>privateFieldKeys(value).filter(k=>k.startsWith('identifier:')))]),owned=requiredScan(()=>createCanonicalPrivateValueIndex([...identities]));
+ const values=new Set(data.values),ownedValues=requiredScan(()=>createCanonicalPrivateValueIndex([...values].filter(k=>/^(number|date|date-range):/.test(k))));
  const scoped=value=>{
   if(typeof value==='string'){
    const chars=value.split('');
@@ -75,9 +76,9 @@ export async function prepareWhatsAppDispatch({supabase,workspaceId,phone,public
   const visible=payload.type==='template'
     ?payload.template?.components?.flatMap(component=>(component.parameters||[]).map(({type,...data})=>data))
     :content;
-  index.assertValues(scoped(leaves(visible)));
+  requiredScan(()=>index.assertValues(scoped(leaves(visible))));
  };
- admit.upload=form=>{const name=form.get('file')?.name||'';if(!fileOwned||name!==ownedFileName)index.assertValues(scoped(name));};
+ admit.upload=form=>{const name=form.get('file')?.name||'';if(!fileOwned||name!==ownedFileName)requiredScan(()=>index.assertValues(scoped(name)));};
  admit.bindMediaId=id=>{if(typeof id!=='string'||!id)throw Object.assign(Error('Invalid uploaded file identity'),{code:'PRIVATE_PAYLOAD_BLOCKED'});uploadedId=id;};
  return admit;
 }
