@@ -1,8 +1,10 @@
 import { z } from "zod";
+import { customerCustomFieldsSchema } from "./customer-custom-fields.schema";
 export const customerIdSchema = z.uuid();
 export const createCustomerSchema = z
   .object({
     workspaceId: z.uuid(),
+    customFields: customerCustomFieldsSchema.optional(),
     name: z.string().trim().min(1).max(160),
     companyName: z.string().trim().max(160).nullable().optional(),
     email: z
@@ -35,4 +37,5 @@ export type Customer = {
   email: string | null;
   phone: string | null;
   createdAt: string;
+  customFields?: Record<string, string | number | boolean | null>;
 };

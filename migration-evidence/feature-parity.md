@@ -8,7 +8,7 @@ Base: ff066b664d2750638e63adba8b64be1a8290c3b9, containing ceb899b; main remains
 | Supabase Google identity | Provider+subject links and verified open signup | Legacy identity import and actual Google callback configuration/roundtrip |
 | Open signup (policy changed November24) | Credentials pending verification plus password proof; verified Google creates own business; no invite gate | Actual authorized SMTP delivery and external Google handshake; legacy verification-state import |
 | Businesses/workspace_members | Server-scoped membership list; customer API uses memberships | Exact legacy role enum parity and settings/create-business module |
-| Customers | Scoped list/detail/create/edit/delete, unit/route/native browser tests | Preserve metadata/custom_fields/external sync/reminder_tone, exact original RLS semantics and deletion relationships |
+| Customers | Scoped list/detail/create/edit/delete, unit/route/native browser tests | Extension/integration/reminder columns preserved in target; API exposes validated customFields only, internal metadata not returned. UI custom-field editing, reminder approval side effects and import/deletion relationships still open |
 | Invoice metadata and files | Reviewed metadata CRUD and guarded PDF upload/finalize/download, permanent cleanup tombstones | Legacy lifecycle/payment/reminder semantics, actual private bucket and file migration |
 | Payments/balances/corrections | Not migrated | Accounting correctness/idempotency/parity tests |
 | Zoho/QuickBooks/Tally | Not migrated | Provider secrets/OAuth/webhook protocol/tenant policy/parity |

@@ -7,6 +7,17 @@ import type {
   UpdateCustomerInput,
   CustomerFilters,
 } from "@/shared/schemas/customers.schema";
+// Retained integration/private metadata is not an API response field.
+const publicColumns = {
+  id: customers.id,
+  workspaceId: customers.workspaceId,
+  name: customers.name,
+  companyName: customers.companyName,
+  email: customers.email,
+  phone: customers.phone,
+  customFields: customers.customFields,
+  createdAt: customers.createdAt,
+};
 const memberScope = (userId: string) =>
   exists(
     db
@@ -50,7 +61,7 @@ export const customerRepository = {
     return db.transaction(
       async (tx) => {
         const rows = await tx
-          .select()
+          .select(publicColumns)
           .from(customers)
           .where(condition)
           .orderBy(
@@ -69,7 +80,7 @@ export const customerRepository = {
   },
   async find(userId: string, id: string) {
     const [row] = await db
-      .select()
+      .select(publicColumns)
       .from(customers)
       .where(and(eq(customers.id, id), memberScope(userId)))
       .limit(1);
@@ -91,7 +102,7 @@ export const customerRepository = {
       const [row] = await tx
         .insert(customers)
         .values({ ...input, email: input.email || null })
-        .returning();
+        .returning(publicColumns);
       return row ?? null;
     });
   },
@@ -100,6 +111,7 @@ export const customerRepository = {
       .update(customers)
       .set({
         ...input,
+        updatedAt: new Date(),
         email: input.email === undefined ? undefined : input.email || null,
       })
       .where(
@@ -118,7 +130,7 @@ export const customerRepository = {
           ),
         ),
       )
-      .returning();
+      .returning(publicColumns);
     return row ?? null;
   },
   async remove(userId: string, id: string) {
