@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { PaymentForm } from "./payment-form";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
@@ -144,6 +145,10 @@ function InvoiceBusiness({
                     <td className="p-4">{row.invoiceNumber}</td>
                     <td>
                       {row.currency} {row.amount}
+                      <div className="text-sm text-slate-500">
+                        Paid {row.amountPaid ?? "0.00"} ·{" "}
+                        {row.financialStatus ?? "draft"}
+                      </div>
                     </td>
                     <td>
                       {row.status === "uploaded"
@@ -185,6 +190,10 @@ function InvoiceBusiness({
                           />
                         </label>
                       )}
+                      <PaymentForm
+                        id={row.id}
+                        invoiceNumber={row.invoiceNumber}
+                      />
                       <button
                         className="text-red-700 underline"
                         disabled={remove.isPending}

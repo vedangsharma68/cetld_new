@@ -1,16 +1,12 @@
 import { z } from "zod";
+import { exactMoneySchema } from "./exact-money";
 export const invoiceIdSchema = z.uuid();
 export const createInvoiceSchema = z
   .object({
     workspaceId: z.uuid(),
     customerId: z.uuid().nullable().optional(),
     invoiceNumber: z.string().trim().min(1).max(100),
-    amount: z
-      .string()
-      .regex(
-        /^(0|[1-9][0-9]{0,11})(\.[0-9]{1,2})?$/,
-        "Enter a non-negative amount with at most two decimals",
-      ),
+    amount: exactMoneySchema,
     currency: z.enum(["INR", "USD", "EUR", "GBP", "AED"]),
   })
   .strict();
@@ -37,6 +33,15 @@ export const invoiceSchema = createInvoiceSchema.extend({
   ownerId: z.uuid(),
   customerId: z.uuid().nullable(),
   status: z.enum(["pending_upload", "uploaded"]),
+  amountPaid: z.string(),
+  financialStatus: z.enum([
+    "draft",
+    "open",
+    "partially_paid",
+    "paid",
+    "void",
+    "cancelled",
+  ]),
   filePath: z.string().nullable(),
   fileSize: z.number().nullable(),
   mimeType: z.string().nullable(),

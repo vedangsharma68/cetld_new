@@ -27,7 +27,14 @@ export const invoices = pgTable(
       .references(() => users.id),
     customerId: uuid("customer_id"),
     invoiceNumber: text("invoice_number").notNull(),
-    amount: numeric("amount", { precision: 18, scale: 2 }).notNull(),
+    amount: numeric("amount").notNull(),
+    amountPaid: numeric("amount_paid").notNull().default("0"),
+    financialStatus: text("financial_status", {
+      enum: ["draft", "open", "partially_paid", "paid", "void", "cancelled"],
+    })
+      .notNull()
+      .default("draft"),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
     currency: text("currency").notNull(),
     status: text("status", { enum: ["pending_upload", "uploaded"] })
       .notNull()
@@ -61,7 +68,19 @@ export const invoices = pgTable(
       "invoices_uploaded_check",
       sql`${t.status}<>'uploaded' or (${t.filePath} is not null and ${t.fileSize} is not null and ${t.mimeType}='application/pdf' and ${t.uploadedAt} is not null)`,
     ),
-    check("invoices_amount_check", sql`${t.amount}>=0`),
+    check(
+      "invoices_amount_check",
+      sql`${t.amount}>=0 and scale(${t.amount})<=2 and ${t.amount}<10000000000000000`,
+    ),
+    check(
+      "invoices_paid_amount_check",
+      sql`${t.amountPaid}>=0 and ${t.amountPaid}<=${t.amount} and scale(${t.amountPaid})<=2`,
+    ),
+    check(
+      "invoices_financial_status_check",
+      sql`${t.financialStatus} in ('draft','open','partially_paid','paid','void','cancelled')`,
+    ),
+    uniqueIndex("invoices_workspace_id_pair").on(t.workspaceId, t.id),
     check(
       "invoices_pdf_check",
       sql`${t.mimeType} is null or ${t.mimeType}='application/pdf'`,

@@ -17,3 +17,10 @@ Base: ff066b664d2750638e63adba8b64be1a8290c3b9, containing ceb899b; main remains
 | Branding/landing/dashboard settings | Minimal new preview shell | Existing feature/UI inventory, user accepted design direction not assumed |
 
 No feature in the remaining column is silently discarded. No original RLS policy, DB function/trigger, key or stored file has been changed. New target policies in source are not proof that old permissions were mapped. Target baseline is for clean development DB only until exact live migration reviewed.
+
+## V13 local payment slice
+- Exact decimal-string accounting, invoice row locks, business/idempotency serialization, full-request replay checks, and atomic payment/balance writes.
+- Browser payment form keeps its key across failed retries and refreshes persisted balances. This records a payment already made. It does not move money.
+- Local synthetic database proves duplicate concurrent requests create one row, tenant denial, overpayment denial, precise partial/full settlement, and payment FK denial of hard deletion with cleanup rollback.
+- Not lifecycle parity: reversible deletion, proposal/confirmation, reminder side effects, imported financial data and operational scheduler remain open. Paid invoice hard-delete is currently rejected by FK, not a complete lifecycle.
+- 113 unit tests and 11 native browser flows pass. Mobile payment form visually inspected at 390px; invoice table uses explicit horizontal scrolling.

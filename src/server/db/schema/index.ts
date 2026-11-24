@@ -8,3 +8,5 @@ export * from "./oauth-signups";
 export * from "./email-signups";
 
 export * from "./invoices";
+
+export * from "./payments";

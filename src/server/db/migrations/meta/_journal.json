@@ -71,6 +71,13 @@
       "when": 1795514266191,
       "tag": "0009_mature_dorian_gray",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795514487078,
+      "tag": "0010_misty_wolf_cub",
+      "breakpoints": true
     }
   ]
 }
