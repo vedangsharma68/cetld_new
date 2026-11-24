@@ -1,5 +1,10 @@
 "use client";
 import { useState } from "react";
+import {
+  LifecycleForm,
+  RestoreInvoice,
+  useLifecycleState,
+} from "./lifecycle-form";
 import { PaymentForm } from "./payment-form";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -12,7 +17,6 @@ import {
   useCreateInvoice,
   useUploadInvoice,
   useDownloadInvoice,
-  useRemoveInvoice,
 } from "@/client/queries/invoices.queries";
 import { useWorkspaces } from "@/client/queries/workspaces.queries";
 import { QueryBoundary } from "@/client/components/common/query-boundary";
@@ -45,8 +49,8 @@ function InvoiceBusiness({
   const list = useInvoices(filters);
   const create = useCreateInvoice(),
     upload = useUploadInvoice(),
-    download = useDownloadInvoice(),
-    remove = useRemoveInvoice();
+    download = useDownloadInvoice();
+  const lifecycle = useLifecycleState(workspaceId);
   const form = useForm<CreateInvoiceInput>({
     resolver: zodResolver(createInvoiceSchema),
     defaultValues: {
@@ -56,9 +60,25 @@ function InvoiceBusiness({
       currency: "INR",
     },
   });
-  const error = create.error ?? upload.error ?? download.error ?? remove.error;
+  const error = create.error ?? upload.error ?? download.error;
   return (
     <div className="min-w-0 max-w-full space-y-6">
+      {lifecycle.error && <p role="alert">{toUserMessage(lifecycle.error)}</p>}
+      {!!lifecycle.data?.deleted.length && (
+        <section aria-label="Deleted invoices" className="space-y-3">
+          <h2 className="text-xl font-semibold">Deleted invoices</h2>
+          {lifecycle.data.deleted.map((row) => (
+            <RestoreInvoice
+              key={row.id}
+              id={row.id}
+              number={row.invoiceNumber}
+              onRestored={() => {
+                void lifecycle.refetch();
+              }}
+            />
+          ))}
+        </section>
+      )}
       <label className="block">
         Business
         <select
@@ -128,10 +148,10 @@ function InvoiceBusiness({
             className="block w-full min-w-0 max-w-full overflow-x-auto rounded-xl border"
             tabIndex={0}
             role="region"
-            aria-label="Invoice table, scroll horizontally"
+            aria-label="Invoice list"
           >
-            <table className="w-full min-w-[650px] text-left">
-              <thead className="bg-slate-100">
+            <table className="w-full text-left sm:min-w-[650px]">
+              <thead className="hidden bg-slate-100 sm:table-header-group">
                 <tr>
                   <th className="p-4">Invoice</th>
                   <th>Amount</th>
@@ -141,21 +161,27 @@ function InvoiceBusiness({
               </thead>
               <tbody>
                 {result.data.map((row) => (
-                  <tr className="border-t" key={row.id}>
-                    <td className="p-4">{row.invoiceNumber}</td>
-                    <td>
+                  <tr
+                    className="block border-t p-3 sm:table-row sm:p-0"
+                    key={row.id}
+                    role="row"
+                  >
+                    <td className="block break-words p-2 font-medium sm:table-cell sm:p-4">
+                      {row.invoiceNumber}
+                    </td>
+                    <td className="block p-2 sm:table-cell">
                       {row.currency} {row.amount}
                       <div className="text-sm text-slate-500">
                         Paid {row.amountPaid ?? "0.00"} ·{" "}
                         {row.financialStatus ?? "draft"}
                       </div>
                     </td>
-                    <td>
+                    <td className="block p-2 sm:table-cell">
                       {row.status === "uploaded"
                         ? "Uploaded"
                         : "Pending upload"}
                     </td>
-                    <td className="space-x-3 p-3">
+                    <td className="block space-y-3 p-2 sm:table-cell sm:p-3">
                       {row.status === "uploaded" ? (
                         <button
                           className="underline"
@@ -194,20 +220,25 @@ function InvoiceBusiness({
                         id={row.id}
                         invoiceNumber={row.invoiceNumber}
                       />
-                      <button
-                        className="text-red-700 underline"
-                        disabled={remove.isPending}
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              `Delete invoice ${row.invoiceNumber}? This removes its file too.`,
-                            )
-                          )
-                            remove.mutate(row.id);
+                      <LifecycleForm
+                        key={
+                          row.id +
+                          ":" +
+                          (lifecycle.data?.pending?.invoiceId === row.id
+                            ? lifecycle.data.pending.id
+                            : "none")
+                        }
+                        id={row.id}
+                        invoiceNumber={row.invoiceNumber}
+                        initialProposal={
+                          lifecycle.data?.pending?.invoiceId === row.id
+                            ? lifecycle.data.pending
+                            : null
+                        }
+                        onDeleted={() => {
+                          void lifecycle.refetch();
                         }}
-                      >
-                        Delete
-                      </button>
+                      />
                     </td>
                   </tr>
                 ))}
@@ -216,10 +247,7 @@ function InvoiceBusiness({
           </div>
         )}
       </QueryBoundary>
-      <p className="text-sm text-slate-500">
-        Showing the first 20 invoices. On smaller screens, scroll the table
-        sideways.
-      </p>
+      <p className="text-sm text-slate-500">Showing the first 20 invoices.</p>
     </div>
   );
 }

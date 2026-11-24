@@ -11,6 +11,8 @@ import {
   foreignKey,
   index,
   uniqueIndex,
+  jsonb,
+  boolean,
 } from "drizzle-orm/pg-core";
 import { users } from "./users";
 import { workspaces } from "./workspaces";
@@ -34,6 +36,21 @@ export const invoices = pgTable(
     })
       .notNull()
       .default("draft"),
+    revision: integer("revision").notNull().default(0),
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    followupState: text("followup_state", {
+      enum: ["paused", "cancelled", "scheduled"],
+    })
+      .notNull()
+      .default("paused"),
+    nextFollowUpAt: timestamp("next_follow_up_at", { withTimezone: true }),
+    lifecycleRiskVerified: boolean("lifecycle_risk_verified")
+      .notNull()
+      .default(false),
+    deletedBy: uuid("deleted_by").references(() => users.id),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     currency: text("currency").notNull(),
     status: text("status", { enum: ["pending_upload", "uploaded"] })

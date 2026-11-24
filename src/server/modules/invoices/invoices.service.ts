@@ -6,10 +6,9 @@ import {
   UnsupportedMediaError,
 } from "@/server/lib/errors";
 import { sweepInvoiceFiles } from "./storage-cleanup.service";
-import { logger } from "@/server/lib/logger";
 import * as storage from "@/server/lib/storage";
 import { invoiceRepository } from "./invoices.repository";
-import { canReadInvoice, canDeleteInvoice } from "./invoices.policy";
+import { canReadInvoice } from "./invoices.policy";
 import type {
   CreateInvoiceInput,
   InvoiceFilters,
@@ -101,23 +100,14 @@ export function createInvoiceService(
         );
       return files.createDownloadUrl(`${row.ownerId}/${row.id}.pdf`);
     },
-    async remove(userId: string, id: string, requestId: string) {
-      const row = await find(userId, id);
-      canDeleteInvoice(
-        await repository.membership(userId, row.workspaceId),
-        row.workspaceId,
+    async remove(_userId: string, _id: string, _requestId: string) {
+      void _userId;
+      void _id;
+      void _requestId;
+      throw new ConflictError(
+        "LIFECYCLE_CONFIRMATION_REQUIRED",
+        "Use the owner deletion proposal and confirmation flow",
       );
-      const cleanup = await repository.remove(userId, id, requestId);
-      if (!cleanup) throw new NotFoundError("Invoice");
-      try {
-        await files.deleteFile(cleanup.path);
-        // Keep durable tombstone for a later sweep after any signed-upload capability expires.
-      } catch {
-        logger.warn(
-          { requestId, code: "STORAGE_CLEANUP_PENDING" },
-          "Invoice removed, file cleanup pending",
-        );
-      }
     },
   };
 }

@@ -133,11 +133,12 @@ describe("invoice route contracts", () => {
         .status,
     ).toBe(401);
   });
-  it("DELETE204 no body and missing404", async () => {
+  it("DELETE is fail-closed and never calls permanent removal", async () => {
     const response = await remove(req("DELETE", "invoices/" + id), c);
-    expect(response.status).toBe(204);
-    expect(await response.text()).toBe("");
-    service.remove.mockRejectedValue(new NotFoundError("Invoice"));
-    expect((await remove(req("DELETE", "invoices/" + id), c)).status).toBe(404);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: { code: "LIFECYCLE_CONFIRMATION_REQUIRED" },
+    });
+    expect(service.remove).not.toHaveBeenCalled();
   });
 });

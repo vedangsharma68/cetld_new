@@ -195,19 +195,13 @@ describe("invoice membership and file lifecycle", () => {
       "stored-owner/invoice.pdf",
     );
   });
-  it("storage deletion failure leaves durable cleanup, not500", async () => {
+  it("legacy removal entry point fails closed without deleting storage or DB rows", async () => {
     const { service, files, repo } = setup();
-    files.deleteFile.mockRejectedValue(Error("storage offline"));
     await expect(
       service.remove("owner", "invoice", "request"),
-    ).resolves.toBeUndefined();
-    expect(repo.remove).toHaveBeenCalledWith("owner", "invoice", "request");
-    expect(repo.finishCleanup).not.toHaveBeenCalled();
-  });
-  it("even successful deletion retains late-upload cleanup tombstone", async () => {
-    const { service, repo } = setup();
-    await service.remove("owner", "invoice", "request");
-    expect(repo.finishCleanup).not.toHaveBeenCalled();
+    ).rejects.toMatchObject({ code: "LIFECYCLE_CONFIRMATION_REQUIRED" });
+    expect(repo.remove).not.toHaveBeenCalled();
+    expect(files.deleteFile).not.toHaveBeenCalled();
   });
   it("money uses exact decimal string and rejects float exponents", () => {
     expect(

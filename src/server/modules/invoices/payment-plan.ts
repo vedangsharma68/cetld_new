@@ -79,6 +79,6 @@ export function planPayment(
     amount: moneyString(applied),
     amountPaid: moneyString(updated),
     financialStatus:
-      updated === total ? ("paid" as const) : ("partially_paid" as const),
+      updated === total ? ("paid" as const) : state.financialStatus,
   };
 }

@@ -1,5 +1,14 @@
 import "server-only";
-import { and, eq, exists, count, desc, sql } from "drizzle-orm";
+import {
+  and,
+  eq,
+  exists,
+  count,
+  desc,
+  sql,
+  isNull,
+  getTableColumns,
+} from "drizzle-orm";
 import { db } from "@/server/db/client";
 import {
   invoices,
@@ -13,6 +22,15 @@ import type {
   InvoiceFilters,
   InvoiceUploadInput,
 } from "@/shared/schemas/invoices.schema";
+const {
+  metadata: privateMetadata,
+  lifecycleRiskVerified: privateRisk,
+  deletedBy: privateDeletedBy,
+  ...publicColumns
+} = getTableColumns(invoices);
+void privateMetadata;
+void privateRisk;
+void privateDeletedBy;
 const scope = (userId: string) =>
   exists(
     db
@@ -42,11 +60,12 @@ export const invoiceRepository = {
     const where = and(
       eq(invoices.workspaceId, filters.workspaceId),
       scope(userId),
+      isNull(invoices.deletedAt),
     );
     return db.transaction(
       async (tx) => {
         const rows = await tx
-          .select()
+          .select(publicColumns)
           .from(invoices)
           .where(where)
           .orderBy(desc(invoices.createdAt), desc(invoices.id))
@@ -63,9 +82,11 @@ export const invoiceRepository = {
   },
   async find(userId: string, id: string) {
     const [row] = await db
-      .select()
+      .select(publicColumns)
       .from(invoices)
-      .where(and(eq(invoices.id, id), scope(userId)));
+      .where(
+        and(eq(invoices.id, id), scope(userId), isNull(invoices.deletedAt)),
+      );
     return row ?? null;
   },
   async create(userId: string, input: CreateInvoiceInput) {
@@ -102,8 +123,12 @@ export const invoiceRepository = {
       }
       const [row] = await tx
         .insert(invoices)
-        .values({ ...input, ownerId: business.ownerId })
-        .returning();
+        .values({
+          ...input,
+          ownerId: business.ownerId,
+          lifecycleRiskVerified: true,
+        })
+        .returning(publicColumns);
       return row ?? null;
     });
   },
@@ -121,6 +146,7 @@ export const invoiceRepository = {
           and(
             eq(invoices.id, id),
             scope(userId),
+            isNull(invoices.deletedAt),
             eq(invoices.status, "pending_upload"),
           ),
         )
@@ -138,10 +164,11 @@ export const invoiceRepository = {
           and(
             eq(invoices.id, id),
             scope(userId),
+            isNull(invoices.deletedAt),
             eq(invoices.status, "pending_upload"),
           ),
         )
-        .returning();
+        .returning(publicColumns);
       return row ?? null;
     });
   },
@@ -153,46 +180,20 @@ export const invoiceRepository = {
         and(
           eq(invoices.id, id),
           scope(userId),
+          isNull(invoices.deletedAt),
           eq(invoices.status, "pending_upload"),
         ),
       )
-      .returning();
+      .returning(publicColumns);
     return row ?? null;
-  },
-  async remove(userId: string, id: string, requestId: string) {
-    return db.transaction(async (tx) => {
-      const [row] = await tx
-        .select()
-        .from(invoices)
-        .where(and(eq(invoices.id, id), scope(userId)))
-        .for("update");
-      if (!row) return null;
-      const [member] = await tx
-        .select()
-        .from(workspaceMembers)
-        .where(
-          and(
-            eq(workspaceMembers.userId, userId),
-            eq(workspaceMembers.workspaceId, row.workspaceId),
-            eq(workspaceMembers.role, "owner"),
-          ),
-        )
-        .for("share");
-      if (!member) return null;
-      const path = `${row.ownerId}/${row.id}.pdf`;
-      const [job] = await tx
-        .insert(storageCleanup)
-        .values({ path, requestId })
-        .returning({ id: storageCleanup.id });
-      await tx.delete(invoices).where(and(eq(invoices.id, id), scope(userId)));
-      return job ? { jobId: job.id, path } : null;
-    });
   },
   async dueCleanup() {
     return db
       .select()
       .from(storageCleanup)
-      .where(sql`${storageCleanup.notBefore}<=clock_timestamp()`)
+      .where(
+        sql`${storageCleanup.notBefore}<=clock_timestamp() and not exists(select 1 from invoices i where ${storageCleanup.path}=i.owner_id::text||'/'||i.id::text||'.pdf')`,
+      )
       .orderBy(storageCleanup.notBefore)
       .limit(10);
   },

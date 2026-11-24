@@ -24,7 +24,7 @@ test("records a payment exactly and shows persisted balance", async ({
   ).toBeLessThanOrEqual(390);
   await page.getByRole("button", { name: "Save payment" }).click();
   await expect(row).toContainText("Paid 2.33");
-  await expect(row).toContainText("partially_paid");
+  await expect(row).toContainText("draft");
   await page.screenshot({
     path: "/downloads/cetld-payment-mobile-20261124.png",
     fullPage: true,

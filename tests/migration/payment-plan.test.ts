@@ -22,7 +22,7 @@ describe("exact financial settlement plan", () => {
     expect(moneyString(moneyUnits(state.amount))).toBe(state.amount);
     expect(planPayment("i", state, input, null)).toMatchObject({
       amountPaid: "0.01",
-      financialStatus: "partially_paid",
+      financialStatus: "open",
     });
   });
   it("settles exactly the current remaining balance", () =>
@@ -114,3 +114,12 @@ it("allows draft payment as legacy RPC does", () => {
     planPayment("i", { ...state, financialStatus: "draft" }, input, null),
   ).toMatchObject({ amountPaid: "0.01" });
 });
+
+it.each(["draft", "open", "partially_paid"] as const)(
+  "partial payment preserves prior %s financial status",
+  (financialStatus) =>
+    expect(
+      planPayment("i", { ...state, financialStatus }, input, null)
+        .financialStatus,
+    ).toBe(financialStatus),
+);

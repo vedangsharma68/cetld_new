@@ -55,6 +55,17 @@ export const paymentRepository = {
         .set({
           amountPaid: plan.amountPaid,
           financialStatus: plan.financialStatus,
+          ...(plan.financialStatus === "paid"
+            ? {
+                followupState: "cancelled" as const,
+                nextFollowUpAt: null,
+                metadata: {
+                  ...invoice.metadata,
+                  followup_state: "cancelled",
+                  next_follow_up_at: null,
+                },
+              }
+            : {}),
         })
         .where(eq(invoices.id, invoiceId));
       return saved ?? null;
