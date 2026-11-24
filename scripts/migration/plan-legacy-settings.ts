@@ -1,18 +1,58 @@
 import { z } from "zod";
 const instant = z.string().datetime({ offset: true }),
   fields = z.record(z.string(), z.unknown());
+const modelLists = {
+  primary: [
+    "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "@cf/meta/llama-4-scout-17b-16e-instruct",
+    "@cf/mistralai/mistral-small-3.1-24b-instruct",
+    "@cf/openai/gpt-oss-20b",
+    "@cf/qwen/qwen3-30b-a3b-fp8",
+    "@cf/zai-org/glm-4.7-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "space-bunny-free",
+  ],
+  fallback: [
+    "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "@cf/meta/llama-4-scout-17b-16e-instruct",
+    "@cf/mistralai/mistral-small-3.1-24b-instruct",
+    "@cf/openai/gpt-oss-20b",
+    "@cf/qwen/qwen3-30b-a3b-fp8",
+    "@cf/zai-org/glm-4.7-flash",
+    "space-bunny-free",
+    "longcat-2.5-preview-free",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gpt-oss:20b-cloud",
+  ],
+};
+const model = (kind: keyof typeof modelLists) =>
+  z
+    .string()
+    .refine(
+      (v) =>
+        modelLists[kind].includes(v) ||
+        (v.length <= 100 && /^[a-z0-9][a-z0-9.-]*-free$/.test(v)),
+    );
 const settings = z
   .object({
     workspace_id: z.uuid(),
-    business_name: z.string().nullable(),
-    default_currency: z.string(),
+    business_name: z
+      .string()
+      .refine((v) => v.trim().length >= 1 && v.trim().length <= 200)
+      .nullable(),
+    default_currency: z.string().regex(/^[A-Z]{3}$/),
     default_timezone: z.string(),
     follow_up_preferences: fields,
     created_at: instant,
     updated_at: instant,
     whatsapp_owner_attested_at: instant.nullable(),
     whatsapp_owner_attested_by: z.uuid().nullable(),
-    whatsapp_owner_phone: z.string().nullable(),
+    whatsapp_owner_phone: z
+      .string()
+      .regex(/^\+[1-9][0-9]{7,14}$/)
+      .nullable(),
     owner_bot_preferences: fields,
     offline_invoice_provenance: z.boolean(),
   })
@@ -20,8 +60,8 @@ const settings = z
 const ai = z
   .object({
     workspace_id: z.uuid(),
-    primary_model: z.string(),
-    fallback_model: z.string().nullable(),
+    primary_model: model("primary"),
+    fallback_model: model("fallback").nullable(),
     created_at: instant,
     updated_at: instant,
     offline_invoice_provenance: z.boolean(),
@@ -67,7 +107,11 @@ export function planLegacySettings(
     };
   });
   const workspaceAiSettings = s.workspace_ai_settings.map((r) => {
-    if (!businesses.has(r.workspace_id) || seenAi.has(r.workspace_id))
+    if (
+      !businesses.has(r.workspace_id) ||
+      seenAi.has(r.workspace_id) ||
+      r.primary_model === r.fallback_model
+    )
       throw Error("Duplicate or orphan AI settings");
     seenAi.add(r.workspace_id);
     return {

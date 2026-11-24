@@ -1,72 +1,15 @@
 import { it, expect } from "vitest";
 import { planLegacyFinancial } from "../../scripts/migration/plan-legacy-financial";
+import {
+  financialFixture as fixture,
+  financialScope as scope,
+} from "./financial-fixture";
 const owner = "11111111-1111-4111-8111-111111111111",
   business = "22222222-2222-4222-8222-222222222222",
   customer = "33333333-3333-4333-8333-333333333333",
   id = "44444444-4444-4444-8444-444444444444",
   pid = "55555555-5555-4555-8555-555555555555",
   at = "2026-11-24T00:00:00Z";
-const scope = () => ({
-  users: new Set([owner]),
-  businesses: new Map([[business, owner]]),
-  customers: new Map([[customer, business]]),
-});
-const fixture = () => ({
-  invoices: [
-    {
-      id,
-      workspace_id: business,
-      customer_id: customer,
-      invoice_number: "I-1",
-      issue_date: "2026-11-01",
-      due_date: null,
-      currency: "INR",
-      total_amount: "123.45",
-      amount_paid: "1.23",
-      status: "sent",
-      notes: "note",
-      metadata: { private: { nested: true } },
-      created_at: at,
-      updated_at: at,
-      external_provider: null,
-      external_invoice_id: null,
-      last_synced_at: null,
-      sync_status: "local",
-      last_sync_error: null,
-      followup_state: "paused",
-      next_follow_up_at: null,
-      last_follow_up_at: null,
-      reminder_count: 7,
-      customer_phone: null,
-      follow_up_settings: { days: [1, 2] },
-      automation_version: "9007199254740993",
-      deleted_at: null,
-      deleted_by: null,
-      custom_fields: { po: "P-1" },
-    },
-  ],
-  payments: [
-    {
-      id: pid,
-      workspace_id: business,
-      invoice_id: id,
-      amount: "1.23",
-      paid_at: at,
-      method: "bank",
-      reference: "ref",
-      metadata: { legacy: true },
-      created_at: at,
-      updated_at: at,
-      external_provider: null,
-      external_payment_id: null,
-      last_synced_at: null,
-      sync_status: "local",
-      last_sync_error: null,
-      idempotency_key: null,
-      settle_remaining: false,
-    },
-  ],
-});
 it("maps complete financial state exactly without granting reminder safety or invented attribution", () => {
   const f = fixture(),
     p = planLegacyFinancial(f, scope());
@@ -178,4 +121,126 @@ it("accepts exact full settlement and retains void/cancelled partial ledger hist
       status,
     );
   }
+});
+it("preserves reversed receipts and exact sequence high-water marks without treating them as paid", () => {
+  const f = fixture();
+  const proposalId = "66666666-6666-4666-8666-666666666666";
+  Object.assign(f, {
+    invoice_reopening_proposals: [
+      {
+        id: proposalId,
+        workspace_id: business,
+        owner_id: owner,
+        phone: "+12025550101",
+        invoice_id: id,
+        source_message_id: "original-source",
+        invoice_number: "I-1",
+        currency: "INR",
+        amount: "1.23",
+        expected_updated_at: at,
+        ledger_fingerprint: "original-hash",
+        payment_ids: [pid],
+        state: "confirmed",
+        created_at: at,
+        expires_at: at,
+        decision_message_id: "original-decision",
+        result: { private: "original" },
+      },
+    ],
+    payment_reversals: [
+      {
+        id: "77777777-7777-4777-8777-777777777777",
+        workspace_id: business,
+        invoice_id: id,
+        payment_id: pid,
+        proposal_id: proposalId,
+        amount: "1.23",
+        actor_id: owner,
+        reason: "owner_invoice_reopening",
+        recorded_at: at,
+      },
+    ],
+    invoice_number_sequences: [
+      {
+        workspace_id: business,
+        invoice_year: 2026,
+        last_value: "9007199254740993",
+      },
+    ],
+  });
+  f.payments[0]!.settle_remaining = true;
+  f.invoices[0]!.amount_paid = "0";
+  const p = planLegacyFinancial(f, scope());
+  expect(p.payments).toHaveLength(1);
+  expect(p.paymentReversals[0]!.amount).toBe("1.23");
+  expect(p.invoiceNumberSequences[0]!.lastValue).toBe(9007199254740993n);
+  expect(p.invoiceReopeningProposals[0]!.result).toEqual({
+    private: "original",
+  });
+  const resettled = structuredClone(f);
+  resettled.invoices[0]!.amount_paid = "123.45";
+  resettled.invoices[0]!.status = "paid";
+  resettled.payments.push({
+    ...resettled.payments[0]!,
+    id: "88888888-8888-4888-8888-888888888888",
+    amount: "123.45",
+    idempotency_key: null,
+    settle_remaining: true,
+  });
+  expect(planLegacyFinancial(resettled, scope()).payments).toHaveLength(2);
+  expect(planLegacyFinancial(resettled, scope()).invoices[0]!.amountPaid).toBe(
+    "123.45",
+  );
+  for (const change of [
+    { amount: "1.22" },
+    { actor_id: customer },
+    { workspace_id: customer },
+    { invoice_id: customer },
+    { payment_id: customer },
+    { proposal_id: customer },
+  ]) {
+    const bad = structuredClone(f);
+    Object.assign((bad.payment_reversals as object[])[0]!, change);
+    expect(() => planLegacyFinancial(bad, scope())).toThrow();
+  }
+  const duplicate = structuredClone(f);
+  duplicate.payment_reversals.push(duplicate.payment_reversals[0]!);
+  expect(() => planLegacyFinancial(duplicate, scope())).toThrow(/Duplicate/);
+  const omitted: Record<string, unknown> = structuredClone(f);
+  delete omitted.payment_reversals;
+  expect(() => planLegacyFinancial(omitted, scope())).toThrow();
+});
+it("requires all financial-history slices even when empty and checks sequence boundaries", () => {
+  for (const table of [
+    "payment_reversals",
+    "invoice_reopening_proposals",
+    "invoice_number_sequences",
+  ]) {
+    const f: Record<string, unknown> = fixture();
+    delete f[table];
+    expect(() => planLegacyFinancial(f, scope())).toThrow();
+  }
+  for (const sequence of [
+    { workspace_id: business, invoice_year: 1999, last_value: "1" },
+    { workspace_id: business, invoice_year: 2026, last_value: "0" },
+    {
+      workspace_id: business,
+      invoice_year: 2026,
+      last_value: "9223372036854775808",
+    },
+    { workspace_id: customer, invoice_year: 2026, last_value: "1" },
+    {
+      workspace_id: business,
+      invoice_year: 2026,
+      last_value: 9007199254740992,
+    },
+  ]) {
+    const f = fixture();
+    Object.assign(f, { invoice_number_sequences: [sequence] });
+    expect(() => planLegacyFinancial(f, scope())).toThrow();
+  }
+  const f = fixture(),
+    sequence = { workspace_id: business, invoice_year: 2026, last_value: "1" };
+  Object.assign(f, { invoice_number_sequences: [sequence, sequence] });
+  expect(() => planLegacyFinancial(f, scope())).toThrow(/Duplicate/);
 });

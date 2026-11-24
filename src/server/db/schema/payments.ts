@@ -9,6 +9,7 @@ import {
   timestamp,
   foreignKey,
   uniqueIndex,
+  unique,
   check,
   jsonb,
 } from "drizzle-orm/pg-core";
@@ -44,6 +45,7 @@ export const payments = pgTable(
       .defaultNow(),
   },
   (t) => [
+    unique("payments_business_id_unique").on(t.workspaceId, t.id),
     foreignKey({
       columns: [t.workspaceId, t.invoiceId],
       foreignColumns: [invoices.workspaceId, invoices.id],

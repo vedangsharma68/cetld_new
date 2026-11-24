@@ -1,0 +1,69 @@
+const user = "11111111-1111-4111-8111-111111111111",
+  business = "22222222-2222-4222-8222-222222222222",
+  customer = "33333333-3333-4333-8333-333333333333";
+export function coreFixture() {
+  return {
+    users: [
+      {
+        id: user,
+        email: "synthetic@example.invalid",
+        encrypted_password: null,
+        email_confirmed_at: "2026-11-24T00:00:00Z",
+        banned_until: null,
+        deleted_at: null,
+        is_sso_user: false,
+        is_anonymous: false,
+        raw_user_meta_data: {},
+        email_change: "",
+        phone: null,
+        phone_change: "",
+      },
+    ],
+    identities: [],
+    workspaces: [
+      {
+        id: business,
+        name: "Synthetic",
+        owner_id: user,
+        slug: "original-business",
+        created_at: "2026-11-20T00:00:00Z",
+        updated_at: "2026-11-21T00:00:00Z",
+      },
+    ],
+    members: [
+      {
+        workspace_id: business,
+        user_id: user,
+        role: "owner",
+        created_at: "2026-11-20T00:00:00Z",
+        updated_at: "2026-11-21T00:00:00Z",
+      },
+    ],
+    customers: [
+      {
+        id: customer,
+        workspace_id: business,
+        name: "Synthetic customer",
+        company_name: null,
+        email: null,
+        phone: null,
+        metadata: { private: "kept" },
+        custom_fields: {},
+        created_at: "2026-11-24T00:00:00Z",
+        updated_at: "2026-11-24T00:00:00Z",
+        external_provider: null,
+        external_customer_id: null,
+        last_synced_at: null,
+        sync_status: "local",
+        last_sync_error: null,
+        reminder_tone: null,
+      },
+    ],
+    payment_reversals: [],
+    invoice_reopening_proposals: [],
+    invoice_number_sequences: [],
+    invoices: [],
+    payments: [],
+    invoice_files: [],
+  };
+}

@@ -125,3 +125,17 @@ it("rejects unmapped business/member fields rather than silently dropping histor
     }),
   ).toThrow();
 });
+it.each([
+  { name: "   " },
+  { name: "x".repeat(161) },
+  { slug: null },
+  { slug: "bad_slug" },
+  { slug: "ab" },
+])("rejects invalid source business constraints %j", (change) => {
+  expect(() =>
+    planLegacyImport({
+      ...snapshot,
+      workspaces: [{ ...snapshot.workspaces[0], ...change }],
+    }),
+  ).toThrow();
+});

@@ -1,4 +1,5 @@
 import "server-only";
+import { planInvoiceNumber } from "./invoice-number-plan";
 import { and, eq, exists, count, desc, sql, isNull } from "drizzle-orm";
 import { db } from "@/server/db/client";
 import {
@@ -126,10 +127,35 @@ export const invoiceRepository = {
           .for("share");
         if (!customer) return null;
       }
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${input.workspaceId},92741))`,
+      );
+      const history = await tx
+        .select({
+          id: invoices.id,
+          invoiceNumber: invoices.invoiceNumber,
+          createdAt: invoices.createdAt,
+          metadata: invoices.metadata,
+        })
+        .from(invoices)
+        .where(eq(invoices.workspaceId, input.workspaceId));
+      const clock = await tx.execute<{ today: string }>(
+        sql`select current_date::text as today`,
+      );
+      const numbering = planInvoiceNumber(history, {
+        sourceNumber: input.invoiceNumber,
+        idempotencyKey: null,
+        preserveOwnerNumber: true,
+        today: clock[0]!.today,
+      });
       const [row] = await tx
         .insert(invoices)
         .values({
           ...input,
+          invoiceNumber: numbering.invoiceNumber,
+          metadata: numbering.sourceInvoiceNumber
+            ? { source_invoice_number: numbering.sourceInvoiceNumber }
+            : {},
           ownerId: business.ownerId,
           lifecycleRiskVerified: true,
         })

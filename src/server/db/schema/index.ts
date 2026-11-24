@@ -14,3 +14,5 @@ export * from "./payments";
 export * from "./invoice-lifecycle";
 
 export * from "./workspace-settings";
+
+export * from "./financial-history";

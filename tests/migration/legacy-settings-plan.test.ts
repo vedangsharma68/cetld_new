@@ -23,7 +23,7 @@ const fixture = () => ({
   workspace_ai_settings: [
     {
       workspace_id: business,
-      primary_model: "exact-model",
+      primary_model: "exact-model-free",
       fallback_model: null,
       created_at: at,
       updated_at: at,
@@ -42,7 +42,7 @@ it("retains settings and proof metadata without enabling any message delivery", 
     offlineInvoiceProvenance: true,
   });
   expect(p.workspaceAiSettings[0]).toMatchObject({
-    primaryModel: "exact-model",
+    primaryModel: "exact-model-free",
     fallbackModel: null,
   });
 });
@@ -67,5 +67,48 @@ it("rejects unmapped and missing fields rather than discarding preferences", () 
   ).toThrow();
   expect(() =>
     planLegacySettings({ workspace_settings: [] }, new Set(), new Set()),
+  ).toThrow();
+});
+it.each([
+  { business_name: "   " },
+  { business_name: "x".repeat(201) },
+  { default_currency: "inr" },
+  { whatsapp_owner_phone: "123" },
+  { follow_up_preferences: [] },
+  { owner_bot_preferences: [] },
+])("rejects settings constraint violation %j", (change) => {
+  const f = fixture();
+  Object.assign(f.workspace_settings[0]!, change);
+  expect(() =>
+    planLegacySettings(f, new Set([business]), new Set([user])),
+  ).toThrow();
+});
+it.each([
+  { primary_model: "not-supported" },
+  { primary_model: "UPPER-free" },
+  { primary_model: "x".repeat(100) + "-free" },
+  { fallback_model: "exact-model-free" },
+  { fallback_model: "bad-model" },
+])("rejects invalid AI models %j", (change) => {
+  const f = fixture();
+  Object.assign(f.workspace_ai_settings[0]!, change);
+  expect(() =>
+    planLegacySettings(f, new Set([business]), new Set([user])),
+  ).toThrow();
+});
+it("retains asymmetric fallback choices and valid custom free models", () => {
+  const f = fixture();
+  Object.assign(f.workspace_ai_settings[0]!, {
+    fallback_model: "gpt-oss:20b-cloud",
+  });
+  expect(
+    planLegacySettings(f, new Set([business]), new Set([user]))
+      .workspaceAiSettings[0]!.fallbackModel,
+  ).toBe("gpt-oss:20b-cloud");
+  Object.assign(f.workspace_ai_settings[0]!, {
+    primary_model: "gpt-oss:20b-cloud",
+  });
+  expect(() =>
+    planLegacySettings(f, new Set([business]), new Set([user])),
   ).toThrow();
 });

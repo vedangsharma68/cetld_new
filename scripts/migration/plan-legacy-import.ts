@@ -6,8 +6,10 @@ const businessSchema = z.object({
       .object({
         id: z.uuid(),
         owner_id: z.uuid(),
-        name: z.string().min(1),
-        slug: z.string(),
+        name: z
+          .string()
+          .refine((v) => v.trim().length >= 1 && v.trim().length <= 160),
+        slug: z.string().regex(/^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/),
         created_at: z.string().datetime({ offset: true }),
         updated_at: z.string().datetime({ offset: true }),
       })
@@ -30,11 +32,13 @@ export function planLegacyImport(snapshot: unknown) {
   const business = businessSchema.parse(snapshot);
   const userIds = new Set(auth.users.map((u) => u.id));
   const workspaceIds = new Set<string>();
+  const slugs = new Set<string>();
   const keys = new Set<string>();
   for (const w of business.workspaces) {
-    if (workspaceIds.has(w.id) || !userIds.has(w.owner_id))
+    if (workspaceIds.has(w.id) || slugs.has(w.slug) || !userIds.has(w.owner_id))
       throw Error("Duplicate business or orphan owner");
     workspaceIds.add(w.id);
+    slugs.add(w.slug);
   }
   const members = business.members.map((m) => {
     const key = m.workspace_id + ":" + m.user_id;

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { expectedLegacyTables } from "./expected-legacy-tables";
 export function inspectLegacyTableCoverage(inventory: unknown) {
   const rows = z
     .array(
@@ -12,6 +13,15 @@ export function inspectLegacyTableCoverage(inventory: unknown) {
     )
     .parse(inventory);
   const seen = new Set<string>();
+  const actual = new Set(rows.map((r) => r.schema + "." + r.table));
+  if (actual.size !== rows.length) throw Error("Duplicate inventory table");
+  if (
+    expectedLegacyTables.some((key) => !actual.has(key)) ||
+    actual.size !== expectedLegacyTables.length
+  )
+    throw Error(
+      "Inventory differs from expected baseline: missing or unexpected table",
+    );
   const core = new Set([
     "auth.users",
     "auth.identities",

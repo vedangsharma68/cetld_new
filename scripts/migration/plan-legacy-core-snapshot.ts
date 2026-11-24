@@ -14,6 +14,9 @@ export function planLegacyCoreSnapshot(snapshot: unknown) {
     "customers",
     "invoices",
     "payments",
+    "payment_reversals",
+    "invoice_reopening_proposals",
+    "invoice_number_sequences",
     "invoice_files",
   ]);
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot))

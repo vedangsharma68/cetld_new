@@ -2,7 +2,7 @@
 Uses only a new temporary loopback database with synthetic fixture data.
 No hosted connection, credentials or Docker needed. Requires psql and npm.
 """
-import pathlib,subprocess,os,time,tempfile
+import pathlib,subprocess,os,time,tempfile,sys
 root=pathlib.Path(__file__).resolve().parents[2]
 bindir=pathlib.Path(os.environ['POSTGRES_BIN'])
 data=pathlib.Path(tempfile.mkdtemp(prefix='cetld-next-synthetic-pg-'))/'data'
@@ -18,11 +18,13 @@ try:
  else:raise RuntimeError('Synthetic DB unavailable')
  for file in sorted((root/'src/server/db/migrations').glob('*.sql')):subprocess.run(['psql',env['DATABASE_URL'],'-v','ON_ERROR_STOP=1','-f',str(file)],check=True,capture_output=True)
  subprocess.run(['node','--conditions=react-server','--import','tsx','scripts/migration/seed-local-test.ts'],cwd=root,env=env,check=True)
- subprocess.run(['node','--conditions=react-server','--import','tsx','scripts/migration/verify-native-auth.ts'],cwd=root,env=env,check=True)
- subprocess.run(['node','--conditions=react-server','--import','tsx','scripts/migration/verify-native-import.ts'],cwd=root,env=env,check=True)
- subprocess.run(['node','--conditions=react-server','--import','tsx','scripts/migration/verify-native-lifecycle.ts'],cwd=root,env=env,check=True)
- subprocess.run(['node','--conditions=react-server','--import','tsx','scripts/migration/verify-native-financial-preservation.ts'],cwd=root,env=env,check=True)
- for command in [['npm','run','build'],['npm','run','test:e2e']]:subprocess.run(command,cwd=root,env=env,check=True)
+ if '--browser-only' not in sys.argv:
+  proofs = [sys.argv[sys.argv.index('--proof')+1]] if '--proof' in sys.argv else ['auth','import','lifecycle','financial-preservation','settings-constraints','financial-history','number-parity']
+  for proof in proofs:
+   subprocess.run(['node','--conditions=react-server','--import','tsx','scripts/migration/run-native-proof.ts',proof],cwd=root,env=env,check=True)
+ if '--native-only' not in sys.argv:
+  commands = [['npm','run','test:e2e']] if '--use-existing-build' in sys.argv else [['npm','run','build'],['npm','run','test:e2e']]
+  for command in commands:subprocess.run(command,cwd=root,env=env,check=True)
 finally:
  pg.terminate()
  try:pg.wait(timeout=10)

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { planLegacyFinancialHistory } from "./plan-legacy-financial-history";
 import {
   moneyUnits,
   exactMoneySchema,
@@ -163,9 +164,20 @@ export function planLegacyFinancial(
       recordedBy: null,
     };
   });
+  const history = planLegacyFinancialHistory(snapshot, {
+    businesses: scope.businesses,
+    invoices: new Map(rows.map((i) => [i.id, { workspaceId: i.workspaceId }])),
+    payments: new Map(payments.map((p) => [p.id, p])),
+  });
+  // Installed whatsapp_invoice_reopening excludes reversed allocations from
+  // its ledger sum and resets amount_paid to zero without deleting receipts.
+  // record_invoice_payment then permits settlement again against that balance.
+  // Therefore historical reversed settlements do not count as active settlement.
+  const reversed = new Set(history.paymentReversals.map((r) => r.paymentId));
   const sums = new Map<string, bigint>();
   const settlements = new Map<string, number>();
   for (const p of payments) {
+    if (reversed.has(p.id)) continue;
     sums.set(p.invoiceId, (sums.get(p.invoiceId) ?? 0n) + moneyUnits(p.amount));
     if (p.settleRemaining)
       settlements.set(p.invoiceId, (settlements.get(p.invoiceId) ?? 0) + 1);
@@ -194,5 +206,5 @@ export function planLegacyFinancial(
         "Settlement history and invoice balance differ; reconcile before import",
       );
   }
-  return { invoices: rows, payments };
+  return { invoices: rows, payments, ...history };
 }

@@ -120,6 +120,20 @@
       "when": 1795523117924,
       "tag": "0016_plain_molten_man",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1795523460665,
+      "tag": "0017_volatile_jubilee",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1795524038883,
+      "tag": "0018_violet_lord_tyger",
+      "breakpoints": true
     }
   ]
 }
