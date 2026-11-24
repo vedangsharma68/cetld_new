@@ -12,14 +12,20 @@
     "start": "next start",
     "lint": "eslint src tests/migration scripts/migration --max-warnings=0",
     "format": "prettier --write src tests/migration",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && npm run typecheck:legacy",
     "test": "vitest run",
     "test:e2e": "playwright test --config playwright.migration.config.ts",
     "db:generate": "drizzle-kit generate",
     "db:pull": "drizzle-kit pull",
     "db:migrate": "tsx scripts/migration/migrate.ts",
     "db:seed": "tsx scripts/migration/seed.ts",
-    "check:boundaries": "node scripts/migration/check-boundaries.mjs"
+    "check:boundaries": "node scripts/migration/check-boundaries.mjs",
+    "test:owner-chat": "node scripts/migration/run-legacy-gate.mjs test:owner-chat",
+    "test:offline-route": "node scripts/migration/run-legacy-gate.mjs test:offline-route",
+    "build:frontend": "node scripts/migration/run-legacy-gate.mjs build:frontend",
+    "test:ui": "node scripts/migration/run-legacy-gate.mjs test:ui",
+    "test:legacy": "node scripts/migration/run-legacy-gate.mjs test",
+    "typecheck:legacy": "node scripts/migration/run-legacy-gate.mjs typecheck"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -42,7 +48,15 @@
     "server-only": "^0.0.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.3.1",
-    "zod": "^4.1.12"
+    "zod": "^4.1.12",
+    "@napi-rs/canvas": "0.1.100",
+    "@vercel/functions": "3.9.9",
+    "@vercel/oidc": "file:vendor/vercel-oidc-disabled",
+    "pdfjs-dist": "5.4.394",
+    "sharp": "0.35.5",
+    "tesseract.js": "7.0.0",
+    "wink-lexicon": "2.2.0",
+    "wink-pos-tagger": "2.2.2"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.6.0",
@@ -63,6 +77,10 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.2",
     "vite": "^8.3.8",
-    "vitest": "^5.1.1"
+    "vitest": "^5.1.1",
+    "embedded-postgres": "18.6.0-beta.19"
+  },
+  "overrides": {
+    "@vercel/oidc": "$@vercel/oidc"
   }
 }

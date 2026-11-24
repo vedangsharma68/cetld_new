@@ -28,13 +28,11 @@ function fixture() {
     byRestoreKey: vi.fn().mockResolvedValue(null),
     expirePending: vi.fn(),
     pending: vi.fn().mockResolvedValue(null),
-    create: vi
-      .fn()
-      .mockImplementation(async (v) => ({
-        id: "proposal",
-        state: "pending",
-        ...v,
-      })),
+    create: vi.fn().mockImplementation(async (v) => ({
+      id: "proposal",
+      state: "pending",
+      ...v,
+    })),
     deletedProposal: vi.fn(),
     proposal: vi.fn(),
     updateInvoice: vi.fn(),
