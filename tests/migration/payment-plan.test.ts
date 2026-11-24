@@ -17,7 +17,7 @@ const input = {
   reference: null,
   idempotencyKey: "synthetic-key",
 };
-describe("exact financial settlement plan, not connected to API", () => {
+describe("exact financial settlement plan", () => {
   it("keeps high values exact without floating point", () => {
     expect(moneyString(moneyUnits(state.amount))).toBe(state.amount);
     expect(planPayment("i", state, input, null)).toMatchObject({
@@ -97,4 +97,20 @@ describe("exact financial settlement plan, not connected to API", () => {
       planPayment("i", state, { ...input, settleRemaining: true }, null),
     ).toThrow();
   });
+});
+
+it("denies deleted invoice replay before returning ledger data", () => {
+  expect(() =>
+    planPayment("i", { ...state, deletedAt: new Date() }, input, {
+      invoiceId: "i",
+      amount: "0.01",
+      settleRemaining: false,
+      reference: null,
+    }),
+  ).toThrow(/Restore/);
+});
+it("allows draft payment as legacy RPC does", () => {
+  expect(
+    planPayment("i", { ...state, financialStatus: "draft" }, input, null),
+  ).toMatchObject({ amountPaid: "0.01" });
 });

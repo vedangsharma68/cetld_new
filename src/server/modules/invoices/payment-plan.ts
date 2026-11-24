@@ -33,6 +33,11 @@ export function planPayment(
       "INVALID_PAYMENT",
       "Settling the balance does not accept an amount",
     );
+  if (state.deletedAt)
+    throw new ConflictError(
+      "INVOICE_DELETED",
+      "Restore the invoice before recording payment",
+    );
   if (existing) {
     if (
       existing.invoiceId !== invoiceId ||
@@ -48,11 +53,6 @@ export function planPayment(
       );
     return { replayed: true as const, payment: existing };
   }
-  if (state.deletedAt)
-    throw new ConflictError(
-      "INVOICE_DELETED",
-      "Restore the invoice before recording payment",
-    );
   if (["void", "cancelled", "paid"].includes(state.financialStatus))
     throw new ConflictError(
       "INVOICE_TERMINAL",

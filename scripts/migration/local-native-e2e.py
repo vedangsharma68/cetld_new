@@ -19,6 +19,7 @@ try:
  for file in sorted((root/'src/server/db/migrations').glob('*.sql')):subprocess.run(['psql',env['DATABASE_URL'],'-v','ON_ERROR_STOP=1','-f',str(file)],check=True,capture_output=True)
  subprocess.run(['node','--conditions=react-server','--import','tsx','scripts/migration/seed-local-test.ts'],cwd=root,env=env,check=True)
  subprocess.run(['node','--conditions=react-server','--import','tsx','scripts/migration/verify-native-auth.ts'],cwd=root,env=env,check=True)
+ subprocess.run(['node','--conditions=react-server','--import','tsx','scripts/migration/verify-native-import.ts'],cwd=root,env=env,check=True)
  for command in [['npm','run','build'],['npm','run','test:e2e']]:subprocess.run(command,cwd=root,env=env,check=True)
 finally:
  pg.terminate()

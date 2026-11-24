@@ -12,6 +12,9 @@ const u = () => ({
   is_anonymous: false,
   is_sso_user: false,
   raw_user_meta_data: { name: "Legacy" },
+  email_change: "",
+  phone: null,
+  phone_change: "",
 });
 const identity = () => ({
   user_id: id,
@@ -103,4 +106,49 @@ describe("legacy auth import plan, pure no effects", () => {
     ])
       expect(() => planLegacyAuth(s)).toThrow();
   });
+});
+
+it.each([
+  ["anonymous", { is_anonymous: true }],
+  ["SSO", { is_sso_user: true }],
+  ["invalid hash", { encrypted_password: "not-bcrypt" }],
+  ["pending email", { email_change: "new@example.test" }],
+  ["phone auth", { phone: "+15555550100" }],
+  ["pending phone", { phone_change: "+15555550100" }],
+])("blocks %s independently", (_name, change) => {
+  expect(() =>
+    planLegacyAuth({ users: [{ ...u(), ...change }], identities: [] }),
+  ).toThrow();
+});
+it("blocks orphan identity", () => {
+  expect(() => planLegacyAuth({ users: [], identities: [identity()] })).toThrow(
+    /Orphan/,
+  );
+});
+it("blocks duplicate Google subject", () => {
+  expect(() =>
+    planLegacyAuth({ users: [u()], identities: [identity(), identity()] }),
+  ).toThrow(/Duplicate provider subject/);
+});
+it("blocks duplicate canonical email across distinct UUIDs", () => {
+  expect(() =>
+    planLegacyAuth({
+      users: [
+        u(),
+        {
+          ...u(),
+          id: "22222222-2222-4222-8222-222222222222",
+          email: "legacy@example.test",
+        },
+      ],
+      identities: [],
+    }),
+  ).toThrow(/Duplicate account identity/);
+});
+it("blocks snapshots omitting phone or pending-change state", () => {
+  const { phone, ...incomplete } = u();
+  void phone;
+  expect(() =>
+    planLegacyAuth({ users: [incomplete], identities: [] }),
+  ).toThrow();
 });
