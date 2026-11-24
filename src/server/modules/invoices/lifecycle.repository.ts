@@ -8,9 +8,6 @@ import {
   workspaceMembers,
   workspaces,
 } from "@/server/db/schema";
-import { ConflictError } from "@/server/lib/errors";
-import { moneyUnits } from "@/shared/schemas/exact-money";
-import { confirmLifecyclePlan } from "./lifecycle-plan";
 // No integration may mark imported reminder risk verified until its full delivery
 // inventory is mapped. Fresh candidate invoices cannot send reminders yet.
 export const lifecycleRepository = {
@@ -75,15 +72,10 @@ export const lifecycleRepository = {
       .limit(1);
     return row ?? null;
   },
-  async act(
+  async withLockedInvoice<T>(
     userId: string,
     invoiceId: string,
-    input: {
-      action: "prepare" | "confirm" | "cancel" | "restore";
-      key: string;
-      proposalId?: string;
-      confirmation?: string;
-    },
+    run: (context: LifecycleContext) => Promise<T>,
   ) {
     return db.transaction(async (tx) => {
       const [invoice] = await tx
@@ -118,245 +110,140 @@ export const lifecycleRepository = {
         sql`select clock_timestamp() as now`,
       );
       const now = new Date(clock[0]!.now);
-      if (!invoice.lifecycleRiskVerified)
-        throw new ConflictError(
-          "LIFECYCLE_RISK_UNKNOWN",
-          "Reminder delivery state has not been verified for this invoice",
-        );
-      const [ledger] = await tx
-        .select({ id: payments.id })
-        .from(payments)
-        .where(
-          and(
-            eq(payments.workspaceId, invoice.workspaceId),
-            eq(payments.invoiceId, invoice.id),
-          ),
-        )
-        .limit(1);
-      const risk = {
-        hadPayment:
-          !!ledger ||
-          invoice.financialStatus === "paid" ||
-          moneyUnits(invoice.amountPaid) > 0n,
-        hadSentReminder: false,
-        activeDispatch: false,
-      };
       const ownerScope = and(
         eq(proposals.workspaceId, invoice.workspaceId),
         eq(proposals.ownerId, userId),
       );
-      if (input.action === "prepare") {
-        const [replay] = await tx
-          .select()
-          .from(proposals)
-          .where(and(ownerScope, eq(proposals.idempotencyKey, input.key)))
-          .for("update");
-        if (replay) {
-          if (replay.invoiceId !== invoiceId)
-            throw new ConflictError(
-              "IDEMPOTENCY_MISMATCH",
-              "Deletion key belongs to another invoice",
-            );
-          if (replay.state !== "pending" || replay.expiresAt <= now)
-            throw new ConflictError(
-              "ACTION_STALE",
-              "Prepare a new deletion proposal",
-            );
-          return replay;
-        }
-        if (invoice.deletedAt)
-          throw new ConflictError(
-            "ALREADY_DELETED",
-            "Invoice is already deleted",
-          );
-        await tx
-          .update(proposals)
-          .set({ state: "expired" })
-          .where(
-            and(
-              ownerScope,
-              eq(proposals.state, "pending"),
-              sql`${proposals.expiresAt}<=clock_timestamp()`,
-            ),
-          );
-        const [pending] = await tx
-          .select({ id: proposals.id })
-          .from(proposals)
-          .where(and(ownerScope, eq(proposals.state, "pending")))
-          .limit(1);
-        if (pending)
-          throw new ConflictError(
-            "ACTION_PENDING",
-            "Complete or cancel the pending deletion first",
-          );
-        const [created] = await tx
-          .insert(proposals)
-          .values({
-            workspaceId: invoice.workspaceId,
-            ownerId: userId,
-            invoiceId: invoice.id,
-            idempotencyKey: input.key,
-            revision: String(invoice.revision),
-            invoiceNumber: invoice.invoiceNumber,
-            hadPayment: risk.hadPayment,
-            hadSentReminder: risk.hadSentReminder,
-            expiresAt: new Date(now.getTime() + 600000),
-            snapshot: {
-              invoiceNumber: invoice.invoiceNumber,
-              amount: invoice.amount,
-              currency: invoice.currency,
-              status: invoice.financialStatus,
-            },
-          })
-          .returning();
-        return created ?? null;
-      }
-      if (input.action === "restore") {
-        const [replay] = await tx
-          .select()
-          .from(proposals)
-          .where(and(ownerScope, eq(proposals.restoreKey, input.key)))
-          .for("update");
-        if (replay) {
-          if (replay.invoiceId !== invoiceId)
-            throw new ConflictError(
-              "IDEMPOTENCY_MISMATCH",
-              "Restore key belongs to another invoice",
-            );
-          if (replay.state !== "restored")
-            throw new ConflictError("ACTION_STALE", "Restore changed");
-          return replay;
-        }
-        if (!invoice.deletedAt || invoice.deletedBy !== userId)
-          throw new ConflictError(
-            "INVOICE_NOT_DELETED",
-            "Invoice is not deleted by this owner",
-          );
-        if (invoice.deletedAt.getTime() < now.getTime() - 30 * 86400000)
-          throw new ConflictError(
-            "UNDO_EXPIRED",
-            "Restore is available for thirty days",
-          );
-        const [proposal] = await tx
-          .select()
-          .from(proposals)
-          .where(
-            and(
-              ownerScope,
-              eq(proposals.invoiceId, invoice.id),
-              eq(proposals.state, "deleted"),
-              eq(proposals.deletedAt, invoice.deletedAt),
-            ),
-          )
-          .for("update");
-        if (!proposal) return null;
-        const followupState =
-          ["paid", "void", "cancelled"].includes(invoice.financialStatus) ||
-          moneyUnits(invoice.amountPaid) >= moneyUnits(invoice.amount)
-            ? "cancelled"
-            : "paused";
-        await tx
-          .update(invoices)
-          .set({
-            deletedAt: null,
-            deletedBy: null,
-            followupState,
-            nextFollowUpAt: null,
-            metadata: {
-              ...invoice.metadata,
-              followup_state: followupState,
-              next_follow_up_at: null,
-            },
-          })
-          .where(eq(invoices.id, invoiceId));
-        const [restored] = await tx
-          .update(proposals)
-          .set({ state: "restored", restoreKey: input.key })
-          .where(eq(proposals.id, proposal.id))
-          .returning();
-        return restored ?? null;
-      }
-      const [proposal] = await tx
-        .select()
-        .from(proposals)
-        .where(
-          and(
-            ownerScope,
-            eq(proposals.invoiceId, invoice.id),
-            eq(proposals.id, input.proposalId!),
+      const first = <T>(rows: T[]) => rows[0] ?? null;
+      const store = {
+        payment: async () =>
+          first(
+            await tx
+              .select({ id: payments.id })
+              .from(payments)
+              .where(
+                and(
+                  eq(payments.workspaceId, invoice.workspaceId),
+                  eq(payments.invoiceId, invoice.id),
+                ),
+              )
+              .limit(1),
           ),
-        )
-        .for("update");
-      if (!proposal) return null;
-      if (input.action === "cancel") {
-        if (proposal.state === "cancelled" && proposal.cancelKey === input.key)
-          return proposal;
-        if (proposal.state !== "pending" || proposal.expiresAt <= now)
-          throw new ConflictError(
-            "ACTION_STALE",
-            "Deletion proposal changed or expired",
-          );
-        const [cancelled] = await tx
-          .update(proposals)
-          .set({ state: "cancelled", cancelKey: input.key })
-          .where(eq(proposals.id, proposal.id))
-          .returning();
-        return cancelled ?? null;
-      }
-      if (
-        proposal.state === "deleted" &&
-        proposal.confirmationKey === input.key
-      ) {
-        const exact = proposal.hadPayment || proposal.hadSentReminder;
-        if (
-          exact
-            ? input.confirmation !== "DELETE " + proposal.invoiceNumber
-            : input.confirmation?.trim().toLowerCase() !== "yes"
-        )
-          throw new ConflictError(
-            "IDEMPOTENCY_MISMATCH",
-            "Confirmation changed on replay",
-          );
-        return proposal;
-      }
-      const planned = confirmLifecyclePlan(
-        {
-          id: invoice.id,
-          number: invoice.invoiceNumber,
-          revision: String(invoice.revision),
-          deletedAt: invoice.deletedAt,
-          amountPaid: invoice.amountPaid,
-          status: invoice.financialStatus,
+        byPrepareKey: async (key: string) =>
+          first(
+            await tx
+              .select()
+              .from(proposals)
+              .where(and(ownerScope, eq(proposals.idempotencyKey, key)))
+              .for("update"),
+          ),
+        byRestoreKey: async (key: string) =>
+          first(
+            await tx
+              .select()
+              .from(proposals)
+              .where(and(ownerScope, eq(proposals.restoreKey, key)))
+              .for("update"),
+          ),
+        expirePending: async () => {
+          await tx
+            .update(proposals)
+            .set({ state: "expired" })
+            .where(
+              and(
+                ownerScope,
+                eq(proposals.state, "pending"),
+                sql`${proposals.expiresAt}<=clock_timestamp()`,
+              ),
+            );
         },
-        proposal,
-        risk,
-        input.confirmation ?? "",
-        now,
-      );
-      await tx
-        .update(invoices)
-        .set({
-          deletedAt: planned.deletedAt,
-          deletedBy: userId,
-          followupState: "cancelled",
-          nextFollowUpAt: null,
-          metadata: {
-            ...invoice.metadata,
-            followup_state: "cancelled",
-            next_follow_up_at: null,
-          },
-        })
-        .where(eq(invoices.id, invoiceId));
-      const [deleted] = await tx
-        .update(proposals)
-        .set({
-          state: "deleted",
-          deletedAt: planned.deletedAt,
-          confirmationKey: input.key,
-        })
-        .where(eq(proposals.id, proposal.id))
-        .returning();
-      return deleted ?? null;
+        pending: async () =>
+          first(
+            await tx
+              .select({ id: proposals.id })
+              .from(proposals)
+              .where(and(ownerScope, eq(proposals.state, "pending")))
+              .limit(1),
+          ),
+        create: async (values: typeof proposals.$inferInsert) =>
+          first(await tx.insert(proposals).values(values).returning()),
+        deletedProposal: async () =>
+          first(
+            await tx
+              .select()
+              .from(proposals)
+              .where(
+                and(
+                  ownerScope,
+                  eq(proposals.invoiceId, invoice.id),
+                  eq(proposals.state, "deleted"),
+                  eq(proposals.deletedAt, invoice.deletedAt!),
+                ),
+              )
+              .for("update"),
+          ),
+        proposal: async (id: string) =>
+          first(
+            await tx
+              .select()
+              .from(proposals)
+              .where(
+                and(
+                  ownerScope,
+                  eq(proposals.invoiceId, invoice.id),
+                  eq(proposals.id, id),
+                ),
+              )
+              .for("update"),
+          ),
+        updateInvoice: async (
+          values: Partial<typeof invoices.$inferInsert>,
+        ) => {
+          await tx
+            .update(invoices)
+            .set(values)
+            .where(eq(invoices.id, invoice.id));
+        },
+        updateProposal: async (
+          id: string,
+          values: Partial<typeof proposals.$inferInsert>,
+        ) =>
+          first(
+            await tx
+              .update(proposals)
+              .set(values)
+              .where(
+                and(
+                  ownerScope,
+                  eq(proposals.invoiceId, invoice.id),
+                  eq(proposals.id, id),
+                ),
+              )
+              .returning(),
+          ),
+      };
+      return run({ invoice, now, store });
     });
   },
+};
+type LifecycleContext = {
+  invoice: typeof invoices.$inferSelect;
+  now: Date;
+  store: {
+    payment(): Promise<{ id: string } | null>;
+    byPrepareKey(key: string): Promise<typeof proposals.$inferSelect | null>;
+    byRestoreKey(key: string): Promise<typeof proposals.$inferSelect | null>;
+    expirePending(): Promise<void>;
+    pending(): Promise<{ id: string } | null>;
+    create(
+      values: typeof proposals.$inferInsert,
+    ): Promise<typeof proposals.$inferSelect | null>;
+    deletedProposal(): Promise<typeof proposals.$inferSelect | null>;
+    proposal(id: string): Promise<typeof proposals.$inferSelect | null>;
+    updateInvoice(values: Partial<typeof invoices.$inferInsert>): Promise<void>;
+    updateProposal(
+      id: string,
+      values: Partial<typeof proposals.$inferInsert>,
+    ): Promise<typeof proposals.$inferSelect | null>;
+  };
 };

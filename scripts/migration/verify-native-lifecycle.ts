@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import postgres from "postgres";
 import { getEnv } from "../../src/env";
 import { lifecycleRepository } from "../../src/server/modules/invoices/lifecycle.repository";
+import { lifecycleService } from "../../src/server/modules/invoices/lifecycle.service";
 import { invoiceRepository } from "../../src/server/modules/invoices/invoices.repository";
 import { paymentRepository } from "../../src/server/modules/invoices/payments.repository";
 const env = getEnv();
@@ -22,21 +23,15 @@ try {
     currency: "INR",
   });
   assert.ok(invoice);
-  assert.equal(
-    await lifecycleRepository.act(foreign, invoice.id, {
-      action: "prepare",
-      key: "foreign-lifecycle",
-    }),
-    null,
-  );
-  let proposal = await lifecycleRepository.act(owner, invoice.id, {
+  await assert.rejects(() => lifecycleService.act(foreign, invoice.id, {action:"prepare",key:"foreign-lifecycle"}), {statusCode:404});
+  let proposal = await lifecycleService.act(owner, invoice.id, {
     action: "prepare",
     key: "native-prepare-1",
   });
   assert.ok(proposal);
   assert.equal(
     (
-      await lifecycleRepository.act(owner, invoice.id, {
+      await lifecycleService.act(owner, invoice.id, {
         action: "prepare",
         key: "native-prepare-1",
       })
@@ -51,7 +46,7 @@ try {
   });
   await assert.rejects(
     () =>
-      lifecycleRepository.act(owner, invoice.id, {
+      lifecycleService.act(owner, invoice.id, {
         action: "confirm",
         key: "confirm-stale",
         proposalId: proposal.id,
@@ -59,12 +54,12 @@ try {
       }),
     { code: "ACTION_STALE" },
   );
-  await lifecycleRepository.act(owner, invoice.id, {
+  await lifecycleService.act(owner, invoice.id, {
     action: "cancel",
     key: "cancel-stale",
     proposalId: proposal.id,
   });
-  proposal = await lifecycleRepository.act(owner, invoice.id, {
+  proposal = await lifecycleService.act(owner, invoice.id, {
     action: "prepare",
     key: "native-prepare-2",
   });
@@ -72,7 +67,7 @@ try {
   assert.equal(proposal.hadPayment, true);
   await assert.rejects(
     () =>
-      lifecycleRepository.act(owner, invoice.id, {
+      lifecycleService.act(owner, invoice.id, {
         action: "confirm",
         key: "confirm-wrong",
         proposalId: proposal.id,
@@ -80,7 +75,7 @@ try {
       }),
     { code: "EXACT_CONFIRMATION_REQUIRED" },
   );
-  const result = await lifecycleRepository.act(owner, invoice.id, {
+  const result = await lifecycleService.act(owner, invoice.id, {
     action: "confirm",
     key: "confirm-exact",
     proposalId: proposal.id,
@@ -89,7 +84,7 @@ try {
   assert.equal(result?.state, "deleted");
   await assert.rejects(
     () =>
-      lifecycleRepository.act(owner, invoice.id, {
+      lifecycleService.act(owner, invoice.id, {
         action: "confirm",
         key: "confirm-exact",
         proposalId: proposal.id,
@@ -99,7 +94,7 @@ try {
   );
   assert.equal(
     (
-      await lifecycleRepository.act(owner, invoice.id, {
+      await lifecycleService.act(owner, invoice.id, {
         action: "confirm",
         key: "confirm-exact",
         proposalId: proposal.id,
@@ -144,7 +139,7 @@ try {
   );
   assert.equal(
     (
-      await lifecycleRepository.act(owner, invoice.id, {
+      await lifecycleService.act(owner, invoice.id, {
         action: "restore",
         key: "restore-native",
       })
@@ -162,7 +157,7 @@ try {
   );
   assert.equal(
     (
-      await lifecycleRepository.act(owner, invoice.id, {
+      await lifecycleService.act(owner, invoice.id, {
         action: "restore",
         key: "restore-native",
       })
@@ -179,11 +174,11 @@ try {
   });
   assert.ok(second);
   const pendingRace = await Promise.allSettled([
-    lifecycleRepository.act(owner, invoice.id, {
+    lifecycleService.act(owner, invoice.id, {
       action: "prepare",
       key: "pending-race-first",
     }),
-    lifecycleRepository.act(owner, second.id, {
+    lifecycleService.act(owner, second.id, {
       action: "prepare",
       key: "pending-race-second",
     }),
@@ -197,7 +192,7 @@ try {
   await sql`update invoice_lifecycle_proposals set expires_at=clock_timestamp()-interval '1 second' where id=${pending.id}`;
   await assert.rejects(
     () =>
-      lifecycleRepository.act(owner, pending.invoiceId, {
+      lifecycleService.act(owner, pending.invoiceId, {
         action: "confirm",
         key: "expired-native-confirm",
         proposalId: pending.id,
@@ -205,12 +200,12 @@ try {
       }),
     { code: "ACTION_EXPIRED" },
   );
-  const expiryReplacement = await lifecycleRepository.act(owner, second.id, {
+  const expiryReplacement = await lifecycleService.act(owner, second.id, {
     action: "prepare",
     key: "after-expiry-native",
   });
   assert.ok(expiryReplacement);
-  await lifecycleRepository.act(owner, second.id, {
+  await lifecycleService.act(owner, second.id, {
     action: "confirm",
     key: "unpaid-delete-native",
     proposalId: expiryReplacement.id,
@@ -228,33 +223,27 @@ try {
   await sql`update invoices set deleted_at=clock_timestamp()-interval '31 days' where id=${second.id}`;
   await assert.rejects(
     () =>
-      lifecycleRepository.act(owner, second.id, {
+      lifecycleService.act(owner, second.id, {
         action: "restore",
         key: "expired-restore-native",
       }),
     { code: "UNDO_EXPIRED" },
   );
   await sql`update invoices set deleted_at=${deletion} where id=${second.id}`;
-  await lifecycleRepository.act(owner, second.id, {
+  await lifecycleService.act(owner, second.id, {
     action: "restore",
     key: "second-restore-native",
   });
   // Business owner without matching owner membership is not enough.
   await sql`update workspace_members set role='admin' where workspace_id=${workspace} and user_id=${owner}`;
-  assert.equal(
-    await lifecycleRepository.act(owner, second.id, {
-      action: "prepare",
-      key: "owner-role-mismatch",
-    }),
-    null,
-  );
+  await assert.rejects(() => lifecycleService.act(owner, second.id, {action:"prepare",key:"owner-role-mismatch"}), {statusCode:404});
   assert.equal(await lifecycleRepository.pending(owner, workspace), null);
   assert.deepEqual(await lifecycleRepository.deleted(owner, workspace), []);
   await sql`update workspace_members set role='owner' where workspace_id=${workspace} and user_id=${owner}`;
   await sql`update invoices set lifecycle_risk_verified=false where id=${invoice.id}`;
   await assert.rejects(
     () =>
-      lifecycleRepository.act(owner, invoice.id, {
+      lifecycleService.act(owner, invoice.id, {
         action: "prepare",
         key: "unverified-risk",
       }),

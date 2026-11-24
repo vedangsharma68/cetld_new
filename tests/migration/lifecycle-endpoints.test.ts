@@ -3,8 +3,14 @@ const { repo, session } = vi.hoisted(() => ({
   repo: { act: vi.fn(), deleted: vi.fn(), pending: vi.fn() },
   session: { getSessionUser: vi.fn() },
 }));
-vi.mock("@/server/modules/invoices/lifecycle.repository", () => ({
-  lifecycleRepository: repo,
+vi.mock("@/server/modules/invoices/lifecycle.service", () => ({
+  lifecycleService: {
+    act: (...args: unknown[]) => repo.act(...args),
+    state: async (u: string, w: string) => ({
+      deleted: await repo.deleted(u, w),
+      pending: await repo.pending(u, w),
+    }),
+  },
 }));
 vi.mock("@/server/lib/auth", () => session);
 vi.mock("@/server/lib/logger", () => ({
@@ -12,7 +18,11 @@ vi.mock("@/server/lib/logger", () => ({
 }));
 import { POST } from "../../src/app/api/v1/invoices/[id]/lifecycle/route";
 import { GET } from "../../src/app/api/v1/invoice-lifecycle/route";
-import { UnauthorizedError, ConflictError } from "@/server/lib/errors";
+import {
+  UnauthorizedError,
+  ConflictError,
+  NotFoundError,
+} from "@/server/lib/errors";
 const id = "11111111-1111-4111-8111-111111111111",
   workspace = "22222222-2222-4222-8222-222222222222";
 const context = { params: Promise.resolve({ id }) };
@@ -34,8 +44,6 @@ beforeEach(() => {
     hadPayment: false,
     hadSentReminder: false,
     expiresAt: new Date("2026-12-01T00:00:00Z"),
-    ownerId: "private-owner",
-    snapshot: { private: "not-exposed" },
   });
   repo.deleted.mockResolvedValue([]);
   repo.pending.mockResolvedValue(null);
@@ -63,7 +71,7 @@ it("rejects signed-out lifecycle requests", async () => {
   expect(repo.act).not.toHaveBeenCalled();
 });
 it("returns404 for foreign or missing owner scope", async () => {
-  repo.act.mockResolvedValue(null);
+  repo.act.mockRejectedValue(new NotFoundError("Invoice lifecycle"));
   expect((await POST(request(), context)).status).toBe(404);
 });
 it.each([
