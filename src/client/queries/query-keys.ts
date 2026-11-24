@@ -1,6 +1,14 @@
 import type { InvoiceFilters } from "@/shared/schemas/invoices.schema";
 import type { CustomerFilters } from "@/shared/schemas/customers.schema";
 export const qk = {
+  correctionHistory: {
+    list: (workspaceId: string, invoiceId: string) =>
+      ["correction-history", workspaceId, invoiceId] as const,
+  },
+  businessRecords: {
+    list: (workspaceId: string, includeDeleted: boolean) =>
+      ["business-records", workspaceId, includeDeleted] as const,
+  },
   profile: { self: ["profile", "self"] as const },
   settings: {
     all: ["settings"] as const,

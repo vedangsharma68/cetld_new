@@ -1,4 +1,5 @@
 "use client";
+import { CorrectionHistory } from "./correction-history";
 import { useLifecycleState } from "@/client/queries/lifecycle.queries";
 import { useState } from "react";
 import { LifecycleForm, RestoreInvoice } from "./lifecycle-form";
@@ -39,7 +40,12 @@ export function InvoicePage() {
 function InvoiceBusiness({
   businesses,
 }: {
-  businesses: { id: string; name: string; canManageLifecycle: boolean }[];
+  businesses: {
+    id: string;
+    name: string;
+    canManageLifecycle: boolean;
+    canReadBusinessRecords: boolean;
+  }[];
 }) {
   const [selected, setSelected] = useState("");
   const workspaceId = selected || businesses[0]?.id || "";
@@ -215,6 +221,13 @@ function InvoiceBusiness({
                             }}
                           />
                         </label>
+                      )}
+                      {businesses.find((b) => b.id === workspaceId)
+                        ?.canReadBusinessRecords && (
+                        <CorrectionHistory
+                          workspaceId={workspaceId}
+                          invoiceId={row.id}
+                        />
                       )}
                       <PaymentForm
                         id={row.id}

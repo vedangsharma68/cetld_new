@@ -2,6 +2,8 @@ import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { planLegacyCoreSnapshot } from "./plan-legacy-core-snapshot";
 import {
+  invoiceCorrectionAudits,
+  businessRecords,
   users,
   profiles,
   workspaceSettings,
@@ -51,6 +53,8 @@ export async function importSyntheticCore(
         await tx.insert(workspaces).values(plan.workspaces);
       if (plan.members.length)
         await tx.insert(workspaceMembers).values(plan.members);
+      if (plan.businessRecords.length)
+        await tx.insert(businessRecords).values(plan.businessRecords);
       if (plan.profiles.length) await tx.insert(profiles).values(plan.profiles);
       if (plan.workspaceSettings.length)
         await tx.insert(workspaceSettings).values(plan.workspaceSettings);
@@ -59,6 +63,8 @@ export async function importSyntheticCore(
       if (plan.customers.length)
         await tx.insert(customers).values(plan.customers);
       if (plan.invoices.length) await tx.insert(invoices).values(plan.invoices);
+      for (const audit of plan.invoiceCorrectionAudits)
+        await tx.insert(invoiceCorrectionAudits).values(audit);
       if (plan.payments.length) await tx.insert(payments).values(plan.payments);
       if (plan.invoiceReopeningProposals.length)
         await tx

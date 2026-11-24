@@ -1,4 +1,5 @@
 "use client";
+import { BusinessRecords } from "./business-records";
 import { ProfileForm } from "./profile-form";
 import { useState } from "react";
 import { useWorkspaces } from "@/client/queries/workspaces.queries";
@@ -100,13 +101,16 @@ function SettingsBusiness({ businesses }: { businesses: Workspace[] }) {
               )}
             </section>
             <p className="text-sm text-slate-600">
-              Read-only preview. Owner verification, reminder preferences and
-              integrations are not exposed here. Editing is not available in
-              this migration preview.
+              Business settings are read-only. Owner verification, reminder
+              preferences and integrations are not exposed here. Business
+              settings editing is not available in this migration preview.
             </p>
           </>
         )}
       </QueryBoundary>
+      {businesses.find((w) => w.id === workspaceId)?.canReadBusinessRecords && (
+        <BusinessRecords key={workspaceId} workspaceId={workspaceId} />
+      )}
     </div>
   );
 }

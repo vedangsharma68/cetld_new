@@ -8,6 +8,7 @@ export const workspaceRepository = {
       .select({
         id: workspaces.id,
         name: workspaces.name,
+        canReadBusinessRecords: sql<boolean>`${workspaces.ownerId}=${userId}`,
         role: workspaceMembers.role,
         canManageLifecycle: sql<boolean>`${workspaces.ownerId}=${userId} and ${workspaceMembers.role}='owner'`,
       })

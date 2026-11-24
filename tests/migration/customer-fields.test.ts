@@ -45,3 +45,17 @@ describe("legacy custom field boundary", () => {
       expect(updateCustomerSchema.safeParse(x).success).toBe(false);
   });
 });
+
+it("customer writes count1000Unicode codepoints rather than UTF16units", () => {
+  expect(fields.safeParse({ label: "😀".repeat(1000) }).success).toBe(true);
+  expect(fields.safeParse({ label: "😀".repeat(1001) }).success).toBe(false);
+});
+
+it.each(Array.from({ length: 32 }, (_, i) => 128 + i))(
+  "customer writes reject source-locale control U+%i",
+  (code) => {
+    expect(
+      fields.safeParse({ label: String.fromCodePoint(code) }).success,
+    ).toBe(false);
+  },
+);

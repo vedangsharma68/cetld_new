@@ -35,7 +35,7 @@ Live information_schema inventory, November24. Counts and row values intentional
 | app.zoho_export_operations | Unmapped preservation and behavior required | BLOCKED |
 | app.zoho_invoice_origins | Unmapped preservation and behavior required | BLOCKED |
 | public.ai_provider_health | Unmapped preservation and behavior required | BLOCKED |
-| public.business_records | Unmapped preservation and behavior required | BLOCKED |
+| public.business_records | Required strict core slice + loopback transaction proof only | BLOCKED |
 | public.cetld_accounting_connections | Unmapped preservation and behavior required | BLOCKED |
 | public.cetld_accounting_oauth_states | Unmapped preservation and behavior required | BLOCKED |
 | public.cetld_accounting_sync_records | Unmapped preservation and behavior required | BLOCKED |
@@ -43,18 +43,18 @@ Live information_schema inventory, November24. Counts and row values intentional
 | public.cetld_core_automation_events | Unmapped preservation and behavior required | BLOCKED |
 | public.cetld_core_automation_messages | Unmapped preservation and behavior required | BLOCKED |
 | public.customers | Core pure planner only | BLOCKED |
-| public.invoice_correction_audits | Unmapped preservation and behavior required | BLOCKED |
+| public.invoice_correction_audits | Required strict core slice + loopback transaction proof only | BLOCKED |
 | public.invoice_files | Core pure planner only | BLOCKED |
 | public.invoice_lifecycle_proposals | Unmapped preservation and behavior required | BLOCKED |
-| public.invoice_number_sequences | Unmapped preservation and behavior required | BLOCKED |
-| public.invoice_reopening_proposals | Unmapped preservation and behavior required | BLOCKED |
+| public.invoice_number_sequences | Required strict core slice + loopback transaction proof only | BLOCKED |
+| public.invoice_reopening_proposals | Required strict core slice + loopback transaction proof only | BLOCKED |
 | public.invoices | Core pure planner only | BLOCKED |
 | public.owner_assistant_proposals | Unmapped preservation and behavior required | BLOCKED |
 | public.owner_assistant_token_receipts | Unmapped preservation and behavior required | BLOCKED |
 | public.owner_assistant_turns | Unmapped preservation and behavior required | BLOCKED |
-| public.payment_reversals | Unmapped preservation and behavior required | BLOCKED |
+| public.payment_reversals | Required strict core slice + loopback transaction proof only | BLOCKED |
 | public.payments | Core pure planner only | BLOCKED |
-| public.profiles | Unmapped preservation and behavior required | BLOCKED |
+| public.profiles | Required strict core slice + loopback transaction proof only | BLOCKED |
 | public.whatsapp_consents | Unmapped preservation and behavior required | BLOCKED |
 | public.whatsapp_conversation_turns | Unmapped preservation and behavior required | BLOCKED |
 | public.whatsapp_direct_write_receipts | Unmapped preservation and behavior required | BLOCKED |
@@ -72,7 +72,13 @@ Live information_schema inventory, November24. Counts and row values intentional
 | public.whatsapp_provider_memory | Unmapped preservation and behavior required | BLOCKED |
 | public.whatsapp_suppressions | Unmapped preservation and behavior required | BLOCKED |
 | public.whatsapp_workspace_data_proposals | Unmapped preservation and behavior required | BLOCKED |
-| public.workspace_ai_settings | Settings pure planner only | BLOCKED |
+| public.workspace_ai_settings | Required strict core slice + loopback transaction proof only | BLOCKED |
 | public.workspace_members | Core pure planner only | BLOCKED |
-| public.workspace_settings | Settings pure planner only | BLOCKED |
+| public.workspace_settings | Required strict core slice + loopback transaction proof only | BLOCKED |
 | public.workspaces | Core pure planner only | BLOCKED |
+
+Business records use owner-only reads, matching the live SELECT policy, not generic membership. Deleted records remain stored; active reads omit them unless owner explicitly requests deleted history. Import retains exact fields and deletion pair. No write/lifecycle UI or full custom-field validator parity is claimed. The DB retains simple declarative shape/size checks; the legacy JSON custom-field validator is not copied as a DB function, and exhaustive byte/numeric/Unicode source-data validation remains blocking before a real operator. Server validator now shares customer/business-record limits with50native differential cases against the installed legacy function; this is tested coverage, not proof for every possible jsonb numeric value.
+
+Live source Nov24 uses UTF8/en_US.UTF-8; all C1codepoints U+0080-U+009F match PostgreSQL control class. Server customfield new-write validator and record-name planner reject them; each case has direct customer/record coverage and native legacy-function differential. Import custom JSON remains uncoerced to preserve legacy rows outside current new-write rules.
+
+Invoice correction audit rows have a separate original-provenance table with sourcekind/event, before/after/valueJSON and timestamps retained. Synthetic composition imports them after invoices; source-event uniqueness and composite business/invoice/owner FKs are native checked. No correction mutation/replay is enabled. Runtime owner SQL can still alter audit tables until the separate architecture decision is settled; this preservation slice does not fix DB immutability.

@@ -1,3 +1,5 @@
+import { planLegacyInvoiceCorrectionAudits } from "./plan-legacy-invoice-correction-audits";
+import { planLegacyBusinessRecords } from "./plan-legacy-business-records";
 import { planLegacyProfiles } from "./plan-legacy-profiles";
 import { planLegacySettings } from "./plan-legacy-settings";
 import { planLegacyImport } from "./plan-legacy-import";
@@ -9,6 +11,8 @@ import { planLegacyFiles } from "./plan-legacy-files";
 // mandatory external reconciliation gates before any real import operator.
 export function planLegacyCoreSnapshot(snapshot: unknown) {
   const allowed = new Set([
+    "invoice_correction_audits",
+    "business_records",
     "users",
     "profiles",
     "workspace_settings",
@@ -57,7 +61,19 @@ export function planLegacyCoreSnapshot(snapshot: unknown) {
       ]),
     ),
   );
+  const businessRecords = planLegacyBusinessRecords(
+    snapshot,
+    new Set(businesses.keys()),
+    new Set(core.users.map((u) => u.id)),
+  );
+  const invoiceCorrectionAudits = planLegacyInvoiceCorrectionAudits(
+    snapshot,
+    businesses,
+    new Map(financial.invoices.map((i) => [i.id, i.workspaceId])),
+  );
   return {
+    invoiceCorrectionAudits,
+    businessRecords,
     ...core,
     customers,
     profiles,

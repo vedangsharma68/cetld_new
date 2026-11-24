@@ -31,6 +31,12 @@ export function inspectLegacyTableCoverage(inventory: unknown) {
     "public.invoices",
     "public.payments",
     "public.invoice_files",
+    "public.business_records",
+    "public.invoice_correction_audits",
+    "public.profiles",
+    "public.payment_reversals",
+    "public.invoice_reopening_proposals",
+    "public.invoice_number_sequences",
   ]);
   const preservedSettings = new Set([
     "public.workspace_settings",

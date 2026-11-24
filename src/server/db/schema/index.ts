@@ -17,3 +17,7 @@ export * from "./workspace-settings";
 
 export * from "./financial-history";
 export * from "./profiles";
+
+export * from "./business-records";
+
+export * from "./invoice-correction-audits";

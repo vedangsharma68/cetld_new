@@ -17,6 +17,19 @@ test("owner confirms local reopening without erasing history or promising a refu
   await expect(
     row.getByRole("button", { name: "Reopen invoice", exact: true }),
   ).toHaveCount(0);
+  await row
+    .getByRole("button", { name: "Correction history", exact: true })
+    .click();
+  await expect(
+    row.getByRole("region", { name: "Invoice correction history" }),
+  ).toContainText("No saved correction history.");
+  await page.screenshot({
+    path: evidencePath("cetld-correction-history-mobile.png"),
+    fullPage: true,
+  });
+  await row
+    .getByRole("button", { name: "Hide correction history", exact: true })
+    .click();
   await row.getByRole("button", { name: "Record payment" }).click();
   await page.getByLabel("Payment amount for BROWSER-REOPEN").fill("2.33");
   await page.getByRole("button", { name: "Save payment" }).click();

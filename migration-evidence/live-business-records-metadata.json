@@ -1,0 +1,107 @@
+{
+  "columns": [
+    {
+      "column_name": "id",
+      "data_type": "uuid",
+      "is_nullable": "NO",
+      "column_default": "gen_random_uuid()"
+    },
+    {
+      "column_name": "workspace_id",
+      "data_type": "uuid",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "record_type",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "name",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "custom_fields",
+      "data_type": "jsonb",
+      "is_nullable": "NO",
+      "column_default": "'{}'::jsonb"
+    },
+    {
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO",
+      "column_default": "now()"
+    },
+    {
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO",
+      "column_default": "now()"
+    },
+    {
+      "column_name": "deleted_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "column_name": "deleted_by",
+      "data_type": "uuid",
+      "is_nullable": "YES",
+      "column_default": null
+    }
+  ],
+  "constraints": [
+    {
+      "conname": "business_record_deletion_pair",
+      "definition": "CHECK (((deleted_at IS NULL) = (deleted_by IS NULL)))"
+    },
+    {
+      "conname": "business_records_custom_fields_check",
+      "definition": "CHECK (app.business_custom_fields_valid(custom_fields))"
+    },
+    {
+      "conname": "business_records_deleted_by_fkey",
+      "definition": "FOREIGN KEY (deleted_by) REFERENCES auth.users(id)"
+    },
+    {
+      "conname": "business_records_name_check",
+      "definition": "CHECK ((((length(btrim(name)) >= 1) AND (length(btrim(name)) <= 200)) AND (name !~ '[[:cntrl:]]'::text)))"
+    },
+    {
+      "conname": "business_records_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "conname": "business_records_record_type_check",
+      "definition": "CHECK ((record_type ~ '^[a-z][a-z0-9_]{0,63}$'::text))"
+    },
+    {
+      "conname": "business_records_workspace_id_fkey",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  ],
+  "indexes": [
+    {
+      "indexname": "business_records_pkey",
+      "indexdef": "CREATE UNIQUE INDEX business_records_pkey ON public.business_records USING btree (id)"
+    },
+    {
+      "indexname": "business_records_workspace_category_idx",
+      "indexdef": "CREATE INDEX business_records_workspace_category_idx ON public.business_records USING btree (workspace_id, record_type, name)"
+    }
+  ],
+  "policies": [
+    {
+      "policyname": "business_records_owner_read",
+      "roles": "{authenticated}",
+      "cmd": "SELECT",
+      "qual": "(EXISTS ( SELECT 1\n   FROM workspaces w\n  WHERE ((w.id = business_records.workspace_id) AND (w.owner_id = ( SELECT auth.uid() AS uid)))))",
+      "with_check": null
+    }
+  ]
+}

@@ -3,6 +3,8 @@ const user = "11111111-1111-4111-8111-111111111111",
   customer = "33333333-3333-4333-8333-333333333333";
 export function coreFixture() {
   return {
+    invoice_correction_audits: [],
+    business_records: [],
     profiles: [],
     workspace_settings: [],
     workspace_ai_settings: [],
