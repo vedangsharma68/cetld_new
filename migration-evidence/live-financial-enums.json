@@ -1,0 +1,38 @@
+[
+  {
+    "typname": "invoice_status",
+    "enumlabel": "draft"
+  },
+  {
+    "typname": "invoice_status",
+    "enumlabel": "sent"
+  },
+  {
+    "typname": "invoice_status",
+    "enumlabel": "overdue"
+  },
+  {
+    "typname": "invoice_status",
+    "enumlabel": "paid"
+  },
+  {
+    "typname": "invoice_status",
+    "enumlabel": "void"
+  },
+  {
+    "typname": "invoice_status",
+    "enumlabel": "cancelled"
+  },
+  {
+    "typname": "workspace_role",
+    "enumlabel": "owner"
+  },
+  {
+    "typname": "workspace_role",
+    "enumlabel": "admin"
+  },
+  {
+    "typname": "workspace_role",
+    "enumlabel": "member"
+  }
+]

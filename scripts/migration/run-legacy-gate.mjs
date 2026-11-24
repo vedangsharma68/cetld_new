@@ -1,4 +1,4 @@
-import { cp, mkdtemp, rm, symlink, readFile, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -18,15 +18,20 @@ export async function runLegacyGate(command, args = []) {
       await rm(path.join(target, name), {recursive:true, force:true});
       await cp(path.join(root, 'legacy', name), path.join(target, name), {recursive:true});
     }
-    for (const name of ['package.json','tsconfig.json','vercel.json','middleware.js'])
+    for (const name of ['package.json','package-lock.json','tsconfig.json','vercel.json','middleware.js'])
       await cp(path.join(root,'legacy',name),path.join(target,name));
-    await symlink(path.join(root,'node_modules'),path.join(target,'node_modules'),'dir');
+    await rm(path.join(target,'legacy'),{recursive:true,force:true});
+    // Exact legacy dependency graph, not a symlink to Next's broader graph.
+    const install=spawnSync('npm',['ci','--include=dev','--ignore-scripts'],{cwd:target,stdio:'inherit',env:releaseTestEnvironment(process.env)});
+    if(install.status!==0)throw Error('Legacy dependency installation failed');
+    for(const args of [['init','--quiet'],['add','--all']]){const result=spawnSync('git',args,{cwd:target,stdio:'inherit'});if(result.status!==0)throw Error('Legacy source index failed');}
+
     // Keep the source/fixtures at their old paths. All commands and assertions
     // are the original legacy ones, with only the working directory isolated.
     const manifest=JSON.parse(await readFile(path.join(target,'package.json'),'utf8'));
-    if(command!=='shard' && !Object.hasOwn(manifest.scripts,command))throw Error('Unknown legacy gate');
+    if(!['shard','verify-capture','verify-boundaries','verify-admission'].includes(command) && !Object.hasOwn(manifest.scripts,command))throw Error('Unknown legacy gate');
     await writeFile(path.join(target,'legacy-compat-evidence.json'),JSON.stringify({source:'retained legacy modules',command,originalDeploymentBaseline:'ff066b664d2750638e63adba8b64be1a8290c3b9'}));
-    const result=spawnSync(command==='shard'?process.execPath:'npm',command==='shard'?['scripts/release-shard.mjs',...args]:['run',command,...(args.length?['--',...args]:[])],{cwd:target,stdio:'inherit',env:releaseTestEnvironment(process.env,{CETLD_LEGACY_COMPAT:'1',...(process.env.EXTRACTION_ROUTE==='offline'?{EXTRACTION_ROUTE:'offline'}:{})})});
+    const result=spawnSync(['shard','verify-capture','verify-boundaries','verify-admission'].includes(command)?process.execPath:'npm',command==='shard'?['scripts/release-shard.mjs',...args]:command==='verify-admission'?['--test','tests/whatsapp-admission-revision.test.mjs']:command==='verify-boundaries'?['--test','tests/vercel-dependency-boundary.test.mjs']:command==='verify-capture'?['scripts/generate-private-value-sql.mjs','--check']:['run',command,...(args.length?['--',...args]:[])],{cwd:target,stdio:'inherit',env:releaseTestEnvironment(process.env,{CETLD_LEGACY_COMPAT:'1',...(process.env.EXTRACTION_ROUTE==='offline'?{EXTRACTION_ROUTE:'offline'}:{})})});
     if(result.error)throw result.error;
     return result.status??1;
   } finally {

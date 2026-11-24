@@ -85,6 +85,20 @@
       "when": 1795515307424,
       "tag": "0011_deep_stryfe",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795517659691,
+      "tag": "0012_omniscient_sue_storm",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1795519637911,
+      "tag": "0013_tense_talos",
+      "breakpoints": true
     }
   ]
 }

@@ -21,6 +21,7 @@ try:
  subprocess.run(['node','--conditions=react-server','--import','tsx','scripts/migration/verify-native-auth.ts'],cwd=root,env=env,check=True)
  subprocess.run(['node','--conditions=react-server','--import','tsx','scripts/migration/verify-native-import.ts'],cwd=root,env=env,check=True)
  subprocess.run(['node','--conditions=react-server','--import','tsx','scripts/migration/verify-native-lifecycle.ts'],cwd=root,env=env,check=True)
+ subprocess.run(['node','--conditions=react-server','--import','tsx','scripts/migration/verify-native-financial-preservation.ts'],cwd=root,env=env,check=True)
  for command in [['npm','run','build'],['npm','run','test:e2e']]:subprocess.run(command,cwd=root,env=env,check=True)
 finally:
  pg.terminate()

@@ -38,6 +38,8 @@ export const invoiceSchema = createInvoiceSchema.extend({
     "draft",
     "open",
     "partially_paid",
+    "sent",
+    "overdue",
     "paid",
     "void",
     "cancelled",
@@ -47,5 +49,12 @@ export const invoiceSchema = createInvoiceSchema.extend({
   mimeType: z.string().nullable(),
   uploadedAt: z.string().nullable(),
   createdAt: z.string(),
+  issueDate: z.string().nullable(),
+  dueDate: z.string().nullable(),
+  notes: z.string().nullable(),
+  customFields: z.record(
+    z.string(),
+    z.union([z.string(), z.number(), z.boolean(), z.null()]),
+  ),
 });
 export type Invoice = z.infer<typeof invoiceSchema>;

@@ -27,5 +27,8 @@ it("retains original legacy gates separately from Next deployment config", () =>
   const harness = readFileSync("scripts/migration/run-legacy-gate.mjs", "utf8");
   expect(harness).toContain("releaseTestEnvironment");
   expect(harness).toContain(".startsWith('.env')");
+  expect(harness).toContain("['ci','--include=dev','--ignore-scripts']");
+  expect(harness).not.toContain('await symlink');
+  expect(harness).toContain("['init','--quiet']");
   expect(harness).not.toMatch(/\.skip\(|test\.only\(/);
 });

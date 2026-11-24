@@ -13,6 +13,8 @@ import {
   uniqueIndex,
   jsonb,
   boolean,
+  date,
+  bigint,
 } from "drizzle-orm/pg-core";
 import { users } from "./users";
 import { workspaces } from "./workspaces";
@@ -32,10 +34,44 @@ export const invoices = pgTable(
     amount: numeric("amount").notNull(),
     amountPaid: numeric("amount_paid").notNull().default("0"),
     financialStatus: text("financial_status", {
-      enum: ["draft", "open", "partially_paid", "paid", "void", "cancelled"],
+      enum: [
+        "draft",
+        "open",
+        "partially_paid",
+        "sent",
+        "overdue",
+        "paid",
+        "void",
+        "cancelled",
+      ],
     })
       .notNull()
       .default("draft"),
+    issueDate: date("issue_date"),
+    dueDate: date("due_date"),
+    notes: text("notes"),
+    customFields: jsonb("custom_fields")
+      .$type<Record<string, string | number | boolean | null>>()
+      .notNull()
+      .default({}),
+    externalProvider: text("external_provider"),
+    externalInvoiceId: text("external_invoice_id"),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    syncStatus: text("sync_status"),
+    lastSyncError: text("last_sync_error"),
+    lastFollowUpAt: timestamp("last_follow_up_at", { withTimezone: true }),
+    reminderCount: integer("reminder_count").notNull().default(0),
+    customerPhone: text("customer_phone"),
+    followUpSettings: jsonb("follow_up_settings")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    automationVersion: bigint("automation_version", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
     revision: integer("revision").notNull().default(0),
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()
@@ -95,7 +131,7 @@ export const invoices = pgTable(
     ),
     check(
       "invoices_financial_status_check",
-      sql`${t.financialStatus} in ('draft','open','partially_paid','paid','void','cancelled')`,
+      sql`${t.financialStatus} in ('draft','open','partially_paid','sent','overdue','paid','void','cancelled')`,
     ),
     uniqueIndex("invoices_workspace_id_pair").on(t.workspaceId, t.id),
     check(

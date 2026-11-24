@@ -5,7 +5,14 @@ export type PaymentState = {
   amount: string;
   amountPaid: string;
   financialStatus:
-    "draft" | "open" | "partially_paid" | "paid" | "void" | "cancelled";
+    | "draft"
+    | "open"
+    | "partially_paid"
+    | "sent"
+    | "overdue"
+    | "paid"
+    | "void"
+    | "cancelled";
   deletedAt: Date | null;
   currency: string;
 };

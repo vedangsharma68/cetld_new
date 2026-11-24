@@ -1,14 +1,5 @@
 import "server-only";
-import {
-  and,
-  eq,
-  exists,
-  count,
-  desc,
-  sql,
-  isNull,
-  getTableColumns,
-} from "drizzle-orm";
+import { and, eq, exists, count, desc, sql, isNull } from "drizzle-orm";
 import { db } from "@/server/db/client";
 import {
   invoices,
@@ -22,15 +13,28 @@ import type {
   InvoiceFilters,
   InvoiceUploadInput,
 } from "@/shared/schemas/invoices.schema";
-const {
-  metadata: privateMetadata,
-  lifecycleRiskVerified: privateRisk,
-  deletedBy: privateDeletedBy,
-  ...publicColumns
-} = getTableColumns(invoices);
-void privateMetadata;
-void privateRisk;
-void privateDeletedBy;
+const publicColumns = {
+  id: invoices.id,
+  workspaceId: invoices.workspaceId,
+  ownerId: invoices.ownerId,
+  customerId: invoices.customerId,
+  invoiceNumber: invoices.invoiceNumber,
+  amount: invoices.amount,
+  amountPaid: invoices.amountPaid,
+  financialStatus: invoices.financialStatus,
+  deletedAt: invoices.deletedAt,
+  currency: invoices.currency,
+  status: invoices.status,
+  filePath: invoices.filePath,
+  fileSize: invoices.fileSize,
+  mimeType: invoices.mimeType,
+  uploadedAt: invoices.uploadedAt,
+  createdAt: invoices.createdAt,
+  issueDate: invoices.issueDate,
+  dueDate: invoices.dueDate,
+  notes: invoices.notes,
+  customFields: invoices.customFields,
+};
 const scope = (userId: string) =>
   exists(
     db

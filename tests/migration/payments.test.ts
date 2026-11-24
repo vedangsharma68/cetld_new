@@ -26,7 +26,13 @@ beforeEach(() => {
 });
 describe("payment service and endpoint", () => {
   it("records with authenticated identity and typed data", async () => {
-    repository.record.mockResolvedValue({ id: "p", amount: "1.01" });
+    repository.record.mockResolvedValue({
+      id: "p",
+      amount: "1.01",
+      metadata: { private: "secret" },
+      externalPaymentId: "provider-private",
+      lastSyncError: "private-error",
+    });
     const response = await withHandler(paymentController.record)(
       new Request("http://localhost:3000/api/v1/invoices/" + id + "/payments", {
         method: "POST",
@@ -40,9 +46,9 @@ describe("payment service and endpoint", () => {
     );
     expect(response.status).toBe(200);
     expect(repository.record).toHaveBeenCalledWith("user", id, input);
-    expect(await response.json()).toMatchObject({
+    expect(await response.json()).toEqual({
       success: true,
-      data: { amount: "1.01" },
+      data: { id: "p", amount: "1.01" },
     });
   });
   it("hides foreign/missing invoice", async () => {

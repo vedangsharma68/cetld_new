@@ -7,7 +7,7 @@ export function createPaymentService(repository = paymentRepository) {
     async record(userId: string, invoiceId: string, input: RecordPaymentInput) {
       const row = await repository.record(userId, invoiceId, input);
       if (!row) throw new NotFoundError("Invoice");
-      return row;
+      return { id: row.id, amount: row.amount };
     },
   };
 }
