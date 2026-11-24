@@ -45,6 +45,7 @@ export const invoiceSchema = createInvoiceSchema.extend({
     "cancelled",
   ]),
   filePath: z.string().nullable(),
+  originalFileName: z.string().nullable(),
   fileSize: z.number().nullable(),
   mimeType: z.string().nullable(),
   uploadedAt: z.string().nullable(),

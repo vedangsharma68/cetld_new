@@ -93,6 +93,7 @@ export const invoices = pgTable(
       .notNull()
       .default("pending_upload"),
     filePath: text("file_path"),
+    originalFileName: text("original_file_name"),
     fileSize: integer("file_size"),
     mimeType: text("mime_type"),
     uploadedAt: timestamp("uploaded_at", { withTimezone: true }),

@@ -20,12 +20,42 @@ const user = {
 const snapshot = {
   users: [user],
   identities: [],
-  workspaces: [{ id: wid, owner_id: id, name: "Business" }],
-  members: [{ workspace_id: wid, user_id: id, role: "owner" }],
+  workspaces: [
+    {
+      id: wid,
+      owner_id: id,
+      name: "Business",
+      slug: "exact-original",
+      created_at: "2026-11-20T00:00:00Z",
+      updated_at: "2026-11-21T00:00:00Z",
+    },
+  ],
+  members: [
+    {
+      workspace_id: wid,
+      user_id: id,
+      role: "owner",
+      created_at: "2026-11-20T00:00:00Z",
+      updated_at: "2026-11-21T00:00:00Z",
+    },
+  ],
 };
 it("preserves business UUID and role without global privilege", () => {
   const p = planLegacyImport(snapshot);
-  expect(p.members).toEqual([{ workspaceId: wid, userId: id, role: "owner" }]);
+  expect(p.members).toEqual([
+    {
+      workspaceId: wid,
+      userId: id,
+      role: "owner",
+      createdAt: new Date("2026-11-20T00:00:00Z"),
+      updatedAt: new Date("2026-11-21T00:00:00Z"),
+    },
+  ]);
+  expect(p.workspaces[0]).toMatchObject({
+    slug: "exact-original",
+    createdAt: new Date("2026-11-20T00:00:00Z"),
+    updatedAt: new Date("2026-11-21T00:00:00Z"),
+  });
   expect(p.users[0]!.role).toBe("member");
   expect(p.workspaces[0]!.id).toBe(wid);
 });
@@ -48,14 +78,14 @@ it.each([
     "orphan member",
     {
       ...snapshot,
-      members: [{ workspace_id: wid, user_id: other, role: "owner" }],
+      members: [{ ...snapshot.members[0], user_id: other }],
     },
   ],
   [
     "orphan business membership",
     {
       ...snapshot,
-      members: [{ workspace_id: other, user_id: id, role: "owner" }],
+      members: [{ ...snapshot.members[0], workspace_id: other }],
     },
   ],
   [
@@ -67,16 +97,31 @@ it.each([
     "owner role mismatch",
     {
       ...snapshot,
-      members: [{ workspace_id: wid, user_id: id, role: "admin" }],
+      members: [{ ...snapshot.members[0], role: "admin" }],
     },
   ],
   [
     "unknown role",
     {
       ...snapshot,
-      members: [{ workspace_id: wid, user_id: id, role: "superuser" }],
+      members: [{ ...snapshot.members[0], role: "superuser" }],
     },
   ],
 ])("blocks %s", (_name, input) =>
   expect(() => planLegacyImport(input)).toThrow(),
 );
+
+it("rejects unmapped business/member fields rather than silently dropping history", () => {
+  expect(() =>
+    planLegacyImport({
+      ...snapshot,
+      workspaces: [{ ...snapshot.workspaces[0], valuable: "original" }],
+    }),
+  ).toThrow();
+  expect(() =>
+    planLegacyImport({
+      ...snapshot,
+      members: [{ ...snapshot.members[0], valuable: "original" }],
+    }),
+  ).toThrow();
+});

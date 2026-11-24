@@ -1,0 +1,874 @@
+[
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_button_events",
+    "column_name": "provider_message_id",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_button_events",
+    "column_name": "claim_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_button_events",
+    "column_name": "phone",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_button_events",
+    "column_name": "action",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_button_events",
+    "column_name": "received_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "clock_timestamp()"
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "claim_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "workspace_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "owner_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "invoice_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "customer_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "phone",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "callback_token",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "snapshot",
+    "data_type": "jsonb",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "snapshot_hash",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "state",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": "'reserved'::text"
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "provider_message_id",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "counted",
+    "data_type": "boolean",
+    "is_nullable": "NO",
+    "column_default": "false"
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "reconciled_invoice_version",
+    "data_type": "bigint",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "count_before",
+    "data_type": "integer",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "reserved_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "clock_timestamp()"
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "lease_until",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "receipt_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_dispatches",
+    "column_name": "last_error",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_receipt_events",
+    "column_name": "callback_token",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_receipt_events",
+    "column_name": "provider_message_id",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_receipt_events",
+    "column_name": "status",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_receipt_events",
+    "column_name": "received_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "clock_timestamp()"
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_templates",
+    "column_name": "waba_id",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_templates",
+    "column_name": "name",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_templates",
+    "column_name": "language",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_templates",
+    "column_name": "revision",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_templates",
+    "column_name": "body",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_templates",
+    "column_name": "approved",
+    "data_type": "boolean",
+    "is_nullable": "NO",
+    "column_default": "false"
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_templates",
+    "column_name": "approval_reference",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_templates",
+    "column_name": "approved_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_templates",
+    "column_name": "category",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_templates",
+    "column_name": "parameter_count",
+    "data_type": "integer",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_templates",
+    "column_name": "button_variant",
+    "data_type": "boolean",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "first_party_reminder_templates",
+    "column_name": "tone",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_alias_cache",
+    "column_name": "workspace_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_alias_cache",
+    "column_name": "revision",
+    "data_type": "bytea",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_alias_cache",
+    "column_name": "input_kind",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_alias_cache",
+    "column_name": "input_hash",
+    "data_type": "bytea",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_alias_cache",
+    "column_name": "input_value",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_alias_cache",
+    "column_name": "aliases",
+    "data_type": "ARRAY",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_customer_parties",
+    "column_name": "customer_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_customer_parties",
+    "column_name": "party_hash",
+    "data_type": "bytea",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_customer_parties",
+    "column_name": "party_key",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_global_keys",
+    "column_name": "workspace_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_global_keys",
+    "column_name": "source_hash",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_global_keys",
+    "column_name": "term_hash",
+    "data_type": "bytea",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_global_keys",
+    "column_name": "term",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_global_keys",
+    "column_name": "alias_count",
+    "data_type": "integer",
+    "is_nullable": "NO",
+    "column_default": "0"
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_index_state",
+    "column_name": "singleton",
+    "data_type": "boolean",
+    "is_nullable": "NO",
+    "column_default": "true"
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_index_state",
+    "column_name": "revision",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_raw_edges",
+    "column_name": "workspace_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_raw_edges",
+    "column_name": "source_hash",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_raw_edges",
+    "column_name": "term_hash",
+    "data_type": "bytea",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_raw_edges",
+    "column_name": "key_hash",
+    "data_type": "bytea",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_raw_edges",
+    "column_name": "key",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_sources",
+    "column_name": "workspace_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_sources",
+    "column_name": "term_hash",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_sources",
+    "column_name": "term",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_sources",
+    "column_name": "keys",
+    "data_type": "ARRAY",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_witnesses",
+    "column_name": "workspace_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_witnesses",
+    "column_name": "term_hash",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_witnesses",
+    "column_name": "source_value",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_witnesses",
+    "column_name": "party_hash",
+    "data_type": "bytea",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "private_dispatch_witnesses",
+    "column_name": "party_key",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_approvals",
+    "column_name": "id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_approvals",
+    "column_name": "workspace_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_approvals",
+    "column_name": "owner_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_approvals",
+    "column_name": "invoice_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_approvals",
+    "column_name": "approved_form",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_approvals",
+    "column_name": "delivery",
+    "data_type": "jsonb",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_approvals",
+    "column_name": "approved_text",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_approvals",
+    "column_name": "approved_template",
+    "data_type": "jsonb",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_approvals",
+    "column_name": "approved_fallback_template",
+    "data_type": "jsonb",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_approvals",
+    "column_name": "approved_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "clock_timestamp()"
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_approvals",
+    "column_name": "window_deadline",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_approvals",
+    "column_name": "dispatch_outcome",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": "'pending'::text"
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_approvals",
+    "column_name": "evaluated_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_delivery_evaluations",
+    "column_name": "id",
+    "data_type": "bigint",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_delivery_evaluations",
+    "column_name": "approval_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_delivery_evaluations",
+    "column_name": "claim_id",
+    "data_type": "uuid",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_delivery_evaluations",
+    "column_name": "evaluated_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "clock_timestamp()"
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_delivery_evaluations",
+    "column_name": "window_deadline",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_delivery_evaluations",
+    "column_name": "outcome",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_delivery_evaluations",
+    "column_name": "delivery_form",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "reminder_delivery_evaluations",
+    "column_name": "delivery",
+    "data_type": "jsonb",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "cetld_core_automation_delivery_claims",
+    "column_name": "id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": "gen_random_uuid()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "cetld_core_automation_delivery_claims",
+    "column_name": "workspace_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "cetld_core_automation_delivery_claims",
+    "column_name": "invoice_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "cetld_core_automation_delivery_claims",
+    "column_name": "scheduled_for",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "cetld_core_automation_delivery_claims",
+    "column_name": "invoice_version",
+    "data_type": "bigint",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "cetld_core_automation_delivery_claims",
+    "column_name": "preferences_updated_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "cetld_core_automation_delivery_claims",
+    "column_name": "status",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "cetld_core_automation_delivery_claims",
+    "column_name": "attempts",
+    "data_type": "integer",
+    "is_nullable": "NO",
+    "column_default": "1"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "cetld_core_automation_delivery_claims",
+    "column_name": "lease_until",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "cetld_core_automation_delivery_claims",
+    "column_name": "delivery_token",
+    "data_type": "uuid",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "cetld_core_automation_delivery_claims",
+    "column_name": "provider_message_id",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "cetld_core_automation_delivery_claims",
+    "column_name": "last_error",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "cetld_core_automation_delivery_claims",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspaces",
+    "column_name": "id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": "gen_random_uuid()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspaces",
+    "column_name": "owner_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspaces",
+    "column_name": "name",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspaces",
+    "column_name": "slug",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspaces",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspaces",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  }
+]

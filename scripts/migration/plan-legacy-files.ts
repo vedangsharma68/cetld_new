@@ -64,6 +64,7 @@ export function planLegacyFiles(
       sourcePath: f.storage_path,
       destinationPath: invoice.ownerId + "/" + f.invoice_id + ".pdf",
       sizeBytes: BigInt(f.size_bytes),
+      originalFileName: f.file_name,
       requiresByteVerification: true as const,
     };
   });

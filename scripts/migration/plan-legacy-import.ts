@@ -2,14 +2,27 @@ import { z } from "zod";
 import { planLegacyAuth } from "./plan-legacy-auth";
 const businessSchema = z.object({
   workspaces: z.array(
-    z.object({ id: z.uuid(), owner_id: z.uuid(), name: z.string().min(1) }),
+    z
+      .object({
+        id: z.uuid(),
+        owner_id: z.uuid(),
+        name: z.string().min(1),
+        slug: z.string(),
+        created_at: z.string().datetime({ offset: true }),
+        updated_at: z.string().datetime({ offset: true }),
+      })
+      .strict(),
   ),
   members: z.array(
-    z.object({
-      workspace_id: z.uuid(),
-      user_id: z.uuid(),
-      role: z.enum(["owner", "admin", "member"]),
-    }),
+    z
+      .object({
+        workspace_id: z.uuid(),
+        user_id: z.uuid(),
+        role: z.enum(["owner", "admin", "member"]),
+        created_at: z.string().datetime({ offset: true }),
+        updated_at: z.string().datetime({ offset: true }),
+      })
+      .strict(),
   ),
 });
 export function planLegacyImport(snapshot: unknown) {
@@ -32,7 +45,13 @@ export function planLegacyImport(snapshot: unknown) {
     )
       throw Error("Duplicate or orphan membership");
     keys.add(key);
-    return { workspaceId: m.workspace_id, userId: m.user_id, role: m.role };
+    return {
+      workspaceId: m.workspace_id,
+      userId: m.user_id,
+      role: m.role,
+      createdAt: new Date(m.created_at),
+      updatedAt: new Date(m.updated_at),
+    };
   });
   const membersByKey = new Map(
     members.map((m) => [m.workspaceId + ":" + m.userId, m]),
@@ -48,6 +67,9 @@ export function planLegacyImport(snapshot: unknown) {
       id: w.id,
       ownerId: w.owner_id,
       name: w.name,
+      slug: w.slug,
+      createdAt: new Date(w.created_at),
+      updatedAt: new Date(w.updated_at),
     })),
     members,
   };

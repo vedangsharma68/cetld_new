@@ -25,6 +25,7 @@ it("plans server-owned target path without dropping original metadata or claimin
     sourcePath: source.storage_path,
     destinationPath: owner + "/" + invoice + ".pdf",
     sizeBytes: 1234n,
+    originalFileName: source.file_name,
     requiresByteVerification: true,
   });
 });

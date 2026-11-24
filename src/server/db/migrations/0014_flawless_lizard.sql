@@ -1,0 +1,1 @@
+ALTER TABLE "invoices" ADD COLUMN "original_file_name" text;

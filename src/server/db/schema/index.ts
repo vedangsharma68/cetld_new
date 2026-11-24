@@ -12,3 +12,5 @@ export * from "./invoices";
 export * from "./payments";
 
 export * from "./invoice-lifecycle";
+
+export * from "./workspace-settings";

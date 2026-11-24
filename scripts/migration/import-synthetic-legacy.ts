@@ -18,9 +18,9 @@ export async function importSyntheticLegacy(
       for (const a of p.accounts)
         await tx`insert into provider_accounts(provider,provider_account_id,user_id) values(${a.provider},${a.providerAccountId},${a.userId})`;
       for (const w of p.workspaces)
-        await tx`insert into workspaces(id,name,owner_id) values(${w.id},${w.name},${w.ownerId})`;
+        await tx`insert into workspaces(id,name,owner_id,slug,created_at,updated_at) values(${w.id},${w.name},${w.ownerId},${w.slug},${w.createdAt},${w.updatedAt})`;
       for (const m of p.members)
-        await tx`insert into workspace_members(workspace_id,user_id,role) values(${m.workspaceId},${m.userId},${m.role})`;
+        await tx`insert into workspace_members(workspace_id,user_id,role,created_at,updated_at) values(${m.workspaceId},${m.userId},${m.role},${m.createdAt},${m.updatedAt})`;
     });
     return {
       users: p.users.length,

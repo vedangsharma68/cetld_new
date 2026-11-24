@@ -26,6 +26,7 @@ const publicColumns = {
   currency: invoices.currency,
   status: invoices.status,
   filePath: invoices.filePath,
+  originalFileName: invoices.originalFileName,
   fileSize: invoices.fileSize,
   mimeType: invoices.mimeType,
   uploadedAt: invoices.uploadedAt,
@@ -158,12 +159,19 @@ export const invoiceRepository = {
       if (!current) return null;
       if (
         current.fileSize !== null &&
-        (current.fileSize !== input.size || current.mimeType !== input.mimeType)
+        (current.fileSize !== input.size ||
+          current.mimeType !== input.mimeType ||
+          current.originalFileName !== input.fileName)
       )
         return null;
       const [row] = await tx
         .update(invoices)
-        .set({ filePath: path, fileSize: input.size, mimeType: input.mimeType })
+        .set({
+          filePath: path,
+          originalFileName: input.fileName,
+          fileSize: input.size,
+          mimeType: input.mimeType,
+        })
         .where(
           and(
             eq(invoices.id, id),

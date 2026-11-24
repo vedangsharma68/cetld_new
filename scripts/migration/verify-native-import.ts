@@ -44,9 +44,24 @@ const snapshot = {
     },
   ],
   workspaces: [
-    { id: business, name: "Imported synthetic business", owner_id: id },
+    {
+      id: business,
+      name: "Imported synthetic business",
+      owner_id: id,
+      slug: "original-business",
+      created_at: "2026-11-20T00:00:00Z",
+      updated_at: "2026-11-21T00:00:00Z",
+    },
   ],
-  members: [{ workspace_id: business, user_id: id, role: "owner" }],
+  members: [
+    {
+      workspace_id: business,
+      user_id: id,
+      role: "owner",
+      created_at: "2026-11-20T00:00:00Z",
+      updated_at: "2026-11-21T00:00:00Z",
+    },
+  ],
 };
 try {
   assert.deepEqual(await importSyntheticLegacy(env.DATABASE_URL, snapshot), {
@@ -55,6 +70,17 @@ try {
     workspaces: 1,
     members: 1,
   });
+  const [preservedBusiness] =
+    await sql`select slug,created_at,updated_at from workspaces where id=${business}`;
+  assert.equal(preservedBusiness!.slug, "original-business");
+  assert.equal(
+    preservedBusiness!.created_at.toISOString(),
+    "2026-11-20T00:00:00.000Z",
+  );
+  assert.equal(
+    preservedBusiness!.updated_at.toISOString(),
+    "2026-11-21T00:00:00.000Z",
+  );
   assert.equal(
     (await authService.credentials(user.email, password, "import-proof"))?.id,
     id,
