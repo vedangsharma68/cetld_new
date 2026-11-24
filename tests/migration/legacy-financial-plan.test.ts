@@ -95,6 +95,10 @@ it.each(["draft", "sent", "overdue", "paid", "void", "cancelled"])(
   (status) => {
     const f = fixture();
     f.invoices[0]!.status = status;
+    if (status === "paid") {
+      f.invoices[0]!.amount_paid = "123.45";
+      f.payments[0]!.amount = "123.45";
+    }
     expect(planLegacyFinancial(f, scope()).invoices[0]!.financialStatus).toBe(
       status,
     );
@@ -129,6 +133,7 @@ it("blocks duplicate payment keys but preserves null legacy keys", () => {
     ...f.payments[0]!,
     id: "66666666-6666-4666-8666-666666666666",
   });
+  f.invoices[0]!.amount_paid = "2.46";
   expect(planLegacyFinancial(f, scope()).payments).toHaveLength(2);
   for (const p of f.payments) p.idempotency_key = "reused" as never;
   expect(() => planLegacyFinancial(f, scope())).toThrow(/Duplicate/);
@@ -137,4 +142,40 @@ it("rejects numeric automation bigint rather than accepting rounded data", () =>
   const f = fixture();
   Object.assign(f.invoices[0]!, { automation_version: 9007199254740993 });
   expect(() => planLegacyFinancial(f, scope())).toThrow();
+});
+
+it("blocks ledger mismatch, absent ledger, paid-status mismatch and false settlement", () => {
+  const a = fixture();
+  a.payments[0]!.amount = "1.22";
+  expect(() => planLegacyFinancial(a, scope())).toThrow(/ledger/);
+  const b = fixture();
+  b.payments = [];
+  expect(() => planLegacyFinancial(b, scope())).toThrow(/ledger/);
+  const c = fixture();
+  c.invoices[0]!.status = "paid";
+  expect(() => planLegacyFinancial(c, scope())).toThrow(/status/);
+  const d = fixture();
+  d.payments[0]!.settle_remaining = true;
+  expect(() => planLegacyFinancial(d, scope())).toThrow(/Settlement/);
+  const e = fixture();
+  e.invoices[0]!.amount_paid = "123.45";
+  e.payments[0]!.amount = "123.45";
+  expect(() => planLegacyFinancial(e, scope())).toThrow(/status/);
+});
+it("accepts exact full settlement and retains void/cancelled partial ledger history", () => {
+  const f = fixture();
+  f.invoices[0]!.status = "paid";
+  f.invoices[0]!.amount_paid = "123.45";
+  f.payments[0]!.amount = "123.45";
+  f.payments[0]!.settle_remaining = true;
+  expect(planLegacyFinancial(f, scope()).payments[0]!.settleRemaining).toBe(
+    true,
+  );
+  for (const status of ["void", "cancelled"]) {
+    const g = fixture();
+    g.invoices[0]!.status = status;
+    expect(planLegacyFinancial(g, scope()).invoices[0]!.financialStatus).toBe(
+      status,
+    );
+  }
 });

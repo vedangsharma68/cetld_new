@@ -4,7 +4,7 @@ import { getEnv } from "../../src/env";
 import { lifecycleRepository } from "../../src/server/modules/invoices/lifecycle.repository";
 import { lifecycleService } from "../../src/server/modules/invoices/lifecycle.service";
 import { invoiceRepository } from "../../src/server/modules/invoices/invoices.repository";
-import { paymentRepository } from "../../src/server/modules/invoices/payments.repository";
+import { paymentService } from "../../src/server/modules/invoices/payments.service";
 const env = getEnv();
 if (
   env.APP_ENV !== "test" ||
@@ -38,7 +38,7 @@ try {
     )?.id,
     proposal.id,
   );
-  await paymentRepository.record(owner, invoice.id, {
+  await paymentService.record(owner, invoice.id, {
     amount: "2.33",
     settleRemaining: false,
     reference: null,
@@ -129,7 +129,7 @@ try {
   );
   await assert.rejects(
     () =>
-      paymentRepository.record(owner, invoice.id, {
+      paymentService.record(owner, invoice.id, {
         amount: "2.33",
         settleRemaining: false,
         reference: null,

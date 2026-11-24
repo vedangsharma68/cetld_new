@@ -163,5 +163,36 @@ export function planLegacyFinancial(
       recordedBy: null,
     };
   });
+  const sums = new Map<string, bigint>();
+  const settlements = new Map<string, number>();
+  for (const p of payments) {
+    sums.set(p.invoiceId, (sums.get(p.invoiceId) ?? 0n) + moneyUnits(p.amount));
+    if (p.settleRemaining)
+      settlements.set(p.invoiceId, (settlements.get(p.invoiceId) ?? 0) + 1);
+  }
+  for (const i of rows) {
+    const total = moneyUnits(i.amount),
+      paid = moneyUnits(i.amountPaid);
+    if ((sums.get(i.id) ?? 0n) !== paid)
+      throw Error(
+        "Payment ledger and invoice balance differ; reconcile before import",
+      );
+    // Partial legacy payment deliberately retains draft/sent/overdue. Only
+    // full settlement transitions to paid; void/cancelled history is retained.
+    if (
+      (i.financialStatus === "paid" && paid !== total) ||
+      (total > 0n &&
+        paid === total &&
+        !["paid", "void", "cancelled"].includes(i.financialStatus))
+    )
+      throw Error(
+        "Invoice financial status and balance differ; reconcile before import",
+      );
+    const settled = settlements.get(i.id) ?? 0;
+    if (settled > 1 || (settled === 1 && paid !== total))
+      throw Error(
+        "Settlement history and invoice balance differ; reconcile before import",
+      );
+  }
   return { invoices: rows, payments };
 }
