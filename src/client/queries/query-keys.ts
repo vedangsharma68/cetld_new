@@ -1,6 +1,7 @@
 import type { InvoiceFilters } from "@/shared/schemas/invoices.schema";
 import type { CustomerFilters } from "@/shared/schemas/customers.schema";
 export const qk = {
+  profile: { self: ["profile", "self"] as const },
   settings: {
     all: ["settings"] as const,
     detail: (workspaceId: string) => ["settings", workspaceId] as const,

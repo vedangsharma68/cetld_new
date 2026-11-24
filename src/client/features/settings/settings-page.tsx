@@ -1,4 +1,5 @@
 "use client";
+import { ProfileForm } from "./profile-form";
 import { useState } from "react";
 import { useWorkspaces } from "@/client/queries/workspaces.queries";
 import { useBusinessSettings } from "@/client/queries/settings.queries";
@@ -13,6 +14,7 @@ export function SettingsPage() {
         title="Settings"
         description="General business settings. Local migration preview, existing Cetld is unchanged."
       />
+      <ProfileForm />
       <QueryBoundary query={businesses}>
         {(rows) => <SettingsBusiness businesses={rows} />}
       </QueryBoundary>

@@ -1,4 +1,5 @@
 import "server-only";
+import { providerDisplayName } from "@/shared/schemas/provider-name";
 import { createHash } from "node:crypto";
 import { googleSignupRepository } from "./google-signup.repository";
 import { authRepository } from "./auth.repository";
@@ -7,7 +8,7 @@ export const googleSignupService = {
   async open(
     email: string,
     subject: string,
-    name: string,
+    name: string | null | undefined,
     verified: boolean,
     address: string,
   ) {
@@ -21,7 +22,7 @@ export const googleSignupService = {
     return googleSignupRepository.open({
       email: email.toLowerCase(),
       subject,
-      name,
+      name: providerDisplayName(name),
     });
   },
 };

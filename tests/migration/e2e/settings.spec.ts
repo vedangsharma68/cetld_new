@@ -19,6 +19,19 @@ test("general settings page shows honest empty state without private settings", 
   await expect(
     page.getByText("Read-only preview.", { exact: false }),
   ).toBeVisible();
+  await page.getByLabel("Your full name").fill("   ");
+  await page.getByRole("button", { name: "Save profile", exact: true }).click();
+  await expect(page.locator('[aria-invalid="true"]')).toHaveCount(1);
+  await page.getByLabel("Your full name").fill("Profile browser exact");
+  await page.getByRole("button", { name: "Save profile", exact: true }).click();
+  await expect(page.getByLabel("Your full name")).toHaveValue(
+    "Profile browser exact",
+  );
+  await expect(page.getByRole("status")).toHaveText("Profile saved.");
+  await page.reload();
+  await expect(page.getByLabel("Your full name")).toHaveValue(
+    "Profile browser exact",
+  );
   const response = await page.request.get(
     "/api/v1/settings?workspaceId=99999999-9999-4999-8999-999999999999",
   );

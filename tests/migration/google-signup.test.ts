@@ -46,3 +46,34 @@ describe("verified Google open signup", () => {
     });
   });
 });
+
+it.each([undefined, null, "", "  ", "\t\n"])(
+  "missing or blank provider name %s does not block signup",
+  async (name) => {
+    await googleSignupService.open("u@example.test", "s", name, true, "a");
+    expect(repository.open).toHaveBeenCalledWith({
+      email: "u@example.test",
+      subject: "s",
+      name: "New member",
+    });
+  },
+);
+it.each(["x".repeat(161), "世".repeat(200), "😀".repeat(180)])(
+  "bounds long provider names without splitting Unicode",
+  async (name) => {
+    await googleSignupService.open(
+      "u@example.test",
+      "s",
+      "  " + name + "  ",
+      true,
+      "a",
+    );
+    expect(repository.open.mock.calls[0]![0].name).toBe(
+      Array.from(name).slice(0, 160).join(""),
+    );
+  },
+);
+it("trims a valid provider name", async () => {
+  await googleSignupService.open("u@example.test", "s", "  世界  ", true, "a");
+  expect(repository.open.mock.calls[0]![0].name).toBe("世界");
+});

@@ -1,3 +1,5 @@
+import { googleSignupService } from "../../src/server/modules/auth/google-signup.service";
+import { providerDisplayName } from "../../src/shared/schemas/provider-name";
 import assert from "node:assert/strict";
 import postgres from "postgres";
 import { getEnv } from "../../src/env";
@@ -52,6 +54,30 @@ try {
     (e) => (e as { code: string }).code === "23514",
   );
   await sql`delete from profiles where user_id=${owner}`;
+  for (const [i, name] of [
+    undefined,
+    null,
+    "",
+    "   ",
+    "x".repeat(161),
+    "😀".repeat(180),
+  ].entries()) {
+    const user = await googleSignupService.open(
+      `provider-name-${i}@example.test`,
+      `provider-name-${i}`,
+      name,
+      true,
+      `provider-name-${i}`,
+    );
+    assert.ok(user);
+    const [created] =
+      await sql`select p.full_name,u.name from profiles p join users u on u.id=p.user_id where u.id=${user.id}`;
+    assert.equal(created!.full_name, providerDisplayName(name));
+    assert.equal(created!.name, providerDisplayName(name));
+    const [business] =
+      await sql`select count(*) n from workspaces w join workspace_settings s on s.workspace_id=w.id where w.owner_id=${user.id}`;
+    assert.equal(Number(business!.n), 1);
+  }
   console.log(
     "Native profile import retains exact name/avatar/timestamps, self update preserves avatar/history, other identity read empty and CHECK guard passed",
   );

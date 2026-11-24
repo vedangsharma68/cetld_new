@@ -60,7 +60,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         linked = await googleSignupService.open(
           profile.email,
           account.providerAccountId,
-          user.name ?? "New member",
+          user.name,
           true,
           clientAddress(new Request(env.APP_URL, { headers: await headers() })),
         );
