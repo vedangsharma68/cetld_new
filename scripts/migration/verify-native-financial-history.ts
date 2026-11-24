@@ -39,6 +39,41 @@ const source = JSON.parse(
     JSON.stringify({
       ...original,
       ...financial,
+      profiles: [
+        {
+          user_id: original.users[0]!.id,
+          full_name: "Exact imported profile",
+          avatar_url: "opaque-avatar",
+          created_at: at,
+          updated_at: at,
+        },
+      ],
+      workspace_settings: [
+        {
+          workspace_id: invoice.workspace_id,
+          business_name: "Exact imported settings",
+          default_currency: "INR",
+          default_timezone: "Asia/Kolkata",
+          follow_up_preferences: { private: "preserved" },
+          created_at: at,
+          updated_at: at,
+          whatsapp_owner_attested_at: at,
+          whatsapp_owner_attested_by: original.users[0]!.id,
+          whatsapp_owner_phone: "+12025550101",
+          owner_bot_preferences: { private: "retained" },
+          offline_invoice_provenance: true,
+        },
+      ],
+      workspace_ai_settings: [
+        {
+          workspace_id: invoice.workspace_id,
+          primary_model: "exact-free",
+          fallback_model: null,
+          created_at: at,
+          updated_at: at,
+          offline_invoice_provenance: true,
+        },
+      ],
       users: [
         { ...original.users[0], email: "reversed-import@example.invalid" },
       ],
@@ -94,6 +129,15 @@ try {
     reversals: 1,
     sequences: 1,
   });
+  const [importedPrivate] =
+    await sql`select p.full_name,p.avatar_url,s.owner_bot_preferences,s.whatsapp_owner_phone,a.primary_model from profiles p join workspace_settings s on s.whatsapp_owner_attested_by=p.user_id join workspace_ai_settings a on a.workspace_id=s.workspace_id where p.user_id=${source.users[0].id}`;
+  assert.equal(importedPrivate!.full_name, "Exact imported profile");
+  assert.equal(importedPrivate!.avatar_url, "opaque-avatar");
+  assert.deepEqual(importedPrivate!.owner_bot_preferences, {
+    private: "retained",
+  });
+  assert.equal(importedPrivate!.whatsapp_owner_phone, "+12025550101");
+  assert.equal(importedPrivate!.primary_model, "exact-free");
   const [row] =
     await sql`select i.amount_paid, p.amount, r.amount reversed, s.last_value from invoices i join payments p on p.invoice_id=i.id join payment_reversals r on r.payment_id=p.id join invoice_number_sequences s on s.workspace_id=i.workspace_id where i.id=${invoice.id}`;
   assert.equal(Number(row!.amount_paid), 0);

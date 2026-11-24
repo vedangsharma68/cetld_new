@@ -122,6 +122,13 @@ try {
         `INV-${clock!.today.slice(0, 4)}-${String(i + 1).padStart(4, "0")}`,
     ),
   );
+  const blank = await invoiceRepository.create(owner, {
+    workspaceId: wid,
+    invoiceNumber: "   ",
+    amount: "1.00",
+    currency: "INR",
+  });
+  assert.equal(blank!.invoiceNumber, `INV-${clock!.today.slice(0, 4)}-0009`);
   const explicit = await invoiceRepository.create(owner, {
     workspaceId: wid,
     invoiceNumber: "Owner original 42",

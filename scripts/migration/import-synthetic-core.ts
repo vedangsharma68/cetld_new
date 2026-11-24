@@ -3,6 +3,9 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { planLegacyCoreSnapshot } from "./plan-legacy-core-snapshot";
 import {
   users,
+  profiles,
+  workspaceSettings,
+  workspaceAiSettings,
   providerAccounts,
   workspaces,
   workspaceMembers,
@@ -32,24 +35,27 @@ export async function importSyntheticCore(
   try {
     await db.transaction(async (tx) => {
       if (plan.users.length)
-        await tx
-          .insert(users)
-          .values(
-            plan.users.map((u) => ({
-              ...u,
-              emailVerifiedAt: u.emailVerifiedAt
-                ? new Date(u.emailVerifiedAt)
-                : null,
-              bannedUntil: u.bannedUntil ? new Date(u.bannedUntil) : null,
-              deletedAt: u.deletedAt ? new Date(u.deletedAt) : null,
-            })),
-          );
+        await tx.insert(users).values(
+          plan.users.map((u) => ({
+            ...u,
+            emailVerifiedAt: u.emailVerifiedAt
+              ? new Date(u.emailVerifiedAt)
+              : null,
+            bannedUntil: u.bannedUntil ? new Date(u.bannedUntil) : null,
+            deletedAt: u.deletedAt ? new Date(u.deletedAt) : null,
+          })),
+        );
       if (plan.accounts.length)
         await tx.insert(providerAccounts).values(plan.accounts);
       if (plan.workspaces.length)
         await tx.insert(workspaces).values(plan.workspaces);
       if (plan.members.length)
         await tx.insert(workspaceMembers).values(plan.members);
+      if (plan.profiles.length) await tx.insert(profiles).values(plan.profiles);
+      if (plan.workspaceSettings.length)
+        await tx.insert(workspaceSettings).values(plan.workspaceSettings);
+      if (plan.workspaceAiSettings.length)
+        await tx.insert(workspaceAiSettings).values(plan.workspaceAiSettings);
       if (plan.customers.length)
         await tx.insert(customers).values(plan.customers);
       if (plan.invoices.length) await tx.insert(invoices).values(plan.invoices);

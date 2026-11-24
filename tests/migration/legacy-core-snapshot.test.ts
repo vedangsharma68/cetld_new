@@ -5,6 +5,9 @@ const user = "11111111-1111-4111-8111-111111111111",
   customer = "33333333-3333-4333-8333-333333333333";
 function fixture() {
   return {
+    profiles: [],
+    workspace_settings: [],
+    workspace_ai_settings: [],
     users: [
       {
         id: user,
@@ -183,4 +186,67 @@ it("composes invoice, exact ledger and original-file ownership and rejects cross
     foreign[table][0]!.workspace_id = user;
     expect(() => planLegacyCoreSnapshot(foreign)).toThrow(/orphan/);
   }
+});
+
+it("requires profiles and settings slices and retains private source values only in import plan", () => {
+  const base = fixture(),
+    at = "2026-11-24T00:00:00Z";
+  const populated = {
+    ...base,
+    profiles: [
+      {
+        user_id: user,
+        full_name: "Original profile",
+        avatar_url: "opaque",
+        created_at: at,
+        updated_at: at,
+      },
+    ],
+    workspace_settings: [
+      {
+        workspace_id: business,
+        business_name: "Exact",
+        default_currency: "INR",
+        default_timezone: "Asia/Kolkata",
+        follow_up_preferences: { private: true },
+        created_at: at,
+        updated_at: at,
+        whatsapp_owner_attested_at: at,
+        whatsapp_owner_attested_by: user,
+        whatsapp_owner_phone: "+12025550101",
+        owner_bot_preferences: { private: true },
+        offline_invoice_provenance: true,
+      },
+    ],
+    workspace_ai_settings: [
+      {
+        workspace_id: business,
+        primary_model: "exact-free",
+        fallback_model: null,
+        created_at: at,
+        updated_at: at,
+        offline_invoice_provenance: true,
+      },
+    ],
+  };
+  const p = planLegacyCoreSnapshot(populated);
+  expect(p.profiles[0]!.fullName).toBe("Original profile");
+  expect(p.workspaceSettings[0]!.ownerBotPreferences).toEqual({
+    private: true,
+  });
+  for (const table of [
+    "profiles",
+    "workspace_settings",
+    "workspace_ai_settings",
+  ]) {
+    const partial: Record<string, unknown> = { ...populated };
+    delete partial[table];
+    expect(() => planLegacyCoreSnapshot(partial)).toThrow();
+  }
+  expect(() =>
+    planLegacyCoreSnapshot({
+      ...populated,
+      profiles: [{ ...populated.profiles[0], user_id: customer }],
+    }),
+  ).toThrow(/orphan/);
 });

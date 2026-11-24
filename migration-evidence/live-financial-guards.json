@@ -1,0 +1,10 @@
+[
+  {
+    "proname": "currency_uses_two_decimal_precision",
+    "definition": "CREATE OR REPLACE FUNCTION app.currency_uses_two_decimal_precision(p_currency text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE\n SET search_path TO 'pg_catalog'\nAS $function$\n  select coalesce(p_currency = any (array['INR','USD','EUR','GBP','AED','SGD','AUD','CAD','CHF']::text[]), false)\n$function$\n"
+  },
+  {
+    "proname": "invoice_has_external_ledger",
+    "definition": "CREATE OR REPLACE FUNCTION app.invoice_has_external_ledger(i invoices)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE\n SET search_path TO ''\nAS $function$\n select nullif(btrim(i.external_provider),'') is not null\n   or nullif(btrim(i.external_invoice_id),'') is not null\n   or nullif(btrim(i.metadata->>'accounting_provider'),'') is not null\n   or nullif(btrim(i.metadata->>'bookkeeping_record_id'),'') is not null;\n$function$\n"
+  }
+]

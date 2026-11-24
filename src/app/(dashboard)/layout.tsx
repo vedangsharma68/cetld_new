@@ -13,6 +13,7 @@ export default function DashboardLayout({
           </Link>
           <Link href="/customers">Customers</Link>
           <Link href="/invoices">Invoices</Link>
+          <Link href="/settings">Settings</Link>
           <span className="rounded-full bg-amber-50 px-3 py-1 text-xs text-amber-900">
             Migration preview
           </span>

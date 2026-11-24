@@ -1,0 +1,110 @@
+[
+  {
+    "schemaname": "public",
+    "tablename": "business_records",
+    "policyname": "business_records_owner_read",
+    "cmd": "SELECT",
+    "roles": "{authenticated}",
+    "qual": "(EXISTS ( SELECT 1\n   FROM workspaces w\n  WHERE ((w.id = business_records.workspace_id) AND (w.owner_id = ( SELECT auth.uid() AS uid)))))",
+    "with_check": null
+  },
+  {
+    "schemaname": "public",
+    "tablename": "profiles",
+    "policyname": "profiles_delete",
+    "cmd": "DELETE",
+    "roles": "{authenticated}",
+    "qual": "(user_id = ( SELECT auth.uid() AS uid))",
+    "with_check": null
+  },
+  {
+    "schemaname": "public",
+    "tablename": "profiles",
+    "policyname": "profiles_insert",
+    "cmd": "INSERT",
+    "roles": "{authenticated}",
+    "qual": null,
+    "with_check": "(user_id = ( SELECT auth.uid() AS uid))"
+  },
+  {
+    "schemaname": "public",
+    "tablename": "profiles",
+    "policyname": "profiles_select",
+    "cmd": "SELECT",
+    "roles": "{authenticated}",
+    "qual": "(user_id = ( SELECT auth.uid() AS uid))",
+    "with_check": null
+  },
+  {
+    "schemaname": "public",
+    "tablename": "profiles",
+    "policyname": "profiles_update",
+    "cmd": "UPDATE",
+    "roles": "{authenticated}",
+    "qual": "(user_id = ( SELECT auth.uid() AS uid))",
+    "with_check": "(user_id = ( SELECT auth.uid() AS uid))"
+  },
+  {
+    "schemaname": "public",
+    "tablename": "workspace_ai_settings",
+    "policyname": "workspace_ai_settings_insert",
+    "cmd": "INSERT",
+    "roles": "{authenticated}",
+    "qual": null,
+    "with_check": "app.can_manage_settings(workspace_id)"
+  },
+  {
+    "schemaname": "public",
+    "tablename": "workspace_ai_settings",
+    "policyname": "workspace_ai_settings_read",
+    "cmd": "SELECT",
+    "roles": "{authenticated}",
+    "qual": "app.is_workspace_member(workspace_id)",
+    "with_check": null
+  },
+  {
+    "schemaname": "public",
+    "tablename": "workspace_ai_settings",
+    "policyname": "workspace_ai_settings_update",
+    "cmd": "UPDATE",
+    "roles": "{authenticated}",
+    "qual": "app.can_manage_settings(workspace_id)",
+    "with_check": "app.can_manage_settings(workspace_id)"
+  },
+  {
+    "schemaname": "public",
+    "tablename": "workspace_settings",
+    "policyname": "settings_delete",
+    "cmd": "DELETE",
+    "roles": "{authenticated}",
+    "qual": "app.can_manage_settings(workspace_id)",
+    "with_check": null
+  },
+  {
+    "schemaname": "public",
+    "tablename": "workspace_settings",
+    "policyname": "settings_insert",
+    "cmd": "INSERT",
+    "roles": "{authenticated}",
+    "qual": null,
+    "with_check": "app.can_manage_settings(workspace_id)"
+  },
+  {
+    "schemaname": "public",
+    "tablename": "workspace_settings",
+    "policyname": "settings_select",
+    "cmd": "SELECT",
+    "roles": "{authenticated}",
+    "qual": "app.is_workspace_member(workspace_id)",
+    "with_check": null
+  },
+  {
+    "schemaname": "public",
+    "tablename": "workspace_settings",
+    "policyname": "settings_update",
+    "cmd": "UPDATE",
+    "roles": "{authenticated}",
+    "qual": "app.can_manage_settings(workspace_id)",
+    "with_check": "app.can_manage_settings(workspace_id)"
+  }
+]

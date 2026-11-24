@@ -1,11 +1,15 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
+import { planBusinessCreation } from "../workspaces/business-create-plan";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/server/db/client";
 import {
   users,
+  profiles,
   providerAccounts,
   workspaces,
   workspaceMembers,
+  workspaceSettings,
 } from "@/server/db/schema";
 export const googleSignupRepository = {
   async open(input: { email: string; subject: string; name: string }) {
@@ -66,6 +70,9 @@ export const googleSignupRepository = {
           image: users.image,
         });
       if (!user) throw Error("Account creation failed");
+      await tx
+        .insert(profiles)
+        .values({ userId: user.id, fullName: input.name });
       await tx.insert(providerAccounts).values({
         provider: "google",
         providerAccountId: input.subject,
@@ -73,12 +80,18 @@ export const googleSignupRepository = {
       });
       const [business] = await tx
         .insert(workspaces)
-        .values({ ownerId: user.id, name: "My business" })
+        .values({
+          ownerId: user.id,
+          ...planBusinessCreation("My business", randomUUID()),
+        })
         .returning({ id: workspaces.id });
       if (!business) throw Error("Business creation failed");
       await tx
         .insert(workspaceMembers)
         .values({ workspaceId: business.id, userId: user.id, role: "owner" });
+      await tx
+        .insert(workspaceSettings)
+        .values({ workspaceId: business.id, businessName: "My business" });
       return user;
     });
   },

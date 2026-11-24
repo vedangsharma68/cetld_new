@@ -5,7 +5,7 @@ export const createInvoiceSchema = z
   .object({
     workspaceId: z.uuid(),
     customerId: z.uuid().nullable().optional(),
-    invoiceNumber: z.string().trim().min(1).max(100),
+    invoiceNumber: z.string().trim().max(100),
     amount: exactMoneySchema,
     currency: z.enum(["INR", "USD", "EUR", "GBP", "AED"]),
   })

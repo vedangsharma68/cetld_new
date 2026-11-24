@@ -2,6 +2,7 @@
 import { useLifecycleState } from "@/client/queries/lifecycle.queries";
 import { useState } from "react";
 import { LifecycleForm, RestoreInvoice } from "./lifecycle-form";
+import { ReopeningForm } from "./reopening-form";
 import { PaymentForm } from "./payment-form";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -38,10 +39,12 @@ export function InvoicePage() {
 function InvoiceBusiness({
   businesses,
 }: {
-  businesses: { id: string; name: string }[];
+  businesses: { id: string; name: string; canManageLifecycle: boolean }[];
 }) {
   const [selected, setSelected] = useState("");
   const workspaceId = selected || businesses[0]?.id || "";
+  const canManageLifecycle =
+    businesses.find((w) => w.id === workspaceId)?.canManageLifecycle === true;
   const filters = { workspaceId, page: 1, pageSize: 20 };
   const list = useInvoices(filters);
   const create = useCreateInvoice(),
@@ -217,6 +220,17 @@ function InvoiceBusiness({
                         id={row.id}
                         invoiceNumber={row.invoiceNumber}
                       />
+                      {canManageLifecycle && (
+                        <ReopeningForm
+                          id={row.id}
+                          invoiceNumber={row.invoiceNumber}
+                          canReopen={
+                            (row.amountPaid !== "0" &&
+                              row.amountPaid !== "0.00") ||
+                            row.financialStatus === "paid"
+                          }
+                        />
+                      )}
                       <LifecycleForm
                         key={
                           row.id +

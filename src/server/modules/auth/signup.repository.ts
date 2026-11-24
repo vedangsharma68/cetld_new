@@ -1,12 +1,16 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
+import { planBusinessCreation } from "../workspaces/business-create-plan";
 import { eq, and, isNull, sql } from "drizzle-orm";
 import { compare } from "bcryptjs";
 import { db } from "@/server/db/client";
 import {
   users,
+  profiles,
   emailSignups,
   workspaces,
   workspaceMembers,
+  workspaceSettings,
 } from "@/server/db/schema";
 export const signupRepository = {
   async prepare(input: {
@@ -68,14 +72,24 @@ export const signupRepository = {
         .set({ consumedAt: sql`clock_timestamp()` })
         .where(eq(emailSignups.id, pending.id));
       if (!user) return null;
+      await tx
+        .insert(profiles)
+        .values({ userId: user.id, fullName: pending.name });
       const [business] = await tx
         .insert(workspaces)
-        .values({ ownerId: user.id, name: pending.businessName })
+        .values({
+          ownerId: user.id,
+          ...planBusinessCreation(pending.businessName, randomUUID()),
+        })
         .returning({ id: workspaces.id });
       if (!business) throw Error("Business creation failed");
       await tx
         .insert(workspaceMembers)
         .values({ workspaceId: business.id, userId: user.id, role: "owner" });
+      await tx.insert(workspaceSettings).values({
+        workspaceId: business.id,
+        businessName: pending.businessName,
+      });
       return { verified: true };
     });
   },

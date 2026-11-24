@@ -19,7 +19,7 @@ try:
  for file in sorted((root/'src/server/db/migrations').glob('*.sql')):subprocess.run(['psql',env['DATABASE_URL'],'-v','ON_ERROR_STOP=1','-f',str(file)],check=True,capture_output=True)
  subprocess.run(['node','--conditions=react-server','--import','tsx','scripts/migration/seed-local-test.ts'],cwd=root,env=env,check=True)
  if '--browser-only' not in sys.argv:
-  proofs = [sys.argv[sys.argv.index('--proof')+1]] if '--proof' in sys.argv else ['auth','import','lifecycle','financial-preservation','settings-constraints','financial-history','number-parity']
+  proofs = [sys.argv[sys.argv.index('--proof')+1]] if '--proof' in sys.argv else ['auth','import','lifecycle','financial-preservation','settings-constraints','financial-history','number-parity','reopening','settings-view','profiles']
   for proof in proofs:
    subprocess.run(['node','--conditions=react-server','--import','tsx','scripts/migration/run-native-proof.ts',proof],cwd=root,env=env,check=True)
  if '--native-only' not in sys.argv:

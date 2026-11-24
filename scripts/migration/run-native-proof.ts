@@ -9,6 +9,10 @@ const allowed = new Set([
   "settings-constraints",
   "financial-history",
   "number-parity",
+  "reopening",
+  "audit-roles",
+  "settings-view",
+  "profiles",
 ]);
 const name = process.argv[2];
 if (!name || !allowed.has(name)) throw Error("Unknown native proof");

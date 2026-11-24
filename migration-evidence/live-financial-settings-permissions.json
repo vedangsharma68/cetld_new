@@ -1,0 +1,7 @@
+[
+  {
+    "kind": "function",
+    "name": "can_manage_settings",
+    "definition": "CREATE OR REPLACE FUNCTION app.can_manage_settings(p_workspace_id uuid, p_user_id uuid DEFAULT auth.uid())\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'public'\nAS $function$\n  select app.workspace_role_for(p_workspace_id, p_user_id) in ('owner'::public.workspace_role, 'admin'::public.workspace_role)\n$function$\n"
+  }
+]

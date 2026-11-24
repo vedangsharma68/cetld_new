@@ -77,3 +77,15 @@ it("uses exact bigint and rejects exhaustion instead of wrapping", () => {
   ).toThrow(/exhausted/);
   expect(() => invoiceNumberPattern("9223372036854775808")).toThrow(/range/);
 });
+
+it("blank and whitespace inputs use automatic numbering, not an empty explicit number", () => {
+  for (const sourceNumber of ["", "   "]) {
+    expect(
+      planInvoiceNumber(history(["A-009"]), {
+        ...input,
+        sourceNumber,
+        preserveOwnerNumber: true,
+      }).invoiceNumber,
+    ).toBe("A-010");
+  }
+});

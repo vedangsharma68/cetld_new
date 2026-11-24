@@ -1,3 +1,5 @@
+import { planLegacyProfiles } from "./plan-legacy-profiles";
+import { planLegacySettings } from "./plan-legacy-settings";
 import { planLegacyImport } from "./plan-legacy-import";
 import { planLegacyCustomers } from "./plan-legacy-customers";
 import { planLegacyFinancial } from "./plan-legacy-financial";
@@ -8,6 +10,9 @@ import { planLegacyFiles } from "./plan-legacy-files";
 export function planLegacyCoreSnapshot(snapshot: unknown) {
   const allowed = new Set([
     "users",
+    "profiles",
+    "workspace_settings",
+    "workspace_ai_settings",
     "identities",
     "workspaces",
     "members",
@@ -27,6 +32,15 @@ export function planLegacyCoreSnapshot(snapshot: unknown) {
       "Unmapped snapshot tables block planning: " + extras.sort().join(","),
     );
   const core = planLegacyImport(snapshot);
+  const profiles = planLegacyProfiles(
+    snapshot,
+    new Set(core.users.map((u) => u.id)),
+  );
+  const settings = planLegacySettings(
+    snapshot,
+    new Set(core.workspaces.map((w) => w.id)),
+    new Set(core.users.map((u) => u.id)),
+  );
   const businesses = new Map(core.workspaces.map((w) => [w.id, w.ownerId]));
   const customers = planLegacyCustomers(snapshot, new Set(businesses.keys()));
   const financial = planLegacyFinancial(snapshot, {
@@ -46,6 +60,8 @@ export function planLegacyCoreSnapshot(snapshot: unknown) {
   return {
     ...core,
     customers,
+    profiles,
+    ...settings,
     ...financial,
     files,
     realImportAllowed: false as const,

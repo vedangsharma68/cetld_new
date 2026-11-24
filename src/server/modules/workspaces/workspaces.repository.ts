@@ -1,5 +1,5 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/server/db/client";
 import { workspaces, workspaceMembers } from "@/server/db/schema";
 export const workspaceRepository = {
@@ -9,6 +9,7 @@ export const workspaceRepository = {
         id: workspaces.id,
         name: workspaces.name,
         role: workspaceMembers.role,
+        canManageLifecycle: sql<boolean>`${workspaces.ownerId}=${userId} and ${workspaceMembers.role}='owner'`,
       })
       .from(workspaces)
       .innerJoin(
