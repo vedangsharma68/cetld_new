@@ -1,3 +1,4 @@
+import { evidencePath } from "./evidence";
 import { test, expect } from "@playwright/test";
 test("Auth.js reports rate limit clearly to the login form", async ({
   page,
@@ -21,7 +22,7 @@ test("Auth.js reports rate limit clearly to the login form", async ({
     "Too many failed attempts. Try again in 15 minutes.",
   );
   await page.screenshot({
-    path: "/downloads/cetld-next-rate-limit-20261124.png",
+    path: evidencePath("cetld-next-rate-limit-20261124.png"),
     fullPage: true,
   });
 });

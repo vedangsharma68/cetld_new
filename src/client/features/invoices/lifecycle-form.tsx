@@ -1,8 +1,6 @@
 "use client";
 import { useState } from "react";
-import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
-import { http } from "@/client/api/http";
-import { qk } from "@/client/queries/query-keys";
+import { useLifecycleMutation } from "@/client/queries/lifecycle.queries";
 import { toUserMessage } from "@/client/lib/errors";
 import type {
   LifecycleInput,
@@ -24,14 +22,7 @@ export function LifecycleForm({
     ),
     [confirmation, setConfirmation] = useState("");
   const [prepareKey, setPrepareKey] = useState(() => crypto.randomUUID());
-  const qc = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: (input: LifecycleInput) =>
-      http<LifecycleResult>(`/invoices/${id}/lifecycle`, {
-        method: "POST",
-        body: JSON.stringify(input),
-      }),
-  });
+  const mutation = useLifecycleMutation(id);
   const run = async (input: LifecycleInput) => {
     try {
       const result = await mutation.mutateAsync(input);
@@ -41,8 +32,6 @@ export function LifecycleForm({
         setProposal(null);
         setConfirmation("");
         if (result.state === "deleted") onDeleted(id, invoiceNumber);
-        void qc.invalidateQueries({ queryKey: qk.invoices.all });
-        void qc.invalidateQueries({ queryKey: ["invoice-lifecycle"] });
       }
     } catch {
       /* shown below */
@@ -127,19 +116,7 @@ export function RestoreInvoice({
   onRestored: () => void;
 }) {
   const [key] = useState(() => crypto.randomUUID());
-  const qc = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: () =>
-      http<LifecycleResult>(`/invoices/${id}/lifecycle`, {
-        method: "POST",
-        body: JSON.stringify({ action: "restore", key }),
-      }),
-    onSuccess: () => {
-      onRestored();
-      void qc.invalidateQueries({ queryKey: qk.invoices.all });
-      void qc.invalidateQueries({ queryKey: ["invoice-lifecycle"] });
-    },
-  });
+  const mutation = useLifecycleMutation(id);
   return (
     <div className="rounded border p-3">
       <p>
@@ -149,23 +126,13 @@ export function RestoreInvoice({
       <button
         className="underline"
         disabled={mutation.isPending}
-        onClick={() => mutation.mutate()}
+        onClick={() =>
+          mutation.mutate({ action: "restore", key }, { onSuccess: onRestored })
+        }
       >
         Restore {number}
       </button>
       {mutation.error && <p role="alert">{toUserMessage(mutation.error)}</p>}
     </div>
   );
-}
-
-export function useLifecycleState(workspaceId: string) {
-  return useQuery({
-    queryKey: ["invoice-lifecycle", workspaceId],
-    queryFn: () =>
-      http<{
-        deleted: { id: string; invoiceNumber: string; deletedAt: string }[];
-        pending: LifecycleResult | null;
-      }>(`/invoice-lifecycle?workspaceId=${workspaceId}`),
-    enabled: !!workspaceId,
-  });
 }

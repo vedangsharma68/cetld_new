@@ -1,3 +1,4 @@
+import { evidencePath } from "./evidence";
 import { test, expect } from "@playwright/test";
 test("records a payment exactly and shows persisted balance", async ({
   page,
@@ -16,7 +17,7 @@ test("records a payment exactly and shows persisted balance", async ({
   await row.getByRole("button", { name: "Record payment" }).click();
   await page.getByLabel("Payment amount for BROWSER-PAYMENT").fill("2.33");
   await page.screenshot({
-    path: "/downloads/cetld-payment-form-mobile-20261124.png",
+    path: evidencePath("cetld-payment-form-mobile-20261124.png"),
     fullPage: true,
   });
   expect(
@@ -26,7 +27,7 @@ test("records a payment exactly and shows persisted balance", async ({
   await expect(row).toContainText("Paid 2.33");
   await expect(row).toContainText("draft");
   await page.screenshot({
-    path: "/downloads/cetld-payment-mobile-20261124.png",
+    path: evidencePath("cetld-payment-mobile-20261124.png"),
     fullPage: true,
   });
   await page.reload();

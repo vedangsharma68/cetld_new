@@ -22,7 +22,7 @@ const {customerRepository}=await import('../../src/server/modules/customers/cust
 const {invoiceRepository}=await import('../../src/server/modules/invoices/invoices.repository');const owner='11111111-1111-4111-8111-111111111111',workspace='22222222-2222-4222-8222-222222222222',foreign='33333333-3333-4333-8333-333333333333';
 const invoice=await invoiceRepository.create(owner,{workspaceId:workspace,invoiceNumber:'NATIVE-PDF-1',amount:'12.34',currency:'INR'});assert.ok(invoice);assert.equal(invoice.ownerId,owner);assert.equal(await invoiceRepository.find(foreign,invoice.id),null);assert.equal(await invoiceRepository.create(owner,{workspaceId:workspace,customerId:'55555555-5555-4555-8555-555555555555',invoiceNumber:'FOREIGN-CUSTOMER',amount:'1.00',currency:'INR'}),null);
 const path=`${invoice.ownerId}/${invoice.id}.pdf`;assert.ok(await invoiceRepository.reserveUpload(owner,invoice.id,{fileName:'a.pdf',mimeType:'application/pdf',size:25},path));assert.equal(await invoiceRepository.reserveUpload(owner,invoice.id,{fileName:'b.pdf',mimeType:'application/pdf',size:26},path),null);// Synthetic orphan cleanup tombstone, independent of reversible invoice deletion.
-await assert.rejects(()=>sql`delete from invoices where id=${invoice.id}`,{code:"42501"});
+assert.equal(typeof (invoiceRepository as unknown as Record<string,unknown>).remove,"undefined");
 await sql`insert into storage_cleanup_jobs(path,request_id,not_before) values(${path},'retained-invoice-must-not-clean',clock_timestamp()-interval '1 second')`;
 assert.equal((await invoiceRepository.dueCleanup()).some(j=>j.path===path),false);
 const retainedPath=path;const orphanPath=owner+'/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.pdf';

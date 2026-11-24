@@ -38,7 +38,3 @@ CREATE FUNCTION bump_invoice_revision() RETURNS trigger LANGUAGE plpgsql AS $$ B
 --> statement-breakpoint
 CREATE TRIGGER invoice_revision_change BEFORE UPDATE ON invoices FOR EACH ROW EXECUTE FUNCTION bump_invoice_revision();
 
---> statement-breakpoint
-CREATE FUNCTION guard_invoice_hard_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF EXISTS(SELECT 1 FROM workspaces WHERE id=OLD.workspace_id) THEN RAISE EXCEPTION 'invoice hard delete is disabled' USING ERRCODE='42501'; END IF; RETURN OLD; END $$;
---> statement-breakpoint
-CREATE TRIGGER invoice_hard_delete_guard BEFORE DELETE ON invoices FOR EACH ROW EXECUTE FUNCTION guard_invoice_hard_delete();

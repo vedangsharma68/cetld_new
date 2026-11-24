@@ -1,3 +1,4 @@
+import { evidencePath } from "./evidence";
 import { test, expect } from "@playwright/test";
 test("credentials, real workspace CRUD and cross-workspace privacy", async ({
   page,
@@ -28,7 +29,7 @@ test("credentials, real workspace CRUD and cross-workspace privacy", async ({
   ).toBeVisible();
   await page.setViewportSize({ width: 390, height: 900 });
   await page.screenshot({
-    path: "/downloads/cetld-next-customers-mobile-20261124.png",
+    path: evidencePath("cetld-next-customers-mobile-20261124.png"),
     fullPage: true,
   });
   await page.getByRole("link", { name: "Local Browser Customer" }).click();

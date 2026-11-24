@@ -1,3 +1,4 @@
+import { evidencePath } from "./evidence";
 import { test, expect } from "@playwright/test";
 test("invoice metadata UI and cross-business API privacy", async ({ page }) => {
   await page.goto("/login");
@@ -23,7 +24,7 @@ test("invoice metadata UI and cross-business API privacy", async ({ page }) => {
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(390);
   await page.screenshot({
-    path: "/downloads/cetld-next-invoices-mobile-20261124.png",
+    path: evidencePath("cetld-next-invoices-mobile-20261124.png"),
     fullPage: true,
   });
 });

@@ -1,3 +1,4 @@
+import { evidencePath } from "./evidence";
 import { test, expect } from "@playwright/test";
 test("landing and login fit desktop and narrow mobile", async ({ page }) => {
   for (const width of [1280, 390]) {
@@ -7,7 +8,7 @@ test("landing and login fit desktop and narrow mobile", async ({ page }) => {
       page.getByRole("heading", { name: /Keep your business/ }),
     ).toBeVisible();
     await page.screenshot({
-      path: `/downloads/cetld-next-home-${width}-20261124.png`,
+      path: evidencePath(`cetld-next-home-${width}-20261124.png`),
       fullPage: true,
     });
     await page.getByRole("link", { name: "Sign in", exact: true }).click();
@@ -22,7 +23,7 @@ test("landing and login fit desktop and narrow mobile", async ({ page }) => {
       ),
     ).toBeTruthy();
     await page.screenshot({
-      path: `/downloads/cetld-next-login-${width}-20261124.png`,
+      path: evidencePath(`cetld-next-login-${width}-20261124.png`),
       fullPage: true,
     });
   }

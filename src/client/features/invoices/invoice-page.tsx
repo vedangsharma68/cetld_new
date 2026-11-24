@@ -1,10 +1,7 @@
 "use client";
+import { useLifecycleState } from "@/client/queries/lifecycle.queries";
 import { useState } from "react";
-import {
-  LifecycleForm,
-  RestoreInvoice,
-  useLifecycleState,
-} from "./lifecycle-form";
+import { LifecycleForm, RestoreInvoice } from "./lifecycle-form";
 import { PaymentForm } from "./payment-form";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";

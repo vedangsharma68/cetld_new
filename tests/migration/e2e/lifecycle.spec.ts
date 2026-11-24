@@ -1,3 +1,4 @@
+import { evidencePath } from "./evidence";
 import { test, expect } from "@playwright/test";
 test("owner reversible invoice deletion retains ledger and supports paused restore", async ({
   page,
@@ -29,7 +30,7 @@ test("owner reversible invoice deletion retains ledger and supports paused resto
     .getByLabel("Confirm deletion of BROWSER-LIFECYCLE")
     .fill("DELETE BROWSER-LIFECYCLE");
   await page.screenshot({
-    path: "/downloads/cetld-lifecycle-mobile-20261124.png",
+    path: evidencePath("cetld-lifecycle-mobile-20261124.png"),
     fullPage: true,
   });
   await page
