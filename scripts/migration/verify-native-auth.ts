@@ -1,0 +1,474 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import postgres from "postgres";
+import { getEnv } from "../../src/env";
+import { authService } from "../../src/server/modules/auth/auth.service";
+import { signupRepository } from "../../src/server/modules/auth/signup.repository";
+import { authRepository } from "../../src/server/modules/auth/auth.repository";
+import { createSignupService } from "../../src/server/modules/auth/signup.service";
+import { googleSignupService } from "../../src/server/modules/auth/google-signup.service";
+const env = getEnv();
+if (
+  env.APP_ENV !== "test" ||
+  new URL(env.DATABASE_URL).hostname !== "127.0.0.1"
+)
+  throw Error("Synthetic loopback only");
+const sql = postgres(env.DATABASE_URL, { max: 1, prepare: false });
+const email = "open-native@example.test",
+  password = "synthetic-open-password";
+let token = "";
+let sent = 0;
+const service = createSignupService(signupRepository, authRepository, {
+  assertReady() {},
+  async send(_email, value) {
+    token = value;
+    sent++;
+  },
+});
+const input = {
+  email,
+  password,
+  name: "Native",
+  businessName: "世界",
+};
+try {
+  await service.signup(input, "native-address");
+  const first = token;
+  assert.equal(await authService.credentials(email, password), null);
+  assert.equal(
+    (await sql`select count(*)::int as n from users where email=${email}`)[0]!
+      .n,
+    0,
+  );
+  await assert.rejects(
+    () => service.verify(first, "wrong-password", "wrong-proof"),
+    { statusCode: 403 },
+  );
+  const outcomes = await Promise.allSettled([
+    service.verify(first, password, "proof-a"),
+    service.verify(first, password, "proof-b"),
+  ]);
+  assert.equal(outcomes.filter((r) => r.status === "fulfilled").length, 1);
+  await assert.rejects(() => service.verify(first, password, "proof-c"), {
+    statusCode: 403,
+  });
+  assert.ok((await authService.credentials(email, password))?.id);
+  const sentBefore = sent;
+  await service.signup(
+    { ...input, password: "attacker-supplied-password" },
+    "new-address",
+  );
+  assert.equal(sent, sentBefore);
+  await assert.rejects(
+    () => service.verify(token, "attacker-supplied-password", "other-proof"),
+    { statusCode: 403 },
+  );
+  assert.ok(await authService.credentials(email, password));
+  await service.signup(
+    { ...input, email: "expired-native@example.test" },
+    "expiry-address",
+  );
+  await sql`update email_signup_verifications set expires_at=clock_timestamp()-interval '1 second' where token_hash=${createHash("sha256").update(token).digest("hex")}`;
+  await assert.rejects(() => service.verify(token, password, "expired-proof"), {
+    statusCode: 403,
+  });
+  const google = await googleSignupService.open(
+    "google-only@example.test",
+    "synthetic-subject",
+    "Google",
+    true,
+    "google-address",
+  );
+  assert.ok(google?.id);
+  assert.equal(
+    (
+      await googleSignupService.open(
+        "google-only@example.test",
+        "synthetic-subject",
+        "Google",
+        true,
+        "google-address",
+      )
+    )?.id,
+    google.id,
+  );
+  assert.equal(
+    await googleSignupService.open(
+      email,
+      "other-subject",
+      "Other",
+      true,
+      "google-address",
+    ),
+    null,
+  );
+  assert.equal(
+    await googleSignupService.open(
+      "changed@example.test",
+      "synthetic-subject",
+      "Changed",
+      true,
+      "google-address",
+    ),
+    null,
+  );
+  assert.equal(
+    await googleSignupService.open(
+      "unverified@example.test",
+      "unverified-subject",
+      "U",
+      false,
+      "google-address",
+    ),
+    null,
+  );
+  assert.equal(
+    await authService.credentials("google-only@example.test", password),
+    null,
+  );
+  for (let n = 0; n < 12; n++)
+    assert.ok(
+      await authService.credentials(
+        "owner@example.test",
+        "synthetic-local-password-only",
+        "victim-address",
+      ),
+    );
+  for (let n = 0; n < 10; n++)
+    assert.equal(
+      await authService.credentials(
+        "owner@example.test",
+        "wrong-password",
+        "attacker-address",
+      ),
+      null,
+    );
+  await assert.rejects(
+    () =>
+      authService.credentials(
+        "owner@example.test",
+        "synthetic-local-password-only",
+        "attacker-address",
+      ),
+    { code: "RATE_LIMITED" },
+  );
+  assert.ok(
+    await authService.credentials(
+      "owner@example.test",
+      "synthetic-local-password-only",
+      "victim-address",
+    ),
+  );
+  await assert.rejects(
+    () => sql`update users set role='invalid' where email=${email}`,
+    { code: "23514" },
+  );
+  await sql`insert into auth_rate_limits values('stale-native-test',1,clock_timestamp()-interval '2 days')`;
+  await authService.credentials(
+    "retention@example.test",
+    "wrong",
+    "retention-address",
+  );
+  assert.equal(
+    (
+      await sql`select count(*)::int as n from auth_rate_limits where key='stale-native-test'`
+    )[0]!.n,
+    0,
+  );
+  assert.equal(
+    (await sql`select count(*)::int as n from users where email=${email}`)[0]!
+      .n,
+    1,
+  );
+  assert.equal(
+    (
+      await sql`select count(*)::int as n from workspaces w join users u on u.id=w.owner_id where u.email=${email}`
+    )[0]!.n,
+    1,
+  );
+  // Disabled/deleted legacy-account states remain denied through credentials, subject and signup fallback.
+  await sql`update users set banned_until=clock_timestamp()+interval '1 day' where email=${email}`;
+  assert.equal(
+    await authService.credentials(email, password, "banned-native"),
+    null,
+  );
+  await sql`update users set banned_until=clock_timestamp()-interval '1 second' where email=${email}`;
+  assert.ok(
+    await authService.credentials(email, password, "expired-ban-native"),
+  );
+  await sql`update users set deleted_at=clock_timestamp() where email=${email}`;
+  assert.equal(
+    await authService.credentials(email, password, "deleted-native"),
+    null,
+  );
+  await sql`update users set deleted_at=null where email=${email}`;
+  await sql`update users set banned_until=clock_timestamp()+interval '1 day' where email='google-only@example.test'`;
+  assert.equal(
+    await authService.google(
+      "synthetic-subject",
+      "google-only@example.test",
+      true,
+    ),
+    null,
+  );
+  assert.equal(
+    await googleSignupService.open(
+      "google-only@example.test",
+      "synthetic-subject",
+      "Google",
+      true,
+      "banned-google",
+    ),
+    null,
+  );
+  await sql`update users set banned_until=null,deleted_at=clock_timestamp() where email='google-only@example.test'`;
+  assert.equal(
+    await googleSignupService.open(
+      "google-only@example.test",
+      "synthetic-subject",
+      "Google",
+      true,
+      "deleted-google",
+    ),
+    null,
+  );
+  // Preserve imported customer extension/integration state without exposing internal metadata.
+  const { customerRepository } =
+    await import("../../src/server/modules/customers/customers.repository");
+  const customer = await customerRepository.create(
+    "11111111-1111-4111-8111-111111111111",
+    {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      name: "Extension",
+      customFields: { school: "Example", year: 2026 },
+    },
+  );
+  assert.ok(customer);
+  await sql`update customers set metadata='{"private":"retained"}',external_provider='zoho',external_customer_id='synthetic-id',reminder_tone='firm' where id=${customer.id}`;
+  await customerRepository.update(
+    "11111111-1111-4111-8111-111111111111",
+    customer.id,
+    { name: "Renamed" },
+  );
+  const customerRead = await customerRepository.find(
+    "11111111-1111-4111-8111-111111111111",
+    customer.id,
+  );
+  assert.equal(customerRead?.customFields.school, "Example");
+  assert.equal(Object.hasOwn(customerRead!, "metadata"), false);
+  assert.equal(Object.hasOwn(customerRead!, "externalCustomerId"), false);
+  const preserved = (
+    await sql`select metadata,external_customer_id,reminder_tone from customers where id=${customer.id}`
+  )[0]!;
+  assert.equal(preserved.metadata.private, "retained");
+  assert.equal(preserved.external_customer_id, "synthetic-id");
+  assert.equal(preserved.reminder_tone, "firm");
+  await customerRepository.remove(
+    "11111111-1111-4111-8111-111111111111",
+    customer.id,
+  );
+  // Native invoice repository isolation, customer FK, upload reservation and durable deletion.
+  const { invoiceRepository } =
+    await import("../../src/server/modules/invoices/invoices.repository");
+  const owner = "11111111-1111-4111-8111-111111111111",
+    workspace = "22222222-2222-4222-8222-222222222222",
+    foreign = "33333333-3333-4333-8333-333333333333";
+  const invoice = await invoiceRepository.create(owner, {
+    workspaceId: workspace,
+    invoiceNumber: "NATIVE-PDF-1",
+    amount: "12.34",
+    currency: "INR",
+  });
+  assert.ok(invoice);
+  assert.equal(invoice.ownerId, owner);
+  assert.equal(await invoiceRepository.find(foreign, invoice.id), null);
+  assert.equal(
+    await invoiceRepository.create(owner, {
+      workspaceId: workspace,
+      customerId: "55555555-5555-4555-8555-555555555555",
+      invoiceNumber: "FOREIGN-CUSTOMER",
+      amount: "1.00",
+      currency: "INR",
+    }),
+    null,
+  );
+  const path = `${invoice.ownerId}/${invoice.id}.pdf`;
+  assert.ok(
+    await invoiceRepository.reserveUpload(
+      owner,
+      invoice.id,
+      { fileName: "a.pdf", mimeType: "application/pdf", size: 25 },
+      path,
+    ),
+  );
+  assert.equal(
+    await invoiceRepository.reserveUpload(
+      owner,
+      invoice.id,
+      { fileName: "b.pdf", mimeType: "application/pdf", size: 26 },
+      path,
+    ),
+    null,
+  ); // Synthetic orphan cleanup tombstone, independent of reversible invoice deletion.
+  assert.equal(
+    typeof (invoiceRepository as unknown as Record<string, unknown>).remove,
+    "undefined",
+  );
+  await sql`insert into storage_cleanup_jobs(path,request_id,not_before) values(${path},'retained-invoice-must-not-clean',clock_timestamp()-interval '1 second')`;
+  assert.equal(
+    (await invoiceRepository.dueCleanup()).some((j) => j.path === path),
+    false,
+  );
+  const retainedPath = path;
+  const orphanPath = owner + "/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.pdf";
+  await sql`insert into storage_cleanup_jobs(path,request_id) values(${orphanPath},'synthetic-orphan-cleanup')`;
+  assert.ok(await invoiceRepository.find(owner, invoice.id));
+  assert.equal(
+    (await invoiceRepository.dueCleanup()).some((j) => j.path === path),
+    false,
+  );
+  await sql`update storage_cleanup_jobs set not_before=clock_timestamp()-interval '1 second' where path=${orphanPath}`;
+  const due = (await invoiceRepository.dueCleanup()).find(
+    (j) => j.path === orphanPath,
+  );
+  assert.ok(due);
+  await invoiceRepository.finishCleanup(due.id);
+  assert.equal(
+    (
+      await sql`select count(*)::int as n from storage_cleanup_jobs where id=${due.id}`
+    )[0]!.n,
+    1,
+  );
+  assert.equal(
+    (await invoiceRepository.dueCleanup()).some((j) => j.id === due.id),
+    false,
+  );
+  // Exact atomic payment persistence and idempotency on native PostgreSQL.
+  const { paymentService } =
+    await import("../../src/server/modules/invoices/payments.service");
+  const paidInvoice = await invoiceRepository.create(owner, {
+    workspaceId: workspace,
+    invoiceNumber: "NATIVE-PAYMENT",
+    amount: "12.34",
+    currency: "INR",
+  });
+  assert.ok(paidInvoice);
+  const paymentInput = {
+    amount: "2.33",
+    settleRemaining: false,
+    reference: null,
+    idempotencyKey: "native-bound-payment",
+  };
+  const paymentResults = await Promise.all([
+    paymentService.record(owner, paidInvoice.id, paymentInput),
+    paymentService.record(owner, paidInvoice.id, paymentInput),
+  ]);
+  assert.equal(paymentResults[0]?.id, paymentResults[1]?.id);
+  assert.equal(
+    (
+      await sql`select count(*)::int as n from payments where invoice_id=${paidInvoice.id}`
+    )[0]!.n,
+    1,
+  );
+  assert.equal(
+    (await invoiceRepository.find(owner, paidInvoice.id))?.amountPaid,
+    "2.33",
+  );
+  await assert.rejects(
+    () =>
+      paymentService.record(foreign, paidInvoice.id, {
+        ...paymentInput,
+        idempotencyKey: "foreign-payment",
+      }),
+    { code: "INVOICE_NOT_FOUND" },
+  );
+  await assert.rejects(
+    () =>
+      paymentService.record(owner, paidInvoice.id, {
+        ...paymentInput,
+        amount: "3.00",
+      }),
+    { code: "IDEMPOTENCY_MISMATCH" },
+  );
+  await assert.rejects(
+    () =>
+      paymentService.record(owner, paidInvoice.id, {
+        ...paymentInput,
+        amount: "100.00",
+        idempotencyKey: "too-much",
+      }),
+    { code: "INVALID_PAYMENT" },
+  );
+  await paymentService.record(owner, paidInvoice.id, {
+    settleRemaining: true,
+    reference: "settle",
+    idempotencyKey: "native-settle",
+  });
+  assert.equal(
+    (await invoiceRepository.find(owner, paidInvoice.id))?.amountPaid,
+    "12.34",
+  );
+  assert.equal(
+    (await invoiceRepository.find(owner, paidInvoice.id))?.financialStatus,
+    "paid",
+  );
+  const paidState = (
+    await sql`select metadata,followup_state,next_follow_up_at from invoices where id=${paidInvoice.id}`
+  )[0]!;
+  assert.equal(paidState.followup_state, "cancelled");
+  assert.equal(paidState.next_follow_up_at, null);
+  assert.equal(paidState.metadata.followup_state, "cancelled");
+  assert.equal(paidState.metadata.next_follow_up_at, null);
+  await assert.rejects(
+    () => sql`delete from invoices where id=${paidInvoice.id}`,
+  );
+  assert.equal(
+    (
+      await sql`select count(*)::int as n from invoices where id=${paidInvoice.id}`
+    )[0]!.n,
+    1,
+  );
+  assert.equal(
+    (
+      await sql`select count(*)::int as n from storage_cleanup_jobs where request_id='ledger-delete'`
+    )[0]!.n,
+    0,
+  );
+  assert.ok(retainedPath);
+  for (let n = 0; n < 10; n++)
+    await service.signup(
+      { ...input, email: "distributed-victim@example.test" },
+      `distributed-${n}`,
+    );
+  const sentBeforeCap = sent;
+  await assert.rejects(
+    () =>
+      service.signup(
+        { ...input, email: "distributed-victim@example.test" },
+        "distributed-next",
+      ),
+    { statusCode: 429 },
+  );
+  assert.equal(sent, sentBeforeCap);
+  process.stdout.write(
+    "Native open signup verification, atomic duplicate creation, expiry/replay, no overwrite, Google subject binding and limiter invariants passed. Synthetic mail transport, not real SMTP/OAuth.\n",
+  );
+} finally {
+  await sql.end();
+}
+
+// Signup business identity/settings are materialized atomically, not lazy reads.
+{
+  const probe = postgres(env.DATABASE_URL, { max: 1, prepare: false });
+  try {
+    const rows =
+      await probe`select w.slug, s.business_name, w.name from workspaces w join workspace_settings s on s.workspace_id=w.id where w.owner_id in (select id from users where email=${email} or email='google-only@example.test')`;
+    assert.ok(rows.length >= 2);
+    for (const row of rows) {
+      assert.match(row.slug, /^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/);
+      assert.equal(row.business_name, row.name);
+    }
+  } finally {
+    await probe.end();
+  }
+}

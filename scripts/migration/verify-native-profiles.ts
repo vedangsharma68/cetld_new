@@ -1,0 +1,86 @@
+import { googleSignupService } from "../../src/server/modules/auth/google-signup.service";
+import { providerDisplayName } from "../../src/shared/schemas/provider-name";
+import assert from "node:assert/strict";
+import postgres from "postgres";
+import { getEnv } from "../../src/env";
+import { profileService } from "../../src/server/modules/profiles/profiles.service";
+import { planLegacyProfiles } from "./plan-legacy-profiles";
+const env = getEnv();
+if (
+  env.APP_ENV !== "test" ||
+  new URL(env.DATABASE_URL).hostname !== "127.0.0.1"
+)
+  throw Error("Synthetic loopback only");
+const sql = postgres(env.DATABASE_URL, { max: 1, prepare: false }),
+  owner = "11111111-1111-4111-8111-111111111111",
+  other = "99999999-9999-4999-8999-999999999999",
+  at = "2026-11-20T00:00:00Z";
+try {
+  const plan = planLegacyProfiles(
+    {
+      profiles: [
+        {
+          user_id: owner,
+          full_name: " Original profile ",
+          avatar_url: "opaque-retained-value",
+          created_at: at,
+          updated_at: at,
+        },
+      ],
+    },
+    new Set([owner]),
+  );
+  const row = plan[0]!;
+  await sql`insert into profiles(user_id,full_name,avatar_url,created_at,updated_at) values(${row.userId},${row.fullName},${row.avatarUrl},${row.createdAt},${row.updatedAt})`;
+  assert.equal(
+    (await profileService.read(owner)).fullName,
+    " Original profile ",
+  );
+  assert.deepEqual(await profileService.read(other), {
+    fullName: null,
+    updatedAt: null,
+  });
+  await profileService.update(owner, { fullName: "Changed" });
+  const [saved] =
+    await sql`select avatar_url,created_at,full_name from profiles where user_id=${owner}`;
+  assert.equal(saved!.avatar_url, "opaque-retained-value");
+  assert.equal(saved!.created_at.toISOString(), "2026-11-20T00:00:00.000Z");
+  assert.equal(saved!.full_name, "Changed");
+  const [foreign] =
+    await sql`select count(*) n from profiles where user_id=${other}`;
+  assert.equal(Number(foreign!.n), 0);
+  await assert.rejects(
+    sql`update profiles set full_name='   ' where user_id=${owner}`,
+    (e) => (e as { code: string }).code === "23514",
+  );
+  await sql`delete from profiles where user_id=${owner}`;
+  for (const [i, name] of [
+    undefined,
+    null,
+    "",
+    "   ",
+    "x".repeat(161),
+    "😀".repeat(180),
+  ].entries()) {
+    const user = await googleSignupService.open(
+      `provider-name-${i}@example.test`,
+      `provider-name-${i}`,
+      name,
+      true,
+      `provider-name-${i}`,
+    );
+    assert.ok(user);
+    const [created] =
+      await sql`select p.full_name,u.name from profiles p join users u on u.id=p.user_id where u.id=${user.id}`;
+    assert.equal(created!.full_name, providerDisplayName(name));
+    assert.equal(created!.name, providerDisplayName(name));
+    const [business] =
+      await sql`select count(*) n from workspaces w join workspace_settings s on s.workspace_id=w.id where w.owner_id=${user.id}`;
+    assert.equal(Number(business!.n), 1);
+  }
+  console.log(
+    "Native profile import retains exact name/avatar/timestamps, self update preserves avatar/history, other identity read empty and CHECK guard passed",
+  );
+} finally {
+  await sql.end();
+}

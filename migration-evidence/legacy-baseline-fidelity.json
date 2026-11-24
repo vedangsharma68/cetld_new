@@ -1,0 +1,167 @@
+{
+  "baseline": "ff066b664d2750638e63adba8b64be1a8290c3b9",
+  "candidate": "e6dd6fb",
+  "mappedFiles": 17,
+  "identical": 17,
+  "differences": [],
+  "extraFiles": [],
+  "files": [
+    {
+      "baselinePath": "api/accounting.js",
+      "candidatePath": "legacy/api/accounting.js",
+      "baselineGitBlob": "102a4be012b9bd72652b448fc47d726af634b874",
+      "candidateGitBlob": "102a4be012b9bd72652b448fc47d726af634b874",
+      "identical": true
+    },
+    {
+      "baselinePath": "api/ai.js",
+      "candidatePath": "legacy/api/ai.js",
+      "baselineGitBlob": "01b840363472dd008a5c566a001dd505aed23854",
+      "candidateGitBlob": "01b840363472dd008a5c566a001dd505aed23854",
+      "identical": true
+    },
+    {
+      "baselinePath": "api/automation.js",
+      "candidatePath": "legacy/api/automation.js",
+      "baselineGitBlob": "c8f9540918ab8e7d4be6892ce346a66b8488468f",
+      "candidateGitBlob": "c8f9540918ab8e7d4be6892ce346a66b8488468f",
+      "identical": true
+    },
+    {
+      "baselinePath": "api/integrations/quickbooks/callback.js",
+      "candidatePath": "legacy/api/integrations/quickbooks/callback.js",
+      "baselineGitBlob": "0517489d364b4a17cee4a7f8696d4fd021e34422",
+      "candidateGitBlob": "0517489d364b4a17cee4a7f8696d4fd021e34422",
+      "identical": true
+    },
+    {
+      "baselinePath": "api/integrations/quickbooks/connect.js",
+      "candidatePath": "legacy/api/integrations/quickbooks/connect.js",
+      "baselineGitBlob": "03985585f346fc3c3f0fbc059a70b5a7272714be",
+      "candidateGitBlob": "03985585f346fc3c3f0fbc059a70b5a7272714be",
+      "identical": true
+    },
+    {
+      "baselinePath": "api/integrations/zoho/callback.js",
+      "candidatePath": "legacy/api/integrations/zoho/callback.js",
+      "baselineGitBlob": "c0a6e7a9886cf071dfdc723cddf7f011a898852f",
+      "candidateGitBlob": "c0a6e7a9886cf071dfdc723cddf7f011a898852f",
+      "identical": true
+    },
+    {
+      "baselinePath": "api/integrations/zoho/connect.js",
+      "candidatePath": "legacy/api/integrations/zoho/connect.js",
+      "baselineGitBlob": "756367af003a7c38499546bb317304aa5235fa08",
+      "candidateGitBlob": "756367af003a7c38499546bb317304aa5235fa08",
+      "identical": true
+    },
+    {
+      "baselinePath": "api/invoice-lifecycle.js",
+      "candidatePath": "legacy/api/invoice-lifecycle.js",
+      "baselineGitBlob": "1d08a8a69216a171de36fbcf0ad68853c54226ef",
+      "candidateGitBlob": "1d08a8a69216a171de36fbcf0ad68853c54226ef",
+      "identical": true
+    },
+    {
+      "baselinePath": "api/whatsapp-process.js",
+      "candidatePath": "legacy/api/whatsapp-process.js",
+      "baselineGitBlob": "0e5119aa4a003973ebc309de655b815500fb030a",
+      "candidateGitBlob": "0e5119aa4a003973ebc309de655b815500fb030a",
+      "identical": true
+    },
+    {
+      "baselinePath": "api/whatsapp-test-send.js",
+      "candidatePath": "legacy/api/whatsapp-test-send.js",
+      "baselineGitBlob": "f870439e1110964c451c76e2dcf19741a5427e91",
+      "candidateGitBlob": "f870439e1110964c451c76e2dcf19741a5427e91",
+      "identical": true
+    },
+    {
+      "baselinePath": "api/whatsapp.js",
+      "candidatePath": "legacy/api/whatsapp.js",
+      "baselineGitBlob": "7356c8566b7f19bc5ec5bccf33270d45eecd1658",
+      "candidateGitBlob": "7356c8566b7f19bc5ec5bccf33270d45eecd1658",
+      "identical": true
+    },
+    {
+      "baselinePath": "app/index.html",
+      "candidatePath": "legacy/app/index.html",
+      "baselineGitBlob": "fe2cabc1c46bc754e2d972ec9c52aa61649da6b5",
+      "candidateGitBlob": "fe2cabc1c46bc754e2d972ec9c52aa61649da6b5",
+      "identical": true
+    },
+    {
+      "baselinePath": "src/auth.ts",
+      "candidatePath": "legacy/src/auth.ts",
+      "baselineGitBlob": "77625dc092094b46f5d6915dad7362b71c5ff1c0",
+      "candidateGitBlob": "77625dc092094b46f5d6915dad7362b71c5ff1c0",
+      "identical": true
+    },
+    {
+      "baselinePath": "src/data.ts",
+      "candidatePath": "legacy/src/data.ts",
+      "baselineGitBlob": "3792484c9ce193492563f87c3cd97a8a96166958",
+      "candidateGitBlob": "3792484c9ce193492563f87c3cd97a8a96166958",
+      "identical": true
+    },
+    {
+      "baselinePath": "src/index.ts",
+      "candidatePath": "legacy/src/index.ts",
+      "baselineGitBlob": "32585c572235fee8bb3af9523874814d8e6784cd",
+      "candidateGitBlob": "32585c572235fee8bb3af9523874814d8e6784cd",
+      "identical": true
+    },
+    {
+      "baselinePath": "src/settings.ts",
+      "candidatePath": "legacy/src/settings.ts",
+      "baselineGitBlob": "53b8b6dfe969e8a2860c58ae7a6eb7195be930b6",
+      "candidateGitBlob": "53b8b6dfe969e8a2860c58ae7a6eb7195be930b6",
+      "identical": true
+    },
+    {
+      "baselinePath": "src/storage.ts",
+      "candidatePath": "legacy/src/storage.ts",
+      "baselineGitBlob": "418d016641943da4ff7f92b4b9aba5ad3e904173",
+      "candidateGitBlob": "418d016641943da4ff7f92b4b9aba5ad3e904173",
+      "identical": true
+    }
+  ],
+  "configFiles": [
+    {
+      "baselinePath": "package.json",
+      "candidatePath": "legacy/package.json",
+      "baselineGitBlob": "d09133a78f08dd2c81d21b39160e5b567d1cba2e",
+      "candidateGitBlob": "d09133a78f08dd2c81d21b39160e5b567d1cba2e",
+      "identical": true
+    },
+    {
+      "baselinePath": "tsconfig.json",
+      "candidatePath": "legacy/tsconfig.json",
+      "baselineGitBlob": "2f4e3a3aa966f8e6e94a271651192ac5dc7bf67a",
+      "candidateGitBlob": "2f4e3a3aa966f8e6e94a271651192ac5dc7bf67a",
+      "identical": true
+    },
+    {
+      "baselinePath": "vercel.json",
+      "candidatePath": "legacy/vercel.json",
+      "baselineGitBlob": "8a1acb2ac7b799346ec768835d55ab09684692a8",
+      "candidateGitBlob": "8a1acb2ac7b799346ec768835d55ab09684692a8",
+      "identical": true
+    },
+    {
+      "baselinePath": "middleware.js",
+      "candidatePath": "legacy/middleware.js",
+      "baselineGitBlob": "0adf733665f86d71cb5e1cef13deb00abc016b76",
+      "candidateGitBlob": "0adf733665f86d71cb5e1cef13deb00abc016b76",
+      "identical": true
+    },
+    {
+      "baselinePath": "package-lock.json",
+      "candidatePath": "legacy/package-lock.json",
+      "baselineGitBlob": "0c5876896086de2bc8207965f683ceec3e89afaa",
+      "candidateGitBlob": "0c5876896086de2bc8207965f683ceec3e89afaa",
+      "identical": true
+    }
+  ],
+  "configNote": "V21 original parsed JSON was semantically identical but reformatted; followup restores exact original bytes."
+}

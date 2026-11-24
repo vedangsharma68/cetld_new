@@ -1,0 +1,17 @@
+[
+  {
+    "table_name": "profiles",
+    "conname": "profiles_full_name_check",
+    "definition": "CHECK (((full_name IS NULL) OR ((length(btrim(full_name)) >= 1) AND (length(btrim(full_name)) <= 160))))"
+  },
+  {
+    "table_name": "profiles",
+    "conname": "profiles_pkey",
+    "definition": "PRIMARY KEY (user_id)"
+  },
+  {
+    "table_name": "profiles",
+    "conname": "profiles_user_id_fkey",
+    "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+  }
+]

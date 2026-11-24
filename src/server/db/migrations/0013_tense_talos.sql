@@ -1,0 +1,2 @@
+ALTER TABLE "invoices" DROP CONSTRAINT "invoices_financial_status_check";--> statement-breakpoint
+ALTER TABLE "invoices" ADD CONSTRAINT "invoices_financial_status_check" CHECK ("invoices"."financial_status" in ('draft','open','partially_paid','sent','overdue','paid','void','cancelled'));

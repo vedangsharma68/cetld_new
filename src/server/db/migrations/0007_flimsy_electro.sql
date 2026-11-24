@@ -1,0 +1,1 @@
+ALTER TABLE "storage_cleanup_jobs" ADD COLUMN "not_before" timestamp with time zone DEFAULT clock_timestamp()+interval '3 hours' NOT NULL;

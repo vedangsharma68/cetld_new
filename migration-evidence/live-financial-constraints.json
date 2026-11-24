@@ -1,0 +1,102 @@
+[
+  {
+    "table_name": "invoice_number_sequences",
+    "conname": "invoice_number_sequences_invoice_year_check",
+    "definition": "CHECK (((invoice_year >= 2000) AND (invoice_year <= 9999)))"
+  },
+  {
+    "table_name": "invoice_number_sequences",
+    "conname": "invoice_number_sequences_last_value_check",
+    "definition": "CHECK ((last_value > 0))"
+  },
+  {
+    "table_name": "invoice_number_sequences",
+    "conname": "invoice_number_sequences_pkey",
+    "definition": "PRIMARY KEY (workspace_id, invoice_year)"
+  },
+  {
+    "table_name": "invoice_number_sequences",
+    "conname": "invoice_number_sequences_workspace_id_fkey",
+    "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+  },
+  {
+    "table_name": "invoice_reopening_proposals",
+    "conname": "invoice_reopening_proposals_amount_check",
+    "definition": "CHECK (((amount >= (0)::numeric) AND (scale(amount) <= 2)))"
+  },
+  {
+    "table_name": "invoice_reopening_proposals",
+    "conname": "invoice_reopening_proposals_decision_message_id_key",
+    "definition": "UNIQUE (decision_message_id)"
+  },
+  {
+    "table_name": "invoice_reopening_proposals",
+    "conname": "invoice_reopening_proposals_pkey",
+    "definition": "PRIMARY KEY (id)"
+  },
+  {
+    "table_name": "invoice_reopening_proposals",
+    "conname": "invoice_reopening_proposals_source_message_id_key",
+    "definition": "UNIQUE (source_message_id)"
+  },
+  {
+    "table_name": "invoice_reopening_proposals",
+    "conname": "invoice_reopening_proposals_state_check",
+    "definition": "CHECK ((state = ANY (ARRAY['pending'::text, 'confirmed'::text, 'cancelled'::text, 'expired'::text, 'stale'::text])))"
+  },
+  {
+    "table_name": "invoice_reopening_proposals",
+    "conname": "invoice_reopening_proposals_workspace_id_invoice_id_fkey",
+    "definition": "FOREIGN KEY (workspace_id, invoice_id) REFERENCES invoices(workspace_id, id) ON DELETE CASCADE"
+  },
+  {
+    "table_name": "invoice_reopening_proposals",
+    "conname": "invoice_reopening_proposals_workspace_id_owner_id_fkey",
+    "definition": "FOREIGN KEY (workspace_id, owner_id) REFERENCES workspaces(id, owner_id) ON DELETE CASCADE"
+  },
+  {
+    "table_name": "payment_reversals",
+    "conname": "payment_reversals_actor_id_fkey",
+    "definition": "FOREIGN KEY (actor_id) REFERENCES auth.users(id)"
+  },
+  {
+    "table_name": "payment_reversals",
+    "conname": "payment_reversals_amount_check",
+    "definition": "CHECK (((amount > (0)::numeric) AND (scale(amount) <= 2)))"
+  },
+  {
+    "table_name": "payment_reversals",
+    "conname": "payment_reversals_pkey",
+    "definition": "PRIMARY KEY (id)"
+  },
+  {
+    "table_name": "payment_reversals",
+    "conname": "payment_reversals_proposal_id_fkey",
+    "definition": "FOREIGN KEY (proposal_id) REFERENCES invoice_reopening_proposals(id)"
+  },
+  {
+    "table_name": "payment_reversals",
+    "conname": "payment_reversals_reason_check",
+    "definition": "CHECK ((reason = 'owner_invoice_reopening'::text))"
+  },
+  {
+    "table_name": "payment_reversals",
+    "conname": "payment_reversals_workspace_id_actor_id_fkey",
+    "definition": "FOREIGN KEY (workspace_id, actor_id) REFERENCES workspaces(id, owner_id)"
+  },
+  {
+    "table_name": "payment_reversals",
+    "conname": "payment_reversals_workspace_id_invoice_id_fkey",
+    "definition": "FOREIGN KEY (workspace_id, invoice_id) REFERENCES invoices(workspace_id, id)"
+  },
+  {
+    "table_name": "payment_reversals",
+    "conname": "payment_reversals_workspace_id_payment_id_fkey",
+    "definition": "FOREIGN KEY (workspace_id, payment_id) REFERENCES payments(workspace_id, id)"
+  },
+  {
+    "table_name": "payment_reversals",
+    "conname": "payment_reversals_workspace_id_payment_id_key",
+    "definition": "UNIQUE (workspace_id, payment_id)"
+  }
+]

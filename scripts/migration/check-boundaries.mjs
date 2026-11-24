@@ -1,0 +1,5 @@
+import { readFile,readdir } from "node:fs/promises";
+import path from "node:path";
+const errors=[];
+async function visit(dir){for(const entry of await readdir(dir,{withFileTypes:true})){const name=path.join(dir,entry.name);if(entry.isDirectory()){await visit(name);continue;}if(!/\.(ts|tsx)$/.test(name))continue;const text=await readFile(name,"utf8");if(name.startsWith("src/server/")&&!text.startsWith('import "server-only"'))errors.push(name+": missing server-only boundary");if(text.includes("@supabase/supabase-js")&&name!=="src/server/lib/supabase-admin.ts")errors.push(name+": forbidden Supabase SDK import");if((name.startsWith("src/client/")||/^['"]use client['"]/.test(text))&&/from\s+['"][^'"]*server\//.test(text))errors.push(name+": client imports server");if(/NEXT_PUBLIC_SUPABASE_/.test(text))errors.push(name+": public Supabase env");}}
+await visit("src");if(errors.length){process.stderr.write(errors.join("\n")+"\n");process.exitCode=1;}else process.stdout.write("Import boundaries passed\n");

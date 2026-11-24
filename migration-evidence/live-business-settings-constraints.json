@@ -1,0 +1,117 @@
+[
+  {
+    "table_name": "workspace_ai_settings",
+    "conname": "workspace_ai_settings_fallback_model_check",
+    "definition": "CHECK (((fallback_model IS NULL) OR (fallback_model = ANY (ARRAY['@cf/meta/llama-3.3-70b-instruct-fp8-fast'::text, '@cf/meta/llama-4-scout-17b-16e-instruct'::text, '@cf/mistralai/mistral-small-3.1-24b-instruct'::text, '@cf/openai/gpt-oss-20b'::text, '@cf/qwen/qwen3-30b-a3b-fp8'::text, '@cf/zai-org/glm-4.7-flash'::text, 'space-bunny-free'::text, 'longcat-2.5-preview-free'::text, 'gemini-3.5-flash'::text, 'gemini-3.5-flash-lite'::text, 'gpt-oss:20b-cloud'::text])) OR ((length(fallback_model) <= 100) AND (fallback_model ~ '^[a-z0-9][a-z0-9.-]*-free$'::text))))"
+  },
+  {
+    "table_name": "workspace_ai_settings",
+    "conname": "workspace_ai_settings_models_different",
+    "definition": "CHECK (((fallback_model IS NULL) OR (fallback_model <> primary_model)))"
+  },
+  {
+    "table_name": "workspace_ai_settings",
+    "conname": "workspace_ai_settings_pkey",
+    "definition": "PRIMARY KEY (workspace_id)"
+  },
+  {
+    "table_name": "workspace_ai_settings",
+    "conname": "workspace_ai_settings_primary_model_check",
+    "definition": "CHECK (((primary_model = ANY (ARRAY['@cf/meta/llama-3.3-70b-instruct-fp8-fast'::text, '@cf/meta/llama-4-scout-17b-16e-instruct'::text, '@cf/mistralai/mistral-small-3.1-24b-instruct'::text, '@cf/openai/gpt-oss-20b'::text, '@cf/qwen/qwen3-30b-a3b-fp8'::text, '@cf/zai-org/glm-4.7-flash'::text, 'gemini-3.5-flash'::text, 'gemini-3.5-flash-lite'::text, 'space-bunny-free'::text])) OR ((length(primary_model) <= 100) AND (primary_model ~ '^[a-z0-9][a-z0-9.-]*-free$'::text))))"
+  },
+  {
+    "table_name": "workspace_ai_settings",
+    "conname": "workspace_ai_settings_workspace_id_fkey",
+    "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+  },
+  {
+    "table_name": "workspace_members",
+    "conname": "workspace_members_pkey",
+    "definition": "PRIMARY KEY (workspace_id, user_id)"
+  },
+  {
+    "table_name": "workspace_members",
+    "conname": "workspace_members_user_id_fkey",
+    "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+  },
+  {
+    "table_name": "workspace_members",
+    "conname": "workspace_members_workspace_id_fkey",
+    "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+  },
+  {
+    "table_name": "workspace_members",
+    "conname": "workspace_members_workspace_id_user_id_role_key",
+    "definition": "UNIQUE (workspace_id, user_id, role)"
+  },
+  {
+    "table_name": "workspace_settings",
+    "conname": "workspace_settings_business_name_check",
+    "definition": "CHECK (((business_name IS NULL) OR ((length(btrim(business_name)) >= 1) AND (length(btrim(business_name)) <= 200))))"
+  },
+  {
+    "table_name": "workspace_settings",
+    "conname": "workspace_settings_default_currency_check",
+    "definition": "CHECK ((default_currency ~ '^[A-Z]{3}$'::text))"
+  },
+  {
+    "table_name": "workspace_settings",
+    "conname": "workspace_settings_follow_up_preferences_check",
+    "definition": "CHECK ((jsonb_typeof(follow_up_preferences) = 'object'::text))"
+  },
+  {
+    "table_name": "workspace_settings",
+    "conname": "workspace_settings_owner_bot_preferences_object",
+    "definition": "CHECK (((jsonb_typeof(owner_bot_preferences) = 'object'::text) AND (octet_length((owner_bot_preferences)::text) <= 8192)))"
+  },
+  {
+    "table_name": "workspace_settings",
+    "conname": "workspace_settings_pkey",
+    "definition": "PRIMARY KEY (workspace_id)"
+  },
+  {
+    "table_name": "workspace_settings",
+    "conname": "workspace_settings_whatsapp_owner_attested_by_fkey",
+    "definition": "FOREIGN KEY (whatsapp_owner_attested_by) REFERENCES auth.users(id) ON DELETE RESTRICT"
+  },
+  {
+    "table_name": "workspace_settings",
+    "conname": "workspace_settings_whatsapp_owner_phone_check",
+    "definition": "CHECK (((whatsapp_owner_phone IS NULL) OR (whatsapp_owner_phone ~ '^\\+[1-9][0-9]{7,14}$'::text)))"
+  },
+  {
+    "table_name": "workspace_settings",
+    "conname": "workspace_settings_workspace_id_fkey",
+    "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+  },
+  {
+    "table_name": "workspaces",
+    "conname": "workspaces_id_owner_id_key",
+    "definition": "UNIQUE (id, owner_id)"
+  },
+  {
+    "table_name": "workspaces",
+    "conname": "workspaces_name_check",
+    "definition": "CHECK (((length(btrim(name)) >= 1) AND (length(btrim(name)) <= 160)))"
+  },
+  {
+    "table_name": "workspaces",
+    "conname": "workspaces_owner_id_fkey",
+    "definition": "FOREIGN KEY (owner_id) REFERENCES auth.users(id) ON DELETE RESTRICT"
+  },
+  {
+    "table_name": "workspaces",
+    "conname": "workspaces_pkey",
+    "definition": "PRIMARY KEY (id)"
+  },
+  {
+    "table_name": "workspaces",
+    "conname": "workspaces_slug_check",
+    "definition": "CHECK ((slug ~ '^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$'::text))"
+  },
+  {
+    "table_name": "workspaces",
+    "conname": "workspaces_slug_key",
+    "definition": "UNIQUE (slug)"
+  }
+]

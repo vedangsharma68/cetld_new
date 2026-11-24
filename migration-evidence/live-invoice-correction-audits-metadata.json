@@ -1,0 +1,105 @@
+{
+  "columns": [
+    {
+      "column_name": "id",
+      "data_type": "uuid",
+      "is_nullable": "NO",
+      "column_default": "gen_random_uuid()"
+    },
+    {
+      "column_name": "workspace_id",
+      "data_type": "uuid",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "owner_id",
+      "data_type": "uuid",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "invoice_id",
+      "data_type": "uuid",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "source_kind",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "source_event_id",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "values",
+      "data_type": "jsonb",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "before_snapshot",
+      "data_type": "jsonb",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "after_snapshot",
+      "data_type": "jsonb",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO",
+      "column_default": "clock_timestamp()"
+    }
+  ],
+  "constraints": [
+    {
+      "conname": "invoice_correction_audits_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "conname": "invoice_correction_audits_source_kind_check",
+      "definition": "CHECK ((source_kind = ANY (ARRAY['whatsapp'::text, 'dashboard'::text])))"
+    },
+    {
+      "conname": "invoice_correction_audits_workspace_id_invoice_id_fkey",
+      "definition": "FOREIGN KEY (workspace_id, invoice_id) REFERENCES invoices(workspace_id, id)"
+    },
+    {
+      "conname": "invoice_correction_audits_workspace_id_owner_id_fkey",
+      "definition": "FOREIGN KEY (workspace_id, owner_id) REFERENCES workspaces(id, owner_id)"
+    },
+    {
+      "conname": "invoice_correction_audits_workspace_id_owner_id_source_kind_key",
+      "definition": "UNIQUE (workspace_id, owner_id, source_kind, source_event_id)"
+    }
+  ],
+  "indexes": [
+    {
+      "indexname": "invoice_correction_audits_pkey",
+      "indexdef": "CREATE UNIQUE INDEX invoice_correction_audits_pkey ON public.invoice_correction_audits USING btree (id)"
+    },
+    {
+      "indexname": "invoice_correction_audits_workspace_id_owner_id_source_kind_key",
+      "indexdef": "CREATE UNIQUE INDEX invoice_correction_audits_workspace_id_owner_id_source_kind_key ON public.invoice_correction_audits USING btree (workspace_id, owner_id, source_kind, source_event_id)"
+    }
+  ],
+  "policies": [
+    {
+      "policyname": "invoice_correction_owner_read",
+      "roles": "{authenticated}",
+      "cmd": "SELECT",
+      "qual": "((owner_id = ( SELECT auth.uid() AS uid)) AND (EXISTS ( SELECT 1\n   FROM workspaces w\n  WHERE ((w.id = invoice_correction_audits.workspace_id) AND (w.owner_id = ( SELECT auth.uid() AS uid))))))",
+      "with_check": null
+    }
+  ]
+}

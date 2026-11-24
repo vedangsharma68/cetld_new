@@ -1,0 +1,45 @@
+{
+  "name": "@cetld/core-backend",
+  "version": "1.0.0",
+  "description": "Tenant-isolated Supabase backend foundation",
+  "scripts": {
+    "test": "node --import tsx --test --test-concurrency=2 tests/*.test.ts tests/*.test.mjs",
+    "test:ai": "node --test tests/ai-*.test.mjs",
+    "test:offline-route": "node --test tests/release/offline-route.test.mjs",
+    "test:ai:live": "node scripts/ai-smoke.mjs",
+    "typecheck": "tsc --noEmit",
+    "test:owner-chat": "node scripts/owner-chat-battery.mjs --fast",
+    "test:owner-chat:live": "node scripts/owner-chat-battery.mjs --live",
+    "check:release": "node scripts/check-owner-chat-gate.mjs",
+    "build:frontend": "node scripts/build-frontend.mjs",
+    "test:ui": "playwright test",
+    "postcheck:release": "npm run build:frontend"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@napi-rs/canvas": "0.1.100",
+    "@supabase/supabase-js": "2.116.0",
+    "@vercel/functions": "3.9.9",
+    "@vercel/oidc": "file:vendor/vercel-oidc-disabled",
+    "pdfjs-dist": "5.4.394",
+    "sharp": "0.35.5",
+    "tesseract.js": "7.0.0",
+    "wink-lexicon": "2.2.0",
+    "wink-pos-tagger": "2.2.2"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@playwright/test": "1.56.1",
+    "@types/node": "26.6.2",
+    "embedded-postgres": "18.6.0-beta.19",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  },
+  "private": true,
+  "overrides": {
+    "@vercel/oidc": "$@vercel/oidc"
+  }
+}
