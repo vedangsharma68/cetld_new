@@ -18,6 +18,8 @@ export const users = pgTable(
       .notNull()
       .default("member"),
     emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
+    bannedUntil: timestamp("banned_until", { withTimezone: true }),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
     passwordHash: text("password_hash"),
     sessionVersion: integer("session_version").notNull().default(0),
     image: text("image"),

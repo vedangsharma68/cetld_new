@@ -1,13 +1,18 @@
 import "server-only";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, sql, isNull, or } from "drizzle-orm";
 import { db } from "@/server/db/client";
 import { users, providerAccounts, authRateLimits } from "@/server/db/schema";
+const activeUser = () =>
+  and(
+    isNull(users.deletedAt),
+    or(isNull(users.bannedUntil), sql`${users.bannedUntil}<=clock_timestamp()`),
+  );
 export const authRepository = {
   async byId(id: string) {
     const [row] = await db
       .select()
       .from(users)
-      .where(eq(users.id, id))
+      .where(and(eq(users.id, id), activeUser()))
       .limit(1);
     return row ?? null;
   },
@@ -18,7 +23,7 @@ export const authRepository = {
     const [row] = await db
       .select()
       .from(users)
-      .where(eq(users.email, email))
+      .where(and(eq(users.email, email), activeUser()))
       .limit(1);
     return row ?? null;
   },
@@ -36,6 +41,8 @@ export const authRepository = {
         and(
           eq(providerAccounts.provider, provider),
           eq(providerAccounts.providerAccountId, subject),
+          activeUser(),
+          sql`${users.emailVerifiedAt} is not null`,
         ),
       )
       .limit(1);

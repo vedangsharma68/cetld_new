@@ -1,5 +1,5 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { eq, and, isNull, or, sql } from "drizzle-orm";
 import { auth } from "@/server/auth.config";
 import { db } from "@/server/db/client";
 import { users } from "@/server/db/schema";
@@ -21,7 +21,16 @@ export async function getSessionUser(): Promise<SessionUser> {
       sessionVersion: users.sessionVersion,
     })
     .from(users)
-    .where(eq(users.id, session.user.id))
+    .where(
+      and(
+        eq(users.id, session.user.id),
+        isNull(users.deletedAt),
+        or(
+          isNull(users.bannedUntil),
+          sql`${users.bannedUntil}<=clock_timestamp()`,
+        ),
+      ),
+    )
     .limit(1);
   if (
     !user ||

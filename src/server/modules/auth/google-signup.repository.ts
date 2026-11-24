@@ -19,6 +19,10 @@ export const googleSignupRepository = {
           email: users.email,
           name: users.name,
           image: users.image,
+          deletedAt: users.deletedAt,
+          bannedUntil: users.bannedUntil,
+          emailVerifiedAt: users.emailVerifiedAt,
+          active: sql<boolean>`${users.deletedAt} is null and (${users.bannedUntil} is null or ${users.bannedUntil}<=clock_timestamp())`,
         })
         .from(providerAccounts)
         .innerJoin(users, eq(users.id, providerAccounts.userId))
@@ -28,7 +32,17 @@ export const googleSignupRepository = {
             eq(providerAccounts.providerAccountId, input.subject),
           ),
         );
-      if (linked) return linked.email === input.email ? linked : null;
+      if (linked)
+        return linked.email === input.email &&
+          linked.emailVerifiedAt &&
+          linked.active
+          ? {
+              id: linked.id,
+              email: linked.email,
+              name: linked.name,
+              image: linked.image,
+            }
+          : null;
       if (
         (
           await tx
