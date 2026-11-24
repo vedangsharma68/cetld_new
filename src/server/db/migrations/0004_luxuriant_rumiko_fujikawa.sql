@@ -1,0 +1,2 @@
+CREATE INDEX "auth_rate_limits_window_idx" ON "auth_rate_limits" USING btree ("window_start");--> statement-breakpoint
+CREATE INDEX "oauth_signup_expiry_idx" ON "oauth_signup_challenges" USING btree ("expires_at");

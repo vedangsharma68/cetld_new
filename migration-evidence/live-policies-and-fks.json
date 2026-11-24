@@ -1,0 +1,803 @@
+[
+  {
+    "kind": "role_enum",
+    "definition": {
+      "type": "workspace_role",
+      "label": "owner"
+    }
+  },
+  {
+    "kind": "role_enum",
+    "definition": {
+      "type": "workspace_role",
+      "label": "admin"
+    }
+  },
+  {
+    "kind": "role_enum",
+    "definition": {
+      "type": "workspace_role",
+      "label": "member"
+    }
+  },
+  {
+    "kind": "policy",
+    "definition": {
+      "cmd": "DELETE",
+      "name": "customers_delete",
+      "qual": "app.is_workspace_member(workspace_id)",
+      "check": null,
+      "table": "customers"
+    }
+  },
+  {
+    "kind": "policy",
+    "definition": {
+      "cmd": "INSERT",
+      "name": "customers_insert",
+      "qual": null,
+      "check": "app.is_workspace_member(workspace_id)",
+      "table": "customers"
+    }
+  },
+  {
+    "kind": "policy",
+    "definition": {
+      "cmd": "SELECT",
+      "name": "customers_select",
+      "qual": "app.is_workspace_member(workspace_id)",
+      "check": null,
+      "table": "customers"
+    }
+  },
+  {
+    "kind": "policy",
+    "definition": {
+      "cmd": "UPDATE",
+      "name": "customers_update",
+      "qual": "app.is_workspace_member(workspace_id)",
+      "check": "app.is_workspace_member(workspace_id)",
+      "table": "customers"
+    }
+  },
+  {
+    "kind": "policy",
+    "definition": {
+      "cmd": "INSERT",
+      "name": "invoices_insert",
+      "qual": null,
+      "check": "(app.is_workspace_member(workspace_id) AND (deleted_at IS NULL) AND (deleted_by IS NULL))",
+      "table": "invoices"
+    }
+  },
+  {
+    "kind": "policy",
+    "definition": {
+      "cmd": "SELECT",
+      "name": "invoices_select",
+      "qual": "(app.is_workspace_member(workspace_id) AND (deleted_at IS NULL))",
+      "check": null,
+      "table": "invoices"
+    }
+  },
+  {
+    "kind": "policy",
+    "definition": {
+      "cmd": "UPDATE",
+      "name": "invoices_update",
+      "qual": "(app.is_workspace_member(workspace_id) AND (deleted_at IS NULL))",
+      "check": "(app.is_workspace_member(workspace_id) AND (deleted_at IS NULL) AND (deleted_by IS NULL))",
+      "table": "invoices"
+    }
+  },
+  {
+    "kind": "policy",
+    "definition": {
+      "cmd": "DELETE",
+      "name": "members_delete",
+      "qual": "(app.can_manage_member(workspace_id, role) AND (user_id <> ( SELECT auth.uid() AS uid)))",
+      "check": null,
+      "table": "workspace_members"
+    }
+  },
+  {
+    "kind": "policy",
+    "definition": {
+      "cmd": "INSERT",
+      "name": "members_insert",
+      "qual": null,
+      "check": "app.can_manage_member(workspace_id, role)",
+      "table": "workspace_members"
+    }
+  },
+  {
+    "kind": "policy",
+    "definition": {
+      "cmd": "SELECT",
+      "name": "members_select",
+      "qual": "app.is_workspace_member(workspace_id)",
+      "check": null,
+      "table": "workspace_members"
+    }
+  },
+  {
+    "kind": "policy",
+    "definition": {
+      "cmd": "UPDATE",
+      "name": "members_update",
+      "qual": "(app.can_manage_member(workspace_id, role) AND (user_id <> ( SELECT auth.uid() AS uid)))",
+      "check": "(app.can_manage_member(workspace_id, role) AND (user_id <> ( SELECT auth.uid() AS uid)))",
+      "table": "workspace_members"
+    }
+  },
+  {
+    "kind": "policy",
+    "definition": {
+      "cmd": "DELETE",
+      "name": "workspaces_delete",
+      "qual": "(owner_id = ( SELECT auth.uid() AS uid))",
+      "check": null,
+      "table": "workspaces"
+    }
+  },
+  {
+    "kind": "policy",
+    "definition": {
+      "cmd": "SELECT",
+      "name": "workspaces_select",
+      "qual": "app.is_workspace_member(id)",
+      "check": null,
+      "table": "workspaces"
+    }
+  },
+  {
+    "kind": "policy",
+    "definition": {
+      "cmd": "UPDATE",
+      "name": "workspaces_update",
+      "qual": "(owner_id = ( SELECT auth.uid() AS uid))",
+      "check": "(owner_id = ( SELECT auth.uid() AS uid))",
+      "table": "workspaces"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "identities_user_id_fkey",
+      "table": "auth.identities",
+      "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "sessions_user_id_fkey",
+      "table": "auth.sessions",
+      "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "mfa_factors_user_id_fkey",
+      "table": "auth.mfa_factors",
+      "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "one_time_tokens_user_id_fkey",
+      "table": "auth.one_time_tokens",
+      "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "oauth_authorizations_user_id_fkey",
+      "table": "auth.oauth_authorizations",
+      "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "oauth_consents_user_id_fkey",
+      "table": "auth.oauth_consents",
+      "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "webauthn_credentials_user_id_fkey",
+      "table": "auth.webauthn_credentials",
+      "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "webauthn_challenges_user_id_fkey",
+      "table": "auth.webauthn_challenges",
+      "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "scim_users_user_id_fkey",
+      "table": "auth.scim_users",
+      "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "mfa_recovery_code_sets_user_id_fkey",
+      "table": "auth.mfa_recovery_code_sets",
+      "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_consents_workspace_id_customer_id_fkey",
+      "table": "whatsapp_consents",
+      "definition": "FOREIGN KEY (workspace_id, customer_id) REFERENCES customers(workspace_id, id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_suppressions_workspace_id_fkey",
+      "table": "whatsapp_suppressions",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "workspaces_owner_id_fkey",
+      "table": "workspaces",
+      "definition": "FOREIGN KEY (owner_id) REFERENCES auth.users(id) ON DELETE RESTRICT"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "workspace_members_workspace_id_fkey",
+      "table": "workspace_members",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "workspace_members_user_id_fkey",
+      "table": "workspace_members",
+      "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "profiles_user_id_fkey",
+      "table": "profiles",
+      "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "cetld_core_automation_events_workspace_id_fkey",
+      "table": "cetld_core_automation_events",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "workspace_settings_workspace_id_fkey",
+      "table": "workspace_settings",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "customers_workspace_id_fkey",
+      "table": "customers",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "payments_workspace_id_fkey",
+      "table": "payments",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "invoices_workspace_id_fkey",
+      "table": "invoices",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "invoices_workspace_id_customer_id_fkey",
+      "table": "invoices",
+      "definition": "FOREIGN KEY (workspace_id, customer_id) REFERENCES customers(workspace_id, id) ON DELETE RESTRICT"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_workspace_data_proposals_workspace_id_fkey",
+      "table": "whatsapp_workspace_data_proposals",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_workspace_data_proposals_owner_id_fkey",
+      "table": "whatsapp_workspace_data_proposals",
+      "definition": "FOREIGN KEY (owner_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "business_records_deleted_by_fkey",
+      "table": "business_records",
+      "definition": "FOREIGN KEY (deleted_by) REFERENCES auth.users(id)"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "private_dispatch_customer_parties_customer_id_fkey",
+      "table": "app.private_dispatch_customer_parties",
+      "definition": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "invoice_files_workspace_id_fkey",
+      "table": "invoice_files",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "workspace_ai_settings_workspace_id_fkey",
+      "table": "workspace_ai_settings",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "cetld_accounting_connections_owner_id_fkey",
+      "table": "cetld_accounting_connections",
+      "definition": "FOREIGN KEY (owner_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "cetld_accounting_connections_workspace_id_owner_id_fkey",
+      "table": "cetld_accounting_connections",
+      "definition": "FOREIGN KEY (workspace_id, owner_id) REFERENCES workspaces(id, owner_id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "cetld_accounting_oauth_states_owner_id_fkey",
+      "table": "cetld_accounting_oauth_states",
+      "definition": "FOREIGN KEY (owner_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "cetld_accounting_oauth_states_workspace_id_owner_id_fkey",
+      "table": "cetld_accounting_oauth_states",
+      "definition": "FOREIGN KEY (workspace_id, owner_id) REFERENCES workspaces(id, owner_id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "cetld_accounting_sync_records_owner_id_fkey",
+      "table": "cetld_accounting_sync_records",
+      "definition": "FOREIGN KEY (owner_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "cetld_accounting_sync_records_workspace_id_owner_id_fkey",
+      "table": "cetld_accounting_sync_records",
+      "definition": "FOREIGN KEY (workspace_id, owner_id) REFERENCES workspaces(id, owner_id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_consents_workspace_id_fkey",
+      "table": "whatsapp_consents",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "workspace_settings_whatsapp_owner_attested_by_fkey",
+      "table": "workspace_settings",
+      "definition": "FOREIGN KEY (whatsapp_owner_attested_by) REFERENCES auth.users(id) ON DELETE RESTRICT"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_consents_consented_by_fkey",
+      "table": "whatsapp_consents",
+      "definition": "FOREIGN KEY (consented_by) REFERENCES auth.users(id) ON DELETE SET NULL"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_inbound_events_stop_workspace_id_fkey",
+      "table": "whatsapp_inbound_events",
+      "definition": "FOREIGN KEY (stop_workspace_id) REFERENCES workspaces(id) ON DELETE SET NULL"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_invoice_update_claims_workspace_id_fkey",
+      "table": "whatsapp_invoice_update_claims",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_invoice_update_claims_workspace_id_customer_id_fkey",
+      "table": "whatsapp_invoice_update_claims",
+      "definition": "FOREIGN KEY (workspace_id, customer_id) REFERENCES customers(workspace_id, id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "cetld_core_automation_delivery_claims_workspace_id_fkey",
+      "table": "cetld_core_automation_delivery_claims",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "cetld_core_automation_messages_workspace_id_fkey",
+      "table": "cetld_core_automation_messages",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "invoice_number_sequences_workspace_id_fkey",
+      "table": "invoice_number_sequences",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_owner_verifications_workspace_id_fkey",
+      "table": "whatsapp_owner_verifications",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_messages_workspace_id_fkey",
+      "table": "whatsapp_messages",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_messages_customer_id_fkey",
+      "table": "whatsapp_messages",
+      "definition": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_owner_action_receipts_workspace_id_fkey",
+      "table": "whatsapp_owner_action_receipts",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_owner_action_receipts_owner_id_fkey",
+      "table": "whatsapp_owner_action_receipts",
+      "definition": "FOREIGN KEY (owner_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "invoices_deleted_by_fkey",
+      "table": "invoices",
+      "definition": "FOREIGN KEY (deleted_by) REFERENCES auth.users(id) ON DELETE RESTRICT"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "invoice_lifecycle_proposals_workspace_id_owner_id_fkey",
+      "table": "invoice_lifecycle_proposals",
+      "definition": "FOREIGN KEY (workspace_id, owner_id) REFERENCES workspaces(id, owner_id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_direct_write_receipts_owner_id_fkey",
+      "table": "whatsapp_direct_write_receipts",
+      "definition": "FOREIGN KEY (owner_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_direct_write_receipts_workspace_id_owner_id_fkey",
+      "table": "whatsapp_direct_write_receipts",
+      "definition": "FOREIGN KEY (workspace_id, owner_id) REFERENCES workspaces(id, owner_id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "business_records_workspace_id_fkey",
+      "table": "business_records",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "payment_reversals_workspace_id_actor_id_fkey",
+      "table": "payment_reversals",
+      "definition": "FOREIGN KEY (workspace_id, actor_id) REFERENCES workspaces(id, owner_id)"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "invoice_reopening_proposals_workspace_id_owner_id_fkey",
+      "table": "invoice_reopening_proposals",
+      "definition": "FOREIGN KEY (workspace_id, owner_id) REFERENCES workspaces(id, owner_id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "payment_reversals_actor_id_fkey",
+      "table": "payment_reversals",
+      "definition": "FOREIGN KEY (actor_id) REFERENCES auth.users(id)"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "invoice_correction_audits_workspace_id_owner_id_fkey",
+      "table": "invoice_correction_audits",
+      "definition": "FOREIGN KEY (workspace_id, owner_id) REFERENCES workspaces(id, owner_id)"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "first_party_reminder_dispatches_workspace_id_owner_id_fkey",
+      "table": "app.first_party_reminder_dispatches",
+      "definition": "FOREIGN KEY (workspace_id, owner_id) REFERENCES workspaces(id, owner_id)"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "first_party_reminder_dispatches_workspace_id_customer_id_fkey",
+      "table": "app.first_party_reminder_dispatches",
+      "definition": "FOREIGN KEY (workspace_id, customer_id) REFERENCES customers(workspace_id, id)"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_owner_contact_recovery_workspace_id_owner_id_fkey",
+      "table": "whatsapp_owner_contact_recovery",
+      "definition": "FOREIGN KEY (workspace_id, owner_id) REFERENCES workspaces(id, owner_id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_owner_contact_recovery_workspace_id_customer_id_fkey",
+      "table": "whatsapp_owner_contact_recovery",
+      "definition": "FOREIGN KEY (workspace_id, customer_id) REFERENCES customers(workspace_id, id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "owner_assistant_turns_workspace_id_owner_id_fkey",
+      "table": "owner_assistant_turns",
+      "definition": "FOREIGN KEY (workspace_id, owner_id) REFERENCES workspaces(id, owner_id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "owner_assistant_proposals_workspace_id_owner_id_fkey",
+      "table": "owner_assistant_proposals",
+      "definition": "FOREIGN KEY (workspace_id, owner_id) REFERENCES workspaces(id, owner_id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "owner_assistant_token_receipts_workspace_id_owner_id_fkey",
+      "table": "owner_assistant_token_receipts",
+      "definition": "FOREIGN KEY (workspace_id, owner_id) REFERENCES workspaces(id, owner_id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "reminder_approvals_workspace_id_owner_id_fkey",
+      "table": "app.reminder_approvals",
+      "definition": "FOREIGN KEY (workspace_id, owner_id) REFERENCES workspaces(id, owner_id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "test_invoice_creations_workspace_id_fkey",
+      "table": "app.test_invoice_creations",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "test_invoice_creations_created_by_fkey",
+      "table": "app.test_invoice_creations",
+      "definition": "FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE RESTRICT"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "test_invoice_creations_workspace_id_customer_id_fkey",
+      "table": "app.test_invoice_creations",
+      "definition": "FOREIGN KEY (workspace_id, customer_id) REFERENCES customers(workspace_id, id) ON DELETE RESTRICT"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "offline_invoice_businesses_workspace_id_fkey",
+      "table": "app.offline_invoice_businesses",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_provider_memory_workspace_id_fkey",
+      "table": "whatsapp_provider_memory",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_provider_memory_owner_id_fkey",
+      "table": "whatsapp_provider_memory",
+      "definition": "FOREIGN KEY (owner_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_provider_memory_workspace_id_customer_id_fkey",
+      "table": "whatsapp_provider_memory",
+      "definition": "FOREIGN KEY (workspace_id, customer_id) REFERENCES customers(workspace_id, id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_private_invoice_terms_workspace_id_fkey",
+      "table": "whatsapp_private_invoice_terms",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "private_dispatch_sources_workspace_id_fkey",
+      "table": "app.private_dispatch_sources",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) DEFERRABLE INITIALLY DEFERRED"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "private_invoice_canonical_inputs_workspace_id_fkey",
+      "table": "app.private_invoice_canonical_inputs",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "private_invoice_capture_epochs_workspace_id_fkey",
+      "table": "app.private_invoice_capture_epochs",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "signup_invites_consumed_by_fkey",
+      "table": "app.signup_invites",
+      "definition": "FOREIGN KEY (consumed_by) REFERENCES auth.users(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "signup_invites_workspace_id_fkey",
+      "table": "app.signup_invites",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "private_dispatch_alias_cache_workspace_id_fkey",
+      "table": "app.private_dispatch_alias_cache",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  },
+  {
+    "kind": "foreign_key",
+    "definition": {
+      "name": "whatsapp_service_deliveries_workspace_id_fkey",
+      "table": "app.whatsapp_service_deliveries",
+      "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+    }
+  }
+]

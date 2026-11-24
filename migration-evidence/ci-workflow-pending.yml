@@ -1,0 +1,48 @@
+name: Next migration validation
+on:
+  pull_request:
+    branches: [main, repair/whatsapp-lazy-admission-20261122]
+    paths: ['src/**', 'tests/migration/**', 'package*.json', '*config*', 'scripts/migration/**', '.github/workflows/migration-next.yml']
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: fixture
+          POSTGRES_PASSWORD: fixture
+          POSTGRES_DB: postgres
+        ports: ["6543:5432"]
+        options: >-
+          --health-cmd "pg_isready -U fixture"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://fixture:fixture@127.0.0.1:6543/postgres
+      DIRECT_URL: postgresql://fixture:fixture@127.0.0.1:5432/postgres
+      SUPABASE_URL: https://fixture.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: synthetic-test-only
+      AUTH_SECRET: synthetic-test-only-secret-32-characters
+      AUTH_GOOGLE_ID: synthetic-test
+      AUTH_GOOGLE_SECRET: synthetic-test
+      APP_URL: http://localhost:3000
+      APP_ENV: test
+      LOG_LEVEL: silent
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run check:boundaries
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - run: python3 scripts/migration/ci-native-e2e.py

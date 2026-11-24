@@ -1,0 +1,4 @@
+import { defineConfig } from "eslint/config";
+import nextVitals from "eslint-config-next/core-web-vitals";
+import nextTs from "eslint-config-next/typescript";
+export default defineConfig([...nextVitals,...nextTs,{ignores:["legacy/**","node_modules/**",".next/**","api/**","ai/**","automation/**","tests/*.test.*"]},{files:["src/**/*.{ts,tsx}"],rules:{"@next/next/no-location-assign-relative-destination":"off","@typescript-eslint/no-explicit-any":"error","@typescript-eslint/ban-ts-comment":"error","no-restricted-imports":["error",{paths:[{name:"@supabase/supabase-js",message:"Storage admin module only"}],patterns:[{group:["@supabase/ssr","@supabase/auth-helpers-*"],message:"Server-owned auth only"}]}]}},{files:["src/server/lib/supabase-admin.ts"],rules:{"no-restricted-imports":"off"}},{files:["src/client/**/*.{ts,tsx}"],rules:{"no-restricted-imports":["error",{patterns:["@/server/*","@supabase/*","**/server/**"]}]} }]);

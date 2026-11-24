@@ -1,0 +1,3898 @@
+{
+  "source_sha": "ff066b664d2750638e63adba8b64be1a8290c3b9",
+  "files_with_candidate_supabase_calls": 109,
+  "source_call_inventory": [
+    {
+      "file": "invite-entry.mjs",
+      "calls": [
+        {
+          "line": 3,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 5,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 6,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 8,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 15,
+          "kinds": [
+            "auth"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "signup-invite.mjs",
+      "calls": [
+        {
+          "line": 4,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 6,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 21,
+          "kinds": [
+            "auth"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "business-name-reminders.mjs",
+      "calls": [
+        {
+          "line": 10,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "auth-link.mjs",
+      "calls": [
+        {
+          "line": 27,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 30,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 32,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 39,
+          "kinds": [
+            "auth"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/scheduled-owner-test.mjs",
+      "calls": [
+        {
+          "line": 66,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 85,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/first-party-reminder-runtime.mjs",
+      "calls": [
+        {
+          "line": 34,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/external-reminder-verification.mjs",
+      "calls": [
+        {
+          "line": 19,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/local-reminder-payment.mjs",
+      "calls": [
+        {
+          "line": 8,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/owner-test.mjs",
+      "calls": [
+        {
+          "line": 21,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 60,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 70,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 89,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 104,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/owner-settings.mjs",
+      "calls": [
+        {
+          "line": 15,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 22,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/workspace-data.mjs",
+      "calls": [
+        {
+          "line": 646,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 665,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 705,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 748,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 820,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 837,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 885,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 898,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/workspace-records.mjs",
+      "calls": [
+        {
+          "line": 68,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/consent.mjs",
+      "calls": [
+        {
+          "line": 34,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 37,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 40,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 47,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 60,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 63,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 66,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 74,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 87,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 98,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/private-dispatch.mjs",
+      "calls": [
+        {
+          "line": 14,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 34,
+          "kinds": [
+            "storage",
+            "storage",
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/service-reply-authority.mjs",
+      "calls": [
+        {
+          "line": 12,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 39,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 41,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 50,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 54,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/approved-reminders.mjs",
+      "calls": [
+        {
+          "line": 53,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 132,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/invoice-reopening.mjs",
+      "calls": [
+        {
+          "line": 19,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 36,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/reminder-approval.mjs",
+      "calls": [
+        {
+          "line": 22,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 32,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 38,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/owner-reply-store.mjs",
+      "calls": [
+        {
+          "line": 25,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 35,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 46,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/direct-owner-write.mjs",
+      "calls": [
+        {
+          "line": 43,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 48,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 56,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 107,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 145,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 177,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 205,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 276,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 308,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 326,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 330,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/owner-handler.mjs",
+      "calls": [
+        {
+          "line": 69,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 72,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 119,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 129,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 133,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 203,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 244,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 487,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 681,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 682,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 684,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 694,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/service-delivery.mjs",
+      "calls": [
+        {
+          "line": 23,
+          "kinds": [
+            "storage",
+            "from"
+          ]
+        },
+        {
+          "line": 24,
+          "kinds": [
+            "storage",
+            "from",
+            "from"
+          ]
+        },
+        {
+          "line": 29,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 33,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 34,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 35,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 37,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 42,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 46,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 47,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 53,
+          "kinds": [
+            "storage",
+            "from",
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/pending-actions.mjs",
+      "calls": [
+        {
+          "line": 10,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 13,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 19,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 28,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 36,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 43,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 50,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 59,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 67,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 72,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/cloud-outbound.mjs",
+      "calls": [
+        {
+          "line": 70,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 80,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 84,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 200,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 212,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 399,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 401,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 472,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 474,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/owner-payment-readback.mjs",
+      "calls": [
+        {
+          "line": 2,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 6,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 11,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 12,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/owner-agent.mjs",
+      "calls": [
+        {
+          "line": 582,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 639,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 719,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 1052,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 1074,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 1124,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 1348,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 1371,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/invoice-update-store.mjs",
+      "calls": [
+        {
+          "line": 9,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 29,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/assistant-handler.mjs",
+      "calls": [
+        {
+          "line": 305,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 344,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/reminder-proof.mjs",
+      "calls": [
+        {
+          "line": 17,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 34,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/owner-reminders.mjs",
+      "calls": [
+        {
+          "line": 93,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 98,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 105,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 113,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 126,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 146,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 147,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 155,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/owner-next-actions.mjs",
+      "calls": [
+        {
+          "line": 63,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 90,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 144,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 158,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 183,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 184,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/reminder-receipts.mjs",
+      "calls": [
+        {
+          "line": 8,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/test-send.mjs",
+      "calls": [
+        {
+          "line": 26,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/bot-preferences.mjs",
+      "calls": [
+        {
+          "line": 100,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 104,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 112,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/owner-binding.mjs",
+      "calls": [
+        {
+          "line": 28,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 32,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 38,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 39,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 49,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 63,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/owner-phone.mjs",
+      "calls": [
+        {
+          "line": 25,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/conversation-memory.mjs",
+      "calls": [
+        {
+          "line": 10,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 15,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 16,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 18,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/invoice-store.mjs",
+      "calls": [
+        {
+          "line": 24,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 207,
+          "kinds": [
+            "storage",
+            "from"
+          ]
+        },
+        {
+          "line": 222,
+          "kinds": [
+            "storage",
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/owner-direct-runtime.mjs",
+      "calls": [
+        {
+          "line": 23,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 47,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/cloud-inbound.mjs",
+      "calls": [
+        {
+          "line": 112,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 126,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 134,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 140,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 146,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 155,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 159,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 160,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 173,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 181,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 187,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 194,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 202,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 206,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 214,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 217,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 226,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 234,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 239,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 284,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 335,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 338,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 361,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 379,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 382,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 400,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 416,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 436,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 458,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 497,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 631,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/owner-consent.mjs",
+      "calls": [
+        {
+          "line": 63,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 68,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "automation/whatsapp/conversation-store.mjs",
+      "calls": [
+        {
+          "line": 38,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 49,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 53,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 59,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 64,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/pr213-delivery-lifecycle.test.mjs",
+      "calls": [
+        {
+          "line": 12,
+          "kinds": [
+            "from",
+            "rpc"
+          ]
+        },
+        {
+          "line": 33,
+          "kinds": [
+            "storage",
+            "from",
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/pr213-confirmation-recovery.test.mjs",
+      "calls": [
+        {
+          "line": 15,
+          "kinds": [
+            "from",
+            "rpc"
+          ]
+        },
+        {
+          "line": 36,
+          "kinds": [
+            "from",
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/owner-retained-zero-balance-correction-native-sql.test.mjs",
+      "calls": [
+        {
+          "line": 199,
+          "kinds": [
+            "storage",
+            "from",
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/test-invoice-reminders.test.mjs",
+      "calls": [
+        {
+          "line": 66,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 67,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 237,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 238,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/owner-pending-expiration.test.mjs",
+      "calls": [
+        {
+          "line": 18,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 19,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/owner-retained-review-confirmation-native-sql.test.mjs",
+      "calls": [
+        {
+          "line": 115,
+          "kinds": [
+            "storage",
+            "from"
+          ]
+        },
+        {
+          "line": 168,
+          "kinds": [
+            "storage",
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/exact-reminder-approval.test.mjs",
+      "calls": [
+        {
+          "line": 47,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 49,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/invoice-sync-native-sql.test.mjs",
+      "calls": [
+        {
+          "line": 24,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/reviewer-round8-topic-routing.source.mjs",
+      "calls": [
+        {
+          "line": 5,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/reminder-disposable-lifecycle-journey.test.mjs",
+      "calls": [
+        {
+          "line": 76,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 103,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/external-reminder-verification-sql.test.mjs",
+      "calls": [
+        {
+          "line": 151,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 229,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 264,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/pr213-prefence-recovery.test.mjs",
+      "calls": [
+        {
+          "line": 11,
+          "kinds": [
+            "from",
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/private-round16-dispatch.test.mjs",
+      "calls": [
+        {
+          "line": 6,
+          "kinds": [
+            "from",
+            "storage",
+            "from",
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/reminder-durability-sql.test.mjs",
+      "calls": [
+        {
+          "line": 133,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 218,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 235,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 237,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 240,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 254,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 272,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 359,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 434,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 435,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/whatsapp-dispatch-retry.test.mjs",
+      "calls": [
+        {
+          "line": 11,
+          "kinds": [
+            "from",
+            "rpc"
+          ]
+        },
+        {
+          "line": 52,
+          "kinds": [
+            "from",
+            "rpc"
+          ]
+        },
+        {
+          "line": 66,
+          "kinds": [
+            "from",
+            "rpc"
+          ]
+        },
+        {
+          "line": 76,
+          "kinds": [
+            "from",
+            "rpc"
+          ]
+        },
+        {
+          "line": 77,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 87,
+          "kinds": [
+            "from",
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/whatsapp-owner-diagnostics.test.mjs",
+      "calls": [
+        {
+          "line": 8,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 9,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/invoice-original-file.test.mjs",
+      "calls": [
+        {
+          "line": 95,
+          "kinds": [
+            "from",
+            "storage"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/pr213-delivery-fairness.test.mjs",
+      "calls": [
+        {
+          "line": 8,
+          "kinds": [
+            "storage",
+            "from",
+            "rpc"
+          ]
+        },
+        {
+          "line": 29,
+          "kinds": [
+            "storage",
+            "from",
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/owner-attachment-handler-sql.test.mjs",
+      "calls": [
+        {
+          "line": 183,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 263,
+          "kinds": [
+            "storage",
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/private-invoice-chat.test.mjs",
+      "calls": [
+        {
+          "line": 149,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/owner-pdf-clarification-native-sql.test.mjs",
+      "calls": [
+        {
+          "line": 105,
+          "kinds": [
+            "storage",
+            "from",
+            "from"
+          ]
+        },
+        {
+          "line": 143,
+          "kinds": [
+            "storage",
+            "from",
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/shared-owner-assistant.test.mjs",
+      "calls": [
+        {
+          "line": 74,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 91,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 198,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/whatsapp-outbound.test.mjs",
+      "calls": [
+        {
+          "line": 260,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 275,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 287,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 301,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 311,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 322,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 350,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/owner-invoice-fields.test.mjs",
+      "calls": [
+        {
+          "line": 79,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 80,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 84,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/reviewer-round8-topic-routing.test.mjs",
+      "calls": [
+        {
+          "line": 5,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/offline-invoice-intake.test.mjs",
+      "calls": [
+        {
+          "line": 476,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 579,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 666,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 667,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 674,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 693,
+          "kinds": [
+            "from",
+            "rpc"
+          ]
+        },
+        {
+          "line": 701,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 705,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 706,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 729,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 730,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/business-record-lifecycle.test.mjs",
+      "calls": [
+        {
+          "line": 28,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 29,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/owner-disposable-attachment-journey.test.mjs",
+      "calls": [
+        {
+          "line": 71,
+          "kinds": [
+            "storage",
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/pr213-delivery-retirement.test.mjs",
+      "calls": [
+        {
+          "line": 30,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 32,
+          "kinds": [
+            "storage",
+            "from",
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/quoted-owner-consent-native-sql.test.mjs",
+      "calls": [
+        {
+          "line": 47,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 49,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 60,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/source-invoice-metadata-sql.test.mjs",
+      "calls": [
+        {
+          "line": 84,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 107,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/cloud-reminders.test.mjs",
+      "calls": [
+        {
+          "line": 228,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/owner-attachment-lookup-native-sql.test.mjs",
+      "calls": [
+        {
+          "line": 101,
+          "kinds": [
+            "storage",
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/whatsapp-admission-recovery.test.mjs",
+      "calls": [
+        {
+          "line": 9,
+          "kinds": [
+            "storage",
+            "from",
+            "rpc"
+          ]
+        },
+        {
+          "line": 84,
+          "kinds": [
+            "storage",
+            "from",
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/text-invoice-native-sql.test.mjs",
+      "calls": [
+        {
+          "line": 153,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/whatsapp-test-send.test.mjs",
+      "calls": [
+        {
+          "line": 42,
+          "kinds": [
+            "rpc",
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/whatsapp-owner-test.test.mjs",
+      "calls": [
+        {
+          "line": 116,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 117,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/reminder-recipient-flow.test.mjs",
+      "calls": [
+        {
+          "line": 255,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/per-message-reminders.test.mjs",
+      "calls": [
+        {
+          "line": 56,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 69,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 70,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 79,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 118,
+          "kinds": [
+            "from",
+            "rpc"
+          ]
+        },
+        {
+          "line": 147,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 164,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 212,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 227,
+          "kinds": [
+            "rpc",
+            "rpc"
+          ]
+        },
+        {
+          "line": 245,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 246,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 249,
+          "kinds": [
+            "rpc",
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/owner-attachment-context.test.mjs",
+      "calls": [
+        {
+          "line": 35,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/whatsapp-commercial-service.test.mjs",
+      "calls": [
+        {
+          "line": 76,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 267,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 270,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 273,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 275,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 276,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/owner-consent-write.test.mjs",
+      "calls": [
+        {
+          "line": 51,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/owner-chat-reminders.test.mjs",
+      "calls": [
+        {
+          "line": 82,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 87,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 88,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 90,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 166,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/reviewer-round17-deadline-isolation.test.mjs",
+      "calls": [
+        {
+          "line": 34,
+          "kinds": [
+            "storage",
+            "from",
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/owner-cancel-signed-webhook-native-sql.test.mjs",
+      "calls": [
+        {
+          "line": 55,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/pr213-delivery-phase-matrix.test.mjs",
+      "calls": [
+        {
+          "line": 13,
+          "kinds": [
+            "storage",
+            "from",
+            "rpc"
+          ]
+        },
+        {
+          "line": 22,
+          "kinds": [
+            "storage",
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/approved-reminders.test.mjs",
+      "calls": [
+        {
+          "line": 120,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 121,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 156,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 160,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 279,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 281,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 283,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 409,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 416,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 420,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 422,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/pr213-customer-recovery.test.mjs",
+      "calls": [
+        {
+          "line": 16,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 22,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/pr213-delivery-upgrade.test.mjs",
+      "calls": [
+        {
+          "line": 10,
+          "kinds": [
+            "storage",
+            "from",
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/owner-attachment-conflict-clarification-native-sql.test.mjs",
+      "calls": [
+        {
+          "line": 138,
+          "kinds": [
+            "storage",
+            "from",
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/owner-atomic-batch.test.mjs",
+      "calls": [
+        {
+          "line": 62,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 63,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 124,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/email-auth-link.test.mjs",
+      "calls": [
+        {
+          "line": 40,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 46,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 55,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 59,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 66,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 69,
+          "kinds": [
+            "auth"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/fixtures/pr213-round5-inbound.source.mjs",
+      "calls": [
+        {
+          "line": 111,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 125,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 133,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 139,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 145,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 154,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 158,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 159,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 167,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 175,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 181,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 188,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 196,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 200,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 208,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 211,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 220,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 228,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 233,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 276,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 317,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 320,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 343,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 361,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 364,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 382,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 398,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 418,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 438,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 477,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/fixtures/owner-contact-recovery.mjs",
+      "calls": [
+        {
+          "line": 115,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 124,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 132,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/fixtures/owner-job.mjs",
+      "calls": [
+        {
+          "line": 11,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 12,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/fixtures/dispatch-sql-double.mjs",
+      "calls": [
+        {
+          "line": 35,
+          "kinds": [
+            "auth"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "tests/fixtures/verified-owner-rpc.mjs",
+      "calls": [
+        {
+          "line": 33,
+          "kinds": [
+            "rpc",
+            "rpc"
+          ]
+        },
+        {
+          "line": 35,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "scripts/issue-signup-invite.mjs",
+      "calls": [
+        {
+          "line": 7,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "ai/owner-conversation.mjs",
+      "calls": [
+        {
+          "line": 60,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "ai/private-chat-memory.mjs",
+      "calls": [
+        {
+          "line": 16,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 26,
+          "kinds": [
+            "rpc"
+          ]
+        },
+        {
+          "line": 31,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 34,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 47,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 54,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 81,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "ai/whatsapp-channel.mjs",
+      "calls": [
+        {
+          "line": 67,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 130,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 150,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 180,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "ai/offline-provenance.mjs",
+      "calls": [
+        {
+          "line": 5,
+          "kinds": [
+            "rpc"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "invoice/original-file-client.mjs",
+      "calls": [
+        {
+          "line": 16,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 18,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 21,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 34,
+          "kinds": [
+            "storage",
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/auth.ts",
+      "calls": [
+        {
+          "line": 136,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 239,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 253,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 263,
+          "kinds": [
+            "auth"
+          ]
+        },
+        {
+          "line": 281,
+          "kinds": [
+            "auth"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/settings.ts",
+      "calls": [
+        {
+          "line": 36,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/storage.ts",
+      "calls": [
+        {
+          "line": 80,
+          "kinds": [
+            "storage",
+            "from"
+          ]
+        },
+        {
+          "line": 98,
+          "kinds": [
+            "storage",
+            "from"
+          ]
+        },
+        {
+          "line": 106,
+          "kinds": [
+            "storage",
+            "from"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/data.ts",
+      "calls": [
+        {
+          "line": 35,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 55,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 59,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 65,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 69,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 74,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 82,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 107,
+          "kinds": [
+            "from"
+          ]
+        },
+        {
+          "line": 115,
+          "kinds": [
+            "from"
+          ]
+        }
+      ]
+    }
+  ],
+  "named_targets": [
+    {
+      "kind": "from",
+      "name": "whatsapp_inbound_events",
+      "references": 28
+    },
+    {
+      "kind": "from",
+      "name": "workspace_settings",
+      "references": 25
+    },
+    {
+      "kind": "from",
+      "name": "invoices",
+      "references": 20
+    },
+    {
+      "kind": "from",
+      "name": "invoice-files",
+      "references": 17
+    },
+    {
+      "kind": "from",
+      "name": "customers",
+      "references": 16
+    },
+    {
+      "kind": "from",
+      "name": "whatsapp_messages",
+      "references": 13
+    },
+    {
+      "kind": "rpc",
+      "name": "cetld_core_authorize_first_party_reminder",
+      "references": 13
+    },
+    {
+      "kind": "from",
+      "name": "whatsapp_consents",
+      "references": 7
+    },
+    {
+      "kind": "from",
+      "name": "whatsapp_inbound_media",
+      "references": 7
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_claim_reserved_reply",
+      "references": 7
+    },
+    {
+      "kind": "rpc",
+      "name": "owner_assistant_offline_provenance",
+      "references": 7
+    },
+    {
+      "kind": "from",
+      "name": "invoice_files",
+      "references": 6
+    },
+    {
+      "kind": "from",
+      "name": "whatsapp_pending_actions",
+      "references": 6
+    },
+    {
+      "kind": "rpc",
+      "name": "cetld_core_handle_reminder_button",
+      "references": 6
+    },
+    {
+      "kind": "from",
+      "name": "profiles",
+      "references": 5
+    },
+    {
+      "kind": "from",
+      "name": "workspaces",
+      "references": 5
+    },
+    {
+      "kind": "rpc",
+      "name": "owner_assistant_decide",
+      "references": 5
+    },
+    {
+      "kind": "rpc",
+      "name": "cetld_core_check_local_reminder_payment",
+      "references": 5
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_claim_service_owner_reply",
+      "references": 5
+    },
+    {
+      "kind": "from",
+      "name": "whatsapp_global_suppressions",
+      "references": 4
+    },
+    {
+      "kind": "from",
+      "name": "whatsapp_suppressions",
+      "references": 4
+    },
+    {
+      "kind": "rpc",
+      "name": "owner_assistant_reminder_dispatch_preview",
+      "references": 4
+    },
+    {
+      "kind": "from",
+      "name": "whatsapp_direct_write_receipts",
+      "references": 4
+    },
+    {
+      "kind": "from",
+      "name": "payments",
+      "references": 4
+    },
+    {
+      "kind": "rpc",
+      "name": "cetld_core_record_first_party_receipt",
+      "references": 4
+    },
+    {
+      "kind": "from",
+      "name": "cetld_core_automation_events",
+      "references": 3
+    },
+    {
+      "kind": "rpc",
+      "name": "cetld_core_quarantine_first_party_leases",
+      "references": 3
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_revoke_phone",
+      "references": 3
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_apply_owner_batch",
+      "references": 3
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_owner_reminder",
+      "references": 3
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_owner_record_consent",
+      "references": 3
+    },
+    {
+      "kind": "rpc",
+      "name": "owner_assistant_pending",
+      "references": 3
+    },
+    {
+      "kind": "from",
+      "name": "invoice",
+      "references": 3
+    },
+    {
+      "kind": "from",
+      "name": "whatsapp_private_invoice_terms",
+      "references": 3
+    },
+    {
+      "kind": "rpc",
+      "name": "signup_invite_status",
+      "references": 2
+    },
+    {
+      "kind": "rpc",
+      "name": "record_invoice_payment",
+      "references": 2
+    },
+    {
+      "kind": "from",
+      "name": "payment_reversals",
+      "references": 2
+    },
+    {
+      "kind": "from",
+      "name": "owner_assistant_proposals",
+      "references": 2
+    },
+    {
+      "kind": "from",
+      "name": "workspace_ai_settings",
+      "references": 2
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_owner_resolve_quote",
+      "references": 2
+    },
+    {
+      "kind": "from",
+      "name": "whatsapp_owner_contact_recovery",
+      "references": 2
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_save_service_delivery",
+      "references": 2
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_service_delivery_status",
+      "references": 2
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_prepare_reply_reservation",
+      "references": 2
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_rearm_unsent_reply",
+      "references": 2
+    },
+    {
+      "kind": "from",
+      "name": "whatsapp_owner_action_receipts",
+      "references": 2
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_owner_save_phone",
+      "references": 2
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_claim_inbound_events",
+      "references": 2
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_record_inbound_stop",
+      "references": 2
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_resubscribe_phone",
+      "references": 2
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_verify_owner_code",
+      "references": 2
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_pause_customer_followups",
+      "references": 2
+    },
+    {
+      "kind": "from",
+      "name": "%PDF-1.7\\ninvoice",
+      "references": 2
+    },
+    {
+      "kind": "rpc",
+      "name": "owner_assistant_propose",
+      "references": 2
+    },
+    {
+      "kind": "from",
+      "name": "%PDF-1.7\\nfixture",
+      "references": 2
+    },
+    {
+      "kind": "from",
+      "name": "test",
+      "references": 2
+    },
+    {
+      "kind": "from",
+      "name": "%PDF-1.7\\ninvalid",
+      "references": 2
+    },
+    {
+      "kind": "rpc",
+      "name": "cetld_core_claim_due_followups",
+      "references": 2
+    },
+    {
+      "kind": "from",
+      "name": "image",
+      "references": 2
+    },
+    {
+      "kind": "from",
+      "name": "original attachment",
+      "references": 2
+    },
+    {
+      "kind": "rpc",
+      "name": "redeem_workspace_invite",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "create_workspace",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_record_verbal_consent",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "owner_whatsapp_verification_status",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "owner_start_whatsapp_verification",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "owner_cancel_whatsapp_verification",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "owner_unbind_whatsapp",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "prepare_signup_invite",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "business_name_reminder_pause_count",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "Bearer ",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_suppress_unknown_phone",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_dispatch_privacy_snapshot",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_invoice_reopening",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "invoice_reopening_proposals",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "invoice_correction_audits",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_correct_owner_invoice",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_service_delivery_state",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_claim_ready_service_delivery",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_dispatch_admission_revision",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_finish_service_delivery",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_release_service_delivery",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_expire_owner_pending",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_begin_invoice_review",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_load_invoice_review",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_correct_offline_invoice_review",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_transition_invoice_review",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_load_pending_action_state",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_store_pending_action",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_claim_pending_action",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_begin_reply_dispatch",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_release_reply_dispatch",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_owner_partial_payment_capability",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_confirm_owner_invoice_action",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_confirm_owner_create_settings",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_override_invoice_review_number",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_claim_logged_invoice_update",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "cetld_core_claim_reminder_proof",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "whatsapp_owner_verifications",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "workspace_members",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_resolve_verified_owner",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_resolve_service_owner",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_record_delivery_status",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_block_unclaimed_reply",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "cetld_consume_accounting_oauth_state",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "cetld_claim_accounting_connection_refresh",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "cetld_update_accounting_connection_tokens",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "cetld_release_accounting_connection_refresh",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "hello",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "isolated fixture",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "cetld_core_check_local_reminder_payment_with_external_read",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "cetld_core_authorize_first_party_reminder_with_external_read",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "%PDF-1.7 own-source",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "foreign bytes",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "%PDF-1.7\\n1 0 obj <<>> endobj\\n%%EOF\\n",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "%PDF-1.4\\nSynthetic original\\n%%EOF\\n",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "\\n",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "isolated invoice source ",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "isolated",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "owner_assistant_history",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "owner_assistant_append",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "%PDF-1.4 fixture",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "%PDF- invalid",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "%PDF-1.7",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "isolated source bytes",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "fake",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "fake pdf",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "photo",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "cetld_core_authorize_delivery",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "isolated PDF fixture",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_claim_owner_reply",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "{ ",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "fixture",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "\u00bc\u00bd\u00be\u2150\u2151\u2152\u2153\u2154\u2155\u2156\u2157\u2158\u2159\u215a\u215b\u215c\u215d\u215e",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "pdf",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "test-signature",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_apply_direct_owner_write",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "isolated printed invoice source",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "issue_signup_invite",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "local fixture",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "whatsapp_retain_private_chat_origin",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "whatsapp_private_invoice_backfill",
+      "references": 1
+    },
+    {
+      "kind": "from",
+      "name": "and",
+      "references": 1
+    },
+    {
+      "kind": "rpc",
+      "name": "owner_correct_invoice",
+      "references": 1
+    }
+  ],
+  "historical_sql_migrations": 107,
+  "api_files": [
+    "api/whatsapp-process.js",
+    "api/ai.js",
+    "api/accounting.js",
+    "api/automation.js",
+    "api/whatsapp.js",
+    "api/invoice-lifecycle.js",
+    "api/whatsapp-test-send.js"
+  ]
+}

@@ -1,0 +1,15 @@
+# Cutover is not authorized or ready
+
+- Source is an isolated draft candidate, not approved for merge or deployment. Temporary free synthetic test project created under prior user approval, never a production reset.
+- Schema currently represents a clean target, not a completed drizzle-kit pull of live. Applying the generated CREATE TABLE baseline to current production would collide with existing tables. Do not do it.
+- Existing Supabase users need a same-UUID import, bcrypt verification, verified Google subject identities, membership role mapping and provider-owned identifier checks. The inspection script reads schema metadata only; importing password hashes is not performed here.
+- User changed policy to open signup on November24. Existing invite records are retained in the old system for history, not required for future signup. Gaurav can use the open flow without his previously issued code once safely deployed.
+- Open Google signup and strict existing-subject sign-in need actual OAuth test configuration and roundtrip. Existing-email accounts are never auto-linked. Synthetic invariants are not a real Google handshake.
+- Credentials signup uses expiring token hashes and password proof, creating no user or business until verification. No SMTP sender is configured: API returns503 rather than bypass verification. Synthetic mail transport is tested, actual sender delivery is not.
+- email_verified_at must be imported from trusted provider state for existing accounts, never backfilled as verified merely to make tests pass.
+- Temporary synthetic Supabase project syfqehqbrepgwlzktmcs is isolated; permanent app-dev remains unresolved and this temporary project must be deleted after tests. Direct IPv6 connection is unreachable in test network; session/transaction pooler connections work. No production key rotation, policy removal or function deletion permitted in this checkpoint.
+- Current product includes payments, accounting integrations, business settings, invoice OCR/photo/PDF flows, reminders/WhatsApp. They remain unmigrated and must not disappear in a cutover.
+- Old service dispatch remains paused. A modern frontend build does not prove the real bot reply path.
+- Existing Vercel project has live environment bindings and preview behavior. Local vercel.json disables Git deployments, but this does not prove a future push cannot trigger project-level behavior. Verify the actual hosting path separately before pushing.
+
+- Target invoice module is a clean metadata/PDF checkpoint. Existing invoices use owner-confirmed reversible deletion, payment/reminder guards and lifecycle proposals. Those are NOT mapped yet; no existing invoice may be imported into simplified hard-delete semantics. Target durable cleanup retains permanent tombstones and rechecks in bounded ten-job batches every three hours on invoice listing or explicit script. Native DB proves the due-time fence and retention. Hosted scheduling/retry observation still needs verification before live use. Private bucket constraints and signed-upload expiry must be verified against the actual target project.

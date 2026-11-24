@@ -1,0 +1,46 @@
+import { z } from "zod";
+export const invoiceIdSchema = z.uuid();
+export const createInvoiceSchema = z
+  .object({
+    workspaceId: z.uuid(),
+    customerId: z.uuid().nullable().optional(),
+    invoiceNumber: z.string().trim().min(1).max(100),
+    amount: z
+      .string()
+      .regex(
+        /^(0|[1-9][0-9]{0,11})(\.[0-9]{1,2})?$/,
+        "Enter a non-negative amount with at most two decimals",
+      ),
+    currency: z.enum(["INR", "USD", "EUR", "GBP", "AED"]),
+  })
+  .strict();
+export const invoiceFiltersSchema = z.object({
+  workspaceId: z.uuid(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+});
+export const invoiceUploadSchema = z
+  .object({
+    fileName: z.string().trim().min(1).max(254),
+    mimeType: z.string(),
+    size: z.number().int().positive(),
+  })
+  .strict();
+export const finalizeInvoiceSchema = z
+  .object({ status: z.literal("uploaded") })
+  .strict();
+export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
+export type InvoiceFilters = z.infer<typeof invoiceFiltersSchema>;
+export type InvoiceUploadInput = z.infer<typeof invoiceUploadSchema>;
+export const invoiceSchema = createInvoiceSchema.extend({
+  id: z.uuid(),
+  ownerId: z.uuid(),
+  customerId: z.uuid().nullable(),
+  status: z.enum(["pending_upload", "uploaded"]),
+  filePath: z.string().nullable(),
+  fileSize: z.number().nullable(),
+  mimeType: z.string().nullable(),
+  uploadedAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type Invoice = z.infer<typeof invoiceSchema>;

@@ -1,0 +1,1154 @@
+[
+  {
+    "table_schema": "app",
+    "table_name": "signup_invites",
+    "column_name": "id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": "gen_random_uuid()"
+  },
+  {
+    "table_schema": "app",
+    "table_name": "signup_invites",
+    "column_name": "email",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "signup_invites",
+    "column_name": "code_hash",
+    "data_type": "bytea",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "signup_invites",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "app",
+    "table_name": "signup_invites",
+    "column_name": "expires_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "signup_invites",
+    "column_name": "google_authorized_until",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "signup_invites",
+    "column_name": "revoked_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "signup_invites",
+    "column_name": "consumed_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "signup_invites",
+    "column_name": "consumed_by",
+    "data_type": "uuid",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "signup_invites",
+    "column_name": "password_ticket_hash",
+    "data_type": "bytea",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "signup_invites",
+    "column_name": "password_ticket_expires_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "signup_invites",
+    "column_name": "workspace_id",
+    "data_type": "uuid",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "app",
+    "table_name": "signup_invites",
+    "column_name": "workspace_consumed_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "identities",
+    "column_name": "provider_id",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "identities",
+    "column_name": "user_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "identities",
+    "column_name": "identity_data",
+    "data_type": "jsonb",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "identities",
+    "column_name": "provider",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "identities",
+    "column_name": "last_sign_in_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "identities",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "identities",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "identities",
+    "column_name": "email",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "identities",
+    "column_name": "id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": "gen_random_uuid()"
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "instance_id",
+    "data_type": "uuid",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "aud",
+    "data_type": "character varying",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "role",
+    "data_type": "character varying",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "email",
+    "data_type": "character varying",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "encrypted_password",
+    "data_type": "character varying",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "email_confirmed_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "invited_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "confirmation_token",
+    "data_type": "character varying",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "confirmation_sent_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "recovery_token",
+    "data_type": "character varying",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "recovery_sent_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "email_change_token_new",
+    "data_type": "character varying",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "email_change",
+    "data_type": "character varying",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "email_change_sent_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "last_sign_in_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "raw_app_meta_data",
+    "data_type": "jsonb",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "raw_user_meta_data",
+    "data_type": "jsonb",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "is_super_admin",
+    "data_type": "boolean",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "phone",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": "NULL::character varying"
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "phone_confirmed_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "phone_change",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": "''::character varying"
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "phone_change_token",
+    "data_type": "character varying",
+    "is_nullable": "YES",
+    "column_default": "''::character varying"
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "phone_change_sent_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "confirmed_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "email_change_token_current",
+    "data_type": "character varying",
+    "is_nullable": "YES",
+    "column_default": "''::character varying"
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "email_change_confirm_status",
+    "data_type": "smallint",
+    "is_nullable": "YES",
+    "column_default": "0"
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "banned_until",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "reauthentication_token",
+    "data_type": "character varying",
+    "is_nullable": "YES",
+    "column_default": "''::character varying"
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "reauthentication_sent_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "is_sso_user",
+    "data_type": "boolean",
+    "is_nullable": "NO",
+    "column_default": "false"
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "deleted_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "auth",
+    "table_name": "users",
+    "column_name": "is_anonymous",
+    "data_type": "boolean",
+    "is_nullable": "NO",
+    "column_default": "false"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": "gen_random_uuid()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "workspace_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "name",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "company_name",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "email",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "phone",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "metadata",
+    "data_type": "jsonb",
+    "is_nullable": "NO",
+    "column_default": "'{}'::jsonb"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "external_provider",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "external_customer_id",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "last_synced_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "sync_status",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": "'local'::text"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "last_sync_error",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "custom_fields",
+    "data_type": "jsonb",
+    "is_nullable": "NO",
+    "column_default": "'{}'::jsonb"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "customers",
+    "column_name": "reminder_tone",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoice_files",
+    "column_name": "id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": "gen_random_uuid()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoice_files",
+    "column_name": "workspace_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoice_files",
+    "column_name": "invoice_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoice_files",
+    "column_name": "storage_path",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoice_files",
+    "column_name": "file_name",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoice_files",
+    "column_name": "mime_type",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoice_files",
+    "column_name": "size_bytes",
+    "data_type": "bigint",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoice_files",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoice_files",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": "gen_random_uuid()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "workspace_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "customer_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "invoice_number",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "issue_date",
+    "data_type": "date",
+    "is_nullable": "NO",
+    "column_default": "CURRENT_DATE"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "due_date",
+    "data_type": "date",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "currency",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": "'INR'::text"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "total_amount",
+    "data_type": "numeric",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "amount_paid",
+    "data_type": "numeric",
+    "is_nullable": "NO",
+    "column_default": "0"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "status",
+    "data_type": "USER-DEFINED",
+    "is_nullable": "NO",
+    "column_default": "'draft'::invoice_status"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "notes",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "metadata",
+    "data_type": "jsonb",
+    "is_nullable": "NO",
+    "column_default": "'{}'::jsonb"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "external_provider",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "external_invoice_id",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "last_synced_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "sync_status",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": "'local'::text"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "last_sync_error",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "followup_state",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": "'draft'::text"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "next_follow_up_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "last_follow_up_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "reminder_count",
+    "data_type": "integer",
+    "is_nullable": "NO",
+    "column_default": "0"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "customer_phone",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "follow_up_settings",
+    "data_type": "jsonb",
+    "is_nullable": "NO",
+    "column_default": "'{}'::jsonb"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "automation_version",
+    "data_type": "bigint",
+    "is_nullable": "NO",
+    "column_default": "0"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "deleted_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "deleted_by",
+    "data_type": "uuid",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "invoices",
+    "column_name": "custom_fields",
+    "data_type": "jsonb",
+    "is_nullable": "NO",
+    "column_default": "'{}'::jsonb"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": "gen_random_uuid()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "workspace_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "invoice_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "amount",
+    "data_type": "numeric",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "paid_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "method",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "reference",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "metadata",
+    "data_type": "jsonb",
+    "is_nullable": "NO",
+    "column_default": "'{}'::jsonb"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "external_provider",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "external_payment_id",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "last_synced_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "sync_status",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": "'local'::text"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "last_sync_error",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "idempotency_key",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "payments",
+    "column_name": "settle_remaining",
+    "data_type": "boolean",
+    "is_nullable": "NO",
+    "column_default": "false"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "profiles",
+    "column_name": "user_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "profiles",
+    "column_name": "full_name",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "profiles",
+    "column_name": "avatar_url",
+    "data_type": "text",
+    "is_nullable": "YES",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "profiles",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "profiles",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspace_members",
+    "column_name": "workspace_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspace_members",
+    "column_name": "user_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspace_members",
+    "column_name": "role",
+    "data_type": "USER-DEFINED",
+    "is_nullable": "NO",
+    "column_default": "'member'::workspace_role"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspace_members",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspace_members",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspaces",
+    "column_name": "id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": "gen_random_uuid()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspaces",
+    "column_name": "owner_id",
+    "data_type": "uuid",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspaces",
+    "column_name": "name",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspaces",
+    "column_name": "slug",
+    "data_type": "text",
+    "is_nullable": "NO",
+    "column_default": null
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspaces",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  },
+  {
+    "table_schema": "public",
+    "table_name": "workspaces",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone",
+    "is_nullable": "NO",
+    "column_default": "now()"
+  }
+]

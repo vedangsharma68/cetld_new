@@ -11,3 +11,6 @@ work/
 app-version.json
 test-results/
 playwright-report/
+
+.next/
+*.tsbuildinfo
